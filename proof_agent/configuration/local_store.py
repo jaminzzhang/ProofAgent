@@ -2336,7 +2336,29 @@ class LocalAgentConfigurationStore:
         artifact_path: str,
         artifact_result: Mapping[str, Any],
     ) -> KnowledgeIngestionJob:
-        """Atomically persist exact Hybrid artifact refs and complete the owned job."""
+        """Project exact Hybrid output, persist registries, and complete the fenced job."""
+
+        from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_units
+        from proof_agent.capabilities.knowledge.hybrid.workbook import (
+            InsuranceMetadataAuthorityRecord,
+            InsuranceMetadataPdfDraftRecord,
+            WorkbookReviewConflictError,
+            WorkbookValidationError,
+            _persist_completed_hybrid_metadata_projection,
+        )
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridArtifactBuildRequest,
+            HybridArtifactBuildResult,
+            HybridInsuranceMetadataArtifact,
+            validate_hybrid_artifact_build_result,
+        )
+        from proof_agent.configuration.hybrid_knowledge_repository import (
+            FileSystemKnowledgeArtifactStore,
+        )
+        from proof_agent.contracts.hybrid_documents import (
+            StructuredArtifactBuildIdentity,
+            StructuredKnowledgeDocumentArtifact,
+        )
 
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             job, document = self._owned_job_and_document_unlocked(
@@ -2345,11 +2367,123 @@ class LocalAgentConfigurationStore:
                 claim_token=claim_token,
             )
             self._require_active_knowledge_source_unlocked(source_id)
+            revision_dir = self.knowledge_document_original_path(document).parent
+            request_path = revision_dir / "hybrid-build-request.json"
+            try:
+                request = HybridArtifactBuildRequest.model_validate_json(request_path.read_bytes())
+                result = HybridArtifactBuildResult.model_validate_json(
+                    json.dumps(dict(artifact_result), ensure_ascii=False)
+                )
+                validate_hybrid_artifact_build_result(request, result)
+            except (OSError, ValidationError, ValueError) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid completion payload failed exact build validation."
+                ) from exc
+            if (
+                result.source_id != source_id
+                or result.job_id != job_id
+                or result.document_id != document.document_id
+                or result.revision_id != document.revision_id
+                or artifact_path != result.canonical_ref.artifact_uri
+            ):
+                raise _invalid_ingestion_transition(
+                    "Hybrid completion payload does not match the owned job."
+                )
+            try:
+                with FileSystemKnowledgeArtifactStore(
+                    self._root_dir / "hybrid_artifacts"
+                ) as artifact_store:
+                    artifact_store.get_exact(result.persisted_original_ref)
+                    canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+                        artifact_store.get_exact(result.canonical_ref)
+                    )
+                    metadata = HybridInsuranceMetadataArtifact.model_validate_json(
+                        artifact_store.get_exact(result.insurance_metadata_ref)
+                    )
+                    persisted_build_identity = StructuredArtifactBuildIdentity.model_validate_json(
+                        artifact_store.get_exact(result.build_identity_ref)
+                    )
+                if (
+                    canonical.document_id != result.document_id
+                    or canonical.revision_id != result.revision_id
+                    or canonical.original_sha256 != result.original_ref.sha256
+                    or canonical.build_identity != result.build_identity
+                    or persisted_build_identity != result.build_identity
+                    or metadata.source_id != result.source_id
+                    or metadata.document_id != result.document_id
+                    or metadata.revision_id != result.revision_id
+                    or metadata.structured_build_id != result.build_id
+                    or metadata.original_sha256 != result.original_ref.sha256
+                ):
+                    raise ValueError("Hybrid projection artifacts do not match the result")
+                rule_units = project_rule_units(
+                    canonical,
+                    document_defaults=metadata.document_defaults,
+                    source_id=result.source_id,
+                )
+                authority_records = tuple(
+                    InsuranceMetadataAuthorityRecord(
+                        source_id=unit.source_id,
+                        document_id=unit.document_id,
+                        revision_id=unit.revision_id,
+                        canonical_anchor=unit.canonical_anchor,
+                        structured_build_id=unit.structured_build_id,
+                        original_ref=result.persisted_original_ref,
+                        rule_unit_draft_id=unit.rule_unit_draft_id,
+                        citation_uri=unit.citation_uri,
+                    )
+                    for unit in rule_units
+                )
+                authority_by_anchor = {
+                    record.canonical_anchor: record for record in authority_records
+                }
+                pdf_draft_records = tuple(
+                    InsuranceMetadataPdfDraftRecord(
+                        source_id=draft.source_id,
+                        document_id=draft.document_id,
+                        revision_id=draft.revision_id,
+                        canonical_anchor=draft.canonical_anchor,
+                        structured_build_id=result.build_id,
+                        original_ref=result.persisted_original_ref,
+                        metadata_artifact_ref=result.insurance_metadata_ref,
+                        rule_unit_draft_id=authority_by_anchor[draft.canonical_anchor].rule_unit_draft_id,
+                        pdf_draft=draft,
+                    )
+                    for draft in metadata.pdf_drafts
+                )
+            except (KeyError, OSError, ValidationError, ValueError) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid canonical metadata projection failed exact validation."
+                ) from exc
+            try:
+                _persist_completed_hybrid_metadata_projection(
+                    self._root_dir,
+                    authority_records=authority_records,
+                    pdf_draft_records=pdf_draft_records,
+                )
+            except (OSError, ValidationError, WorkbookReviewConflictError, WorkbookValidationError) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid metadata registry projection failed exact validation."
+                ) from exc
             now = _now()
             result_path = self._knowledge_ingestion_job_path(source_id, job_id).with_name(
                 "hybrid-artifact-result.json"
             )
-            _write_json(result_path, dict(artifact_result))
+            if result_path.exists():
+                try:
+                    current_result = HybridArtifactBuildResult.model_validate_json(
+                        result_path.read_bytes()
+                    )
+                except (OSError, ValidationError, ValueError) as exc:
+                    raise _invalid_ingestion_transition(
+                        "Persisted Hybrid artifact result is invalid."
+                    ) from exc
+                if current_result != result:
+                    raise _invalid_ingestion_transition(
+                        "Persisted Hybrid artifact result conflicts with this completion."
+                    )
+            else:
+                _write_json(result_path, result.model_dump(mode="json"))
             completed = job.model_copy(
                 update={
                     "state": "ready",

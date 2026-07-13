@@ -200,6 +200,7 @@ RuleCellCoordinate = InsuranceRuleCellCoordinate
 class InsuranceRuleUnitDraft(_RuleProjectionModel):
     """Non-authoritative, structurally coherent rule unit awaiting business approval."""
 
+    rule_unit_draft_id: NonBlankStr
     ordinal: NonNegativeInt
     source_id: NonBlankStr
     document_id: NonBlankStr
@@ -210,6 +211,7 @@ class InsuranceRuleUnitDraft(_RuleProjectionModel):
     logical_rule_key: NonBlankStr
     unit_kind: RuleUnitKind
     content: NonBlankStr
+    canonical_anchor: NonBlankStr
     citation_uri: NonBlankStr
     heading_path: tuple[NonBlankStr, ...] = ()
     definitions: tuple[NonBlankStr, ...] = ()
@@ -1183,6 +1185,7 @@ def _draft_from_candidate(
         "anchor_parts": candidate.anchor_parts,
     }
     logical_key = f"lrk-{_sha256_json(logical_key_payload)}"
+    canonical_anchor = "/".join(candidate.anchor_parts)
     citation_uri = _citation_uri(
         source_id=source_id,
         document_id=artifact.document_id,
@@ -1190,7 +1193,19 @@ def _draft_from_candidate(
         page_numbers=candidate.page_numbers,
         anchor_parts=candidate.anchor_parts,
     )
+    draft_identity_payload = {
+        "document_id": artifact.document_id,
+        "revision_id": artifact.revision_id,
+        "original_sha256": artifact.original_sha256,
+        "structured_build_identity": artifact.build_identity.model_dump(mode="json"),
+        "candidate": candidate.model_dump(mode="json"),
+        "document_defaults": document_defaults.model_dump(mode="json"),
+        "source_id": source_id,
+        "ordinal": ordinal,
+    }
+    rule_unit_draft_id = f"rud-{_sha256_json(draft_identity_payload)}"
     return InsuranceRuleUnitDraft(
+        rule_unit_draft_id=rule_unit_draft_id,
         ordinal=ordinal,
         source_id=source_id,
         document_id=artifact.document_id,
@@ -1201,6 +1216,7 @@ def _draft_from_candidate(
         logical_rule_key=logical_key,
         unit_kind=candidate.unit_kind,
         content=candidate.content,
+        canonical_anchor=canonical_anchor,
         citation_uri=citation_uri,
         heading_path=candidate.heading_path,
         definitions=candidate.definitions,

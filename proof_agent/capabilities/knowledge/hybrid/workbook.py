@@ -163,6 +163,7 @@ class WorkbookImportRecord(_WorkbookModel):
 class InsuranceMetadataDraftInput(_WorkbookModel):
     """One parallel, non-authoritative PDF or workbook metadata proposal."""
 
+    metadata_draft_id: NonBlankStr
     origin: Literal["pdf", "workbook"]
     source_id: NonBlankStr
     document_id: NonBlankStr
@@ -208,6 +209,7 @@ class InsuranceMetadataAuthorityRecord(_WorkbookModel):
     revision_id: NonBlankStr
     canonical_anchor: NonBlankStr | None = None
     structured_build_id: NonBlankStr
+    original_ref: ExactArtifactRef
     rule_unit_draft_id: NonBlankStr
     citation_uri: NonBlankStr
 
@@ -223,6 +225,9 @@ class InsuranceMetadataPdfDraftRecord(_WorkbookModel):
     revision_id: NonBlankStr
     canonical_anchor: NonBlankStr | None = None
     structured_build_id: NonBlankStr
+    original_ref: ExactArtifactRef
+    metadata_artifact_ref: ExactArtifactRef
+    rule_unit_draft_id: NonBlankStr
     pdf_draft: InsuranceMetadataDraftInput
 
     @model_validator(mode="after")
@@ -233,6 +238,10 @@ class InsuranceMetadataPdfDraftRecord(_WorkbookModel):
             != (self.source_id, self.document_id, self.revision_id, self.canonical_anchor)
         ):
             raise ValueError("persisted PDF draft must match the exact authority lineage")
+        if self.original_ref.media_type != "application/pdf":
+            raise ValueError("persisted PDF draft requires an exact PDF original reference")
+        if self.metadata_artifact_ref.media_type != "application/json":
+            raise ValueError("persisted PDF draft requires an exact metadata artifact reference")
         return self
 
 
@@ -503,21 +512,6 @@ class FilesystemInsuranceMetadataReviewRepository:
     def put(self, review: InsuranceMetadataReview) -> InsuranceMetadataReview:
         return self.put_many((review,))[0]
 
-    def put_authority_record(
-        self, record: InsuranceMetadataAuthorityRecord
-    ) -> InsuranceMetadataAuthorityRecord:
-        path = self._authority_path(record)
-        with self._lock, self._file_lock:
-            if path.exists():
-                current = InsuranceMetadataAuthorityRecord.model_validate_json(path.read_bytes())
-                if current != record:
-                    raise WorkbookReviewConflictError(
-                        "canonical metadata authority identity already exists"
-                    )
-                return current
-            self._write_payload(path, record.model_dump(mode="json"))
-        return record
-
     def list_authority_records(
         self,
         *,
@@ -534,21 +528,6 @@ class FilesystemInsuranceMetadataReviewRepository:
             if path.is_file() and not path.is_symlink()
         )
         return tuple(sorted(records, key=lambda item: item.canonical_anchor or ""))
-
-    def put_pdf_draft_record(
-        self, record: InsuranceMetadataPdfDraftRecord
-    ) -> InsuranceMetadataPdfDraftRecord:
-        path = self._pdf_draft_path(record)
-        with self._lock, self._file_lock:
-            if path.exists():
-                current = InsuranceMetadataPdfDraftRecord.model_validate_json(path.read_bytes())
-                if current != record:
-                    raise WorkbookReviewConflictError(
-                        "persisted PDF metadata draft identity already exists"
-                    )
-                return current
-            self._write_payload(path, record.model_dump(mode="json"))
-        return record
 
     def list_pdf_draft_records(
         self,
@@ -603,6 +582,85 @@ class FilesystemInsuranceMetadataReviewRepository:
         review_batch = tuple(reviews)
         with self._lock, self._file_lock:
             return self._put_many_unlocked(review_batch)
+
+    def _persist_completed_build_projection(
+        self,
+        authority_records: tuple[InsuranceMetadataAuthorityRecord, ...],
+        pdf_draft_records: tuple[InsuranceMetadataPdfDraftRecord, ...],
+    ) -> None:
+        """Idempotently materialize one fenced completed-build projection."""
+
+        if not authority_records:
+            raise WorkbookValidationError("completed Hybrid build requires rule-unit authority")
+        authority_identity = {
+            (
+                record.source_id,
+                record.document_id,
+                record.revision_id,
+                record.structured_build_id,
+                record.original_ref,
+            )
+            for record in authority_records
+        }
+        if len(authority_identity) != 1:
+            raise WorkbookValidationError("authority records must share one exact build lineage")
+        anchors = [record.canonical_anchor for record in authority_records]
+        if len(anchors) != len(set(anchors)):
+            raise WorkbookValidationError("authority records contain duplicate canonical anchors")
+        authority_by_anchor = {record.canonical_anchor: record for record in authority_records}
+        pdf_anchors = [record.canonical_anchor for record in pdf_draft_records]
+        if len(pdf_anchors) != len(set(pdf_anchors)):
+            raise WorkbookValidationError("PDF metadata records contain duplicate canonical anchors")
+        for record in pdf_draft_records:
+            authority = authority_by_anchor.get(record.canonical_anchor)
+            if authority is None or (
+                record.source_id,
+                record.document_id,
+                record.revision_id,
+                record.structured_build_id,
+                record.original_ref,
+                record.rule_unit_draft_id,
+            ) != (
+                authority.source_id,
+                authority.document_id,
+                authority.revision_id,
+                authority.structured_build_id,
+                authority.original_ref,
+                authority.rule_unit_draft_id,
+            ):
+                raise WorkbookValidationError(
+                    "PDF metadata record does not match exact rule-unit authority"
+                )
+        with self._lock, self._file_lock:
+            for authority_record in authority_records:
+                self._write_exact_projection(
+                    self._authority_path(authority_record),
+                    authority_record,
+                    InsuranceMetadataAuthorityRecord,
+                    conflict="canonical metadata authority identity already exists",
+                )
+            for pdf_record in pdf_draft_records:
+                self._write_exact_projection(
+                    self._pdf_draft_path(pdf_record),
+                    pdf_record,
+                    InsuranceMetadataPdfDraftRecord,
+                    conflict="persisted PDF metadata draft identity already exists",
+                )
+
+    def _write_exact_projection(
+        self,
+        path: Path,
+        record: InsuranceMetadataAuthorityRecord | InsuranceMetadataPdfDraftRecord,
+        model: type[InsuranceMetadataAuthorityRecord] | type[InsuranceMetadataPdfDraftRecord],
+        *,
+        conflict: str,
+    ) -> None:
+        if path.exists():
+            current = model.model_validate_json(path.read_bytes())
+            if current != record:
+                raise WorkbookReviewConflictError(conflict)
+            return
+        self._write_payload(path, record.model_dump(mode="json"))
 
     def _put_many_unlocked(
         self, review_batch: tuple[InsuranceMetadataReview, ...]
@@ -825,6 +883,20 @@ class FilesystemInsuranceMetadataReviewRepository:
         finally:
             if temporary.exists():
                 temporary.unlink()
+
+
+def _persist_completed_hybrid_metadata_projection(
+    root_dir: Path,
+    *,
+    authority_records: tuple[InsuranceMetadataAuthorityRecord, ...],
+    pdf_draft_records: tuple[InsuranceMetadataPdfDraftRecord, ...],
+) -> None:
+    """Completion-only writer used under the LocalStore fenced job transaction."""
+
+    FilesystemInsuranceMetadataReviewRepository(root_dir)._persist_completed_build_projection(
+        authority_records,
+        pdf_draft_records,
+    )
 
 
 def _read_source_bytes(

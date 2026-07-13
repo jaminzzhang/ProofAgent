@@ -1391,6 +1391,7 @@ def import_knowledge_metadata_workbook(
             record
             for record in authority_records
             if record.structured_build_id == build_result.build_id
+            and record.original_ref == build_result.persisted_original_ref
         )
         if not authority_records:
             raise WorkbookValidationError(
@@ -1410,7 +1411,22 @@ def import_knowledge_metadata_workbook(
                 revision_id=request.revision_id,
             )
             if record.structured_build_id == build_result.build_id
+            and record.original_ref == build_result.persisted_original_ref
+            and record.metadata_artifact_ref == build_result.insurance_metadata_ref
         )
+        for record in pdf_records:
+            authority = authority_by_identity.get(
+                (
+                    record.source_id,
+                    record.document_id,
+                    record.revision_id,
+                    record.canonical_anchor,
+                )
+            )
+            if authority is None or authority.rule_unit_draft_id != record.rule_unit_draft_id:
+                raise WorkbookValidationError(
+                    "persisted PDF metadata draft does not match canonical Rule Unit lineage"
+                )
         pdf_by_identity = {
             (record.source_id, record.document_id, record.revision_id, record.canonical_anchor): (
                 record.pdf_draft
@@ -3390,6 +3406,7 @@ def _workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput
     if applicability is None or precedence is None or row.metadata.authority is None:
         raise WorkbookValidationError("workbook row is missing governed metadata")
     return InsuranceMetadataDraftInput(
+        metadata_draft_id=row.metadata.metadata_draft_id,
         origin="workbook",
         source_id=row.source_id,
         document_id=row.document_id,
@@ -3416,6 +3433,7 @@ def _verify_hybrid_result_artifacts(
         result.canonical_ref,
         result.preview_ref,
         result.build_identity_ref,
+        result.insurance_metadata_ref,
     )
     payloads = {ref.artifact_uri: artifact_store.get_exact(ref) for ref in managed_refs}
     try:

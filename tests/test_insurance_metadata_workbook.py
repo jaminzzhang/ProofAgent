@@ -228,6 +228,7 @@ def test_workbook_string_dates_require_exact_calendar_format(value: str) -> None
 
 def _draft(*, origin: str, authority: str) -> InsuranceMetadataDraftInput:
     return InsuranceMetadataDraftInput(
+        metadata_draft_id=f"{origin}-metadata-draft",
         origin=origin,
         source_id="ks_hybrid_index",
         document_id="doc_policy_terms",

@@ -41,6 +41,7 @@ const review: InsuranceMetadataReview = {
   state: 'review_required',
   publication_blocked: true,
   pdf_draft: {
+    metadata_draft_id: 'pdf_metadata_draft_1',
     origin: 'pdf',
     source_id: 'ks_1', document_id: 'doc_1', revision_id: 'rev_1',
     canonical_anchor: 'section:eligibility', authority: 'national',
@@ -50,6 +51,7 @@ const review: InsuranceMetadataReview = {
     precedence_order: 10,
   },
   workbook_draft: {
+    metadata_draft_id: 'workbook_metadata_draft_1',
     origin: 'workbook',
     source_id: 'ks_1', document_id: 'doc_1', revision_id: 'rev_1',
     canonical_anchor: 'section:eligibility', authority: 'regional',

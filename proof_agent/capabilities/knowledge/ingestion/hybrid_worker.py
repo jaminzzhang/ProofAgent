@@ -27,12 +27,18 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJobRequest,
     KnowledgeArtifactStore,
 )
+from proof_agent.capabilities.knowledge.hybrid.rule_units import (
+    RuleUnitProjectionReviewRequired,
+    project_rule_units,
+)
+from proof_agent.capabilities.knowledge.hybrid.workbook import InsuranceMetadataDraftInput
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
     StructuredArtifactBuildIdentity,
     StructuredKnowledgeDocumentArtifact,
 )
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 from proof_agent.contracts import KnowledgeIngestionJob
 
 if TYPE_CHECKING:
@@ -57,8 +63,8 @@ MAX_HYBRID_VENDOR_AGGREGATE_BYTES = 128 * 1024 * 1024
 MAX_HYBRID_CANONICAL_BYTES = 64 * 1024 * 1024
 MAX_HYBRID_PREVIEW_BYTES = 16 * 1024 * 1024
 MAX_HYBRID_BUILD_IDENTITY_BYTES = 1024 * 1024
-MAX_HYBRID_OUTPUT_ARTIFACT_COUNT = 504
-MAX_HYBRID_PERSISTED_ARTIFACT_COUNT = 505
+MAX_HYBRID_OUTPUT_ARTIFACT_COUNT = 505
+MAX_HYBRID_PERSISTED_ARTIFACT_COUNT = 506
 MAX_HYBRID_OUTPUT_BYTES = 209 * 1024 * 1024
 MAX_HYBRID_PERSISTED_BYTES = 259 * 1024 * 1024
 
@@ -120,13 +126,54 @@ class HybridParserResourceEnvelope(_HybridWorkerModel):
     canonical_json_bytes: NonNegativeInt
     preview_bytes: NonNegativeInt
     build_identity_bytes: NonNegativeInt
+    insurance_metadata_bytes: NonNegativeInt
     total_artifact_count: NonNegativeInt
     total_artifact_bytes: NonNegativeInt
+
+
+class HybridInsuranceMetadataArtifact(_HybridWorkerModel):
+    """Immutable server-side projection inputs bound to one exact structured build."""
+
+    schema_version: Literal["hybrid-insurance-metadata.v1"] = (
+        "hybrid-insurance-metadata.v1"
+    )
+    source_id: NonBlankStr
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
+    structured_build_id: NonBlankStr
+    original_sha256: Sha256
+    document_defaults: InsuranceRuleMetadataDraft
+    pdf_drafts: tuple[InsuranceMetadataDraftInput, ...] = Field(max_length=100_000)
+
+    @model_validator(mode="after")
+    def validate_lineage(self) -> Self:
+        if (
+            self.document_defaults.document_id != self.document_id
+            or self.document_defaults.revision_id != self.revision_id
+        ):
+            raise ValueError("document metadata defaults must match the exact revision")
+        anchors: list[str | None] = []
+        for draft in self.pdf_drafts:
+            if (
+                draft.origin != "pdf"
+                or draft.source_id != self.source_id
+                or draft.document_id != self.document_id
+                or draft.revision_id != self.revision_id
+            ):
+                raise ValueError("PDF metadata drafts must match the exact build lineage")
+            anchors.append(draft.canonical_anchor)
+        if len(anchors) != len(set(anchors)):
+            raise ValueError("PDF metadata drafts require unique canonical anchors")
+        draft_ids = [draft.metadata_draft_id for draft in self.pdf_drafts]
+        if len(draft_ids) != len(set(draft_ids)):
+            raise ValueError("PDF metadata draft identities must be unique")
+        return self
 
 
 class HybridParserBuildOutput(_HybridWorkerModel):
     artifact: StructuredKnowledgeDocumentArtifact
     vendor_artifacts: tuple[HybridVendorArtifact, ...] = Field(min_length=1, max_length=501)
+    insurance_metadata: HybridInsuranceMetadataArtifact
 
     @computed_field(return_type=HybridParserResourceEnvelope)  # type: ignore[prop-decorator]
     @property
@@ -158,6 +205,7 @@ class HybridArtifactBuildResult(_HybridWorkerModel):
     canonical_ref: ExactArtifactRef
     preview_ref: ExactArtifactRef
     build_identity_ref: ExactArtifactRef
+    insurance_metadata_ref: ExactArtifactRef
 
     @model_validator(mode="after")
     def validate_build_id(self) -> Self:
@@ -231,6 +279,7 @@ def validate_hybrid_artifact_build_result(
         result.canonical_ref.media_type != "application/json"
         or result.preview_ref.media_type != "text/markdown"
         or result.build_identity_ref.media_type != "application/json"
+        or result.insurance_metadata_ref.media_type != "application/json"
     ):
         raise ValueError("Hybrid result contains an invalid required artifact media type")
     expected_build_identity_sha = hashlib.sha256(
@@ -244,6 +293,7 @@ def validate_hybrid_artifact_build_result(
         result.canonical_ref,
         result.preview_ref,
         result.build_identity_ref,
+        result.insurance_metadata_ref,
     )
     if len({ref.artifact_uri for ref in persisted_refs}) != len(persisted_refs):
         raise ValueError("Hybrid required artifact kinds must have distinct immutable references")
@@ -439,6 +489,18 @@ class HybridKnowledgeWorker:
             raise ValueError("canonical artifact pages do not exactly cover the requested pages")
         if any(signal.requires_review for signal in artifact.quality_signals):
             raise ReviewRequiredError("canonical artifact contains a review-required signal")
+        metadata = _insurance_metadata_artifact(request, parsed)
+        try:
+            rule_units = project_rule_units(
+                artifact,
+                document_defaults=metadata.document_defaults,
+                source_id=request.source_id,
+            )
+        except RuleUnitProjectionReviewRequired as exc:
+            raise ReviewRequiredError("rule-unit projection requires operator review") from exc
+        known_anchors = {unit.canonical_anchor for unit in rule_units}
+        if any(draft.canonical_anchor not in known_anchors for draft in metadata.pdf_drafts):
+            raise ValueError("PDF metadata draft anchor is not a projected Rule Unit")
 
     def _persist_artifacts(
         self,
@@ -485,6 +547,14 @@ class HybridKnowledgeWorker:
             content=_canonical_json(artifact.build_identity.model_dump(mode="json")),
             media_type="application/json",
         )
+        insurance_metadata = _canonical_json(
+            _insurance_metadata_artifact(request, parsed).model_dump(mode="json")
+        )
+        insurance_metadata_ref = self._put_verified(
+            key=f"{key_root}/insurance-metadata.json",
+            content=insurance_metadata,
+            media_type="application/json",
+        )
         return HybridArtifactBuildResult(
             job_id=request.job_id,
             request_identity=request.request_identity,
@@ -499,6 +569,7 @@ class HybridKnowledgeWorker:
             canonical_ref=canonical_ref,
             preview_ref=preview_ref,
             build_identity_ref=build_identity_ref,
+            insurance_metadata_ref=insurance_metadata_ref,
         )
 
     def _put_verified(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
@@ -557,12 +628,34 @@ def _preview_markdown(artifact: StructuredKnowledgeDocumentArtifact) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+def _insurance_metadata_artifact(
+    request: HybridArtifactBuildRequest,
+    parsed: HybridParserBuildOutput,
+) -> HybridInsuranceMetadataArtifact:
+    artifact = parsed.artifact
+    metadata = HybridInsuranceMetadataArtifact.model_validate(
+        parsed.insurance_metadata.model_dump()
+    )
+    if (
+        metadata.source_id != request.source_id
+        or metadata.document_id != request.document_id
+        or metadata.revision_id != request.revision_id
+        or metadata.structured_build_id != artifact.build_identity.build_id
+        or metadata.original_sha256 != artifact.original_sha256
+    ):
+        raise ValueError("insurance metadata artifact does not match the exact build lineage")
+    return metadata
+
+
 def _measure_parser_output(parsed: HybridParserBuildOutput) -> HybridParserResourceEnvelope:
     vendor_sizes = tuple(len(vendor.content) for vendor in parsed.vendor_artifacts)
     canonical_size = len(_canonical_json(parsed.artifact.model_dump(mode="json", by_alias=True)))
     preview_size = len(_preview_markdown(parsed.artifact))
     build_identity_size = len(
         _canonical_json(parsed.artifact.build_identity.model_dump(mode="json"))
+    )
+    metadata_size = len(
+        _canonical_json(parsed.insurance_metadata.model_dump(mode="json"))
     )
     aggregate_vendor = sum(vendor_sizes)
     return HybridParserResourceEnvelope(
@@ -571,9 +664,14 @@ def _measure_parser_output(parsed: HybridParserBuildOutput) -> HybridParserResou
         canonical_json_bytes=canonical_size,
         preview_bytes=preview_size,
         build_identity_bytes=build_identity_size,
-        total_artifact_count=len(vendor_sizes) + 3,
+        insurance_metadata_bytes=metadata_size,
+        total_artifact_count=len(vendor_sizes) + 4,
         total_artifact_bytes=(
-            aggregate_vendor + canonical_size + preview_size + build_identity_size
+            aggregate_vendor
+            + canonical_size
+            + preview_size
+            + build_identity_size
+            + metadata_size
         ),
     )
 
@@ -589,6 +687,8 @@ def _require_parser_output_within_limits(envelope: HybridParserResourceEnvelope)
         raise ValueError("Hybrid preview exceeds the byte limit")
     if envelope.build_identity_bytes > MAX_HYBRID_BUILD_IDENTITY_BYTES:
         raise ValueError("Hybrid build identity exceeds the byte limit")
+    if envelope.insurance_metadata_bytes > MAX_HYBRID_CANONICAL_BYTES:
+        raise ValueError("Hybrid insurance metadata exceeds the byte limit")
     if envelope.total_artifact_count > MAX_HYBRID_OUTPUT_ARTIFACT_COUNT:
         raise ValueError("Hybrid parser output exceeds the artifact-count limit")
     if envelope.total_artifact_bytes > MAX_HYBRID_OUTPUT_BYTES:

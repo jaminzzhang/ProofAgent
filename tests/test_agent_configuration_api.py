@@ -19,14 +19,16 @@ import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
     FilesystemInsuranceMetadataReviewRepository,
-    InsuranceMetadataAuthorityRecord,
     InsuranceMetadataDraftInput,
-    InsuranceMetadataPdfDraftRecord,
 )
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
-    HybridArtifactBuildResult,
-    HybridVendorArtifactRef,
+    HybridInsuranceMetadataArtifact,
+    HybridKnowledgeWorker,
+    HybridParserBuildOutput,
+    HybridVendorArtifact,
+    LocalManagedOriginalStore,
+    LocalStoreHybridWorkerLifecycle,
 )
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
@@ -57,12 +59,14 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredKnowledgeDocumentArtifact,
     StructuredPage,
 )
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
     OperatorPermission,
 )
+from pypdf import PdfWriter
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -484,7 +488,11 @@ def _persist_completed_hybrid_metadata_authority(
     include_pdf_draft: bool = True,
 ) -> tuple[str, str]:
     store = _configuration_store(client)
-    original = b"%PDF-1.7\nserver-managed-policy"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    original_buffer = BytesIO()
+    writer.write(original_buffer)
+    original = original_buffer.getvalue()
     upload = store.stage_quarantined_knowledge_upload(
         source_id="ks_hybrid_index",
         filename="policy.pdf",
@@ -496,7 +504,7 @@ def _persist_completed_hybrid_metadata_authority(
         source_id="ks_hybrid_index"
     )
     assert claimed_upload is not None and claimed_upload.claim_token is not None
-    document, job = store.accept_hybrid_quarantined_knowledge_upload(
+    document, _job = store.accept_hybrid_quarantined_knowledge_upload(
         source_id="ks_hybrid_index",
         upload_id=upload.upload_id,
         claim_token=claimed_upload.claim_token,
@@ -507,141 +515,126 @@ def _persist_completed_hybrid_metadata_authority(
         model_digests=("sha256:test-model",),
         configuration_sha256="b" * 64,
     )
-    request_path = store.knowledge_document_original_path(document).parent / "hybrid-build-request.json"
-    build_request = HybridArtifactBuildRequest.model_validate_json(request_path.read_bytes())
-    build_identity = StructuredArtifactBuildIdentity(
-        build_id="build_server_managed",
-        source_sha256=build_request.original_ref.sha256,
-        parser_adapter="test-parser",
-        parser_revision=build_request.parser_revision,
-        model_digests=build_request.model_digests,
-        canonical_schema_version="structured-knowledge.v1",
-        configuration_sha256=build_request.configuration_sha256,
-    )
-    canonical = StructuredKnowledgeDocumentArtifact(
-        schema_version="structured-knowledge.v1",
-        document_id=document.document_id,
-        revision_id=document.revision_id,
-        original_sha256=build_request.original_ref.sha256,
-        build_identity=build_identity,
-        pages=(
-            StructuredPage(
-                page_number=1,
-                width=612,
-                height=792,
-                native_text_ratio=1,
-                blocks=(
-                    StructuredBlock(
-                        block_id="section_eligibility",
-                        kind="paragraph",
-                        text="Eligibility is governed by the signed policy.",
-                        bbox=BoundingBox(x0=1, y0=1, x1=300, y1=30),
-                        reading_order=0,
-                        heading_path=("Eligibility",),
+
+    class MetadataPipeline:
+        def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+            build_identity = StructuredArtifactBuildIdentity(
+                build_id="build_server_managed",
+                source_sha256=request.original_ref.sha256,
+                parser_adapter="test-parser",
+                parser_revision=request.parser_revision,
+                model_digests=request.model_digests,
+                canonical_schema_version="structured-knowledge.v1",
+                configuration_sha256=request.configuration_sha256,
+            )
+            canonical = StructuredKnowledgeDocumentArtifact(
+                schema_version="structured-knowledge.v1",
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+                original_sha256=request.original_ref.sha256,
+                build_identity=build_identity,
+                pages=(
+                    StructuredPage(
+                        page_number=1,
+                        width=612,
+                        height=792,
+                        native_text_ratio=1,
+                        blocks=(
+                            StructuredBlock(
+                                block_id="section:eligibility",
+                                kind="paragraph",
+                                text="Eligibility is governed by the signed policy.",
+                                bbox=BoundingBox(x0=1, y0=1, x1=300, y1=30),
+                                reading_order=0,
+                                heading_path=("Eligibility",),
+                            ),
+                        ),
                     ),
                 ),
-            ),
-        ),
-    )
-    with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
-        persisted_original_ref = artifacts.put_immutable(
-            key=f"tests/{job.job_id}/original.pdf",
-            content=original,
-            media_type="application/pdf",
-        )
-        vendor_ref = artifacts.put_immutable(
-            key=f"tests/{job.job_id}/vendor.json", content=b"{}", media_type="application/json"
-        )
-        canonical_ref = artifacts.put_immutable(
-            key=f"tests/{job.job_id}/canonical.json",
-            content=canonical.model_dump_json().encode(),
-            media_type="application/json",
-        )
-        preview_ref = artifacts.put_immutable(
-            key=f"tests/{job.job_id}/preview.md",
-            content=b"# Eligibility",
-            media_type="text/markdown",
-        )
-        build_identity_ref = artifacts.put_immutable(
-            key=f"tests/{job.job_id}/build.json",
-            content=json.dumps(
-                build_identity.model_dump(mode="json"),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode(),
-            media_type="application/json",
-        )
-    result = HybridArtifactBuildResult(
-        job_id=job.job_id,
-        request_identity=build_request.request_identity,
-        source_id="ks_hybrid_index",
-        document_id=document.document_id,
-        revision_id=document.revision_id,
-        build_id=build_identity.build_id,
-        build_identity=build_identity,
-        original_ref=build_request.original_ref,
-        persisted_original_ref=persisted_original_ref,
-        vendor_refs=(HybridVendorArtifactRef(adapter="test-parser", ref=vendor_ref),),
-        canonical_ref=canonical_ref,
-        preview_ref=preview_ref,
-        build_identity_ref=build_identity_ref,
-    )
+            )
+            common = {
+                "metadata_draft_id": "pdf-metadata-eligibility",
+                "origin": "pdf",
+                "source_id": request.source_id,
+                "document_id": request.document_id,
+                "revision_id": request.revision_id,
+                "canonical_anchor": "section:eligibility",
+                "authority": "regional",
+                "effective_from": "2026-01-01",
+                "effective_to": "2026-12-31",
+                "taxonomy_id": "insurance-product-applicability",
+                "taxonomy_revision_id": "taxonomy-2026-01",
+                "precedence_policy_revision_id": "precedence-2026-01",
+                "precedence_authority_tier": "policy_terms",
+                "precedence_order": 10,
+            }
+            return HybridParserBuildOutput(
+                artifact=canonical,
+                vendor_artifacts=(
+                    HybridVendorArtifact(
+                        adapter="test-parser",
+                        content=b"{}",
+                    ),
+                ),
+                insurance_metadata=HybridInsuranceMetadataArtifact(
+                    source_id=request.source_id,
+                    document_id=request.document_id,
+                    revision_id=request.revision_id,
+                    structured_build_id=build_identity.build_id,
+                    original_sha256=request.original_ref.sha256,
+                    document_defaults=InsuranceRuleMetadataDraft(
+                        metadata_draft_id="document-defaults",
+                        document_id=request.document_id,
+                        revision_id=request.revision_id,
+                    ),
+                    pdf_drafts=(
+                        (InsuranceMetadataDraftInput(**common),)
+                        if include_pdf_draft
+                        else ()
+                    ),
+                ),
+            )
+
     claimed_job = store.claim_next_knowledge_ingestion_job(source_id="ks_hybrid_index")
     assert claimed_job is not None and claimed_job.claim_token is not None
-    store.complete_hybrid_knowledge_ingestion_job(
-        source_id="ks_hybrid_index",
-        job_id=job.job_id,
-        claim_token=claimed_job.claim_token,
-        artifact_path=canonical_ref.artifact_uri,
-        artifact_result=result.model_dump(mode="json"),
+    original_store = LocalManagedOriginalStore()
+    lifecycle = LocalStoreHybridWorkerLifecycle(
+        store=store,
+        original_store=original_store,
     )
-    store.get_completed_hybrid_artifact_build_result(
+    claim = lifecycle.claim_from_job(claimed_job)
+    with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+        outcome = HybridKnowledgeWorker(
+            lifecycle=lifecycle,
+            original_store=original_store,
+            artifact_store=artifacts,
+            pipeline=MetadataPipeline(),
+            worker_id="test-hybrid-worker",
+        ).process_claim(claim)
+    assert outcome.state == "completed"
+    result = store.get_completed_hybrid_artifact_build_result(
         source_id="ks_hybrid_index",
         document_id=document.document_id,
         revision_id=document.revision_id,
     )
-    common = {
-        "source_id": "ks_hybrid_index",
-        "document_id": document.document_id,
-        "revision_id": document.revision_id,
-        "canonical_anchor": "section:eligibility",
-        "authority": "regional",
-        "effective_from": "2026-01-01",
-        "effective_to": "2026-12-31",
-        "taxonomy_id": "insurance-product-applicability",
-        "taxonomy_revision_id": "taxonomy-2026-01",
-        "precedence_policy_revision_id": "precedence-2026-01",
-        "precedence_authority_tier": "policy_terms",
-        "precedence_order": 10,
-    }
     repository = FilesystemInsuranceMetadataReviewRepository(store.root_dir)
-    repository.put_authority_record(
-        InsuranceMetadataAuthorityRecord(
-            source_id="ks_hybrid_index",
-            document_id=document.document_id,
-            revision_id=document.revision_id,
-            canonical_anchor="section:eligibility",
-            structured_build_id=build_identity.build_id,
-            rule_unit_draft_id="rule_unit_eligibility",
-            citation_uri=(
-                f"knowledge://source/ks_hybrid_index/document/{document.document_id}/revision/"
-                f"{document.revision_id}#pages=1;anchor=section:eligibility"
-            ),
-        )
+    authority = repository.list_authority_records(
+        source_id="ks_hybrid_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
     )
-    if include_pdf_draft:
-        repository.put_pdf_draft_record(
-            InsuranceMetadataPdfDraftRecord(
-                source_id="ks_hybrid_index",
-                document_id=document.document_id,
-                revision_id=document.revision_id,
-                canonical_anchor="section:eligibility",
-                structured_build_id=build_identity.build_id,
-                pdf_draft=InsuranceMetadataDraftInput(origin="pdf", **common),
-            )
-        )
+    assert len(authority) == 1
+    assert authority[0].structured_build_id == result.build_id
+    assert authority[0].original_ref == result.persisted_original_ref
+    pdf_records = repository.list_pdf_draft_records(
+        source_id="ks_hybrid_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+    )
+    assert len(pdf_records) == (1 if include_pdf_draft else 0)
+    if pdf_records:
+        assert pdf_records[0].metadata_artifact_ref == result.insurance_metadata_ref
+        assert pdf_records[0].rule_unit_draft_id == authority[0].rule_unit_draft_id
     return document.document_id, document.revision_id
 
 

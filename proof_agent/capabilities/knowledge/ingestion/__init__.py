@@ -18,6 +18,7 @@ from proof_agent.capabilities.knowledge.ingestion.fingerprint import (
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
+    HybridInsuranceMetadataArtifact,
     HybridKnowledgeWorker,
     HybridParserBuildOutput,
     HybridPrivateParserBuildConfig,
@@ -43,6 +44,7 @@ __all__ = [
     "KnowledgeDocumentParserRegistry",
     "HybridArtifactBuildRequest",
     "HybridArtifactBuildResult",
+    "HybridInsuranceMetadataArtifact",
     "HybridKnowledgeWorker",
     "HybridParserBuildOutput",
     "HybridPrivateParserBuildConfig",

@@ -1109,6 +1109,7 @@ export interface KnowledgeSourcePublicationsResponse {
 }
 
 export interface InsuranceMetadataDraftInput {
+  metadata_draft_id: string
   origin: 'pdf' | 'workbook'
   source_id: string
   document_id: string

@@ -17,6 +17,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
+    HybridInsuranceMetadataArtifact,
     HybridKnowledgeWorker,
     HybridPrivateParserBuildConfig,
     HybridParserBuildOutput,
@@ -28,6 +29,10 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     ReviewRequiredError,
     TransientKnowledgeServiceError,
     hybrid_build_request_sha256,
+)
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataDraftInput,
 )
 from proof_agent.capabilities.knowledge.ingestion.contracts import (
     KnowledgeWorkerTaskClaim,
@@ -46,6 +51,7 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredQualitySignal,
 )
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
     HybridKnowledgeLeaseError,
@@ -139,6 +145,26 @@ def _artifact(request: HybridArtifactBuildRequest) -> StructuredKnowledgeDocumen
     )
 
 
+def _insurance_metadata(
+    request: HybridArtifactBuildRequest,
+    *,
+    pdf_drafts: tuple[InsuranceMetadataDraftInput, ...] = (),
+) -> HybridInsuranceMetadataArtifact:
+    return HybridInsuranceMetadataArtifact(
+        source_id=request.source_id,
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        structured_build_id="build_1",
+        original_sha256=request.original_ref.sha256,
+        document_defaults=InsuranceRuleMetadataDraft(
+            metadata_draft_id="metadata-defaults-1",
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        ),
+        pdf_drafts=pdf_drafts,
+    )
+
+
 def _build_result(request: HybridArtifactBuildRequest) -> HybridArtifactBuildResult:
     artifact = _artifact(request)
     build = artifact.build_identity
@@ -169,6 +195,13 @@ def _build_result(request: HybridArtifactBuildRequest) -> HybridArtifactBuildRes
         build_identity_ref=_artifact_ref(
             "build-identity",
             hybrid_worker_module._canonical_json(build.model_dump(mode="json")),
+            "application/json",
+        ),
+        insurance_metadata_ref=_artifact_ref(
+            "insurance-metadata",
+            hybrid_worker_module._canonical_json(
+                _insurance_metadata(request).model_dump(mode="json")
+            ),
             "application/json",
         ),
     )
@@ -222,6 +255,7 @@ class FakePipeline:
                     media_type="application/json",
                 ),
             ),
+            insurance_metadata=_insurance_metadata(request),
         )
 
 
@@ -389,6 +423,69 @@ def test_hybrid_worker_persists_and_commits_exact_build_artifacts(tmp_path) -> N
     assert result.canonical_ref.media_type == "application/json"
     assert result.preview_ref.media_type == "text/markdown"
     assert result.build_identity_ref.media_type == "application/json"
+    assert result.insurance_metadata_ref.media_type == "application/json"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_id", "other_source"),
+        ("document_id", "other_document"),
+        ("revision_id", "other_revision"),
+        ("structured_build_id", "other_build"),
+        ("original_sha256", "f" * 64),
+    ],
+)
+def test_hybrid_worker_rejects_insurance_metadata_lineage_mismatch(
+    tmp_path, field: str, value: str
+) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    parsed = FakePipeline().build(request)
+    mismatched = parsed.insurance_metadata.model_copy(update={field: value})
+    pipeline = PrebuiltPipeline(parsed.model_copy(update={"insurance_metadata": mismatched}))
+    lifecycle = FakeLifecycle(request)
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=pipeline,
+        worker_id="worker_1",
+    )
+
+    outcome = worker.run_once()
+
+    assert outcome is not None and outcome.state == "failed"
+    assert lifecycle.committed is None
+
+
+def test_hybrid_worker_rejects_pdf_metadata_for_unknown_rule_anchor(tmp_path) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    unknown = InsuranceMetadataDraftInput(
+        metadata_draft_id="pdf-unknown",
+        origin="pdf",
+        source_id=request.source_id,
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        canonical_anchor="unknown-anchor",
+    )
+    parsed = FakePipeline().build(request)
+    metadata = _insurance_metadata(request, pdf_drafts=(unknown,))
+    pipeline = PrebuiltPipeline(parsed.model_copy(update={"insurance_metadata": metadata}))
+    lifecycle = FakeLifecycle(request)
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=pipeline,
+        worker_id="worker_1",
+    )
+
+    outcome = worker.run_once()
+
+    assert outcome is not None and outcome.state == "failed"
+    assert lifecycle.committed is None
 
 
 def test_hybrid_worker_retries_transient_parser_failure_but_reviews_content_failure(
@@ -498,6 +595,7 @@ def test_hybrid_parser_resource_envelope_accepts_exact_documented_boundaries() -
         canonical_json_bytes=hybrid_worker_module.MAX_HYBRID_CANONICAL_BYTES,
         preview_bytes=hybrid_worker_module.MAX_HYBRID_PREVIEW_BYTES,
         build_identity_bytes=hybrid_worker_module.MAX_HYBRID_BUILD_IDENTITY_BYTES,
+        insurance_metadata_bytes=hybrid_worker_module.MAX_HYBRID_CANONICAL_BYTES,
         total_artifact_count=hybrid_worker_module.MAX_HYBRID_OUTPUT_ARTIFACT_COUNT,
         total_artifact_bytes=hybrid_worker_module.MAX_HYBRID_OUTPUT_BYTES,
     )
@@ -512,6 +610,7 @@ def test_hybrid_parser_resource_envelope_accepts_exact_documented_boundaries() -
         ("canonical_json_bytes", "MAX_HYBRID_CANONICAL_BYTES"),
         ("preview_bytes", "MAX_HYBRID_PREVIEW_BYTES"),
         ("build_identity_bytes", "MAX_HYBRID_BUILD_IDENTITY_BYTES"),
+        ("insurance_metadata_bytes", "MAX_HYBRID_CANONICAL_BYTES"),
         ("total_artifact_count", "MAX_HYBRID_OUTPUT_ARTIFACT_COUNT"),
         ("total_artifact_bytes", "MAX_HYBRID_OUTPUT_BYTES"),
     ],
@@ -525,8 +624,9 @@ def test_hybrid_parser_resource_envelope_rejects_one_over_each_boundary(
         canonical_json_bytes=1,
         preview_bytes=1,
         build_identity_bytes=1,
-        total_artifact_count=4,
-        total_artifact_bytes=4,
+        insurance_metadata_bytes=1,
+        total_artifact_count=5,
+        total_artifact_bytes=5,
     )
     oversized = envelope.model_copy(
         update={field: getattr(hybrid_worker_module, limit_name) + 1}
@@ -911,6 +1011,21 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     assert jobs[0].attempt_count == 1
     result_files = tuple((tmp_path / "config").rglob("hybrid-artifact-result.json"))
     assert len(result_files) == 1
+    completed = store.get_completed_hybrid_artifact_build_result(
+        source_id="source_1",
+        document_id=jobs[0].document_id,
+        revision_id=jobs[0].revision_id,
+    )
+    authority = FilesystemInsuranceMetadataReviewRepository(
+        tmp_path / "config"
+    ).list_authority_records(
+        source_id="source_1",
+        document_id=jobs[0].document_id,
+        revision_id=jobs[0].revision_id,
+    )
+    assert len(authority) == 1
+    assert authority[0].structured_build_id == completed.build_id
+    assert authority[0].original_ref == completed.persisted_original_ref
 
 
 def test_localstore_exhausted_transient_is_not_classified_as_integrity_failure(tmp_path) -> None:
