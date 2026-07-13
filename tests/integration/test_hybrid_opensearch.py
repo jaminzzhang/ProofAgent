@@ -172,7 +172,7 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
         allow_insecure_loopback=True,
         timeout_seconds=30,
     )
-    adapter = OpenSearchHybridIndex(transport=transport)
+    adapter = OpenSearchHybridIndex(transport=transport, number_of_replicas=0)
     try:
         identity = adapter.create_index(
             generation,

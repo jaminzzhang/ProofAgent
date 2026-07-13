@@ -262,6 +262,7 @@ class RecordingTransport:
                         "settings": {
                             "index": {
                                 "uuid": "uuid-1",
+                                "number_of_replicas": "1",
                                 "analysis": rule_unit_analysis_settings(),
                             }
                         },
@@ -305,7 +306,34 @@ class RecordingTransport:
                 body={
                     "timed_out": False,
                     "_shards": {"total": 1, "successful": 1, "failed": 0},
-                    "hits": {"hits": self.search_hits},
+                    "hits": {
+                        "hits": [
+                            {
+                                key: value
+                                for key, value in hit.items()
+                                if key != "_content_source"
+                            }
+                            for hit in self.search_hits
+                        ]
+                    },
+                },
+            )
+        if method == "POST" and path == f"/{index_name}/_mget":
+            assert json_body is not None
+            requested_ids = json_body["ids"]
+            by_id = {hit["_id"]: hit for hit in self.search_hits}
+            return OpenSearchTransportResponse(
+                status_code=200,
+                body={
+                    "docs": [
+                        {
+                            "_index": index_name,
+                            "_id": projection_id,
+                            "found": True,
+                            "_source": by_id[projection_id]["_content_source"],
+                        }
+                        for projection_id in requested_ids
+                    ]
                 },
             )
         raise AssertionError(f"unexpected transport call: {method} {path}")
@@ -348,9 +376,7 @@ def test_http_transport_allows_only_explicit_insecure_loopback_for_integration()
         allow_insecure_loopback=True,
     )
 
-    assert transport._max_response_bytes >= (  # type: ignore[attr-defined]
-        opensearch_module.MAX_SEARCH_SOURCE_BYTES + 16 * 1024 * 1024
-    )
+    assert transport._max_response_bytes == 32 * 1024 * 1024  # type: ignore[attr-defined]
     transport.close()
 
 
@@ -424,6 +450,7 @@ def test_create_index_pins_generation_metadata_and_source_local_rrf_pipeline() -
     assert index_call["json_body"]["settings"]["index"][
         "analysis"
     ] == rule_unit_analysis_settings()
+    assert index_call["json_body"]["settings"]["index"]["number_of_replicas"] == 1
     assert index_call["json_body"]["mappings"]["properties"]["lexical_text"][
         "analyzer"
     ] == "proof_agent_cjk_v1"
@@ -490,6 +517,7 @@ def test_hybrid_query_applies_identical_filters_inside_both_lanes() -> None:
     assert body["search_pipeline"] == rrf_pipeline_name(rank_constant=60)
     assert "dense_vector" not in body["_source"]
     assert "lexical_text" not in body["_source"]
+    assert "content" not in body["_source"]
     assert "approved_metadata" not in body["_source"]
     assert "approved_visibility" not in body["_source"]
     serialized_filters = json.dumps(lexical_filter, sort_keys=True)
@@ -537,6 +565,39 @@ def test_projection_contains_only_approved_query_safe_fields() -> None:
     assert "approved_visibility" not in projected
     assert "vendor_payload" not in projected
     assert "metadata_draft" not in projected
+
+
+@pytest.mark.parametrize(
+    ("field", "mutated"),
+    (
+        ("title", "forged title"),
+        ("heading_path", ["forged heading"]),
+        ("definitions", ["forged definition"]),
+        ("table_context", "forged table context"),
+        ("page_numbers", [2]),
+        ("lineage_sha256", SHA_B),
+        ("block_ids", ["forged-block"]),
+        ("cell_coordinates", ["p1:r0:c0:rs1:cs1"]),
+        ("table_id", "forged-table"),
+        ("dense_vector", [0.2, 0.1]),
+        ("embedding_sha256", SHA_B),
+        ("lexical_text", "forged ranking text"),
+        ("citation_uri", "knowledge://source/source-1/document/document-1/revision/revision-1#page=2"),
+    ),
+)
+def test_full_write_fence_digest_binds_every_omitted_projection_class(
+    field: str,
+    mutated: object,
+) -> None:
+    projected = project_rule_unit_document(
+        projection_document(),
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+    baseline = projected["immutable_projection_sha256"]
+    projected[field] = mutated
+
+    assert opensearch_module._immutable_projection_sha256(projected) != baseline
 
 
 def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_close() -> None:
@@ -771,21 +832,36 @@ def test_bulk_upsert_rejects_item_shard_failure() -> None:
 def projected_search_hit(
     *,
     document: ProjectionDocument | None = None,
+    content_updates: dict[str, object] | None = None,
     **updates: object,
 ) -> dict[str, object]:
-    source = project_rule_unit_document(
+    projected = project_rule_unit_document(
         document or projection_document(),
         identity=index_identity(),
         publication_attempt_id="attempt-1",
     )
     returned_fields = set(build_hybrid_query(search_request())["_source"])
-    source = {key: value for key, value in source.items() if key in returned_fields}
+    source = {key: value for key, value in projected.items() if key in returned_fields}
+    content_source = {
+        key: value
+        for key, value in projected.items()
+        if key
+        in {
+            "projection_id",
+            "content",
+            "content_sha256",
+            "immutable_projection_sha256",
+            "response_integrity_sha256",
+        }
+    }
+    content_source.update(content_updates or {})
     source.update(updates)
     return {
         "_index": physical_index_name("source-1", "generation-1"),
         "_id": source["projection_id"],
         "_score": 1.25,
         "_source": source,
+        "_content_source": content_source,
     }
 
 
@@ -817,7 +893,18 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
     assert sum(
         call["method"] == "GET" and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
         for call in transport.calls
-    ) == 2
+    ) == 3
+    content_call = next(call for call in transport.calls if call["path"].endswith("/_mget"))
+    assert content_call["json_body"]["ids"] == ["projection-1"]
+    assert content_call["json_body"]["_source"] == sorted(
+        {
+            "projection_id",
+            "content",
+            "content_sha256",
+            "immutable_projection_sha256",
+            "response_integrity_sha256",
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -846,7 +933,6 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
             )
         },
         {"projection_sha256": None},
-        {"content": "x" * 50_001},
     ),
 )
 def test_search_rejects_backend_hits_that_bypass_governed_filters(
@@ -868,6 +954,15 @@ def test_search_rejects_hit_from_another_physical_index() -> None:
         OpenSearchHybridIndex(
             transport=RecordingTransport(search_hits=[hit])
         ).search(search_request())
+
+
+def test_unauthorized_candidate_never_triggers_content_fetch() -> None:
+    transport = RecordingTransport(
+        search_hits=[projected_search_hit(allowed_institutions=["INST-2"])]
+    )
+    with pytest.raises(OpenSearchProjectionError):
+        OpenSearchHybridIndex(transport=transport).search(search_request())
+    assert not any(call["path"].endswith("/_mget") for call in transport.calls)
 
 
 def test_search_rejects_any_failed_backend_shard() -> None:
@@ -905,6 +1000,29 @@ def test_search_rejects_wrong_exact_index_uuid_before_content_query() -> None:
     with pytest.raises(OpenSearchProjectionError, match="index UUID"):
         OpenSearchHybridIndex(transport=transport).search(search_request())
     assert not any(call["path"].endswith("/_search") for call in transport.calls)
+
+
+def test_search_reverifies_index_uuid_after_content_stage() -> None:
+    class PostContentIdentityDriftTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__(search_hits=[projected_search_hit()])
+            self.identity_reads = 0
+
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            response = super().request(**kwargs)
+            if kwargs["method"] == "GET" and kwargs["path"].startswith("/pa-knowledge-"):
+                self.identity_reads += 1
+                if self.identity_reads == 3:
+                    body = dict(response.body)
+                    index = physical_index_name("source-1", "generation-1")
+                    body[index]["settings"]["index"]["uuid"] = "drifted-uuid"  # type: ignore[index]
+                    return OpenSearchTransportResponse(status_code=200, body=body)
+            return response
+
+    with pytest.raises(OpenSearchProjectionError, match="index UUID"):
+        OpenSearchHybridIndex(
+            transport=PostContentIdentityDriftTransport()
+        ).search(search_request())
 
 
 def test_publication_upper_bound_equal_to_requested_sequence_remains_visible() -> None:
@@ -958,6 +1076,23 @@ def test_historical_sequence_candidate_is_root_agnostic_for_later_authority_gate
     assert manifest_entry_core_sha256(open_document.manifest_entry) == (
         manifest_entry_core_sha256(document.manifest_entry)
     )
+    open_projection = project_rule_unit_document(
+        open_document,
+        identity=index_identity(),
+        publication_attempt_id="attempt-open",
+    )
+    closed_projection = project_rule_unit_document(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="attempt-close",
+    )
+    assert open_projection["immutable_projection_sha256"] == closed_projection[
+        "immutable_projection_sha256"
+    ]
+    assert open_projection["projection_sha256"] != closed_projection["projection_sha256"]
+    assert open_projection["response_integrity_sha256"] != closed_projection[
+        "response_integrity_sha256"
+    ]
     hit = projected_search_hit(document=document)
     transport = RecordingTransport(search_hits=[hit])
     adapter = OpenSearchHybridIndex(transport=transport)
@@ -1020,18 +1155,59 @@ def test_search_rejects_per_hit_and_aggregate_source_envelope_overflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     oversized = projected_search_hit()
-    oversized["_source"]["content"] = "x" * (  # type: ignore[index]
-        opensearch_module.MAX_SEARCH_HIT_SOURCE_BYTES + 1
+    oversized["_source"]["authority"] = "x" * (  # type: ignore[index]
+        opensearch_module.MAX_CANDIDATE_SOURCE_BYTES + 1
     )
     with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
         OpenSearchHybridIndex(
             transport=RecordingTransport(search_hits=[oversized])
         ).search(search_request())
 
-    monkeypatch.setattr(opensearch_module, "MAX_SEARCH_SOURCE_BYTES", 1)
+    monkeypatch.setattr(opensearch_module, "MAX_CANDIDATE_SOURCES_BYTES", 1)
     with pytest.raises(OpenSearchProjectionError, match="bounded envelope"):
         OpenSearchHybridIndex(
             transport=RecordingTransport(search_hits=[projected_search_hit()])
+        ).search(search_request())
+
+
+def test_content_fetch_rejects_oversize_and_digest_or_state_mismatch() -> None:
+    for updates in (
+        {"content": "x" * 50_001},
+        {"content": "forged content"},
+        {"immutable_projection_sha256": SHA_B},
+        {"response_integrity_sha256": SHA_B},
+    ):
+        with pytest.raises(OpenSearchProjectionError):
+            OpenSearchHybridIndex(
+                transport=RecordingTransport(
+                    search_hits=[projected_search_hit(content_updates=updates)]
+                )
+            ).search(search_request())
+
+
+@pytest.mark.parametrize("failure", ("count", "id", "index", "found", "source"))
+def test_content_fetch_rejects_incomplete_or_misbound_documents(failure: str) -> None:
+    class InvalidMgetTransport(RecordingTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            response = super().request(**kwargs)
+            if not kwargs["path"].endswith("/_mget"):
+                return response
+            body = {"docs": [dict(item) for item in response.body["docs"]]}  # type: ignore[index]
+            if failure == "count":
+                body["docs"] = []
+            elif failure == "id":
+                body["docs"][0]["_id"] = "wrong-projection"
+            elif failure == "index":
+                body["docs"][0]["_index"] = "wrong-index"
+            elif failure == "found":
+                body["docs"][0]["found"] = False
+            else:
+                body["docs"][0]["_source"] = {"content": "incomplete"}
+            return OpenSearchTransportResponse(status_code=200, body=body)
+
+    with pytest.raises(OpenSearchProjectionError, match="content fetch"):
+        OpenSearchHybridIndex(
+            transport=InvalidMgetTransport(search_hits=[projected_search_hit()])
         ).search(search_request())
 
 
@@ -1153,6 +1329,23 @@ def test_index_identity_rejects_name_only_analyzer_settings_drift() -> None:
 
     with pytest.raises(OpenSearchProjectionError, match="actual analyzer settings"):
         OpenSearchHybridIndex(transport=MutatedAnalysisTransport()).verify_identity(
+            index_identity()
+        )
+
+
+def test_index_identity_rejects_replica_setting_drift() -> None:
+    class MutatedReplicaTransport(RecordingTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            response = super().request(**kwargs)
+            if kwargs["method"] == "GET" and kwargs["path"].startswith("/pa-knowledge-"):
+                body = dict(response.body)
+                index = physical_index_name("source-1", "generation-1")
+                body[index]["settings"]["index"]["number_of_replicas"] = "0"  # type: ignore[index]
+                return OpenSearchTransportResponse(status_code=200, body=body)
+            return response
+
+    with pytest.raises(OpenSearchProjectionError, match="replica setting"):
+        OpenSearchHybridIndex(transport=MutatedReplicaTransport()).verify_identity(
             index_identity()
         )
 

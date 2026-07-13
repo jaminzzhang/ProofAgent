@@ -92,7 +92,7 @@ def _validate_bounded_json(value: object) -> None:
     while pending:
         current, depth = pending.pop()
         nodes += 1
-        if nodes > 5_000_000 or depth > 64:
+        if nodes > 1_000_000 or depth > 64:
             raise OpenSearchProjectionError("OpenSearch JSON exceeds structural limits")
         if isinstance(current, dict):
             if len(current) > 20_000:
@@ -121,7 +121,7 @@ class HttpxOpenSearchTransport:
         allowed_hosts: tuple[str, ...],
         timeout_seconds: float = 10.0,
         allow_insecure_loopback: bool = False,
-        max_response_bytes: int = 384 * 1024 * 1024,
+        max_response_bytes: int = 32 * 1024 * 1024,
         network_policy: PrivateNetworkPolicy | None = None,
         resolver: PrivateAddressResolver | None = None,
         secret_handle: str | None = None,
@@ -170,7 +170,7 @@ class HttpxOpenSearchTransport:
             raise ValueError("OpenSearch timeout must be within 60 seconds")
         if (
             type(max_response_bytes) is not int
-            or not 1 <= max_response_bytes <= 384 * 1024 * 1024
+            or not 1 <= max_response_bytes <= 32 * 1024 * 1024
         ):
             raise ValueError("OpenSearch response limit is invalid")
         base_url = endpoint.rstrip("/")
@@ -403,8 +403,11 @@ def physical_index_name(source_id: str, generation_id: str) -> str:
 
 
 RULE_UNIT_ANALYZER = "proof_agent_cjk_v1"
-MAX_SEARCH_HIT_SOURCE_BYTES = 360_000
-MAX_SEARCH_SOURCE_BYTES = 360_000_000
+MAX_CANDIDATE_SOURCE_BYTES = 24_000
+MAX_CANDIDATE_SOURCES_BYTES = 24_000_000
+MAX_CONTENT_SOURCE_BYTES = 320_000
+MAX_CONTENT_BATCH_BYTES = 12_000_000
+CONTENT_FETCH_BATCH_SIZE = 32
 MAX_AUTHORITY_PROJECTION_BYTES = 16_384
 
 
@@ -509,8 +512,10 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
             "projection_revision",
             "immutable_projection_sha256",
             "projection_sha256",
+            "response_integrity_sha256",
             "publication_attempt_id",
             "embedding_sha256",
+            "lineage_sha256",
             "block_ids",
             "table_id",
             "table_continuation_id",
@@ -562,10 +567,16 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
     return {"dynamic": "strict", "properties": properties}
 
 
-def _rule_unit_index_definition(*, dimension: int) -> dict[str, object]:
+def _rule_unit_index_definition(
+    *, dimension: int, number_of_replicas: int
+) -> dict[str, object]:
     return {
         "settings": {
-            "index": {"knn": True, "analysis": rule_unit_analysis_settings()}
+            "index": {
+                "knn": True,
+                "number_of_replicas": number_of_replicas,
+                "analysis": rule_unit_analysis_settings(),
+            }
         },
         "mappings": rule_unit_index_mapping(dimension=dimension),
     }
@@ -779,6 +790,7 @@ def project_rule_unit_document(
         "publication_seq_from": entry.publication_seq_from,
         "citation_uri": entry.citation_uri,
         "page_numbers": list(lineage.page_numbers),
+        "lineage_sha256": stable_digest(lineage.model_dump(mode="json")),
         "block_ids": list(lineage.block_ids),
         "cell_coordinates": _cell_coordinate_tokens(document),
         "content": rule.content,
@@ -803,6 +815,7 @@ def project_rule_unit_document(
 
     projected["immutable_projection_sha256"] = _immutable_projection_sha256(projected)
     projected["projection_sha256"] = _mutable_projection_sha256(projected)
+    projected["response_integrity_sha256"] = _response_integrity_sha256(projected)
     return projected
 
 
@@ -826,13 +839,23 @@ def _fact_token(value: object) -> str:
     return stable_digest({"fact": _taxonomy_value(value)})
 
 
-_IMMUTABLE_PROJECTION_FIELDS = frozenset(
+_IMMUTABLE_EXCLUDED_FIELDS = frozenset(
+    {
+        "manifest_entry_core_sha256",
+        "publication_seq_to",
+        "publication_attempt_id",
+        "immutable_projection_sha256",
+        "projection_sha256",
+        "response_integrity_sha256",
+    }
+)
+
+_CANDIDATE_SOURCE_FIELDS = frozenset(
     {
         "projection_id",
         "source_id",
         "document_id",
         "revision_id",
-        "logical_rule_key",
         "rule_unit_revision_id",
         "structured_artifact_build_identity",
         "index_generation_id",
@@ -840,29 +863,34 @@ _IMMUTABLE_PROJECTION_FIELDS = frozenset(
         "authority_sha256",
         "publication_seq_from",
         "citation_uri",
-        "content",
-        "rule_type",
-        "embedding_sha256",
         "projection_revision",
         *_FLATTENED_AUTHORITY_FIELDS,
+        "manifest_entry_core_sha256",
+        "publication_seq_to",
+        "immutable_projection_sha256",
+        "projection_sha256",
+        "response_integrity_sha256",
     }
 )
 
-_SEARCH_SOURCE_FIELDS = frozenset(
+_CONTENT_SOURCE_FIELDS = frozenset(
     {
-        *_IMMUTABLE_PROJECTION_FIELDS,
-        "manifest_entry_core_sha256",
-        "publication_seq_to",
-        "publication_attempt_id",
+        "projection_id",
+        "content",
+        "content_sha256",
         "immutable_projection_sha256",
-        "projection_sha256",
+        "response_integrity_sha256",
     }
 )
 
 
 def _immutable_projection_sha256(projected: Mapping[str, object]) -> str:
     return stable_digest(
-        {key: projected[key] for key in _IMMUTABLE_PROJECTION_FIELDS if key in projected}
+        {
+            key: value
+            for key, value in projected.items()
+            if key not in _IMMUTABLE_EXCLUDED_FIELDS
+        }
     )
 
 
@@ -873,6 +901,16 @@ def _mutable_projection_sha256(projected: Mapping[str, object]) -> str:
             "manifest_entry_core_sha256": projected["manifest_entry_core_sha256"],
             "publication_seq_from": projected["publication_seq_from"],
             "publication_seq_to": projected.get("publication_seq_to"),
+        }
+    )
+
+
+def _response_integrity_sha256(projected: Mapping[str, object]) -> str:
+    return stable_digest(
+        {
+            key: projected[key]
+            for key in _CANDIDATE_SOURCE_FIELDS
+            if key != "response_integrity_sha256" and key in projected
         }
     )
 
@@ -1001,7 +1039,7 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
     common_filter = build_common_filter(request)
     return {
         "size": request.rrf_window,
-        "_source": sorted(_SEARCH_SOURCE_FIELDS),
+        "_source": sorted(_CANDIDATE_SOURCE_FIELDS),
         "query": {
             "hybrid": {
                 "pagination_depth": request.lexical_budget,
@@ -1061,6 +1099,7 @@ if (ctx.op == 'create') {
       ctx._source.publication_seq_to = params.doc.publication_seq_to;
     }
     ctx._source.projection_sha256 = params.doc.projection_sha256;
+    ctx._source.response_integrity_sha256 = params.doc.response_integrity_sha256;
     ctx._source.publication_attempt_id = params.doc.publication_attempt_id;
   }
 }
@@ -1139,6 +1178,7 @@ def _response_index_identity(
     *,
     index_name: str,
     expected: SearchIndexIdentity,
+    expected_number_of_replicas: int,
 ) -> SearchIndexIdentity:
     if response.status_code != 200:
         raise OpenSearchProjectionError("exact OpenSearch index identity is unavailable")
@@ -1150,6 +1190,15 @@ def _response_index_identity(
     actual_uuid = _exact_string(index_settings.get("uuid"), field_name="index UUID")
     if actual_uuid != expected.index_uuid:
         raise OpenSearchProjectionError("OpenSearch index UUID does not match the binding")
+    raw_replicas = index_settings.get("number_of_replicas")
+    if type(raw_replicas) is int:
+        actual_replicas = raw_replicas
+    elif type(raw_replicas) is str and re.fullmatch(r"0|[1-9][0-9]*", raw_replicas):
+        actual_replicas = int(raw_replicas)
+    else:
+        raise OpenSearchProjectionError("OpenSearch index replica setting is invalid")
+    if actual_replicas != expected_number_of_replicas:
+        raise OpenSearchProjectionError("OpenSearch index replica setting does not match")
     mappings = _mapping(details.get("mappings"), field_name="index mappings")
     metadata = _mapping(mappings.get("_meta"), field_name="index mapping metadata")
     generation = expected.generation
@@ -1582,12 +1631,33 @@ def _strict_authority_from_flattened(
     return metadata, visibility, expected
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedCandidate:
+    rank: int
+    source_id: str
+    index_generation_id: str
+    index_uuid: str
+    projection_id: str
+    rule_unit_revision_id: str
+    document_id: str
+    revision_id: str
+    manifest_entry_core_sha256: str
+    metadata_revision_digest: str
+    visibility_revision_digest: str
+    content_sha256: str
+    authority_sha256: str
+    citation_uri: str
+    immutable_projection_sha256: str
+    response_integrity_sha256: str
+    fused_score: float
+
+
 def _normalize_search_hits(
     response: OpenSearchTransportResponse,
     *,
     request: HybridSearchRequest,
     index_name: str,
-) -> tuple[HybridSearchHit, ...]:
+) -> tuple[_ValidatedCandidate, ...]:
     if response.status_code != 200:
         raise OpenSearchProjectionError("OpenSearch search failed")
     if response.body.get("timed_out") is not False:
@@ -1599,8 +1669,8 @@ def _normalize_search_hits(
     raw_hits = hits_envelope.get("hits")
     if not isinstance(raw_hits, list) or len(raw_hits) > request.rrf_window:
         raise OpenSearchProjectionError("OpenSearch returned an invalid candidate count")
-    allowed_fields = set(_SEARCH_SOURCE_FIELDS)
-    result: list[HybridSearchHit] = []
+    allowed_fields = set(_CANDIDATE_SOURCE_FIELDS)
+    result: list[_ValidatedCandidate] = []
     seen_rule_units: set[str] = set()
     aggregate_source_bytes = 0
     for rank, raw_hit in enumerate(raw_hits, start=1):
@@ -1615,9 +1685,8 @@ def _normalize_search_hits(
             json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode()
         )
         aggregate_source_bytes += source_bytes
-        if (
-            source_bytes > MAX_SEARCH_HIT_SOURCE_BYTES
-            or aggregate_source_bytes > MAX_SEARCH_SOURCE_BYTES
+        if source_bytes > MAX_CANDIDATE_SOURCE_BYTES or (
+            aggregate_source_bytes > MAX_CANDIDATE_SOURCES_BYTES
         ):
             raise OpenSearchProjectionError("OpenSearch search source exceeds bounded envelope")
         projection_id = _exact_string(source.get("projection_id"), field_name="projection_id")
@@ -1655,8 +1724,9 @@ def _normalize_search_hits(
         projection_sha256 = _sha256(
             source.get("projection_sha256"), field_name="projection_sha256"
         )
-        _exact_string(
-            source.get("publication_attempt_id"), field_name="publication_attempt_id"
+        response_integrity_sha256 = _sha256(
+            source.get("response_integrity_sha256"),
+            field_name="response_integrity_sha256",
         )
         projection_revision = _exact_string(
             source.get("projection_revision"), field_name="projection_revision"
@@ -1713,11 +1783,6 @@ def _normalize_search_hits(
             document_id=document_id,
             revision_id=revision_id,
         )
-        content = _exact_string(
-            source.get("content"), field_name="content", maximum=50_000
-        )
-        if hashlib.sha256(content.encode()).hexdigest() != content_sha256:
-            raise OpenSearchProjectionError("search hit content digest does not match")
         metadata, visibility, _expected_authority = _strict_authority_from_flattened(
             source
         )
@@ -1744,14 +1809,14 @@ def _normalize_search_hits(
             raise OpenSearchProjectionError("search hit is unauthorized")
         if not _applicability_allows(source, request.applicability_filters):
             raise OpenSearchProjectionError("search hit is outside approved applicability")
-        if _immutable_projection_sha256(source) != immutable_projection_sha256:
-            raise OpenSearchProjectionError("search hit immutable projection digest does not match")
         if _mutable_projection_sha256(source) != projection_sha256:
             raise OpenSearchProjectionError("search hit mutable projection digest does not match")
+        if _response_integrity_sha256(source) != response_integrity_sha256:
+            raise OpenSearchProjectionError("search hit response integrity digest does not match")
         if rank > request.limit:
             continue
         result.append(
-            HybridSearchHit(
+            _ValidatedCandidate(
                 rank=rank,
                 source_id=source_id,
                 index_generation_id=generation_id,
@@ -1766,11 +1831,79 @@ def _normalize_search_hits(
                 content_sha256=content_sha256,
                 authority_sha256=authority_sha256,
                 citation_uri=citation_uri,
-                content=content,
+                immutable_projection_sha256=immutable_projection_sha256,
+                response_integrity_sha256=response_integrity_sha256,
                 fused_score=fused_score,
             )
         )
     return tuple(result)
+
+
+def _normalize_mget_content(
+    response: OpenSearchTransportResponse,
+    *,
+    candidates: tuple[_ValidatedCandidate, ...],
+    index_name: str,
+) -> tuple[HybridSearchHit, ...]:
+    if response.status_code != 200:
+        raise OpenSearchProjectionError("OpenSearch content fetch failed")
+    raw_documents = response.body.get("docs")
+    if not isinstance(raw_documents, list) or len(raw_documents) != len(candidates):
+        raise OpenSearchProjectionError("OpenSearch content fetch count does not match")
+    aggregate_bytes = 0
+    results: list[HybridSearchHit] = []
+    for candidate, raw_document in zip(candidates, raw_documents, strict=True):
+        document = _mapping(raw_document, field_name="content fetch document")
+        if (
+            document.get("_index") != index_name
+            or document.get("_id") != candidate.projection_id
+            or document.get("found") is not True
+        ):
+            raise OpenSearchProjectionError("OpenSearch content fetch identity does not match")
+        source = _mapping(document.get("_source"), field_name="content fetch source")
+        if set(source) != set(_CONTENT_SOURCE_FIELDS):
+            raise OpenSearchProjectionError("OpenSearch content fetch source is incomplete")
+        source_bytes = len(
+            json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode()
+        )
+        aggregate_bytes += source_bytes
+        if source_bytes > MAX_CONTENT_SOURCE_BYTES or aggregate_bytes > MAX_CONTENT_BATCH_BYTES:
+            raise OpenSearchProjectionError("OpenSearch content fetch exceeds bounded envelope")
+        if source.get("projection_id") != candidate.projection_id:
+            raise OpenSearchProjectionError("content projection identity does not match")
+        if source.get("content_sha256") != candidate.content_sha256:
+            raise OpenSearchProjectionError("content digest binding does not match candidate")
+        if (
+            source.get("immutable_projection_sha256")
+            != candidate.immutable_projection_sha256
+            or source.get("response_integrity_sha256")
+            != candidate.response_integrity_sha256
+        ):
+            raise OpenSearchProjectionError("content projection state does not match candidate")
+        content = _exact_string(source.get("content"), field_name="content", maximum=50_000)
+        if hashlib.sha256(content.encode()).hexdigest() != candidate.content_sha256:
+            raise OpenSearchProjectionError("content digest does not match exact content")
+        results.append(
+            HybridSearchHit(
+                rank=candidate.rank,
+                source_id=candidate.source_id,
+                index_generation_id=candidate.index_generation_id,
+                index_uuid=candidate.index_uuid,
+                projection_id=candidate.projection_id,
+                rule_unit_revision_id=candidate.rule_unit_revision_id,
+                document_id=candidate.document_id,
+                revision_id=candidate.revision_id,
+                manifest_entry_core_sha256=candidate.manifest_entry_core_sha256,
+                metadata_revision_digest=candidate.metadata_revision_digest,
+                visibility_revision_digest=candidate.visibility_revision_digest,
+                content_sha256=candidate.content_sha256,
+                authority_sha256=candidate.authority_sha256,
+                citation_uri=candidate.citation_uri,
+                content=content,
+                fused_score=candidate.fused_score,
+            )
+        )
+    return tuple(results)
 
 
 def rrf_pipeline_body(*, rank_constant: int) -> dict[str, object]:
@@ -1799,8 +1932,16 @@ def rrf_pipeline_name(*, rank_constant: int) -> str:
 class OpenSearchHybridIndex:
     """Deep adapter implementing the provider-neutral HybridSearchIndex seam."""
 
-    def __init__(self, *, transport: OpenSearchTransport) -> None:
+    def __init__(
+        self,
+        *,
+        transport: OpenSearchTransport,
+        number_of_replicas: int = 1,
+    ) -> None:
+        if type(number_of_replicas) is not int or not 0 <= number_of_replicas <= 12:
+            raise ValueError("OpenSearch number_of_replicas must be between 0 and 12")
         self._transport = transport
+        self._number_of_replicas = number_of_replicas
 
     def _validate_generation(self, generation: KnowledgeIndexGeneration) -> None:
         if generation.mapping_sha256 != rule_unit_mapping_sha256(
@@ -1857,6 +1998,7 @@ class OpenSearchHybridIndex:
         self._ensure_pipeline(pipeline=rrf_pipeline, rank_constant=rrf_rank_constant)
         definition = _rule_unit_index_definition(
             dimension=generation.embedding_dimension,
+            number_of_replicas=self._number_of_replicas,
         )
         mappings = _mapping(definition["mappings"], field_name="index mappings")
         mappings["_meta"] = {  # type: ignore[index]
@@ -1895,6 +2037,7 @@ class OpenSearchHybridIndex:
             identity_response,
             index_name=index_name,
             expected=identity,
+            expected_number_of_replicas=self._number_of_replicas,
         )
 
     def verify_identity(self, expected: SearchIndexIdentity) -> SearchIndexIdentity:
@@ -1907,6 +2050,7 @@ class OpenSearchHybridIndex:
             response,
             index_name=index_name,
             expected=expected,
+            expected_number_of_replicas=self._number_of_replicas,
         )
 
     def bulk_upsert(self, request: ProjectionBulkRequest) -> ProjectionBulkResult:
@@ -1969,11 +2113,31 @@ class OpenSearchHybridIndex:
             pipeline=request.rrf_pipeline,
             rank_constant=request.rrf_rank_constant,
         )
-        return _normalize_search_hits(
+        candidates = _normalize_search_hits(
             response,
             request=request,
             index_name=index_name,
         )
+        results: list[HybridSearchHit] = []
+        for offset in range(0, len(candidates), CONTENT_FETCH_BATCH_SIZE):
+            batch = candidates[offset : offset + CONTENT_FETCH_BATCH_SIZE]
+            content_response = self._transport.request(
+                method="POST",
+                path=f"/{index_name}/_mget",
+                json_body={
+                    "ids": [candidate.projection_id for candidate in batch],
+                    "_source": sorted(_CONTENT_SOURCE_FIELDS),
+                },
+            )
+            self.verify_identity(request.identity)
+            results.extend(
+                _normalize_mget_content(
+                    content_response,
+                    candidates=batch,
+                    index_name=index_name,
+                )
+            )
+        return tuple(results)
 
 
 __all__ = [
