@@ -8,9 +8,13 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_validator
 
-from proof_agent.capabilities.knowledge.hybrid.canonicalizer import CanonicalParserPage
+from proof_agent.capabilities.knowledge.hybrid.canonicalizer import (
+    CanonicalParserPage,
+    validate_page_geometry_and_bounds,
+)
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
+    BoundingBox,
     ParserWarning,
     StructuredArtifactBuildIdentity,
     StructuredBlock,
@@ -80,6 +84,9 @@ def merge_selected_results(
     """Apply complete-boundary replacements; text is never concatenated across parsers."""
 
     _validate_paddle_identity(docling, paddle_pages)
+    for page in docling.pages:
+        validate_page_geometry_and_bounds(page)
+        _require_unique_boundary_ids(page, parser="Docling")
     page_lookup = {candidate.page.page_number: candidate for candidate in paddle_pages}
     if len(page_lookup) != len(paddle_pages):
         raise ValueError("Paddle page numbers must be unique")
@@ -161,6 +168,10 @@ def merge_selected_results(
         warnings=warnings,
         quality_signals=docling.quality_signals + signals,
     )
+    artifact = StructuredKnowledgeDocumentArtifact.model_validate(artifact.model_dump())
+    for page in artifact.pages:
+        validate_page_geometry_and_bounds(page)
+        _require_unique_boundary_ids(page, parser="merged")
     return CanonicalMergeResult(
         artifact=artifact,
         merge_records=records,
@@ -181,6 +192,7 @@ def _merge_page(
     if candidate is None:
         raise ValueError("every merge decision requires a Paddle result for the same page")
     paddle_page = candidate.page
+    _require_unique_boundary_ids(paddle_page, parser="Paddle")
     if paddle_page.width != docling_page.width or paddle_page.height != docling_page.height:
         raise ValueError("Paddle and Docling page dimensions must match exactly")
 
@@ -194,20 +206,25 @@ def _merge_page(
             selected = paddle_blocks.get(decision.paddle_id)
             if original is None or selected is None:
                 raise ValueError("block merge identities must exist in both parser results")
+            _validate_block_replacement(original, selected)
             blocks[decision.docling_id] = _replace_block(original.block_id, selected)
         else:
             original_table = tables.get(decision.docling_id)
             selected_table = paddle_tables.get(decision.paddle_id)
             if original_table is None or selected_table is None:
                 raise ValueError("table merge identities must exist in both parser results")
+            _validate_table_replacement(original_table, selected_table)
             tables[decision.docling_id] = _replace_table(original_table.table_id, selected_table)
 
-    return docling_page.model_copy(
+    merged = docling_page.model_copy(
         update={
             "blocks": tuple(blocks[block.block_id] for block in docling_page.blocks),
             "tables": tuple(tables[table.table_id] for table in docling_page.tables),
         }
     )
+    validate_page_geometry_and_bounds(merged)
+    _require_unique_boundary_ids(merged, parser="merged")
+    return merged
 
 
 def _replace_block(target_id: str, selected: StructuredBlock) -> StructuredBlock:
@@ -225,11 +242,54 @@ def _replace_table(target_id: str, selected: StructuredTable) -> StructuredTable
     )
 
 
+def _require_unique_boundary_ids(page: StructuredPage, *, parser: str) -> None:
+    block_ids = [block.block_id for block in page.blocks]
+    table_ids = [table.table_id for table in page.tables]
+    if len(block_ids) != len(set(block_ids)):
+        raise ValueError(f"{parser} page contains duplicate block identities")
+    if len(table_ids) != len(set(table_ids)):
+        raise ValueError(f"{parser} page contains duplicate table identities")
+
+
+def _validate_block_replacement(original: StructuredBlock, selected: StructuredBlock) -> None:
+    if (
+        selected.block_type != original.block_type
+        or selected.reading_order != original.reading_order
+        or selected.heading_level != original.heading_level
+        or selected.heading_path != original.heading_path
+    ):
+        raise ValueError("Paddle block is incompatible with the selected canonical boundary")
+    if not _bbox_compatible(original.bbox, selected.bbox):
+        raise ValueError("Paddle block violates the canonical boundary geometry policy")
+
+
+def _validate_table_replacement(original: StructuredTable, selected: StructuredTable) -> None:
+    if selected.continuation_of != original.continuation_of:
+        raise ValueError("Paddle table continuation is incompatible with the selected boundary")
+    if not _bbox_compatible(original.bbox, selected.bbox):
+        raise ValueError("Paddle table violates the canonical boundary geometry policy")
+
+
+def _bbox_compatible(original: BoundingBox, selected: BoundingBox) -> bool:
+    intersection_width = max(0.0, min(original.x1, selected.x1) - max(original.x0, selected.x0))
+    intersection_height = max(0.0, min(original.y1, selected.y1) - max(original.y0, selected.y0))
+    intersection = intersection_width * intersection_height
+    original_area = (original.x1 - original.x0) * (original.y1 - original.y0)
+    selected_area = (selected.x1 - selected.x0) * (selected.y1 - selected.y0)
+    smaller_area = min(original_area, selected_area)
+    if smaller_area == 0:
+        return original == selected
+    union = original_area + selected_area - intersection
+    return union > 0 and intersection / union >= 0.5
+
+
 def _validate_paddle_identity(
     docling: StructuredKnowledgeDocumentArtifact,
     paddle_pages: tuple[CanonicalParserPage, ...],
 ) -> None:
     for candidate in paddle_pages:
+        validate_page_geometry_and_bounds(candidate.page)
+        _require_unique_boundary_ids(candidate.page, parser="Paddle")
         if candidate.original_sha256 != candidate.build_identity.source_sha256:
             raise ValueError("Paddle page original SHA must match its build identity")
         if (

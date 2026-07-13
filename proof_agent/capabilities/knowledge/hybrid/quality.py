@@ -7,11 +7,15 @@ from typing import Annotated
 
 from pydantic import ConfigDict, Field, StrictStr, StringConstraints
 
+from proof_agent.capabilities.knowledge.hybrid.canonicalizer import (
+    validate_page_geometry_and_bounds,
+)
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
     ParserWarning,
     StructuredKnowledgeDocumentArtifact,
     StructuredPage,
+    StructuredTableCell,
 )
 
 
@@ -42,6 +46,15 @@ def assess_page_quality(
     review_reasons: list[str] = []
     escalation_reasons: list[str] = []
 
+    try:
+        validate_page_geometry_and_bounds(page)
+    except ValueError:
+        return PageQualityDecision(
+            page_number=page.page_number,
+            outcome=QualityOutcome.REVIEW_REQUIRED,
+            reasons=("invalid_page_geometry_or_bounds",),
+        )
+
     page_warnings = tuple(
         warning for warning in warnings if warning.page_number in {None, page.page_number}
     )
@@ -49,7 +62,9 @@ def assess_page_quality(
         review_reasons.append("parser_warning")
 
     orders = sorted(block.reading_order for block in page.blocks)
-    if len(orders) != len(set(orders)) or (orders and orders != list(range(orders[-1] + 1))):
+    if len(orders) != len(set(orders)) or any(
+        actual != expected for expected, actual in enumerate(orders)
+    ):
         review_reasons.append("reading_order_gap")
 
     block_ids = [block.block_id for block in page.blocks]
@@ -60,17 +75,9 @@ def assess_page_quality(
     for table in page.tables:
         if not table.cells:
             review_reasons.append("table_without_cells")
-        occupied: set[tuple[int, int]] = set()
+        if _table_has_overlapping_cells(table.cells):
+            review_reasons.append("table_cell_overlap")
         for cell in table.cells:
-            footprint = {
-                (row, column)
-                for row in range(cell.row, cell.row + cell.row_span)
-                for column in range(cell.column, cell.column + cell.column_span)
-            }
-            if occupied & footprint:
-                review_reasons.append("table_cell_overlap")
-                break
-            occupied.update(footprint)
             if not (
                 table.bbox.x0 <= cell.bbox.x0 <= cell.bbox.x1 <= table.bbox.x1
                 and table.bbox.y0 <= cell.bbox.y0 <= cell.bbox.y1 <= table.bbox.y1
@@ -87,7 +94,10 @@ def assess_page_quality(
         cell.text for table in page.tables for cell in table.cells if cell.source_method == "ocr"
     )
     if not any(text.strip() for text in (*native_texts, *ocr_texts)):
-        escalation_reasons.append("missing_native_text")
+        if ocr_texts:
+            review_reasons.append("ocr_attempt_without_meaningful_text")
+        else:
+            escalation_reasons.append("missing_native_text")
 
     if review_reasons:
         return PageQualityDecision(
@@ -102,6 +112,22 @@ def assess_page_quality(
             reasons=tuple(dict.fromkeys(escalation_reasons)),
         )
     return PageQualityDecision(page_number=page.page_number, outcome=QualityOutcome.PASS)
+
+
+def _table_has_overlapping_cells(cells: tuple[StructuredTableCell, ...]) -> bool:
+    """Sweep row intervals without expanding any row/column span into coordinates."""
+
+    ordered = sorted(cells, key=lambda cell: (cell.row, cell.column))
+    active: list[StructuredTableCell] = []
+    for cell in ordered:
+        active = [other for other in active if other.row + other.row_span > cell.row]
+        cell_column_end = cell.column + cell.column_span
+        for other in active:
+            other_column_end = other.column + other.column_span
+            if cell.column < other_column_end and other.column < cell_column_end:
+                return True
+        active.append(cell)
+    return False
 
 
 def assess_cross_page_continuations(

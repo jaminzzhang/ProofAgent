@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    StrictBytes,
     StrictInt,
     StrictStr,
     StringConstraints,
@@ -18,9 +22,18 @@ from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 
 
-NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
+NonBlankStr = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
+MAX_PARSER_PAGES = 500
+MAX_TRANSPORT_RESPONSE_BYTES = 64 * 1024 * 1024
+MAX_JSON_DEPTH = 32
+MAX_JSON_COLLECTION_ITEMS = 100_000
+MAX_JSON_STRING_CHARACTERS = 1_000_000
+MAX_JSON_NODES = 1_000_000
 
 
 class _ParserServiceModel(FrozenModel):
@@ -31,9 +44,9 @@ class ParserServiceRequest(_ParserServiceModel):
     """Exact, replayable input envelope for one private parser invocation."""
 
     original_ref: ExactArtifactRef
-    page_numbers: tuple[PositiveInt, ...] = Field(min_length=1)
+    page_numbers: tuple[PositiveInt, ...] = Field(min_length=1, max_length=MAX_PARSER_PAGES)
     parser_revision: NonBlankStr
-    model_digests: tuple[NonBlankStr, ...]
+    model_digests: tuple[NonBlankStr, ...] = Field(max_length=64)
     configuration_sha256: Sha256
 
     @model_validator(mode="after")
@@ -46,6 +59,8 @@ class ParserServiceRequest(_ParserServiceModel):
             raise ValueError("page_numbers must be unique")
         if len(set(self.model_digests)) != len(self.model_digests):
             raise ValueError("model_digests must be unique")
+        if self.page_numbers[-1] > MAX_PARSER_PAGES:
+            raise ValueError(f"page_numbers cannot exceed {MAX_PARSER_PAGES}")
         return self
 
 
@@ -54,11 +69,19 @@ class ParserServiceAttestation(_ParserServiceModel):
 
     parser_adapter: Literal["docling", "paddle"]
     original_ref: ExactArtifactRef
-    page_numbers: tuple[PositiveInt, ...] = Field(min_length=1)
+    page_numbers: tuple[PositiveInt, ...] = Field(min_length=1, max_length=MAX_PARSER_PAGES)
     parser_revision: NonBlankStr
-    model_digests: tuple[NonBlankStr, ...]
+    model_digests: tuple[NonBlankStr, ...] = Field(max_length=64)
     configuration_sha256: Sha256
-    vendor_json: dict[str, JsonValue]
+    vendor_json_sha256: Sha256
+    vendor_json_bytes: StrictBytes = Field(max_length=MAX_TRANSPORT_RESPONSE_BYTES)
+
+    @model_validator(mode="after")
+    def validate_vendor_payload(self) -> Self:
+        if hashlib.sha256(self.vendor_json_bytes).hexdigest() != self.vendor_json_sha256:
+            raise ValueError("vendor JSON digest must match the attested canonical bytes")
+        _decode_attested_vendor_json(self)
+        return self
 
 
 class ParserServiceResponse(_ParserServiceModel):
@@ -90,7 +113,7 @@ class ParserServiceResponse(_ParserServiceModel):
 
     @property
     def vendor_json(self) -> dict[str, JsonValue]:
-        return self.attestation.vendor_json
+        return _decode_attested_vendor_json(self.attestation)
 
 
 class GuardedParserTransport(Protocol):
@@ -130,22 +153,85 @@ def _vendor_page_numbers(
         pages = payload.get("pages")
         if not isinstance(pages, list):
             raise ValueError("Docling response must contain a pages array")
+        if len(pages) > MAX_PARSER_PAGES:
+            raise ValueError("Docling response exceeds the page limit")
         return tuple(_page_number(page) for page in pages)
     page = payload.get("page")
     pages = payload.get("pages")
     if isinstance(page, dict):
         return (_page_number(page),)
     if isinstance(pages, list):
+        if len(pages) > MAX_PARSER_PAGES:
+            raise ValueError("Paddle response exceeds the page limit")
         return tuple(_page_number(item) for item in pages)
     raise ValueError("Paddle response must contain a page object or pages array")
+
+
+def canonical_vendor_json_bytes(payload: dict[str, JsonValue]) -> bytes:
+    """Return the only accepted deterministic wire representation for vendor JSON."""
+
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _decode_attested_vendor_json(
+    attestation: ParserServiceAttestation,
+) -> dict[str, JsonValue]:
+    try:
+        value = json.loads(attestation.vendor_json_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("vendor response must contain valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("vendor response root must be a JSON object")
+    _validate_json_bounds(value)
+    if canonical_vendor_json_bytes(value) != attestation.vendor_json_bytes:
+        raise ValueError("vendor response bytes must use canonical JSON encoding")
+    return value
+
+
+def _validate_json_bounds(value: JsonValue) -> None:
+    pending: list[tuple[JsonValue, int]] = [(value, 1)]
+    visited = 0
+    while pending:
+        current, depth = pending.pop()
+        visited += 1
+        if visited > MAX_JSON_NODES:
+            raise ValueError("vendor JSON exceeds the node limit")
+        if depth > MAX_JSON_DEPTH:
+            raise ValueError("vendor JSON exceeds the nesting-depth limit")
+        if isinstance(current, str):
+            if len(current) > MAX_JSON_STRING_CHARACTERS:
+                raise ValueError("vendor JSON string exceeds the character limit")
+        elif isinstance(current, list):
+            if len(current) > MAX_JSON_COLLECTION_ITEMS:
+                raise ValueError("vendor JSON array exceeds the item limit")
+            pending.extend((item, depth + 1) for item in current)
+        elif isinstance(current, dict):
+            if len(current) > MAX_JSON_COLLECTION_ITEMS:
+                raise ValueError("vendor JSON object exceeds the item limit")
+            for key, item in current.items():
+                if len(key) > MAX_JSON_STRING_CHARACTERS:
+                    raise ValueError("vendor JSON key exceeds the character limit")
+                pending.append((item, depth + 1))
+        elif isinstance(current, float) and not math.isfinite(current):
+            raise ValueError("vendor JSON numbers must be finite")
 
 
 def _page_number(value: JsonValue) -> int:
     if not isinstance(value, dict):
         raise ValueError("parser response page entries must be JSON objects")
     page_number = value.get("page_number")
-    if isinstance(page_number, bool) or not isinstance(page_number, int) or page_number <= 0:
-        raise ValueError("parser response page_number must be a positive integer")
+    if (
+        isinstance(page_number, bool)
+        or not isinstance(page_number, int)
+        or not 1 <= page_number <= MAX_PARSER_PAGES
+    ):
+        raise ValueError(f"parser response page_number must be between 1 and {MAX_PARSER_PAGES}")
     return page_number
 
 

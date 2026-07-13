@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +18,7 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     ParserServiceRequest,
     ParserServiceResponse,
     PrivateDoclingClient,
+    canonical_vendor_json_bytes,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
     MergeSelection,
@@ -84,6 +86,7 @@ def parser_response(
         model_digests=("sha256:model-digest",),
         configuration_sha256=configuration_sha256,
     )
+    vendor_json_bytes = canonical_vendor_json_bytes(payload)
     return ParserServiceResponse(
         adapter=adapter,
         request=request,
@@ -94,8 +97,24 @@ def parser_response(
             parser_revision=parser_revision,
             model_digests=("sha256:model-digest",),
             configuration_sha256=configuration_sha256,
-            vendor_json=payload,
+            vendor_json_sha256=hashlib.sha256(vendor_json_bytes).hexdigest(),
+            vendor_json_bytes=vendor_json_bytes,
         ),
+    )
+
+
+def with_vendor_payload(
+    response: ParserServiceResponse,
+    payload: dict[str, Any],
+    *,
+    update_digest: bool = True,
+) -> ParserServiceResponse:
+    vendor_json_bytes = canonical_vendor_json_bytes(payload)
+    update: dict[str, object] = {"vendor_json_bytes": vendor_json_bytes}
+    if update_digest:
+        update["vendor_json_sha256"] = hashlib.sha256(vendor_json_bytes).hexdigest()
+    return response.model_copy(
+        update={"attestation": response.attestation.model_copy(update=update)}
     )
 
 
@@ -110,32 +129,90 @@ def test_docling_fixture_maps_page_bbox_reading_order_and_table_cells() -> None:
     assert artifact.build_identity == build_id()
 
 
+def test_attested_vendor_payload_is_copy_safe_and_digest_rechecked() -> None:
+    response = parser_response("docling-simple.json")
+    exposed = response.vendor_json
+    exposed["pages"][0]["blocks"][0]["text"] = "mutated after validation"
+
+    artifact = canonicalize_docling(response, build=build_id())
+    assert artifact.pages[0].blocks[0].text == "Eligibility"
+
+    changed = response.vendor_json
+    changed["pages"][0]["blocks"][0]["text"] = "digest bypass"
+    stale_digest = with_vendor_payload(response, changed, update_digest=False)
+    with pytest.raises(ValidationError, match="vendor JSON digest"):
+        canonicalize_docling(stale_digest, build=build_id())
+
+
+def test_attestation_rejects_noncanonical_and_deep_vendor_json_bytes() -> None:
+    response = parser_response("docling-simple.json")
+    noncanonical = response.attestation.vendor_json_bytes + b" "
+    invalid = {
+        **response.attestation.model_dump(),
+        "vendor_json_bytes": noncanonical,
+        "vendor_json_sha256": hashlib.sha256(noncanonical).hexdigest(),
+    }
+    with pytest.raises(ValidationError, match="canonical JSON"):
+        ParserServiceAttestation.model_validate(invalid)
+
+    payload = response.vendor_json
+    nested: dict[str, Any] = {}
+    cursor = nested
+    for _ in range(40):
+        child: dict[str, Any] = {}
+        cursor["child"] = child
+        cursor = child
+    payload["nested"] = nested
+    too_deep = with_vendor_payload(response, payload)
+    with pytest.raises(ValidationError, match="nesting-depth"):
+        canonicalize_docling(too_deep, build=build_id())
+
+    payload = response.vendor_json
+    payload["oversized"] = "x" * 1_000_001
+    oversized = with_vendor_payload(response, payload)
+    with pytest.raises(ValidationError, match="string exceeds"):
+        canonicalize_docling(oversized, build=build_id())
+
+
+def test_parser_and_canonical_structure_bounds_are_enforced() -> None:
+    with pytest.raises(ValidationError):
+        ParserServiceRequest(
+            original_ref=original_ref(),
+            page_numbers=tuple(range(1, 502)),
+            parser_revision="2.112.0",
+            model_digests=("sha256:model-digest",),
+            configuration_sha256="b" * 64,
+        )
+
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    payload["pages"][0]["blocks"][0]["reading_order"] = 10_000
+    with pytest.raises(ValueError, match="reading_order"):
+        canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+    response = parser_response("docling-complex-table.json")
+    payload = response.vendor_json
+    payload["pages"][0]["tables"][0]["cells"][0]["row_span"] = 10_001
+    with pytest.raises(ValueError, match="row_span"):
+        canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    one_block = payload["pages"][0]["blocks"][0]
+    payload["pages"][0]["blocks"] = [one_block] * 10_001
+    with pytest.raises(ValueError, match="blocks exceeds"):
+        canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+
 def merged_block(*, reason: str = "native text missing", paddle_text: str | None = None):
     docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
     response = parser_response(
         "paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64
     )
     if paddle_text is not None:
-        response = response.model_copy(
-            update={
-                "attestation": response.attestation.model_copy(
-                    update={
-                        "vendor_json": {
-                            **response.vendor_json,
-                            "page": {
-                                **response.vendor_json["page"],
-                                "blocks": [
-                                    {
-                                        **response.vendor_json["page"]["blocks"][0],
-                                        "text": paddle_text,
-                                    }
-                                ],
-                            },
-                        }
-                    }
-                )
-            }
-        )
+        payload = response.vendor_json
+        payload["page"]["blocks"][0]["text"] = paddle_text
+        response = with_vendor_payload(response, payload)
     paddle_page = canonicalize_paddle_page(
         response, build=build_id(adapter="paddle", configuration_sha256="c" * 64)
     )
@@ -224,6 +301,117 @@ def test_paddle_page_and_merge_reject_inconsistent_source_build_provenance() -> 
         )
 
 
+def test_merge_rejects_duplicate_boundaries_before_dict_projection() -> None:
+    docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
+    page = docling.pages[0]
+    duplicated = page.model_copy(update={"blocks": (page.blocks[0], page.blocks[0])})
+    invalid_docling = docling.model_copy(update={"pages": (duplicated,)})
+    paddle_page = canonicalize_paddle_page(
+        parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+
+    with pytest.raises(ValueError, match="duplicate block identities"):
+        merge_selected_results(
+            invalid_docling,
+            (paddle_page,),
+            decisions=(
+                MergeSelection(
+                    page_number=1,
+                    boundary_kind="block",
+                    docling_id="heading-1",
+                    paddle_id="ocr-paragraph-1",
+                    reason="bad duplicate target",
+                ),
+            ),
+        )
+
+
+def test_merge_rejects_incompatible_block_lineage_and_geometry() -> None:
+    docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
+    paddle_page = canonicalize_paddle_page(
+        parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+    selected = paddle_page.page.blocks[0]
+    wrong_order = selected.model_copy(update={"reading_order": 0})
+    incompatible_page = paddle_page.page.model_copy(update={"blocks": (wrong_order,)})
+    incompatible = paddle_page.model_copy(update={"page": incompatible_page})
+
+    with pytest.raises(ValueError, match="incompatible"):
+        merge_selected_results(
+            docling,
+            (incompatible,),
+            decisions=(
+                MergeSelection(
+                    page_number=1,
+                    boundary_kind="block",
+                    docling_id="paragraph-1",
+                    paddle_id="ocr-paragraph-1",
+                    reason="wrong boundary",
+                ),
+            ),
+        )
+
+    far_bbox = selected.bbox.model_copy(update={"y0": 300.0, "y1": 340.0})
+    far_block = selected.model_copy(update={"bbox": far_bbox})
+    far_page = paddle_page.page.model_copy(update={"blocks": (far_block,)})
+    incompatible = paddle_page.model_copy(update={"page": far_page})
+    with pytest.raises(ValueError, match="geometry policy"):
+        merge_selected_results(
+            docling,
+            (incompatible,),
+            decisions=(
+                MergeSelection(
+                    page_number=1,
+                    boundary_kind="block",
+                    docling_id="paragraph-1",
+                    paddle_id="ocr-paragraph-1",
+                    reason="wrong geometry",
+                ),
+            ),
+        )
+
+
+def test_merge_rejects_incompatible_table_continuation_boundary() -> None:
+    docling = canonicalize_docling(parser_response("docling-complex-table.json"), build=build_id())
+    source_table = docling.pages[0].tables[0]
+    paddle_table = source_table.model_copy(
+        update={
+            "table_id": "paddle-table",
+            "continuation_of": "different-table",
+            "cells": tuple(
+                cell.model_copy(update={"source_method": "ocr"}) for cell in source_table.cells
+            ),
+        }
+    )
+    paddle_page = docling.pages[0].model_copy(
+        update={"native_text_ratio": 0.0, "blocks": (), "tables": (paddle_table,)}
+    )
+    candidate = CanonicalParserPage(
+        document_id=docling.document_id,
+        revision_id=docling.revision_id,
+        original_sha256=docling.original_sha256,
+        build_identity=build_id(adapter="paddle", configuration_sha256="c" * 64),
+        page=paddle_page,
+    )
+
+    with pytest.raises(ValueError, match="continuation is incompatible"):
+        merge_selected_results(
+            docling,
+            (candidate,),
+            decisions=(
+                MergeSelection(
+                    page_number=12,
+                    boundary_kind="table",
+                    docling_id="table-4",
+                    paddle_id="paddle-table",
+                    reason="table reconstruction",
+                ),
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("fixture", "outcome"),
     [
@@ -242,9 +430,7 @@ def test_quality_gate_uses_actual_text_not_native_ratio() -> None:
     for block in payload["pages"][0]["blocks"]:
         block["text"] = "   "
     response = parser_response("docling-simple.json")
-    response = response.model_copy(
-        update={"attestation": response.attestation.model_copy(update={"vendor_json": payload})}
-    )
+    response = with_vendor_payload(response, payload)
     missing = canonicalize_docling(response, build=build_id())
 
     assert (
@@ -257,13 +443,7 @@ def test_quality_gate_uses_actual_text_not_native_ratio() -> None:
     for cell in table_payload["pages"][0]["tables"][0]["cells"]:
         cell["text"] = ""
     table_response = parser_response("docling-complex-table.json")
-    table_response = table_response.model_copy(
-        update={
-            "attestation": table_response.attestation.model_copy(
-                update={"vendor_json": table_payload}
-            )
-        }
-    )
+    table_response = with_vendor_payload(table_response, table_payload)
     blank_table = canonicalize_docling(table_response, build=build_id())
     assert (
         assess_page_quality(blank_table.pages[0], warnings=()).outcome
@@ -277,14 +457,71 @@ def test_quality_gate_reviews_structural_ambiguity() -> None:
         {"row": 0, "column": 0, "text": "duplicate", "bbox": [40, 90, 220, 130]}
     )
     response = parser_response("docling-complex-table.json")
-    response = response.model_copy(
-        update={"attestation": response.attestation.model_copy(update={"vendor_json": payload})}
-    )
+    response = with_vendor_payload(response, payload)
     ambiguous = canonicalize_docling(response, build=build_id())
     assert (
         assess_page_quality(ambiguous.pages[0], warnings=()).outcome
         is QualityOutcome.REVIEW_REQUIRED
     )
+
+
+def test_quality_detects_large_span_overlap_without_expanding_grid_coordinates() -> None:
+    response = parser_response("docling-complex-table.json")
+    payload = response.vendor_json
+    payload["pages"][0]["tables"][0]["cells"][0]["row_span"] = 10_000
+    artifact = canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+    decision = assess_page_quality(artifact.pages[0], warnings=())
+    assert decision.outcome is QualityOutcome.REVIEW_REQUIRED
+    assert "table_cell_overlap" in decision.reasons
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        [-1, 40, 100, 70],
+        [40, 40, 700, 70],
+        [100, 40, 40, 70],
+    ],
+)
+def test_canonicalizer_rejects_invalid_or_out_of_page_bbox(bbox: list[int]) -> None:
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    payload["pages"][0]["blocks"][0]["bbox"] = bbox
+    with pytest.raises((ValueError, ValidationError), match="bbox|coordinate|greater"):
+        canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+
+def test_canonicalizer_rejects_table_cell_bbox_outside_table() -> None:
+    response = parser_response("docling-complex-table.json")
+    payload = response.vendor_json
+    payload["pages"][0]["tables"][0]["cells"][0]["bbox"] = [0, 0, 20, 20]
+    with pytest.raises(ValueError, match="within its table bbox"):
+        canonicalize_docling(with_vendor_payload(response, payload), build=build_id())
+
+
+def test_quality_invalid_geometry_cannot_pass_and_blank_ocr_requires_review() -> None:
+    artifact = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
+    page = artifact.pages[0]
+    invalid_bbox = page.blocks[0].bbox.model_copy(update={"x0": -1.0})
+    invalid_block = page.blocks[0].model_copy(update={"bbox": invalid_bbox})
+    invalid_page = page.model_copy(update={"blocks": (invalid_block, *page.blocks[1:])})
+    invalid = assess_page_quality(invalid_page, warnings=())
+    assert invalid.outcome is QualityOutcome.REVIEW_REQUIRED
+    assert "invalid_page_geometry_or_bounds" in invalid.reasons
+
+    response = parser_response(
+        "paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64
+    )
+    payload = response.vendor_json
+    payload["page"]["blocks"][0]["text"] = "  "
+    blank_ocr = canonicalize_paddle_page(
+        with_vendor_payload(response, payload),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+    decision = assess_page_quality(blank_ocr.page, warnings=())
+    assert decision.outcome is QualityOutcome.REVIEW_REQUIRED
+    assert "ocr_attempt_without_meaningful_text" in decision.reasons
 
 
 class RecordingTransport:
@@ -343,8 +580,14 @@ def test_private_client_rejects_each_mismatched_service_attestation(
 
 def test_private_client_rejects_vendor_payload_outside_attested_source_binding() -> None:
     attestation = parser_response("docling-simple.json").attestation
+    payload = parser_response("docling-simple.json").vendor_json
+    payload["source_sha256"] = "d" * 64
+    vendor_json_bytes = canonical_vendor_json_bytes(payload)
     attestation = attestation.model_copy(
-        update={"vendor_json": {**attestation.vendor_json, "source_sha256": "d" * 64}}
+        update={
+            "vendor_json_bytes": vendor_json_bytes,
+            "vendor_json_sha256": hashlib.sha256(vendor_json_bytes).hexdigest(),
+        }
     )
     with pytest.raises(ValueError, match="service attestation"):
         PrivateDoclingClient(transport=RecordingTransport(attestation)).parse(exact_request())
@@ -361,9 +604,7 @@ def test_canonicalizer_direct_call_rejects_vendor_page_outside_attestation() -> 
     response = parser_response("docling-simple.json")
     payload = load_fixture("docling-simple.json")
     payload["pages"][0]["page_number"] = 2
-    bypassed = response.model_copy(
-        update={"attestation": response.attestation.model_copy(update={"vendor_json": payload})}
-    )
+    bypassed = with_vendor_payload(response, payload)
 
     with pytest.raises(ValidationError, match="vendor JSON pages"):
         canonicalize_docling(bypassed, build=build_id())
@@ -373,9 +614,7 @@ def test_document_quality_reviews_unresolved_cross_page_table_continuation() -> 
     payload = load_fixture("docling-complex-table.json")
     payload["pages"][0]["tables"][0]["continuation_of"] = "missing-table"
     response = parser_response("docling-complex-table.json")
-    response = response.model_copy(
-        update={"attestation": response.attestation.model_copy(update={"vendor_json": payload})}
-    )
+    response = with_vendor_payload(response, payload)
     artifact = canonicalize_docling(response, build=build_id())
 
     decision = assess_document_quality(artifact)[0]
