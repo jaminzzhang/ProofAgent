@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Event, enumerate as enumerate_threads
 from time import monotonic, sleep
 from typing import Literal
 
@@ -16,12 +16,62 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     PrivateKnowledgeModelWorkSchedulerClient,
     PrivateHostPolicy,
     PrivateEmbeddingClient,
+    PrivateNetworkPolicy,
     PrivateRerankerClient,
     RerankCandidate,
     RerankerTransportResponse,
     SchedulerLease,
+    _PinnedNetworkBackend,
     decode_bounded_json_bytes,
 )
+
+
+class StaticResolver:
+    def __init__(self, answers: tuple[str, ...] = ("10.20.30.40",)) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, int, float]] = []
+
+    def resolve(self, hostname, port, *, timeout_seconds):
+        self.calls.append((hostname, port, timeout_seconds))
+        return self.answers
+
+    def close(self) -> None:
+        return None
+
+
+class RecordingSchedulerTransport:
+    def __init__(self) -> None:
+        self.completed = 0
+        self.cancelled = 0
+
+    def acquire(self, **kwargs) -> SchedulerLease:
+        del kwargs
+        return SchedulerLease(
+            work_id="work-validation",
+            lease_token="lease-validation",
+            queue_time_ms=0.0,
+        )
+
+    def complete(self, *args, **kwargs) -> None:
+        del args, kwargs
+        self.completed += 1
+
+    def cancel(self, *args, **kwargs) -> None:
+        del args, kwargs
+        self.cancelled += 1
+
+    def close(self) -> None:
+        return None
+
+
+def remote_scheduler(transport, **kwargs) -> PrivateKnowledgeModelWorkSchedulerClient:
+    return PrivateKnowledgeModelWorkSchedulerClient(
+        endpoint="https://scheduler.internal",
+        namespace="insurance-knowledge",
+        allowed_hosts=PrivateHostPolicy.from_entries(("scheduler.internal",)),
+        transport=transport,
+        **kwargs,
+    )
 
 
 class RecordingEmbeddingTransport:
@@ -170,6 +220,69 @@ def test_embedding_rejects_wrong_revision_echo() -> None:
         )
 
 
+def test_invalid_embedding_response_cancels_without_completing_remote_lease() -> None:
+    class WrongDimensionTransport(RecordingEmbeddingTransport):
+        def embed(self, request, **kwargs) -> EmbeddingTransportResponse:
+            del kwargs
+            return EmbeddingTransportResponse(
+                model_revision=request.model_revision,
+                vectors=((0.1,),),
+            )
+
+    scheduler_transport = RecordingSchedulerTransport()
+    scheduler = remote_scheduler(scheduler_transport)
+    client = PrivateEmbeddingClient(
+        transport=WrongDimensionTransport(),
+        scheduler=scheduler,
+    )
+
+    with pytest.raises(ValueError, match="dimension"):
+        client.embed(
+            texts=("insurance rule",),
+            model_revision="embedding@sha256:model",
+            instruction="Represent for retrieval",
+            dimension=2,
+            normalized=True,
+            priority="offline",
+            timeout_seconds=5.0,
+        )
+
+    assert scheduler_transport.cancelled == 1
+    assert scheduler_transport.completed == 0
+    scheduler.close()
+
+
+def test_invalid_reranker_response_cancels_without_completing_remote_lease() -> None:
+    class WrongRevisionTransport:
+        def rerank(self, request, **kwargs) -> RerankerTransportResponse:
+            del request, kwargs
+            return RerankerTransportResponse(
+                model_revision="reranker@sha256:wrong",
+                scores=(("rule-1", 0.9),),
+            )
+
+    scheduler_transport = RecordingSchedulerTransport()
+    scheduler = remote_scheduler(scheduler_transport)
+    client = PrivateRerankerClient(
+        transport=WrongRevisionTransport(),
+        scheduler=scheduler,
+    )
+
+    with pytest.raises(ValueError, match="model_revision"):
+        client.rerank(
+            query="waiting period",
+            candidates=(RerankCandidate(candidate_id="rule-1", text="Thirty days."),),
+            model_revision="reranker@sha256:model",
+            max_input_tokens=2048,
+            priority="online",
+            timeout_seconds=5.0,
+        )
+
+    assert scheduler_transport.cancelled == 1
+    assert scheduler_transport.completed == 0
+    scheduler.close()
+
+
 def test_remote_scheduler_timeout_does_not_start_service_transport() -> None:
     class SlowQueueTransport:
         def __init__(self) -> None:
@@ -266,6 +379,52 @@ def test_scheduler_cancel_cleanup_failure_preserves_primary_timeout() -> None:
     assert any("cleanup also failed" in note for note in caught.value.__notes__)
 
 
+def test_blocked_scheduler_cancel_is_bounded_and_cannot_hold_shutdown_open() -> None:
+    cancel_started = Event()
+    release_cancel = Event()
+
+    class BlockedCancelTransport(RecordingSchedulerTransport):
+        def acquire(self, **kwargs) -> SchedulerLease:
+            del kwargs
+            return SchedulerLease(
+                work_id="work-blocked-cancel",
+                lease_token="lease-blocked-cancel",
+                queue_time_ms=2000.0,
+            )
+
+        def cancel(self, *args, **kwargs) -> None:
+            del args, kwargs
+            cancel_started.set()
+            assert release_cancel.wait(timeout=2)
+
+    scheduler_transport = BlockedCancelTransport()
+    scheduler = remote_scheduler(scheduler_transport)
+    client = PrivateEmbeddingClient(
+        transport=RecordingEmbeddingTransport(),
+        scheduler=scheduler,
+    )
+
+    started = monotonic()
+    with pytest.raises(TimeoutError, match="queue") as caught:
+        client.embed(
+            texts=("insurance rule",),
+            model_revision="embedding@sha256:model",
+            instruction="Represent for retrieval",
+            dimension=2,
+            normalized=True,
+            priority="online",
+            timeout_seconds=1.0,
+        )
+    assert monotonic() - started < 0.75
+    assert cancel_started.is_set()
+    assert any("250 ms" in note for note in caught.value.__notes__)
+
+    started = monotonic()
+    scheduler.close()
+    assert monotonic() - started < 0.75
+    release_cancel.set()
+
+
 def test_test_only_in_memory_scheduler_claims_online_before_offline() -> None:
     scheduler = InMemoryKnowledgeModelWorkScheduler()
     offline = scheduler.submit(kind="ocr", priority="offline")
@@ -336,6 +495,124 @@ def test_private_model_json_rejects_excessive_depth_before_contract_validation()
 def test_private_model_json_rejects_non_finite_numbers() -> None:
     with pytest.raises(ValueError, match="bounded JSON"):
         decode_bounded_json_bytes(b'{"vectors":[NaN]}')
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        (),
+        ("203.0.113.10",),
+        ("127.0.0.1",),
+        ("169.254.10.20",),
+        ("10.20.30.40", "203.0.113.10"),
+    ],
+)
+def test_private_network_policy_rejects_empty_public_special_and_mixed_dns_answers(
+    answers: tuple[str, ...],
+) -> None:
+    policy = PrivateNetworkPolicy.from_entries(("10.0.0.0/8",))
+
+    with pytest.raises(ConnectionError):
+        policy.resolve_connection(
+            hostname="embedding.internal",
+            port=443,
+            resolver=StaticResolver(answers),
+            timeout_seconds=5.0,
+        )
+
+
+def test_private_network_policy_rejects_resolution_errors_and_unsafe_cidrs() -> None:
+    class FailingResolver(StaticResolver):
+        def resolve(self, hostname, port, *, timeout_seconds):
+            del hostname, port, timeout_seconds
+            raise OSError("resolver unavailable")
+
+    with pytest.raises(ValueError, match="RFC1918"):
+        PrivateNetworkPolicy.from_entries(("203.0.113.0/24",))
+    with pytest.raises(ValueError, match="must be configured"):
+        PrivateNetworkPolicy.from_entries(())
+    with pytest.raises(ConnectionError, match="failed closed"):
+        PrivateNetworkPolicy.from_entries(("10.0.0.0/8",)).resolve_connection(
+            hostname="embedding.internal",
+            port=443,
+            resolver=FailingResolver(),
+            timeout_seconds=5.0,
+        )
+
+
+def test_pinned_backend_connects_validated_ip_once_and_preserves_host_and_tls_name() -> None:
+    import httpcore
+
+    class RebindingResolver(StaticResolver):
+        def resolve(self, hostname, port, *, timeout_seconds):
+            self.calls.append((hostname, port, timeout_seconds))
+            if len(self.calls) == 1:
+                return ("10.20.30.40",)
+            return ("203.0.113.10",)
+
+    class MemoryStream:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+            self.server_hostname: str | None = None
+            self._response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+
+        def read(self, max_bytes, timeout=None):
+            del max_bytes, timeout
+            response, self._response = self._response, b""
+            return response
+
+        def write(self, buffer, timeout=None):
+            del timeout
+            self.writes.append(buffer)
+
+        def close(self):
+            return None
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            del ssl_context, timeout
+            self.server_hostname = server_hostname
+            return self
+
+        def get_extra_info(self, info):
+            if info == "is_readable":
+                return False
+            return None
+
+    class MemoryBackend:
+        def __init__(self) -> None:
+            self.stream = MemoryStream()
+            self.hosts: list[str] = []
+
+        def connect_tcp(self, *, host, **kwargs):
+            del kwargs
+            self.hosts.append(host)
+            return self.stream
+
+    resolver = RebindingResolver()
+    connector = MemoryBackend()
+    backend = _PinnedNetworkBackend(
+        policy=PrivateNetworkPolicy.from_entries(("10.0.0.0/8",)),
+        resolver=resolver,
+        backend=connector,
+    )
+    pool = httpcore.ConnectionPool(network_backend=backend)
+
+    response = pool.handle_request(
+        httpcore.Request(
+            method=b"POST",
+            url=b"https://embedding.internal/v1/embeddings",
+            headers=[(b"Host", b"embedding.internal"), (b"Content-Length", b"2")],
+            content=b"{}",
+        )
+    )
+    response.read()
+    response.close()
+    pool.close()
+
+    assert resolver.calls == [("embedding.internal", 443, 2.0)]
+    assert connector.hosts == ["10.20.30.40"]
+    assert connector.stream.server_hostname == "embedding.internal"
+    assert b"Host: embedding.internal\r\n" in b"".join(connector.stream.writes)
 
 
 def test_cancellation_during_blocked_acquire_cancels_late_lease_without_service() -> None:
@@ -478,6 +755,77 @@ def test_cancellation_during_model_operation_never_completes_remote_lease() -> N
     assert scheduler_transport.completed == 0
 
 
+def test_cancellation_during_blocked_complete_cancels_without_success() -> None:
+    complete_started = Event()
+    cancellation = KnowledgeModelCancellation()
+
+    class BlockedCompleteTransport(RecordingSchedulerTransport):
+        def complete(self, *args, cancellation, **kwargs) -> None:
+            del args, kwargs
+            complete_started.set()
+            while not cancellation.is_cancelled():
+                sleep(0.005)
+            cancellation.raise_if_cancelled()
+
+    scheduler_transport = BlockedCompleteTransport()
+    scheduler = remote_scheduler(scheduler_transport)
+    client = PrivateEmbeddingClient(
+        transport=RecordingEmbeddingTransport(),
+        scheduler=scheduler,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(
+            client.embed,
+            texts=("insurance rule",),
+            model_revision="embedding@sha256:model",
+            instruction="Represent for retrieval",
+            dimension=2,
+            normalized=True,
+            priority="online",
+            timeout_seconds=5.0,
+            cancellation=cancellation,
+        )
+        assert complete_started.wait(timeout=1)
+        cancellation.cancel()
+        with pytest.raises(KnowledgeModelWorkCancelled):
+            result.result(timeout=1)
+
+    assert scheduler_transport.cancelled == 1
+    assert scheduler_transport.completed == 0
+    scheduler.close()
+
+
+def test_acknowledged_complete_is_only_terminal_state_when_cancellation_races() -> None:
+    class AcknowledgingCompleteTransport(RecordingSchedulerTransport):
+        def complete(self, *args, cancellation, **kwargs) -> None:
+            del args, kwargs
+            self.completed += 1
+            cancellation.cancel()
+
+    scheduler_transport = AcknowledgingCompleteTransport()
+    scheduler = remote_scheduler(scheduler_transport)
+    client = PrivateEmbeddingClient(
+        transport=RecordingEmbeddingTransport(),
+        scheduler=scheduler,
+    )
+
+    with pytest.raises(KnowledgeModelWorkCancelled):
+        client.embed(
+            texts=("insurance rule",),
+            model_revision="embedding@sha256:model",
+            instruction="Represent for retrieval",
+            dimension=2,
+            normalized=True,
+            priority="online",
+            timeout_seconds=5.0,
+        )
+
+    assert scheduler_transport.completed == 1
+    assert scheduler_transport.cancelled == 0
+    scheduler.close()
+
+
 def test_scheduler_close_cancels_active_call_before_closing_transport() -> None:
     service_started = Event()
     service_stopped = Event()
@@ -594,3 +942,74 @@ def test_concurrent_scheduler_close_closes_transport_once() -> None:
         second.result(timeout=1)
 
     assert transport.close_count == 1
+
+
+def test_scheduler_executor_is_bounded_saturates_closed_and_uses_daemon_workers() -> None:
+    acquire_started = Event()
+    release_acquire = Event()
+
+    class IgnoringAcquireTransport(RecordingSchedulerTransport):
+        def acquire(self, **kwargs) -> SchedulerLease:
+            del kwargs
+            acquire_started.set()
+            assert release_acquire.wait(timeout=2)
+            return super().acquire()
+
+    before = tuple(
+        thread
+        for thread in enumerate_threads()
+        if thread.name.startswith("knowledge-model-executor")
+    )
+    scheduler_transport = IgnoringAcquireTransport()
+    scheduler = remote_scheduler(
+        scheduler_transport,
+        executor_workers=1,
+        executor_pending=1,
+    )
+
+    def operation(_remaining, _cancellation):
+        return "unreachable"
+
+    with ThreadPoolExecutor(max_workers=3) as callers:
+        first = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        assert acquire_started.wait(timeout=1)
+        second = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        third = callers.submit(
+            scheduler.submit_and_wait,
+            kind="embedding",
+            priority="online",
+            timeout_seconds=5.0,
+            operation=operation,
+        )
+        with pytest.raises(RuntimeError, match="saturated"):
+            third.result(timeout=1)
+
+        workers = tuple(
+            thread
+            for thread in enumerate_threads()
+            if thread.name.startswith("knowledge-model-executor") and thread not in before
+        )
+        assert len(workers) == 1
+        assert workers[0].daemon is True
+
+        started = monotonic()
+        scheduler.close()
+        assert monotonic() - started < 1.0
+        with pytest.raises(KnowledgeModelWorkCancelled):
+            first.result(timeout=1)
+        with pytest.raises(KnowledgeModelWorkCancelled):
+            second.result(timeout=1)
+
+    release_acquire.set()

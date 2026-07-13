@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from functools import partial
 import ipaddress
 import json
 import math
-from threading import Condition, Event, Lock
+from queue import Empty, Full, Queue
+import socket
+import ssl
+from threading import Condition, Event, Lock, Thread, current_thread
 from time import monotonic
-from typing import Annotated, Generic, Literal, Protocol, TypeVar, cast
+from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -62,6 +65,92 @@ MAX_MODEL_JSON_DEPTH = 32
 MAX_MODEL_JSON_NODES = 1_000_000
 MAX_MODEL_JSON_COLLECTION_ITEMS = 100_000
 MAX_MODEL_JSON_STRING_CHARACTERS = 1_000_000
+MAX_PRIVATE_DNS_RESULTS = 8
+MAX_PRIVATE_DNS_TIMEOUT_SECONDS = 2.0
+_PRIVATE_NETWORK_ROOTS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+@dataclass(frozen=True)
+class _ExecutionTask:
+    future: Future[Any]
+    operation: Callable[..., Any]
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+
+
+class _BoundedDaemonExecutor:
+    """Fixed daemon workers with bounded admission and prompt non-blocking close."""
+
+    def __init__(self, *, name: str, max_workers: int, max_pending: int) -> None:
+        if max_workers <= 0 or max_pending <= 0:
+            raise ValueError("bounded executor limits must be positive")
+        self._queue: Queue[_ExecutionTask] = Queue(maxsize=max_pending)
+        self._lock = Lock()
+        self._closed = False
+        self._threads = tuple(
+            Thread(target=self._run, name=f"{name}-{index}", daemon=True)
+            for index in range(max_workers)
+        )
+        for thread in self._threads:
+            thread.start()
+
+    def submit(self, operation: Callable[..., T], *args: Any, **kwargs: Any) -> Future[T]:
+        future: Future[T] = Future()
+        task = _ExecutionTask(
+            future=cast(Future[Any], future),
+            operation=operation,
+            args=args,
+            kwargs=kwargs,
+        )
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("bounded private-model executor is closed")
+            try:
+                self._queue.put_nowait(task)
+            except Full as exc:
+                raise RuntimeError("bounded private-model executor is saturated") from exc
+        return future
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        while True:
+            try:
+                pending = self._queue.get_nowait()
+            except Empty:
+                break
+            pending.future.cancel()
+        deadline = monotonic() + 0.25
+        for thread in self._threads:
+            thread.join(timeout=max(deadline - monotonic(), 0.0))
+
+    def runs_on_current_thread(self) -> bool:
+        return current_thread() in self._threads
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                if self._closed:
+                    return
+            try:
+                task = self._queue.get(timeout=0.05)
+            except Empty:
+                continue
+            if not task.future.set_running_or_notify_cancel():
+                continue
+            try:
+                value = task.operation(*task.args, **task.kwargs)
+            except BaseException as exc:
+                task.future.set_exception(exc)
+            else:
+                task.future.set_result(value)
 
 
 @dataclass(frozen=True)
@@ -99,6 +188,176 @@ class PrivateHostPolicy:
         return host in self.exact_hosts or any(host.endswith(suffix) for suffix in self.suffixes)
 
 
+class PrivateAddressResolver(Protocol):
+    def resolve(
+        self,
+        hostname: str,
+        port: int,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[str, ...]: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class PrivateNetworkPolicy:
+    """Explicit private CIDRs accepted for one DNS-pinned service connection."""
+
+    allowed_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
+
+    @classmethod
+    def from_entries(cls, entries: tuple[str, ...]) -> "PrivateNetworkPolicy":
+        if not entries:
+            raise ValueError("private Knowledge model allowed CIDRs must be configured")
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for raw_entry in entries:
+            try:
+                network = ipaddress.ip_network(raw_entry.strip(), strict=True)
+            except ValueError as exc:
+                raise ValueError("private Knowledge model allowed CIDR is invalid") from exc
+            if isinstance(network, ipaddress.IPv4Network):
+                is_private_subnet = any(
+                    isinstance(root, ipaddress.IPv4Network) and network.subnet_of(root)
+                    for root in _PRIVATE_NETWORK_ROOTS
+                )
+            else:
+                is_private_subnet = any(
+                    isinstance(root, ipaddress.IPv6Network) and network.subnet_of(root)
+                    for root in _PRIVATE_NETWORK_ROOTS
+                )
+            if not is_private_subnet:
+                raise ValueError("private Knowledge model CIDRs must be RFC1918 or IPv6 ULA")
+            networks.append(network)
+        return cls(allowed_networks=tuple(networks))
+
+    def resolve_connection(
+        self,
+        *,
+        hostname: str,
+        port: int,
+        resolver: PrivateAddressResolver,
+        timeout_seconds: float,
+    ) -> str:
+        bounded_timeout = min(max(timeout_seconds, 0.001), MAX_PRIVATE_DNS_TIMEOUT_SECONDS)
+        try:
+            answers = resolver.resolve(
+                hostname,
+                port,
+                timeout_seconds=bounded_timeout,
+            )
+        except Exception as exc:
+            raise ConnectionError("private service DNS resolution failed closed") from exc
+        if not answers or len(answers) > MAX_PRIVATE_DNS_RESULTS:
+            raise ConnectionError("private service DNS returned an empty or excessive answer set")
+        parsed: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for answer in answers:
+            try:
+                address = ipaddress.ip_address(answer)
+            except ValueError as exc:
+                raise ConnectionError("private service DNS returned a malformed address") from exc
+            if (
+                address.is_loopback
+                or address.is_link_local
+                or address.is_unspecified
+                or address.is_multicast
+                or not any(address in network for network in self.allowed_networks)
+            ):
+                raise ConnectionError("private service DNS answer is outside allowed private CIDRs")
+            parsed.append(address)
+        if len(parsed) != len(set(parsed)):
+            raise ConnectionError("private service DNS returned duplicate answers")
+        return str(parsed[0])
+
+
+class BoundedSocketPrivateAddressResolver:
+    """No-cache, bounded DNS resolver backed by fixed daemon workers."""
+
+    def __init__(self) -> None:
+        self._executor = _BoundedDaemonExecutor(
+            name="knowledge-private-dns",
+            max_workers=2,
+            max_pending=8,
+        )
+
+    def resolve(
+        self,
+        hostname: str,
+        port: int,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[str, ...]:
+        future = self._executor.submit(
+            socket.getaddrinfo,
+            hostname,
+            port,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+        )
+        try:
+            records = future.result(timeout=timeout_seconds)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise TimeoutError("private service DNS resolution timed out") from exc
+        answers: list[str] = []
+        for record in records:
+            address = str(record[4][0])
+            if address not in answers:
+                answers.append(address)
+            if len(answers) > MAX_PRIVATE_DNS_RESULTS:
+                break
+        return tuple(answers)
+
+    def close(self) -> None:
+        self._executor.close()
+
+
+class _PinnedNetworkBackend:
+    """Resolve once, validate all answers, then connect only to the selected numeric address."""
+
+    def __init__(
+        self,
+        *,
+        policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+        backend: Any,
+    ) -> None:
+        self._policy = policy
+        self._resolver = resolver
+        self._backend = backend
+        self.last_hostname: str | None = None
+        self.last_address: str | None = None
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> Any:
+        hostname = host.decode("ascii") if isinstance(host, bytes) else host
+        address = self._policy.resolve_connection(
+            hostname=hostname,
+            port=port,
+            resolver=self._resolver,
+            timeout_seconds=timeout or MAX_PRIVATE_DNS_TIMEOUT_SECONDS,
+        )
+        self.last_hostname = hostname
+        self.last_address = address
+        connect = getattr(self._backend, "connect_tcp")
+        return connect(
+            host=address,
+            port=port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    def connect_unix_socket(self, *args: object, **kwargs: object) -> Any:
+        raise ConnectionError("private Knowledge services do not permit Unix sockets")
+
+
 def _validate_private_hostname(host: str, *, field: str) -> None:
     try:
         ipaddress.ip_address(host)
@@ -125,6 +384,10 @@ def _validate_private_hostname(host: str, *, field: str) -> None:
 
 class KnowledgeModelWorkCancelled(RuntimeError):
     """Raised when scheduled private-model work is cooperatively cancelled."""
+
+
+class _SchedulerCompleteAcknowledgedCancellation(KnowledgeModelWorkCancelled):
+    """Cancellation observed only after the scheduler acknowledged completion."""
 
 
 class KnowledgeModelCancellation:
@@ -298,6 +561,7 @@ class GuardedKnowledgeModelSchedulerTransport(Protocol):
         *,
         timeout_seconds: float,
         follow_redirects: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> None: ...
 
     def cancel(
@@ -430,6 +694,8 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         namespace: str,
         allowed_hosts: PrivateHostPolicy,
         transport: GuardedKnowledgeModelSchedulerTransport,
+        executor_workers: int = 4,
+        executor_pending: int = 16,
     ) -> None:
         self.endpoint = _private_https_endpoint(
             endpoint,
@@ -450,6 +716,11 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         self._active_tokens: set[KnowledgeModelCancellation] = set()
         self._closing = False
         self._closed = False
+        self._executor = _BoundedDaemonExecutor(
+            name="knowledge-model-executor",
+            max_workers=executor_workers,
+            max_pending=executor_pending,
+        )
 
     def submit_and_wait(
         self,
@@ -526,13 +797,15 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 )
                 raise timeout_error
             try:
-                self._transport.complete(
-                    self.endpoint,
-                    self.namespace,
-                    lease,
-                    timeout_seconds=max(deadline - monotonic(), 0.001),
-                    follow_redirects=False,
+                self._complete_cancellable(
+                    lease=lease,
+                    deadline=deadline,
+                    token=token,
                 )
+            except _SchedulerCompleteAcknowledgedCancellation:
+                # Completion is already the scheduler's sole terminal state. Propagate
+                # cancellation without issuing a contradictory cancel transition.
+                raise
             except BaseException as primary:
                 self._cancel_lease_best_effort(
                     lease,
@@ -560,8 +833,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         deadline: float,
         token: KnowledgeModelCancellation,
     ) -> SchedulerLease:
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-scheduler")
-        future = executor.submit(
+        future = self._executor.submit(
             self._transport.acquire,
             endpoint=self.endpoint,
             namespace=self.namespace,
@@ -594,8 +866,6 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                     primary=primary,
                 )
             raise
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     def _run_service_cancellable(
         self,
@@ -604,8 +874,7 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         remaining: float,
         token: KnowledgeModelCancellation,
     ) -> T:
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-model")
-        future = executor.submit(operation, remaining, token)
+        future = self._executor.submit(operation, remaining, token)
         try:
             return _await_cancellable_future(
                 future,
@@ -621,8 +890,48 @@ class PrivateKnowledgeModelWorkSchedulerClient:
             except BaseException:
                 pass
             raise
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _complete_cancellable(
+        self,
+        *,
+        lease: SchedulerLease,
+        deadline: float,
+        token: KnowledgeModelCancellation,
+    ) -> None:
+        acknowledged = Event()
+
+        def complete_and_acknowledge() -> None:
+            self._transport.complete(
+                self.endpoint,
+                self.namespace,
+                lease,
+                timeout_seconds=max(deadline - monotonic(), 0.001),
+                follow_redirects=False,
+                cancellation=token,
+            )
+            acknowledged.set()
+
+        future = self._executor.submit(
+            complete_and_acknowledge,
+        )
+        while True:
+            if acknowledged.is_set():
+                future.result()
+                try:
+                    token.raise_if_cancelled()
+                except KnowledgeModelWorkCancelled as exc:
+                    raise _SchedulerCompleteAcknowledgedCancellation(str(exc)) from exc
+                return
+            if future.done():
+                future.result()
+            token.raise_if_cancelled()
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("private Knowledge model work exceeded its timeout")
+            try:
+                future.result(timeout=min(0.02, remaining))
+            except FutureTimeoutError:
+                continue
 
     def _cancel_late_acquire(
         self,
@@ -646,13 +955,30 @@ class PrivateKnowledgeModelWorkSchedulerClient:
         primary: BaseException,
     ) -> None:
         try:
-            self._transport.cancel(
+            future = self._executor.submit(
+                self._transport.cancel,
                 self.endpoint,
                 self.namespace,
                 lease,
                 timeout_seconds=min(max(timeout_seconds, 0.001), 5.0),
                 follow_redirects=False,
             )
+            if self._executor.runs_on_current_thread():
+                future.add_done_callback(partial(self._record_cancel_failure, primary=primary))
+                return
+            future.result(timeout=min(max(timeout_seconds, 0.001), 0.25))
+        except FutureTimeoutError:
+            future.cancel()
+            primary.add_note("scheduler lease cleanup did not stop within 250 ms")
+        except Exception as cleanup_error:
+            primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
+
+    @staticmethod
+    def _record_cancel_failure(completed: Future[None], *, primary: BaseException) -> None:
+        if completed.cancelled():
+            return
+        try:
+            completed.result()
         except Exception as cleanup_error:
             primary.add_note(f"scheduler lease cleanup also failed: {type(cleanup_error).__name__}")
 
@@ -677,6 +1003,8 @@ class PrivateKnowledgeModelWorkSchedulerClient:
                 self._closing = False
                 self._state.notify_all()
             raise
+        finally:
+            self._executor.close()
         with self._state:
             self._closed = True
             self._closing = False
@@ -740,7 +1068,7 @@ def _validate_timeout(timeout_seconds: float) -> None:
 def _raise_mapped_httpx_failure(exc: Exception) -> None:
     """Map optional-httpx failures onto worker-safe built-in error classes."""
 
-    if not type(exc).__module__.startswith("httpx"):
+    if not type(exc).__module__.startswith(("httpx", "httpcore")):
         return
     if "timeout" in type(exc).__name__.lower():
         raise TimeoutError("private Knowledge service timed out") from exc
@@ -792,13 +1120,26 @@ def validate_bounded_json(value: JsonValue) -> None:
 class _HttpJsonTransport:
     """Small guarded HTTP boundary: HTTPS only, no redirects, proxies, or retries."""
 
-    def __init__(self, *, max_response_bytes: int) -> None:
+    def __init__(
+        self,
+        *,
+        max_response_bytes: int,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> None:
         try:
             import httpx
         except ImportError as exc:  # pragma: no cover - optional production dependency
             raise ImportError("Hybrid private-model HTTP support requires httpx") from exc
         self._httpx = httpx
+        try:
+            import httpcore
+        except ImportError as exc:  # pragma: no cover - httpx runtime dependency
+            raise ImportError("Hybrid private-model HTTP support requires httpcore") from exc
+        self._httpcore = httpcore
         self._max_response_bytes = max_response_bytes
+        self._network_policy = network_policy
+        self._resolver = resolver
         self._state = Condition()
         self._active_clients: set[object] = set()
         self._closing = False
@@ -813,7 +1154,7 @@ class _HttpJsonTransport:
         expect_json: bool = True,
         cancellation: KnowledgeModelCancellation,
     ) -> object:
-        client = self._httpx.Client(follow_redirects=False, trust_env=False)
+        client = self._create_pinned_client()
         with self._state:
             if self._closing or self._closed:
                 client.close()
@@ -860,6 +1201,28 @@ class _HttpJsonTransport:
             return None
         return decode_bounded_json_bytes(content)
 
+    def _create_pinned_client(self) -> Any:
+        backend = _PinnedNetworkBackend(
+            policy=self._network_policy,
+            resolver=self._resolver,
+            backend=self._httpcore.SyncBackend(),
+        )
+        transport = self._httpx.HTTPTransport(retries=0)
+        original_pool = transport._pool
+        original_pool.close()
+        transport._pool = self._httpcore.ConnectionPool(
+            ssl_context=ssl.create_default_context(),
+            max_connections=1,
+            max_keepalive_connections=0,
+            retries=0,
+            network_backend=cast(Any, backend),
+        )
+        return self._httpx.Client(
+            follow_redirects=False,
+            trust_env=False,
+            transport=transport,
+        )
+
     def close(self) -> None:
         with self._state:
             if self._closed:
@@ -880,8 +1243,17 @@ class _HttpJsonTransport:
 class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
     """Guarded HTTP implementation of the remote scheduler lease protocol."""
 
-    def __init__(self) -> None:
-        super().__init__(max_response_bytes=64 * 1024)
+    def __init__(
+        self,
+        *,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> None:
+        super().__init__(
+            max_response_bytes=64 * 1024,
+            network_policy=network_policy,
+            resolver=resolver,
+        )
 
     def acquire(
         self,
@@ -917,6 +1289,7 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
         *,
         timeout_seconds: float,
         follow_redirects: Literal[False],
+        cancellation: KnowledgeModelCancellation,
     ) -> None:
         if follow_redirects is not False:
             raise ValueError("scheduler redirects are forbidden")
@@ -929,7 +1302,7 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
             },
             timeout_seconds=timeout_seconds,
             expect_json=False,
-            cancellation=KnowledgeModelCancellation(),
+            cancellation=cancellation,
         )
 
     def cancel(
@@ -959,8 +1332,19 @@ class HttpKnowledgeModelSchedulerTransport(_HttpJsonTransport):
 class HttpEmbeddingTransport(_HttpJsonTransport):
     """Guarded transport for one pinned private embedding service."""
 
-    def __init__(self, *, endpoint: str, allowed_hosts: PrivateHostPolicy) -> None:
-        super().__init__(max_response_bytes=64 * 1024 * 1024)
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        allowed_hosts: PrivateHostPolicy,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> None:
+        super().__init__(
+            max_response_bytes=64 * 1024 * 1024,
+            network_policy=network_policy,
+            resolver=resolver,
+        )
         self._endpoint = _private_https_endpoint(
             endpoint,
             field="embedding endpoint",
@@ -992,8 +1376,19 @@ class HttpEmbeddingTransport(_HttpJsonTransport):
 class HttpRerankerTransport(_HttpJsonTransport):
     """Guarded transport for one pinned private reranker service."""
 
-    def __init__(self, *, endpoint: str, allowed_hosts: PrivateHostPolicy) -> None:
-        super().__init__(max_response_bytes=16 * 1024 * 1024)
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        allowed_hosts: PrivateHostPolicy,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> None:
+        super().__init__(
+            max_response_bytes=16 * 1024 * 1024,
+            network_policy=network_policy,
+            resolver=resolver,
+        )
         self._endpoint = _private_https_endpoint(
             endpoint,
             field="reranker endpoint",
@@ -1058,15 +1453,34 @@ class PrivateEmbeddingClient:
             priority=priority,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            operation=lambda remaining, scheduled_cancellation: self._transport.embed(
+            operation=lambda remaining, scheduled_cancellation: self._embed_and_validate(
                 request,
                 timeout_seconds=remaining,
-                follow_redirects=False,
-                allow_runtime_downloads=False,
                 cancellation=scheduled_cancellation,
             ),
         )
         response = scheduled.value
+        return EmbeddingResult(
+            model_revision=response.model_revision,
+            vectors=response.vectors,
+            queue_time_ms=scheduled.queue_time_ms,
+            service_time_ms=scheduled.service_time_ms,
+        )
+
+    def _embed_and_validate(
+        self,
+        request: EmbeddingRequest,
+        *,
+        timeout_seconds: float,
+        cancellation: KnowledgeModelCancellation,
+    ) -> EmbeddingTransportResponse:
+        response = self._transport.embed(
+            request,
+            timeout_seconds=timeout_seconds,
+            follow_redirects=False,
+            allow_runtime_downloads=False,
+            cancellation=cancellation,
+        )
         if response.model_revision != request.model_revision:
             raise ValueError("embedding response model_revision must match the exact request")
         if len(response.vectors) != len(request.texts):
@@ -1076,12 +1490,7 @@ class PrivateEmbeddingClient:
                 raise ValueError("embedding response vector dimension must match the request")
             if any(not math.isfinite(value) for value in vector):
                 raise ValueError("embedding response vectors must contain finite numbers")
-        return EmbeddingResult(
-            model_revision=response.model_revision,
-            vectors=response.vectors,
-            queue_time_ms=scheduled.queue_time_ms,
-            service_time_ms=scheduled.service_time_ms,
-        )
+        return response
 
 
 class PrivateRerankerClient:
@@ -1118,15 +1527,34 @@ class PrivateRerankerClient:
             priority=priority,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            operation=lambda remaining, scheduled_cancellation: self._transport.rerank(
+            operation=lambda remaining, scheduled_cancellation: self._rerank_and_validate(
                 request,
                 timeout_seconds=remaining,
-                follow_redirects=False,
-                allow_runtime_downloads=False,
                 cancellation=scheduled_cancellation,
             ),
         )
         response = scheduled.value
+        return RerankerResult(
+            model_revision=response.model_revision,
+            scores=response.scores,
+            queue_time_ms=scheduled.queue_time_ms,
+            service_time_ms=scheduled.service_time_ms,
+        )
+
+    def _rerank_and_validate(
+        self,
+        request: RerankerRequest,
+        *,
+        timeout_seconds: float,
+        cancellation: KnowledgeModelCancellation,
+    ) -> RerankerTransportResponse:
+        response = self._transport.rerank(
+            request,
+            timeout_seconds=timeout_seconds,
+            follow_redirects=False,
+            allow_runtime_downloads=False,
+            cancellation=cancellation,
+        )
         if response.model_revision != request.model_revision:
             raise ValueError("reranker response model_revision must match the exact request")
         requested_ids = tuple(candidate.candidate_id for candidate in request.candidates)
@@ -1135,9 +1563,4 @@ class PrivateRerankerClient:
             raise ValueError("reranker response candidates must exactly echo request order")
         if any(not math.isfinite(score) for _candidate_id, score in response.scores):
             raise ValueError("reranker response scores must be finite")
-        return RerankerResult(
-            model_revision=response.model_revision,
-            scores=response.scores,
-            queue_time_ms=scheduled.queue_time_ms,
-            service_time_ms=scheduled.service_time_ms,
-        )
+        return response

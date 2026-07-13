@@ -24,6 +24,9 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     ImmediateKnowledgeModelWorkScheduler,
     KnowledgeModelCancellation,
+    PrivateHostPolicy,
+    PrivateKnowledgeModelWorkSchedulerClient,
+    SchedulerLease,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
     MergeSelection,
@@ -127,6 +130,56 @@ def parser_response(
             vendor_json_bytes=vendor_json_bytes,
         ),
     )
+
+
+def test_invalid_parser_attestation_cancels_without_completing_remote_lease() -> None:
+    valid = parser_response("docling-simple.json")
+    invalid = valid.attestation.model_copy(update={"parser_revision": "9.9.9"})
+
+    class ParserTransport:
+        def parse(self, request, *, follow_redirects):
+            del request, follow_redirects
+            return invalid
+
+    class SchedulerTransport:
+        def __init__(self) -> None:
+            self.completed = 0
+            self.cancelled = 0
+
+        def acquire(self, **kwargs):
+            del kwargs
+            return SchedulerLease(
+                work_id="work-invalid-parser",
+                lease_token="lease-invalid-parser",
+                queue_time_ms=0.0,
+            )
+
+        def complete(self, *args, **kwargs):
+            del args, kwargs
+            self.completed += 1
+
+        def cancel(self, *args, **kwargs):
+            del args, kwargs
+            self.cancelled += 1
+
+        def close(self):
+            return None
+
+    scheduler_transport = SchedulerTransport()
+    scheduler = PrivateKnowledgeModelWorkSchedulerClient(
+        endpoint="https://scheduler.internal",
+        namespace="insurance-knowledge",
+        allowed_hosts=PrivateHostPolicy.from_entries(("scheduler.internal",)),
+        transport=scheduler_transport,
+    )
+    client = PrivateDoclingClient(transport=ParserTransport(), scheduler=scheduler)
+
+    with pytest.raises(ValidationError, match="parser_revision"):
+        client.parse(valid.request)
+
+    assert scheduler_transport.cancelled == 1
+    assert scheduler_transport.completed == 0
+    scheduler.close()
 
 
 def with_vendor_payload(

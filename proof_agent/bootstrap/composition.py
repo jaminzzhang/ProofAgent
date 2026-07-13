@@ -42,11 +42,14 @@ from proof_agent.bootstrap.knowledge_resolution import (
 from proof_agent.bootstrap.model_resolution import resolve_model_role_config
 from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
+    BoundedSocketPrivateAddressResolver,
     GuardedEmbeddingTransport,
     GuardedKnowledgeModelSchedulerTransport,
     GuardedRerankerTransport,
     PrivateEmbeddingClient,
     PrivateHostPolicy,
+    PrivateAddressResolver,
+    PrivateNetworkPolicy,
     PrivateKnowledgeModelWorkSchedulerClient,
     PrivateRerankerClient,
     _private_https_endpoint,
@@ -77,15 +80,22 @@ class HybridKnowledgeModelSettings:
     embedding_endpoint: str
     reranker_endpoint: str
     allowed_hosts: tuple[str, ...]
+    allowed_cidrs: tuple[str, ...]
     parser_revision: str
     model_digests: tuple[str, ...]
     parser_configuration_sha256: str
     host_policy: PrivateHostPolicy = field(init=False, repr=False)
+    network_policy: PrivateNetworkPolicy = field(init=False, repr=False)
     build_config: HybridPrivateParserBuildConfig = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         policy = PrivateHostPolicy.from_entries(self.allowed_hosts)
         object.__setattr__(self, "host_policy", policy)
+        object.__setattr__(
+            self,
+            "network_policy",
+            PrivateNetworkPolicy.from_entries(self.allowed_cidrs),
+        )
         object.__setattr__(
             self,
             "build_config",
@@ -120,6 +130,7 @@ class HybridKnowledgeTransportBundle:
     paddle: GuardedParserTransport
     embedding: GuardedEmbeddingTransport
     reranker: GuardedRerankerTransport
+    resolver: PrivateAddressResolver | None = None
 
 
 class HybridKnowledgeComposition:
@@ -151,6 +162,8 @@ class HybridKnowledgeComposition:
             "embedding": getattr(self._transports.embedding, "close", lambda: None),
             "reranker": getattr(self._transports.reranker, "close", lambda: None),
         }
+        if self._transports.resolver is not None:
+            self._pending_closers["resolver"] = self._transports.resolver.close
         self._closed = False
 
     def close(self) -> None:
@@ -245,6 +258,12 @@ def compose_hybrid_knowledge_from_env(
             "PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS is required when private Knowledge models are enabled"
         )
     allowed_hosts = tuple(item.strip() for item in allowed_hosts_value.split(",") if item.strip())
+    allowed_cidrs_value = source.get("PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS", "").strip()
+    if not allowed_cidrs_value:
+        raise ValueError(
+            "PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS is required when private Knowledge models are enabled"
+        )
+    allowed_cidrs = tuple(item.strip() for item in allowed_cidrs_value.split(",") if item.strip())
     parser_revision = source.get("PA_KNOWLEDGE_PARSER_REVISION", "").strip()
     if not parser_revision:
         raise ValueError(
@@ -266,6 +285,7 @@ def compose_hybrid_knowledge_from_env(
         settings=HybridKnowledgeModelSettings(
             **values,
             allowed_hosts=allowed_hosts,
+            allowed_cidrs=allowed_cidrs,
             parser_revision=parser_revision,
             model_digests=model_digests,
             parser_configuration_sha256=parser_configuration_sha256,
@@ -283,25 +303,42 @@ def _default_hybrid_transports(
     )
     from proof_agent.capabilities.knowledge.hybrid.parser_clients import HttpParserTransport
 
-    return HybridKnowledgeTransportBundle(
-        scheduler=HttpKnowledgeModelSchedulerTransport(),
-        docling=HttpParserTransport(
-            endpoint=settings.docling_endpoint,
-            allowed_hosts=settings.host_policy,
-        ),
-        paddle=HttpParserTransport(
-            endpoint=settings.paddle_endpoint,
-            allowed_hosts=settings.host_policy,
-        ),
-        embedding=HttpEmbeddingTransport(
-            endpoint=settings.embedding_endpoint,
-            allowed_hosts=settings.host_policy,
-        ),
-        reranker=HttpRerankerTransport(
-            endpoint=settings.reranker_endpoint,
-            allowed_hosts=settings.host_policy,
-        ),
-    )
+    resolver = BoundedSocketPrivateAddressResolver()
+    try:
+        return HybridKnowledgeTransportBundle(
+            scheduler=HttpKnowledgeModelSchedulerTransport(
+                network_policy=settings.network_policy,
+                resolver=resolver,
+            ),
+            docling=HttpParserTransport(
+                endpoint=settings.docling_endpoint,
+                allowed_hosts=settings.host_policy,
+                network_policy=settings.network_policy,
+                resolver=resolver,
+            ),
+            paddle=HttpParserTransport(
+                endpoint=settings.paddle_endpoint,
+                allowed_hosts=settings.host_policy,
+                network_policy=settings.network_policy,
+                resolver=resolver,
+            ),
+            embedding=HttpEmbeddingTransport(
+                endpoint=settings.embedding_endpoint,
+                allowed_hosts=settings.host_policy,
+                network_policy=settings.network_policy,
+                resolver=resolver,
+            ),
+            reranker=HttpRerankerTransport(
+                endpoint=settings.reranker_endpoint,
+                allowed_hosts=settings.host_policy,
+                network_policy=settings.network_policy,
+                resolver=resolver,
+            ),
+            resolver=resolver,
+        )
+    except BaseException:
+        resolver.close()
+        raise
 
 
 @dataclass(frozen=True)

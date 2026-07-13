@@ -74,6 +74,7 @@ def _settings() -> HybridKnowledgeModelSettings:
             "embedding.internal",
             "reranker.internal",
         ),
+        allowed_cidrs=("10.0.0.0/8",),
         parser_revision="docling+paddle@sha256:parser",
         model_digests=("sha256:model",),
         parser_configuration_sha256="b" * 64,
@@ -209,6 +210,7 @@ def test_private_scheduler_endpoint_rejects_ssrf_and_secret_bearing_origins(
                 "embedding.internal",
                 "reranker.internal",
             ),
+            allowed_cidrs=("10.0.0.0/8",),
             parser_revision="docling+paddle@sha256:parser",
             model_digests=("sha256:model",),
             parser_configuration_sha256="b" * 64,
@@ -226,6 +228,22 @@ def test_enabled_composition_requires_explicit_private_host_allowlist() -> None:
                 "PA_KNOWLEDGE_PADDLE_ENDPOINT": "https://paddle.internal",
                 "PA_KNOWLEDGE_EMBEDDING_ENDPOINT": "https://embedding.internal",
                 "PA_KNOWLEDGE_RERANKER_ENDPOINT": "https://reranker.internal",
+            }
+        )
+
+
+def test_enabled_composition_requires_explicit_private_cidr_allowlist() -> None:
+    with pytest.raises(ValueError, match="PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS"):
+        compose_hybrid_knowledge_from_env(
+            {
+                "PA_HYBRID_KNOWLEDGE_MODELS_ENABLED": "1",
+                "PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT": "https://scheduler.internal",
+                "PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE": "insurance-knowledge",
+                "PA_KNOWLEDGE_DOCLING_ENDPOINT": "https://docling.internal",
+                "PA_KNOWLEDGE_PADDLE_ENDPOINT": "https://paddle.internal",
+                "PA_KNOWLEDGE_EMBEDDING_ENDPOINT": "https://embedding.internal",
+                "PA_KNOWLEDGE_RERANKER_ENDPOINT": "https://reranker.internal",
+                "PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS": ",".join(_settings().allowed_hosts),
             }
         )
 

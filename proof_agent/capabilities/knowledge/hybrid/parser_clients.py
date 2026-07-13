@@ -25,7 +25,9 @@ from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     KnowledgeModelCancellation,
     KnowledgeModelWorkScheduler,
+    PrivateAddressResolver,
     PrivateHostPolicy,
+    PrivateNetworkPolicy,
     WorkPriority,
     _HttpJsonTransport,
     _private_https_endpoint,
@@ -195,7 +197,7 @@ class _PrivateParserClient:
             priority=priority,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            operation=lambda remaining, scheduled_cancellation: self._parse_transport(
+            operation=lambda remaining, scheduled_cancellation: self._parse_and_validate(
                 request,
                 timeout_seconds=remaining,
                 cancellation=scheduled_cancellation,
@@ -208,6 +210,25 @@ class _PrivateParserClient:
             queue_time_ms=scheduled.queue_time_ms,
             service_time_ms=scheduled.service_time_ms,
         )
+
+    def _parse_and_validate(
+        self,
+        request: ParserServiceRequest,
+        *,
+        timeout_seconds: float,
+        cancellation: KnowledgeModelCancellation,
+    ) -> ParserServiceAttestation:
+        attestation = self._parse_transport(
+            request,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+        )
+        ParserServiceResponse(
+            adapter=self.adapter,
+            request=request,
+            attestation=attestation,
+        )
+        return attestation
 
     def _parse_transport(
         self,
@@ -328,8 +349,19 @@ class PrivatePaddleClient(_PrivateParserClient):
 class HttpParserTransport(_HttpJsonTransport):
     """Guarded no-redirect HTTP transport for a private parser service."""
 
-    def __init__(self, *, endpoint: str, allowed_hosts: PrivateHostPolicy) -> None:
-        super().__init__(max_response_bytes=MAX_TRANSPORT_RESPONSE_BYTES)
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        allowed_hosts: PrivateHostPolicy,
+        network_policy: PrivateNetworkPolicy,
+        resolver: PrivateAddressResolver,
+    ) -> None:
+        super().__init__(
+            max_response_bytes=MAX_TRANSPORT_RESPONSE_BYTES,
+            network_policy=network_policy,
+            resolver=resolver,
+        )
         self._endpoint = _private_https_endpoint(
             endpoint,
             field="parser endpoint",
