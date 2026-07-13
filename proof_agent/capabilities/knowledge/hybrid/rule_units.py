@@ -55,7 +55,17 @@ _CHINESE_DEFINITION_STATEMENT = re.compile(
     ^\s*
     (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]
       |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?))
-    \s*[:：,，]?\s*(?:是指|系指|定义为|指)\s*
+    \s*[:：,，]?\s*(?:是指|系指|定义为)\s*
+    (?P<body>\S.*?)\s*$
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+_CHINESE_BARE_ZHI_DEFINITION_STATEMENT = re.compile(
+    r"""
+    ^\s*
+    (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]\s*[:：,，]?
+      |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?)\s*[:：,，])
+    \s*指\s*
     (?P<body>\S.*?)\s*$
     """,
     re.DOTALL | re.VERBOSE,
@@ -481,7 +491,11 @@ def _build_definition_index(
 
 
 def _definition_term(text: str) -> str | None:
-    for pattern in (_ENGLISH_DEFINITION_STATEMENT, _CHINESE_DEFINITION_STATEMENT):
+    for pattern in (
+        _ENGLISH_DEFINITION_STATEMENT,
+        _CHINESE_DEFINITION_STATEMENT,
+        _CHINESE_BARE_ZHI_DEFINITION_STATEMENT,
+    ):
         match = pattern.fullmatch(text)
         if match is not None:
             term = match.group("quoted") or match.group("plain")

@@ -736,7 +736,7 @@ def test_ambiguous_duplicate_referenced_definitions_require_review() -> None:
 
 @pytest.mark.parametrize(
     "cross_reference",
-    ("详见本合同释义章节。", "See the definition section."),
+    ("详见本合同释义章节。", "See the definition section.", "本条所指的投保人须签字。"),
 )
 def test_generic_definition_cross_references_are_ordinary_content(
     cross_reference: str,
@@ -776,6 +776,8 @@ def test_generic_definition_cross_references_are_ordinary_content(
         ("投保人，是指申请保险保障的人。", "投保人必须年满十八周岁。"),
         ("“投保人”，是指申请保险保障的人。", "投保人必须年满十八周岁。"),
         ("投保人：是指申请保险保障的人。", "投保人必须年满十八周岁。"),
+        ("“投保人”指申请保险保障的人。", "投保人必须年满十八周岁。"),
+        ("投保人：指申请保险保障的人。", "投保人必须年满十八周岁。"),
     ),
 )
 def test_definition_separator_punctuation_preserves_reference_attachment(
