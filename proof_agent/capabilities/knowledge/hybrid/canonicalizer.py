@@ -97,6 +97,8 @@ def canonicalize_paddle_page(
 
     response = ParserServiceResponse.model_validate(response.model_dump())
     _require_attested_build(response, build, "paddle")
+    if len(response.attestation.page_numbers) != 1:
+        raise ValueError("Paddle canonicalization requires exactly one attested page")
     payload = response.vendor_json
     document_id, revision_id, original_sha256 = _document_identity(payload, build)
     page = _canonical_page(_mapping(payload.get("page"), "page"), source_method="ocr")

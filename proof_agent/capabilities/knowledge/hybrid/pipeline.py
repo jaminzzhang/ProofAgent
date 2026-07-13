@@ -84,6 +84,12 @@ def merge_selected_results(
     """Apply complete-boundary replacements; text is never concatenated across parsers."""
 
     _validate_paddle_identity(docling, paddle_pages)
+    docling_page_numbers = [page.page_number for page in docling.pages]
+    if any(
+        current <= previous
+        for previous, current in zip(docling_page_numbers, docling_page_numbers[1:])
+    ):
+        raise ValueError("Docling canonical page numbers must be strictly increasing and unique")
     for page in docling.pages:
         validate_page_geometry_and_bounds(page)
         _require_unique_boundary_ids(page, parser="Docling")

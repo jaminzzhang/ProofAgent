@@ -18,6 +18,7 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     ParserServiceRequest,
     ParserServiceResponse,
     PrivateDoclingClient,
+    PrivatePaddleClient,
     canonical_vendor_json_bytes,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
@@ -327,6 +328,30 @@ def test_merge_rejects_duplicate_boundaries_before_dict_projection() -> None:
         )
 
 
+def test_merge_rejects_duplicate_docling_page_numbers() -> None:
+    docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
+    duplicate_pages = docling.model_copy(update={"pages": (docling.pages[0], docling.pages[0])})
+    paddle_page = canonicalize_paddle_page(
+        parser_response("paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64),
+        build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+    )
+
+    with pytest.raises(ValueError, match="strictly increasing and unique"):
+        merge_selected_results(
+            duplicate_pages,
+            (paddle_page,),
+            decisions=(
+                MergeSelection(
+                    page_number=1,
+                    boundary_kind="block",
+                    docling_id="paragraph-1",
+                    paddle_id="ocr-paragraph-1",
+                    reason="duplicate page regression",
+                ),
+            ),
+        )
+
+
 def test_merge_rejects_replacement_that_leaves_ambiguous_reading_order() -> None:
     docling = canonicalize_docling(parser_response("docling-simple.json"), build=build_id())
     paddle_page = canonicalize_paddle_page(
@@ -511,6 +536,42 @@ def test_quality_detects_large_span_overlap_without_expanding_grid_coordinates()
     assert "table_cell_overlap" in decision.reasons
 
 
+def test_quality_large_same_row_table_is_subquadratic_and_detects_overlap() -> None:
+    artifact = canonicalize_docling(parser_response("docling-complex-table.json"), build=build_id())
+    page = artifact.pages[0]
+    table = page.tables[0]
+    base_cell = table.cells[0]
+    cell_count = 10_000
+    width = table.bbox.x1 - table.bbox.x0
+    cells = tuple(
+        base_cell.model_copy(
+            update={
+                "row": 0,
+                "column": index,
+                "text": f"cell-{index}",
+                "bbox": base_cell.bbox.model_copy(
+                    update={
+                        "x0": table.bbox.x0 + width * index / cell_count,
+                        "x1": table.bbox.x0 + width * (index + 1) / cell_count,
+                    }
+                ),
+            }
+        )
+        for index in range(cell_count)
+    )
+    large_table = table.model_copy(update={"cells": cells})
+    large_page = page.model_copy(update={"tables": (large_table,)})
+
+    assert assess_page_quality(large_page, warnings=()).outcome is QualityOutcome.PASS
+
+    overlapping_cells = (*cells[:-1], cells[-1].model_copy(update={"column": cell_count - 2}))
+    overlapping_table = large_table.model_copy(update={"cells": overlapping_cells})
+    overlapping_page = large_page.model_copy(update={"tables": (overlapping_table,)})
+    decision = assess_page_quality(overlapping_page, warnings=())
+    assert decision.outcome is QualityOutcome.REVIEW_REQUIRED
+    assert "table_cell_overlap" in decision.reasons
+
+
 @pytest.mark.parametrize(
     "bbox",
     [
@@ -590,6 +651,63 @@ def test_private_client_preserves_service_attestation_and_disables_redirects() -
     assert response.attestation == transport.attestation
     assert response.attestation.original_ref.sha256 == "a" * 64
     assert transport.follow_redirects == [False]
+
+
+def test_paddle_client_rejects_multi_page_request_before_transport() -> None:
+    request = exact_request().model_copy(update={"page_numbers": (1, 2)})
+    transport = RecordingTransport()
+
+    with pytest.raises(ValueError, match="exactly one page_number"):
+        PrivatePaddleClient(transport=transport).parse(request)
+    assert transport.requests == []
+
+
+@pytest.mark.parametrize("include_singular", [False, True])
+def test_paddle_response_rejects_pages_array_payload(include_singular: bool) -> None:
+    response = parser_response(
+        "paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64
+    )
+    payload = response.vendor_json
+    singular = payload.pop("page")
+    payload["pages"] = [singular]
+    if include_singular:
+        payload["page"] = singular
+    bypassed = with_vendor_payload(response, payload)
+
+    with pytest.raises(ValidationError, match="exactly one singular page object"):
+        canonicalize_paddle_page(
+            bypassed,
+            build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+        )
+
+
+def test_paddle_response_rejects_multi_page_attestation() -> None:
+    response = parser_response(
+        "paddle-ocr-page.json", adapter="paddle", configuration_sha256="c" * 64
+    )
+    payload = response.vendor_json
+    first = payload.pop("page")
+    second = {**first, "page_number": 2}
+    payload["pages"] = [first, second]
+    vendor_json_bytes = canonical_vendor_json_bytes(payload)
+    bypassed = response.model_copy(
+        update={
+            "request": response.request.model_copy(update={"page_numbers": (1, 2)}),
+            "attestation": response.attestation.model_copy(
+                update={
+                    "page_numbers": (1, 2),
+                    "vendor_json_bytes": vendor_json_bytes,
+                    "vendor_json_sha256": hashlib.sha256(vendor_json_bytes).hexdigest(),
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="exactly one page_number"):
+        canonicalize_paddle_page(
+            bypassed,
+            build=build_id(adapter="paddle", configuration_sha256="c" * 64),
+        )
 
 
 @pytest.mark.parametrize(

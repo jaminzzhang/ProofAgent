@@ -115,19 +115,94 @@ def assess_page_quality(
 
 
 def _table_has_overlapping_cells(cells: tuple[StructuredTableCell, ...]) -> bool:
-    """Sweep row intervals without expanding any row/column span into coordinates."""
+    """Detect rectangle overlap in O(n log n) without expanding grid coordinates."""
 
-    ordered = sorted(cells, key=lambda cell: (cell.row, cell.column))
-    active: list[StructuredTableCell] = []
-    for cell in ordered:
-        active = [other for other in active if other.row + other.row_span > cell.row]
-        cell_column_end = cell.column + cell.column_span
-        for other in active:
-            other_column_end = other.column + other.column_span
-            if cell.column < other_column_end and other.column < cell_column_end:
-                return True
-        active.append(cell)
+    if len(cells) < 2:
+        return False
+    column_coordinates = sorted(
+        {
+            coordinate
+            for cell in cells
+            for coordinate in (cell.column, cell.column + cell.column_span)
+        }
+    )
+    column_index = {coordinate: index for index, coordinate in enumerate(column_coordinates)}
+    events: list[tuple[int, int, int, int, int]] = []
+    for cell in cells:
+        left = column_index[cell.column]
+        right = column_index[cell.column + cell.column_span] - 1
+        events.append((cell.row, 1, left, right, 1))
+        events.append((cell.row + cell.row_span, 0, left, right, -1))
+    events.sort()
+
+    coverage = _RangeAddMaximum(segment_count=len(column_coordinates) - 1)
+    for _row, _event_kind, left, right, delta in events:
+        coverage.add(left, right, delta)
+        if delta > 0 and coverage.maximum > 1:
+            return True
     return False
+
+
+class _RangeAddMaximum:
+    """Coordinate-compressed range-add tree exposing the global maximum."""
+
+    def __init__(self, *, segment_count: int) -> None:
+        self._segment_count = segment_count
+        self._maximum = [0] * (segment_count * 4)
+        self._lazy = [0] * (segment_count * 4)
+
+    @property
+    def maximum(self) -> int:
+        return self._maximum[1] if self._segment_count else 0
+
+    def add(self, left: int, right: int, delta: int) -> None:
+        if left > right or not self._segment_count:
+            return
+        self._add(
+            node=1,
+            start=0,
+            end=self._segment_count - 1,
+            left=left,
+            right=right,
+            delta=delta,
+        )
+
+    def _add(
+        self,
+        *,
+        node: int,
+        start: int,
+        end: int,
+        left: int,
+        right: int,
+        delta: int,
+    ) -> None:
+        if left <= start and end <= right:
+            self._maximum[node] += delta
+            self._lazy[node] += delta
+            return
+        midpoint = (start + end) // 2
+        if left <= midpoint:
+            self._add(
+                node=node * 2,
+                start=start,
+                end=midpoint,
+                left=left,
+                right=right,
+                delta=delta,
+            )
+        if right > midpoint:
+            self._add(
+                node=node * 2 + 1,
+                start=midpoint + 1,
+                end=end,
+                left=left,
+                right=right,
+                delta=delta,
+            )
+        self._maximum[node] = self._lazy[node] + max(
+            self._maximum[node * 2], self._maximum[node * 2 + 1]
+        )
 
 
 def assess_cross_page_continuations(

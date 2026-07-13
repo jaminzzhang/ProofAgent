@@ -78,6 +78,8 @@ class ParserServiceAttestation(_ParserServiceModel):
 
     @model_validator(mode="after")
     def validate_vendor_payload(self) -> Self:
+        if self.parser_adapter == "paddle" and len(self.page_numbers) != 1:
+            raise ValueError("Paddle parser attestation requires exactly one page_number")
         if hashlib.sha256(self.vendor_json_bytes).hexdigest() != self.vendor_json_sha256:
             raise ValueError("vendor JSON digest must match the attested canonical bytes")
         _decode_attested_vendor_json(self)
@@ -93,6 +95,8 @@ class ParserServiceResponse(_ParserServiceModel):
 
     @model_validator(mode="after")
     def validate_attestation(self) -> Self:
+        if self.adapter == "paddle" and len(self.request.page_numbers) != 1:
+            raise ValueError("Paddle parser request requires exactly one page_number")
         if self.attestation.parser_adapter != self.adapter:
             raise ValueError("parser response adapter must match the requested private client")
         if self.attestation.original_ref != self.request.original_ref:
@@ -138,6 +142,8 @@ class _PrivateParserClient:
         self._transport = transport
 
     def parse(self, request: ParserServiceRequest) -> ParserServiceResponse:
+        if self.adapter == "paddle" and len(request.page_numbers) != 1:
+            raise ValueError("Paddle parser request requires exactly one page_number")
         attestation = self._transport.parse(request, follow_redirects=False)
         return ParserServiceResponse(
             adapter=self.adapter,
@@ -157,14 +163,9 @@ def _vendor_page_numbers(
             raise ValueError("Docling response exceeds the page limit")
         return tuple(_page_number(page) for page in pages)
     page = payload.get("page")
-    pages = payload.get("pages")
-    if isinstance(page, dict):
+    if isinstance(page, dict) and "pages" not in payload:
         return (_page_number(page),)
-    if isinstance(pages, list):
-        if len(pages) > MAX_PARSER_PAGES:
-            raise ValueError("Paddle response exceeds the page limit")
-        return tuple(_page_number(item) for item in pages)
-    raise ValueError("Paddle response must contain a page object or pages array")
+    raise ValueError("Paddle response must contain exactly one singular page object")
 
 
 def canonical_vendor_json_bytes(payload: dict[str, JsonValue]) -> bytes:
