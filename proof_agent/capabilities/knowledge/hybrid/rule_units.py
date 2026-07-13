@@ -39,8 +39,25 @@ NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 RuleUnitKind = Literal["document", "clause", "section", "table_row", "row_group"]
 
-_DEFINITION_PATTERN = re.compile(
-    r"(?:\bmeans\b|\bdefinition\b|\bis defined as\b|是指|定义为|释义)", re.IGNORECASE
+_ENGLISH_DEFINITION_STATEMENT = re.compile(
+    r"""
+    ^\s*
+    (?:["“](?P<quoted>[^"”\r\n]{1,127})["”]
+      |(?P<plain>[A-Za-z][A-Za-z0-9 _-]{0,126}?))
+    \s+(?:means|is\s+defined\s+as|refers\s+to)\s+
+    (?P<body>\S.*?)\s*$
+    """,
+    re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+_CHINESE_DEFINITION_STATEMENT = re.compile(
+    r"""
+    ^\s*
+    (?:["“](?P<quoted>[^"”\r\n]{1,64})["”]
+      |(?P<plain>[^，。；：:\s][^，。；：:\r\n]{0,63}?))
+    \s*[:：]?\s*(?:是指|系指|定义为|指)\s*
+    (?P<body>\S.*?)\s*$
+    """,
+    re.DOTALL | re.VERBOSE,
 )
 _DEFINITION_CONTENT_BLOCK_TYPES = frozenset({"paragraph", "list_item"})
 
@@ -443,18 +460,12 @@ def _build_definition_index(
     entries: list[_DefinitionEntry] = []
     for page in pages:
         for block in page.blocks:
-            if (
-                block.block_type not in _DEFINITION_CONTENT_BLOCK_TYPES
-                or not block.text.strip()
-                or _DEFINITION_PATTERN.search(block.text) is None
-            ):
+            if block.block_type not in _DEFINITION_CONTENT_BLOCK_TYPES or not block.text.strip():
                 continue
-            work.consume(1)
+            work.consume(1 + len(block.text) // 64)
             term = _definition_term(block.text)
             if term is None:
-                raise RuleUnitProjectionReviewRequired(
-                    "definition text does not expose one bounded explicit term"
-                )
+                continue
             entries.append(
                 _DefinitionEntry(
                     term=term,
@@ -469,17 +480,13 @@ def _build_definition_index(
 
 
 def _definition_term(text: str) -> str | None:
-    stripped = text.strip()
-    english = re.match(
-        r'^["“”\s]*([A-Za-z][A-Za-z0-9 _-]{0,126}?)\s+(?:means|is defined as)\b',
-        stripped,
-        re.IGNORECASE,
-    )
-    if english is not None:
-        return english.group(1).strip(' \t"“”')
-    chinese = re.match(r"^[“”\s]*([^，。；：:]{1,64}?)(?:是指|定义为)", stripped)
-    if chinese is not None:
-        return chinese.group(1).strip(' \t"“”')
+    for pattern in (_ENGLISH_DEFINITION_STATEMENT, _CHINESE_DEFINITION_STATEMENT):
+        match = pattern.fullmatch(text)
+        if match is not None:
+            term = match.group("quoted") or match.group("plain")
+            term = term.strip()
+            if term:
+                return term
     return None
 
 

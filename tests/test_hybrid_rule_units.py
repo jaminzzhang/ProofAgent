@@ -734,6 +734,41 @@ def test_ambiguous_duplicate_referenced_definitions_require_review() -> None:
         project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
 
 
+@pytest.mark.parametrize(
+    "cross_reference",
+    ("详见本合同释义章节。", "See the definition section."),
+)
+def test_generic_definition_cross_references_are_ordinary_content(
+    cross_reference: str,
+) -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[0].model_copy(
+        update={
+            "blocks": (
+                StructuredBlock(
+                    block_id="definition-cross-reference",
+                    kind="paragraph",
+                    text=cross_reference,
+                    bbox=bbox(40, 40, 572, 70),
+                    reading_order=0,
+                ),
+            ),
+            "tables": (),
+        }
+    )
+    artifact = artifact.model_copy(update={"pages": (page,)})
+
+    units = project_rule_units(
+        artifact,
+        document_defaults=defaults(),
+        source_id="source-1",
+    )
+
+    assert len(units) == 1
+    assert units[0].content == cross_reference
+    assert units[0].definitions == ()
+
+
 def test_ten_thousand_cells_stay_within_deterministic_work_bound() -> None:
     artifact = canonical_artifact()
     header = artifact.pages[1].tables[0].cells[:2]
