@@ -15,6 +15,18 @@ from proof_agent.capabilities.knowledge.ingestion.contracts import (
 from proof_agent.capabilities.knowledge.ingestion.fingerprint import (
     ingestion_config_fingerprint,
 )
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridArtifactBuildRequest,
+    HybridArtifactBuildResult,
+    HybridKnowledgeWorker,
+    HybridParserBuildOutput,
+    HybridVendorArtifact,
+    HybridVendorArtifactRef,
+    HybridWorkerOutcome,
+    ReviewRequiredError,
+    TransientKnowledgeServiceError,
+    hybrid_build_request_sha256,
+)
 from proof_agent.capabilities.knowledge.ingestion.parsers import (
     KnowledgeDocumentParserRegistry,
     MarkdownKnowledgeDocumentParser,
@@ -25,6 +37,13 @@ from proof_agent.capabilities.knowledge.ingestion.parsers import (
 __all__ = [
     "KnowledgeDocumentParser",
     "KnowledgeDocumentParserRegistry",
+    "HybridArtifactBuildRequest",
+    "HybridArtifactBuildResult",
+    "HybridKnowledgeWorker",
+    "HybridParserBuildOutput",
+    "HybridVendorArtifact",
+    "HybridVendorArtifactRef",
+    "HybridWorkerOutcome",
     "KnowledgeWorkerClaimSelection",
     "KnowledgeWorkerDiagnostic",
     "KnowledgeWorkerTaskClaim",
@@ -32,6 +51,9 @@ __all__ = [
     "ParsedKnowledgeDocument",
     "ParserMetadata",
     "PdfKnowledgeDocumentParser",
+    "ReviewRequiredError",
+    "TransientKnowledgeServiceError",
+    "hybrid_build_request_sha256",
     "ingestion_config_fingerprint",
     "ingestion_model_config_from_build_spec",
     "local_index_engine_version",

@@ -59,6 +59,12 @@ class RecoverableKnowledgeArtifactBuildError(Exception):
     """Known temporary builder failure that may be retried with persisted backoff."""
 
 
+class HybridClaimedTaskHandler(Protocol):
+    """Provider-specific handler for a task already claimed by the unified queue."""
+
+    def __call__(self, task: KnowledgeWorkerTaskClaim) -> KnowledgeWorkerTaskOutcome: ...
+
+
 @dataclass(frozen=True)
 class KnowledgeWorkerTaskOutcome:
     """Value-safe result for the single task processed by one worker invocation."""
@@ -89,11 +95,13 @@ class KnowledgeIngestionWorker:
         store: LocalAgentConfigurationStore,
         artifact_builder: KnowledgeRevisionArtifactBuilder,
         parser: Callable[..., ParsedKnowledgeDocument] = parse_quarantined_upload,
+        hybrid_task_handler: HybridClaimedTaskHandler | None = None,
         lease_seconds: int = 300,
     ) -> None:
         self._store = store
         self._artifact_builder = artifact_builder
         self._parser = parser
+        self._hybrid_task_handler = hybrid_task_handler
         self._lease_seconds = lease_seconds
 
     def run_once(self) -> KnowledgeWorkerResult | None:
@@ -109,11 +117,25 @@ class KnowledgeIngestionWorker:
                 return None
             return KnowledgeWorkerResult(outcome=None, diagnostics=selection.diagnostics)
 
-        if selection.task.kind == "quarantine_validation":
-            outcome = self._process_quarantine_validation(selection.task)
-        else:
-            outcome = self._process_artifact_build(selection.task)
+        source_id = _claimed_task_source_id(selection.task)
+        source = self._store.get_knowledge_source(source_id)
+        if source is None:
+            raise _lost_ownership("Claimed knowledge task Source projection is missing.")
+        outcome = dispatch_claimed_knowledge_task(
+            provider=source.provider,
+            task=selection.task,
+            local_handler=self._process_local_task,
+            hybrid_handler=self._hybrid_task_handler,
+        )
         return KnowledgeWorkerResult(outcome=outcome, diagnostics=selection.diagnostics)
+
+    def _process_local_task(
+        self,
+        task: KnowledgeWorkerTaskClaim,
+    ) -> KnowledgeWorkerTaskOutcome:
+        if task.kind == "quarantine_validation":
+            return self._process_quarantine_validation(task)
+        return self._process_artifact_build(task)
 
     def run_continuously(
         self,
@@ -369,6 +391,40 @@ def _job_outcome(
         error_message=error_message,
         artifact_path=job.artifact_path,
     )
+
+
+def dispatch_claimed_knowledge_task(
+    *,
+    provider: str,
+    task: KnowledgeWorkerTaskClaim,
+    local_handler: Callable[[KnowledgeWorkerTaskClaim], KnowledgeWorkerTaskOutcome],
+    hybrid_handler: HybridClaimedTaskHandler | None,
+) -> KnowledgeWorkerTaskOutcome:
+    """Dispatch one already-owned task without importing Hybrid code on Local jobs."""
+
+    if provider == "local_index":
+        return local_handler(task)
+    if provider == "hybrid_index":
+        if hybrid_handler is None:
+            raise ProofAgentError(
+                "PA_HYBRID_WORKER_001",
+                "Hybrid Index worker handler is not configured.",
+                "Configure the private Hybrid parser worker before processing this Source.",
+            )
+        return hybrid_handler(task)
+    raise ProofAgentError(
+        "PA_INGESTION_001",
+        "Claimed Knowledge Source provider is not supported by the ingestion worker.",
+        "Use a supported provider-specific worker handler.",
+    )
+
+
+def _claimed_task_source_id(task: KnowledgeWorkerTaskClaim) -> str:
+    if task.upload is not None and task.ingestion_job is None:
+        return task.upload.source_id
+    if task.ingestion_job is not None and task.upload is None:
+        return task.ingestion_job.source_id
+    raise _lost_ownership("Claimed knowledge task payload is incomplete or ambiguous.")
 
 
 def _short_message(message: str, *, fallback: str) -> str:
