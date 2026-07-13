@@ -453,6 +453,12 @@ def _apply_bounded_predictor(data: bytes, decode_parms: Any, remaining: int) -> 
         return data
     try:
         from pypdf.filters import FlateDecode
+        from pypdf.generic import DictionaryObject, NameObject, NumberObject
+
+        if isinstance(decode_parms, dict) and not isinstance(decode_parms, DictionaryObject):
+            decode_parms = DictionaryObject(
+                {NameObject(key): NumberObject(value) for key, value in decode_parms.items()}
+            )
 
         predicted = FlateDecode.decode(zlib.compress(data), decode_parms)
     except Exception as exc:

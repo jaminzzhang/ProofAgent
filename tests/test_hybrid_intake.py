@@ -207,6 +207,7 @@ def _write_object_stream_pdf(
     padding_bytes: int,
     nested_dictionary_before_type: bool = False,
     indirect_filter_and_length: bool = False,
+    forward_indirect_filter_and_length: bool = False,
     escaped_filter_name: bool = False,
     escaped_object_stream_type: bool = False,
     indirect_object_stream_type: bool = False,
@@ -239,7 +240,7 @@ def _write_object_stream_pdf(
     length_value = (
         b"8 0 R" if indirect_filter_and_length else str(len(object_stream_encoded)).encode("ascii")
     )
-    if indirect_filter_and_length:
+    if indirect_filter_and_length and not forward_indirect_filter_and_length:
         add_object(7, b"/Flate#44ecode" if escaped_filter_name else b"/FlateDecode")
         add_object(8, str(len(object_stream_encoded)).encode("ascii"))
     if indirect_object_stream_type:
@@ -261,6 +262,9 @@ def _write_object_stream_pdf(
         5,
         b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
     )
+    if indirect_filter_and_length and forward_indirect_filter_and_length:
+        add_object(7, b"/Flate#44ecode" if escaped_filter_name else b"/FlateDecode")
+        add_object(8, str(len(object_stream_encoded)).encode("ascii"))
     offsets[6] = sum(len(part) for part in parts)
 
     def xref_entry(entry_type: int, field2: int, field3: int) -> bytes:
@@ -278,11 +282,19 @@ def _write_object_stream_pdf(
         else:
             xref_entries.append(xref_entry(0, 0, 0))
     decoded_xref_data = b"".join(xref_entries) + b"\x00" * xref_padding_bytes
-    xref_data = zlib.compress(b"\x00" + decoded_xref_data) if xref_predictor else decoded_xref_data
+    if xref_predictor:
+        row_width = 7
+        padding = (-len(decoded_xref_data)) % row_width
+        decoded_xref_data += b"\x00" * padding
+        predicted_xref_data = b"".join(
+            b"\x00" + decoded_xref_data[offset : offset + row_width]
+            for offset in range(0, len(decoded_xref_data), row_width)
+        )
+        xref_data = zlib.compress(predicted_xref_data)
+    else:
+        xref_data = decoded_xref_data
     xref_filter = (
-        b" /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns "
-        + str(len(decoded_xref_data)).encode("ascii")
-        + b" >>"
+        b" /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 7 >>"
         if xref_predictor
         else b""
     )
@@ -1309,12 +1321,31 @@ def test_preflight_accepts_bounded_structural_stream_dictionary_variants(
 
 
 def test_preflight_accepts_png_predicted_xref_stream(tmp_path: Path) -> None:
+    path = _write_object_stream_pdf(
+        tmp_path / "predicted-xref.pdf",
+        padding_bytes=32,
+        indirect_filter_and_length=True,
+        forward_indirect_filter_and_length=True,
+        xref_predictor=True,
+    )
+    raw = path.read_bytes()
+    source = BytesIO(raw)
+    boundaries = hybrid_intake_module._validate_terminal_pdf_region(source)
+    offsets = hybrid_intake_module._validated_xref_object_offsets(
+        source, revision_boundaries=boundaries
+    )
+    values = hybrid_intake_module._collect_simple_indirect_pdf_values(
+        raw,
+        revision_boundaries=boundaries,
+        authoritative_object_offsets=offsets,
+    )
+
+    assert raw.index(b"8 0 obj") in offsets
+    assert values[(8, 0)] == (
+        str(len(zlib.compress(b"2 0 << /Dummy true >>\n%" + b"A" * 32))).encode(),
+    )
     result = preflight_hybrid_pdf(
-        _write_object_stream_pdf(
-            tmp_path / "predicted-xref.pdf",
-            padding_bytes=32,
-            xref_predictor=True,
-        ),
+        path,
         limits=HybridIntakeLimits(),
     )
     assert result.page_count == 1
