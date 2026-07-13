@@ -227,6 +227,9 @@ def _write_object_stream_pdf(
     length_value = (
         b"8 0 R" if indirect_filter_and_length else str(len(object_stream_encoded)).encode("ascii")
     )
+    if indirect_filter_and_length:
+        add_object(7, b"/Flate#44ecode" if escaped_filter_name else b"/FlateDecode")
+        add_object(8, str(len(object_stream_encoded)).encode("ascii"))
     add_object(
         1,
         dictionary_prefix
@@ -244,9 +247,6 @@ def _write_object_stream_pdf(
         5,
         b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
     )
-    if indirect_filter_and_length:
-        add_object(7, b"/Flate#44ecode" if escaped_filter_name else b"/FlateDecode")
-        add_object(8, str(len(object_stream_encoded)).encode("ascii"))
     offsets[6] = sum(len(part) for part in parts)
 
     def xref_entry(entry_type: int, field2: int, field3: int) -> bytes:
@@ -309,6 +309,74 @@ def test_simple_indirect_resolver_rejects_duplicate_object_identity() -> None:
         hybrid_intake_module._collect_simple_indirect_pdf_values(raw)
 
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
+
+
+def test_simple_indirect_resolver_fails_closed_before_forward_length_stream_body() -> None:
+    body = b"endstream\n7 0 obj /RunLengthDecode endobj\n" + b"9 0 obj 1 endobj\n" * 2_000
+    raw = (
+        b"1 0 obj << /Length 8 0 R >>\nstream\n"
+        + body
+        + b"\nendstream\nendobj\n8 0 obj "
+        + str(len(body)).encode("ascii")
+        + b" endobj\n"
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        hybrid_intake_module._collect_simple_indirect_pdf_values(raw)
+
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert "length cannot be bounded" in exc.value.message
+
+
+def test_stream_eof_marker_does_not_authorize_same_revision_duplicate() -> None:
+    body = b"benign %%EOF marker"
+    raw = (
+        b"1 0 obj /Old endobj\n"
+        b"2 0 obj << /Length "
+        + str(len(body)).encode("ascii")
+        + b" >>\nstream\n"
+        + body
+        + b"\nendstream\nendobj\n1 0 obj /New endobj\n"
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        hybrid_intake_module._collect_simple_indirect_pdf_values(raw)
+
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+
+
+def test_validated_incremental_boundary_allows_latest_simple_object_value() -> None:
+    base_object = b"7 0 obj /Old endobj\n"
+    base_xref_offset = len(b"%PDF-1.4\n") + len(base_object)
+    base = (
+        b"%PDF-1.4\n"
+        + base_object
+        + b"xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 8 >>\nstartxref\n"
+        + str(base_xref_offset).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+    incremental_object_offset = len(base)
+    incremental_object = b"7 0 obj /New endobj\n"
+    incremental_xref_offset = incremental_object_offset + len(incremental_object)
+    raw = (
+        base
+        + incremental_object
+        + b"xref\n7 1\n"
+        + f"{incremental_object_offset:010d} 00000 n \n".encode("ascii")
+        + b"trailer\n<< /Size 8 /Prev "
+        + str(base_xref_offset).encode("ascii")
+        + b" >>\nstartxref\n"
+        + str(incremental_xref_offset).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+
+    boundaries = hybrid_intake_module._validate_terminal_pdf_region(BytesIO(raw))
+    values = hybrid_intake_module._collect_simple_indirect_pdf_values(
+        raw, revision_boundaries=boundaries
+    )
+
+    assert boundaries == (base.index(b"%%EOF") + len(b"%%EOF"),)
+    assert values[(7, 0)] == (b"/New",)
 
 
 def test_simple_indirect_resolver_enforces_object_bound_before_allocation(

@@ -106,10 +106,10 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
 
     try:
         _reject_polyglot_payload(snapshot)
-        _validate_bounded_structural_streams(snapshot)
+        revision_boundaries = _validate_terminal_pdf_region(snapshot)
+        _validate_bounded_structural_streams(snapshot, revision_boundaries=revision_boundaries)
         snapshot.seek(0)
         reader = PdfReader(snapshot, strict=True)
-        _validate_terminal_pdf_region(snapshot)
         if reader.is_encrypted:
             raise _hybrid_error(
                 "PA_HYBRID_INTAKE_003", "Encrypted Hybrid PDF uploads are not supported."
@@ -818,10 +818,14 @@ def _reject_polyglot_payload(source: IO[bytes]) -> None:
         raise _hybrid_error("PA_HYBRID_INTAKE_001", "Hybrid PDF upload could not be read.") from exc
 
 
-def _validate_bounded_structural_streams(source: IO[bytes]) -> None:
+def _validate_bounded_structural_streams(
+    source: IO[bytes], *, revision_boundaries: tuple[int, ...] = ()
+) -> None:
     source.seek(0)
     raw = source.read()
-    simple_objects = _collect_simple_indirect_pdf_values(raw)
+    simple_objects = _collect_simple_indirect_pdf_values(
+        raw, revision_boundaries=revision_boundaries
+    )
     position = 0
     token_count = 0
     recent: list[bytes] = []
@@ -948,24 +952,14 @@ def _next_raw_pdf_token(raw: bytes, position: int) -> tuple[bytes, int, int] | N
     return raw[start:position], start, position
 
 
-def _collect_simple_indirect_pdf_values(raw: bytes) -> dict[tuple[int, int], tuple[bytes, ...]]:
-    provisional = _collect_simple_indirect_pdf_values_pass(
-        raw, known_values={}, reject_duplicates=False
-    )
-    return _collect_simple_indirect_pdf_values_pass(
-        raw, known_values=provisional, reject_duplicates=True
-    )
-
-
-def _collect_simple_indirect_pdf_values_pass(
+def _collect_simple_indirect_pdf_values(
     raw: bytes,
     *,
-    known_values: dict[tuple[int, int], tuple[bytes, ...]],
-    reject_duplicates: bool,
+    revision_boundaries: tuple[int, ...] = (),
 ) -> dict[tuple[int, int], tuple[bytes, ...]]:
     values: dict[tuple[int, int], tuple[bytes, ...]] = {}
     seen_identities: set[tuple[int, int]] = set()
-    last_identity_offset: dict[tuple[int, int], int] = {}
+    last_identity_revision: dict[tuple[int, int], int] = {}
     position = 0
     token_count = 0
     recent: list[bytes] = []
@@ -994,12 +988,9 @@ def _collect_simple_indirect_pdf_values_pass(
             and all(value.isdigit() for value in recent[-2:])
         ):
             current_identity = (int(recent[-2]), int(recent[-1]))
-            previous_offset = last_identity_offset.get(current_identity)
-            if (
-                previous_offset is not None
-                and reject_duplicates
-                and raw.find(b"%%EOF", previous_offset, _start) < 0
-            ):
+            current_revision = sum(boundary <= _start for boundary in revision_boundaries)
+            previous_revision = last_identity_revision.get(current_identity)
+            if previous_revision is not None and current_revision <= previous_revision:
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_006", "Hybrid PDF contains duplicate indirect objects."
                 )
@@ -1010,7 +1001,7 @@ def _collect_simple_indirect_pdf_values_pass(
                         "Hybrid PDF indirect object count exceeds safety limits.",
                     )
                 seen_identities.add(current_identity)
-            last_identity_offset[current_identity] = _start
+            last_identity_revision[current_identity] = current_revision
             current_value = []
             simple_candidate = True
             completed_dictionary = None
@@ -1040,24 +1031,11 @@ def _collect_simple_indirect_pdf_values_pass(
                 raise _hybrid_error(
                     "PA_HYBRID_INTAKE_006", "Hybrid PDF stream dictionary is invalid."
                 )
-            resolvable_values = dict(known_values)
-            resolvable_values.update(values)
-            try:
-                length = _structural_dictionary_length(completed_dictionary, resolvable_values)
-            except ProofAgentError:
-                if reject_duplicates:
-                    raise
-                endstream = raw.find(b"endstream", position)
-                if endstream < 0:
-                    raise _hybrid_error(
-                        "PA_HYBRID_INTAKE_006", "Hybrid PDF stream is unterminated."
-                    )
-                position = endstream
-            else:
-                data_start = _raw_stream_data_start(raw, end)
-                position = data_start + length
-                if position > len(raw):
-                    raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF stream is truncated.")
+            length = _structural_dictionary_length(completed_dictionary, values)
+            data_start = _raw_stream_data_start(raw, end)
+            position = data_start + length
+            if position > len(raw):
+                raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF stream is truncated.")
             current_value = []
             simple_candidate = False
             recent.clear()
@@ -1213,10 +1191,10 @@ def _raw_stream_data_start(raw: bytes, stream_token_end: int) -> int:
     raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF stream boundary is invalid.")
 
 
-def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
+def _validate_terminal_pdf_region(source: IO[bytes]) -> tuple[int, ...]:
     startxref_offset = _last_marker_offset(source, b"startxref")
     if startxref_offset is None:
-        return
+        return ()
     source.seek(0, os.SEEK_END)
     size = source.tell()
     terminal_region_size = size - startxref_offset
@@ -1236,23 +1214,34 @@ def _validate_terminal_pdf_region(source: IO[bytes]) -> None:
     xref_offset = int(match.group("offset"))
     if xref_offset >= startxref_offset:
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF startxref is invalid.")
-    previous_revision = _previous_revision_before(source, startxref_offset)
-    if previous_revision is None:
-        return
-
-    previous_eof_end, previous_xref_offset = previous_revision
-    if xref_offset <= previous_eof_end:
-        raise _hybrid_error(
-            "PA_HYBRID_INTAKE_009",
-            "Hybrid PDF upload contains bytes outside a valid incremental revision.",
+    reverse_boundaries: list[int] = []
+    current_xref_offset = xref_offset
+    current_startxref_offset = startxref_offset
+    while True:
+        previous_revision = _previous_revision_before(source, current_startxref_offset)
+        if previous_revision is None:
+            return tuple(reversed(reverse_boundaries))
+        previous_eof_end, previous_xref_offset = previous_revision
+        if current_xref_offset <= previous_eof_end:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_009",
+                "Hybrid PDF upload contains bytes outside a valid incremental revision.",
+            )
+        _validate_incremental_revision(
+            source,
+            previous_eof_end=previous_eof_end,
+            previous_xref_offset=previous_xref_offset,
+            xref_offset=current_xref_offset,
+            startxref_offset=current_startxref_offset,
         )
-    _validate_incremental_revision(
-        source,
-        previous_eof_end=previous_eof_end,
-        previous_xref_offset=previous_xref_offset,
-        xref_offset=xref_offset,
-        startxref_offset=startxref_offset,
-    )
+        reverse_boundaries.append(previous_eof_end)
+        previous_startxref_offset = _last_marker_offset(
+            source, b"startxref", before=previous_eof_end
+        )
+        if previous_startxref_offset is None:
+            raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF revision chain is invalid.")
+        current_xref_offset = previous_xref_offset
+        current_startxref_offset = previous_startxref_offset
 
 
 def _last_marker_offset(
