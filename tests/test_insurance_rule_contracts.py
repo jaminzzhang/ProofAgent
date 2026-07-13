@@ -9,11 +9,15 @@ from proof_agent.contracts import (
     ApprovedInsuranceKnowledgeVisibilityScope,
     ApprovedInsuranceRuleMetadataRevision,
     AuthorityGateCheck,
+    BoundingBox,
     InsuranceEvidenceSlotRequirement,
     InsuranceRuleApplicability,
     InsuranceRuleAuthorityGateResult,
+    InsuranceRuleCellCoordinate,
     InsuranceRuleMetadataDraft,
+    InsuranceRulePageBoundingBox,
     InsuranceRulePrecedence,
+    InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
     ProposedInsuranceKnowledgeVisibilityScope,
     ScopeDimension,
@@ -52,7 +56,54 @@ def restricted_visibility() -> ApprovedInsuranceKnowledgeVisibilityScope:
     )
 
 
-def valid_rule_fields() -> dict[str, object]:
+def rule_lineage(unit_kind: str = "document") -> InsuranceRuleUnitLineage:
+    page_bbox = InsuranceRulePageBoundingBox(
+        page_number=3,
+        bbox=BoundingBox(x0=40, y0=90, x1=572, y1=280),
+    )
+    common: dict[str, object] = {
+        "source_id": "source-1",
+        "original_sha256": "c" * 64,
+        "heading_path": ("Eligibility",),
+        "definitions": ("Applicant means the person applying for cover.",),
+        "page_numbers": (3,),
+        "page_bboxes": (page_bbox,),
+    }
+    if unit_kind in {"clause", "section"}:
+        common["block_ids"] = ("clause-age",)
+    if unit_kind in {"table_row", "row_group"}:
+        rows = (1,) if unit_kind == "table_row" else (1, 2)
+        common.update(
+            {
+                "table_id": "table-1",
+                "table_title": "Eligibility limits",
+                "table_headers": ("Plan", "Age"),
+                "row_header": "Standard",
+                "row_numbers": rows,
+                "cell_coordinates": (
+                    InsuranceRuleCellCoordinate(
+                        page_number=3,
+                        row=1,
+                        column=0,
+                        row_span=len(rows),
+                        column_span=1,
+                        bbox=BoundingBox(x0=40, y0=130, x1=220, y1=210),
+                    ),
+                    InsuranceRuleCellCoordinate(
+                        page_number=3,
+                        row=1,
+                        column=1,
+                        row_span=len(rows),
+                        column_span=1,
+                        bbox=BoundingBox(x0=220, y0=130, x1=400, y1=210),
+                    ),
+                ),
+            }
+        )
+    return InsuranceRuleUnitLineage(**common)
+
+
+def valid_rule_fields(unit_kind: str = "document") -> dict[str, object]:
     return {
         "rule_unit_revision_id": "rule-rev-1",
         "logical_rule_key": "accident-age-limit",
@@ -65,6 +116,7 @@ def valid_rule_fields() -> dict[str, object]:
         "visibility_scope": restricted_visibility(),
         "content_sha256": "a" * 64,
         "authority_sha256": "b" * 64,
+        "lineage": rule_lineage(unit_kind),
     }
 
 
@@ -110,13 +162,24 @@ def test_public_visibility_forbids_dimension_scopes() -> None:
 
 @pytest.mark.parametrize("unit_kind", ["document", "clause", "section", "table_row", "row_group"])
 def test_rule_unit_revision_accepts_coherent_granularity(unit_kind: str) -> None:
-    revision = InsuranceRuleUnitRevision(unit_kind=unit_kind, **valid_rule_fields())
+    revision = InsuranceRuleUnitRevision(unit_kind=unit_kind, **valid_rule_fields(unit_kind))
     assert revision.unit_kind == unit_kind
 
 
 def test_isolated_cell_cannot_be_rule_unit_kind() -> None:
     with pytest.raises(ValidationError):
         InsuranceRuleUnitRevision(unit_kind="cell", **valid_rule_fields())
+
+
+def test_table_rule_revision_rejects_isolated_cell_authority() -> None:
+    fields = valid_rule_fields("table_row")
+    lineage = rule_lineage("table_row")
+    fields["lineage"] = lineage.model_copy(
+        update={"cell_coordinates": lineage.cell_coordinates[:1]}
+    )
+
+    with pytest.raises(ValidationError, match="multi-cell evidence"):
+        InsuranceRuleUnitRevision(unit_kind="table_row", **fields)
 
 
 def test_metadata_draft_is_explicitly_non_authoritative() -> None:
@@ -397,7 +460,7 @@ def test_authority_gate_failure_requires_terminal_handling_and_reason() -> None:
 
 
 def test_contracts_round_trip_are_frozen_and_exported() -> None:
-    revision = InsuranceRuleUnitRevision(unit_kind="table_row", **valid_rule_fields())
+    revision = InsuranceRuleUnitRevision(unit_kind="table_row", **valid_rule_fields("table_row"))
     restored = InsuranceRuleUnitRevision.model_validate_json(revision.model_dump_json())
     payload = json.loads(revision.model_dump_json())
 
@@ -413,8 +476,11 @@ def test_contracts_round_trip_are_frozen_and_exported() -> None:
         "InsuranceEvidenceSlotRequirement",
         "InsuranceRuleApplicability",
         "InsuranceRuleAuthorityGateResult",
+        "InsuranceRuleCellCoordinate",
         "InsuranceRuleMetadataDraft",
+        "InsuranceRulePageBoundingBox",
         "InsuranceRulePrecedence",
+        "InsuranceRuleUnitLineage",
         "InsuranceRuleUnitRevision",
         "ProposedInsuranceKnowledgeVisibilityScope",
         "ScopeDimension",

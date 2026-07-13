@@ -234,7 +234,9 @@ def test_projects_sections_clauses_and_definition_context_without_token_chunks()
 
 
 def test_table_cells_project_as_one_row_rule_unit_with_headers() -> None:
-    units = project_rule_units(canonical_artifact(), document_defaults=defaults())
+    units = project_rule_units(
+        canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+    )
     rows = [unit for unit in units if unit.unit_kind == "table_row"]
 
     assert len(rows) == 2
@@ -250,8 +252,8 @@ def test_table_cells_project_as_one_row_rule_unit_with_headers() -> None:
 
 def test_cross_page_table_continuation_and_deterministic_order_are_preserved() -> None:
     artifact = canonical_artifact()
-    first = project_rule_units(artifact, document_defaults=defaults())
-    second = project_rule_units(artifact, document_defaults=defaults())
+    first = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+    second = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
 
     assert first == second
     assert [unit.ordinal for unit in first] == list(range(len(first)))
@@ -283,7 +285,7 @@ def test_row_spans_project_as_one_row_group_instead_of_isolated_cells() -> None:
         update={"pages": (artifact.pages[0], page.model_copy(update={"tables": (table,)}))}
     )
 
-    units = project_rule_units(artifact, document_defaults=defaults())
+    units = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
     group = next(unit for unit in units if unit.unit_kind == "row_group")
     assert group.row_numbers == (1, 2)
     assert "18-60" in group.content
@@ -294,16 +296,18 @@ def test_row_spans_project_as_one_row_group_instead_of_isolated_cells() -> None:
 def test_projection_rejects_wrong_metadata_lineage_and_invalid_artifact_order() -> None:
     wrong = defaults().model_copy(update={"revision_id": "rev-other"})
     with pytest.raises(ValueError, match="metadata draft lineage"):
-        project_rule_units(canonical_artifact(), document_defaults=wrong)
+        project_rule_units(canonical_artifact(), document_defaults=wrong, source_id="source-1")
 
     artifact = canonical_artifact()
     invalid = artifact.model_copy(update={"pages": tuple(reversed(artifact.pages))})
     with pytest.raises(ValueError, match="strictly increasing"):
-        project_rule_units(invalid, document_defaults=defaults())
+        project_rule_units(invalid, document_defaults=defaults(), source_id="source-1")
 
 
 def test_rule_unit_draft_rejects_isolated_cell_and_inconsistent_lineage() -> None:
-    unit = project_rule_units(canonical_artifact(), document_defaults=defaults())[0]
+    unit = project_rule_units(
+        canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+    )[0]
     payload = unit.model_dump()
     payload["unit_kind"] = "cell"
     with pytest.raises(ValidationError):
@@ -318,7 +322,9 @@ def test_rule_unit_draft_rejects_isolated_cell_and_inconsistent_lineage() -> Non
 def test_immutable_revision_identity_covers_content_build_metadata_and_visibility() -> None:
     draft = next(
         unit
-        for unit in project_rule_units(canonical_artifact(), document_defaults=defaults())
+        for unit in project_rule_units(
+            canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+        )
         if unit.unit_kind == "clause"
     )
     original = materialize_rule_unit_revision(
@@ -364,7 +370,9 @@ def test_immutable_revision_identity_covers_content_build_metadata_and_visibilit
 
 
 def test_logical_rule_key_is_review_only_and_does_not_determine_runtime_identity() -> None:
-    draft = project_rule_units(canonical_artifact(), document_defaults=defaults())[0]
+    draft = project_rule_units(
+        canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+    )[0]
     changed_key = draft.model_copy(update={"logical_rule_key": "review-key-changed"})
 
     first = materialize_rule_unit_revision(
@@ -379,7 +387,9 @@ def test_logical_rule_key_is_review_only_and_does_not_determine_runtime_identity
 
 
 def test_logical_rule_key_stays_stable_across_structurally_aligned_document_revisions() -> None:
-    first_draft = project_rule_units(canonical_artifact(), document_defaults=defaults())[0]
+    first_draft = project_rule_units(
+        canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+    )[0]
     artifact = canonical_artifact().model_copy(
         update={
             "revision_id": "rev-2",
@@ -387,7 +397,9 @@ def test_logical_rule_key_stays_stable_across_structurally_aligned_document_revi
         }
     )
     revised_defaults = defaults().model_copy(update={"revision_id": "rev-2"})
-    second_draft = project_rule_units(artifact, document_defaults=revised_defaults)[0]
+    second_draft = project_rule_units(
+        artifact, document_defaults=revised_defaults, source_id="source-1"
+    )[0]
 
     assert first_draft.logical_rule_key == second_draft.logical_rule_key
     first_revision = materialize_rule_unit_revision(
@@ -427,6 +439,8 @@ def test_explicit_source_binding_participates_in_lineage_and_is_normalized() -> 
         approved_metadata=approved_metadata(),
         approved_visibility=visibility(),
     )
+    assert first_revision.lineage.source_id == "source-1"
+    assert other_revision.lineage.source_id == "source-2"
     assert first_revision.rule_unit_revision_id != other_revision.rule_unit_revision_id
 
 
@@ -435,7 +449,7 @@ def test_projection_rejects_empty_artifacts_and_out_of_page_geometry() -> None:
     empty_page = artifact.pages[0].model_copy(update={"blocks": (), "tables": ()})
     empty = artifact.model_copy(update={"pages": (empty_page,)})
     with pytest.raises(ValueError, match="no coherent rule units"):
-        project_rule_units(empty, document_defaults=defaults())
+        project_rule_units(empty, document_defaults=defaults(), source_id="source-1")
 
     bad_block = artifact.pages[0].blocks[0].model_copy(update={"bbox": bbox(40, 40, 700, 70)})
     bad_page = artifact.pages[0].model_copy(
@@ -443,4 +457,143 @@ def test_projection_rejects_empty_artifacts_and_out_of_page_geometry() -> None:
     )
     invalid = artifact.model_copy(update={"pages": (bad_page, *artifact.pages[1:])})
     with pytest.raises(ValueError, match="within page geometry"):
-        project_rule_units(invalid, document_defaults=defaults())
+        project_rule_units(invalid, document_defaults=defaults(), source_id="source-1")
+
+
+def test_single_cell_row_is_merged_into_coherent_row_group() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1]
+    table = page.tables[0]
+    cells = (
+        *table.cells[:2],
+        table.cells[3],
+        StructuredTableCell(
+            row=2,
+            column=0,
+            text="Premium",
+            bbox=bbox(40, 170, 220, 210),
+        ),
+        StructuredTableCell(
+            row=2,
+            column=1,
+            text="18-65",
+            bbox=bbox(220, 170, 400, 210),
+        ),
+    )
+    artifact = artifact.model_copy(
+        update={
+            "pages": (
+                artifact.pages[0],
+                page.model_copy(update={"tables": (table.model_copy(update={"cells": cells}),)}),
+            )
+        }
+    )
+
+    units = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+    table_units = [unit for unit in units if unit.table_id == "table-eligibility"]
+
+    assert len(table_units) == 1
+    assert table_units[0].unit_kind == "row_group"
+    assert table_units[0].row_numbers == (1, 2)
+    assert len(table_units[0].cell_coordinates) == 3
+
+
+def test_unmergeable_isolated_table_cell_blocks_projection() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1]
+    table = page.tables[0]
+    isolated = (*table.cells[:2], table.cells[3])
+    artifact = artifact.model_copy(
+        update={
+            "pages": (
+                artifact.pages[0],
+                page.model_copy(update={"tables": (table.model_copy(update={"cells": isolated}),)}),
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="isolated cell"):
+        project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+
+
+def test_same_table_rows_have_distinct_exact_citation_anchors() -> None:
+    artifact = canonical_artifact()
+    page = artifact.pages[1]
+    table = page.tables[0]
+    cells = table.cells + (
+        StructuredTableCell(
+            row=2,
+            column=0,
+            text="Premium",
+            bbox=bbox(40, 170, 220, 210),
+        ),
+        StructuredTableCell(
+            row=2,
+            column=1,
+            text="18-65",
+            bbox=bbox(220, 170, 400, 210),
+        ),
+    )
+    artifact = artifact.model_copy(
+        update={
+            "pages": (
+                artifact.pages[0],
+                page.model_copy(update={"tables": (table.model_copy(update={"cells": cells}),)}),
+            )
+        }
+    )
+
+    rows = [
+        unit
+        for unit in project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
+        if unit.unit_kind == "table_row"
+    ]
+
+    assert len(rows) == 2
+    assert rows[0].citation_uri != rows[1].citation_uri
+    assert "rows-1" in rows[0].citation_uri
+    assert "rows-2" in rows[1].citation_uri
+
+
+def test_materialized_revision_retains_inspectable_coherent_lineage() -> None:
+    row = next(
+        unit
+        for unit in project_rule_units(
+            canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+        )
+        if unit.unit_kind == "table_row"
+    )
+    revision = materialize_rule_unit_revision(
+        row,
+        approved_metadata=approved_metadata(),
+        approved_visibility=visibility(),
+    )
+
+    assert revision.lineage.source_id == "source-1"
+    assert revision.lineage.original_sha256 == "a" * 64
+    assert revision.lineage.page_numbers == (2,)
+    assert revision.lineage.table_title == "Eligibility limits"
+    assert revision.lineage.table_headers == ("Plan", "Age")
+    assert revision.lineage.row_header == "Standard"
+    assert revision.lineage.row_numbers == (1,)
+    assert revision.lineage.cell_coordinates
+    assert revision.lineage.page_bboxes[0].bbox == bbox(40, 90, 572, 280)
+
+    continuation = next(
+        unit
+        for unit in project_rule_units(
+            canonical_artifact(), document_defaults=defaults(), source_id="source-1"
+        )
+        if unit.table_continuation_id is not None
+    )
+    continued_revision = materialize_rule_unit_revision(
+        continuation,
+        approved_metadata=approved_metadata(),
+        approved_visibility=visibility(),
+    )
+    assert continued_revision.lineage.table_continuation_id == "table-eligibility"
+
+
+def test_projection_requires_explicit_source_identity() -> None:
+    with pytest.raises(TypeError):
+        project_rule_units(canonical_artifact(), document_defaults=defaults())  # type: ignore[call-arg]

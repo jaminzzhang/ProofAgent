@@ -41,8 +41,11 @@ from proof_agent.configuration.hybrid_knowledge_repository import (
 )
 from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceKnowledgeVisibilityScope,
+    InsuranceRulePageBoundingBox,
+    InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
 )
+from proof_agent.contracts.hybrid_documents import BoundingBox
 from proof_agent.contracts.knowledge_index import ExactArtifactRef, KnowledgeIndexGeneration
 
 
@@ -102,6 +105,19 @@ def rule_unit(rule_unit_revision_id: str = "rule_1") -> InsuranceRuleUnitRevisio
         ),
         content_sha256="4" * 64,
         authority_sha256="5" * 64,
+        lineage=InsuranceRuleUnitLineage(
+            source_id="source_1",
+            original_sha256="6" * 64,
+            heading_path=("Rule",),
+            page_numbers=(1,),
+            page_bboxes=(
+                InsuranceRulePageBoundingBox(
+                    page_number=1,
+                    bbox=BoundingBox(x0=0, y0=0, x1=100, y1=100),
+                ),
+            ),
+            block_ids=("clause_1",),
+        ),
     )
 
 

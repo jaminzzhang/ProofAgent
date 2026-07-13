@@ -9,6 +9,7 @@ from proof_agent.capabilities.knowledge.hybrid.rule_units import InsuranceRuleUn
 from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceKnowledgeVisibilityScope,
     ApprovedInsuranceRuleMetadataRevision,
+    InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
 )
 
@@ -62,6 +63,23 @@ def materialize_rule_unit_revision(
         visibility_scope=approved_visibility,
         content_sha256=content_sha256,
         authority_sha256=authority_sha256,
+        lineage=InsuranceRuleUnitLineage(
+            source_id=draft.source_id,
+            original_sha256=draft.original_sha256,
+            heading_path=draft.heading_path,
+            definitions=draft.definitions,
+            page_numbers=draft.page_numbers,
+            page_bboxes=draft.page_bboxes,
+            block_ids=draft.block_ids,
+            table_id=draft.table_id,
+            table_continuation_id=draft.table_continuation_id,
+            table_title=draft.table_title,
+            table_headers=draft.table_headers,
+            row_header=draft.row_header,
+            row_numbers=draft.row_numbers,
+            header_cell_coordinates=draft.header_cell_coordinates,
+            cell_coordinates=draft.cell_coordinates,
+        ),
     )
 
 

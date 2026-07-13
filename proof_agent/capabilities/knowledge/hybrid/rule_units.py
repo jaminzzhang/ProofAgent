@@ -24,7 +24,11 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredTable,
     StructuredTableCell,
 )
-from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
+from proof_agent.contracts.insurance_rules import (
+    InsuranceRuleCellCoordinate,
+    InsuranceRuleMetadataDraft,
+    InsuranceRulePageBoundingBox,
+)
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -42,29 +46,15 @@ class _RuleProjectionModel(FrozenModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
-class PageBoundingBox(_RuleProjectionModel):
-    """One source-page geometry region contributing to a projected rule unit."""
-
-    page_number: PositiveInt
-    bbox: BoundingBox
-
-
-class RuleCellCoordinate(_RuleProjectionModel):
-    """Exact canonical grid and geometry lineage for one table cell."""
-
-    page_number: PositiveInt
-    row: NonNegativeInt
-    column: NonNegativeInt
-    row_span: PositiveInt
-    column_span: PositiveInt
-    bbox: BoundingBox
+PageBoundingBox = InsuranceRulePageBoundingBox
+RuleCellCoordinate = InsuranceRuleCellCoordinate
 
 
 class InsuranceRuleUnitDraft(_RuleProjectionModel):
     """Non-authoritative, structurally coherent rule unit awaiting business approval."""
 
     ordinal: NonNegativeInt
-    source_id: NonBlankStr | None = None
+    source_id: NonBlankStr
     document_id: NonBlankStr
     revision_id: NonBlankStr
     original_sha256: Sha256
@@ -81,6 +71,8 @@ class InsuranceRuleUnitDraft(_RuleProjectionModel):
     block_ids: tuple[NonBlankStr, ...] = ()
     table_id: NonBlankStr | None = None
     table_continuation_id: NonBlankStr | None = None
+    table_title: NonBlankStr | None = None
+    table_headers: tuple[NonBlankStr, ...] = ()
     table_context: StrictStr = ""
     row_header: StrictStr | None = None
     row_numbers: tuple[NonNegativeInt, ...] = ()
@@ -117,6 +109,8 @@ class InsuranceRuleUnitDraft(_RuleProjectionModel):
             (
                 self.table_id is not None,
                 self.table_continuation_id is not None,
+                self.table_title is not None,
+                bool(self.table_headers),
                 bool(self.table_context),
                 self.row_header is not None,
                 bool(self.row_numbers),
@@ -125,10 +119,19 @@ class InsuranceRuleUnitDraft(_RuleProjectionModel):
             )
         )
         if table_kind:
-            if self.table_id is None or not self.table_context or not self.row_numbers:
+            if (
+                self.table_id is None
+                or self.row_header is None
+                or not self.table_context
+                or not self.row_numbers
+            ):
                 raise ValueError("table rule units require table context and row lineage")
             if not self.cell_coordinates:
                 raise ValueError("table rule units require complete cell coordinates")
+            if len(self.cell_coordinates) < 2:
+                raise ValueError("table rule units require coherent multi-cell evidence")
+            if len({coordinate.column for coordinate in self.cell_coordinates}) < 2:
+                raise ValueError("table rule units require row-header and data columns")
             if self.block_ids:
                 raise ValueError("table rule units cannot claim block lineage")
             if self.unit_kind == "table_row" and len(self.row_numbers) != 1:
@@ -166,13 +169,12 @@ def project_rule_units(
     artifact: StructuredKnowledgeDocumentArtifact,
     *,
     document_defaults: InsuranceRuleMetadataDraft,
-    source_id: str | None = None,
+    source_id: str,
 ) -> tuple[InsuranceRuleUnitDraft, ...]:
     """Project business-reviewable structural units; never split by token count or cell."""
 
     _validate_projection_inputs(artifact, document_defaults=document_defaults, source_id=source_id)
-    if source_id is not None:
-        source_id = source_id.strip()
+    source_id = source_id.strip()
     definitions = _collect_definitions(artifact.pages)
     block_candidates = _project_blocks(artifact.pages, definitions=definitions)
     table_candidates = _project_tables(artifact.pages, definitions=definitions)
@@ -210,6 +212,8 @@ class _ProjectionCandidate(_RuleProjectionModel):
     anchor_parts: tuple[NonBlankStr, ...]
     table_id: NonBlankStr | None = None
     table_continuation_id: NonBlankStr | None = None
+    table_title: NonBlankStr | None = None
+    table_headers: tuple[NonBlankStr, ...] = ()
     table_context: StrictStr = ""
     row_header: StrictStr | None = None
     row_numbers: tuple[NonNegativeInt, ...] = ()
@@ -221,7 +225,7 @@ def _validate_projection_inputs(
     artifact: StructuredKnowledgeDocumentArtifact,
     *,
     document_defaults: InsuranceRuleMetadataDraft,
-    source_id: str | None,
+    source_id: str,
 ) -> None:
     # Revalidation closes model_copy/construct bypasses before identity material is produced.
     artifact = StructuredKnowledgeDocumentArtifact.model_validate(artifact.model_dump())
@@ -231,8 +235,8 @@ def _validate_projection_inputs(
         or document_defaults.revision_id != artifact.revision_id
     ):
         raise ValueError("metadata draft lineage must match the canonical artifact")
-    if source_id is not None and not source_id.strip():
-        raise ValueError("source_id must be non-empty when supplied")
+    if not isinstance(source_id, str) or not source_id.strip():
+        raise ValueError("source_id must be an explicit non-empty string")
     page_numbers = tuple(page.page_number for page in artifact.pages)
     if tuple(sorted(set(page_numbers))) != page_numbers:
         raise ValueError("canonical page numbers must be strictly increasing and unique")
@@ -396,23 +400,32 @@ def _table_candidates(
     else:
         header_rows = (rows[0],)
         data_rows = tuple(rows[1:])
-    header_cells = tuple(cell for cell in nonempty if cell.row in header_rows)
+    header_cells = tuple(
+        sorted(
+            (cell for cell in nonempty if cell.row in header_rows),
+            key=lambda cell: (cell.row, cell.column),
+        )
+    )
+    data_source_cells = tuple(cell for cell in nonempty if cell.row not in header_rows)
+    table_title = table.title.strip() if table.title and table.title.strip() else None
+    table_headers = tuple(cell.text.strip() for cell in header_cells)
     table_context = _table_context(table, header_cells)
-    row_groups = _connected_row_groups(data_rows, nonempty)
+    row_groups = _coherent_row_groups(
+        _connected_row_groups(data_rows, data_source_cells),
+        data_source_cells,
+    )
     candidates: list[_ProjectionCandidate] = []
     for group_index, row_numbers in enumerate(row_groups):
-        data_cells = tuple(
-            cell
-            for cell in nonempty
-            if cell.row not in header_rows
-            and cell.row <= row_numbers[-1]
-            and cell.row + cell.row_span - 1 >= row_numbers[0]
+        data_cells = _data_cells_for_group(data_source_cells, row_numbers)
+        first_column = min(cell.column for cell in data_cells)
+        row_headers = tuple(
+            dict.fromkeys(
+                cell.text.strip()
+                for cell in data_cells
+                if cell.column == first_column and cell.text.strip()
+            )
         )
-        data_cells = tuple(sorted(data_cells, key=lambda cell: (cell.row, cell.column)))
-        if not data_cells:
-            continue
-        row_header_cell = min(data_cells, key=lambda cell: (cell.column, cell.row))
-        row_header = row_header_cell.text.strip() or None
+        row_header = " | ".join(row_headers) or None
         unit_kind: Literal["table_row", "row_group"] = (
             "row_group" if len(row_numbers) > 1 else "table_row"
         )
@@ -420,7 +433,7 @@ def _table_candidates(
             _ProjectionCandidate(
                 sort_key=(page.page_number, 1_000_000 + table_index, group_index, table.table_id),
                 unit_kind=unit_kind,
-                content=" | ".join(cell.text.strip() for cell in data_cells),
+                content=_table_group_content(data_cells, row_numbers),
                 heading_path=heading_path,
                 definitions=_definition_texts(definitions, heading_path),
                 page_numbers=(page.page_number,),
@@ -436,6 +449,8 @@ def _table_candidates(
                 ),
                 table_id=table.table_id,
                 table_continuation_id=table.continuation_of,
+                table_title=table_title,
+                table_headers=table_headers,
                 table_context=table_context,
                 row_header=row_header,
                 row_numbers=row_numbers,
@@ -448,6 +463,66 @@ def _table_candidates(
             )
         )
     return tuple(candidates)
+
+
+def _coherent_row_groups(
+    groups: tuple[tuple[int, ...], ...],
+    cells: tuple[StructuredTableCell, ...],
+) -> tuple[tuple[int, ...], ...]:
+    pending = list(groups)
+    coherent: list[tuple[int, ...]] = []
+    index = 0
+    while index < len(pending):
+        group = pending[index]
+        if _is_coherent_table_group(cells, group):
+            coherent.append(group)
+            index += 1
+            continue
+        if index + 1 < len(pending):
+            pending[index + 1] = tuple(sorted({*group, *pending[index + 1]}))
+            index += 1
+            continue
+        if coherent:
+            merged = tuple(sorted({*coherent.pop(), *group}))
+            if _is_coherent_table_group(cells, merged):
+                coherent.append(merged)
+                index += 1
+                continue
+        raise ValueError("table cannot project an isolated cell as an authority rule unit")
+    return tuple(coherent)
+
+
+def _is_coherent_table_group(
+    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
+) -> bool:
+    group_cells = _data_cells_for_group(cells, row_numbers)
+    return len(group_cells) >= 2 and len({cell.column for cell in group_cells}) >= 2
+
+
+def _data_cells_for_group(
+    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
+) -> tuple[StructuredTableCell, ...]:
+    selected = (
+        cell
+        for cell in cells
+        if cell.row <= row_numbers[-1] and cell.row + cell.row_span - 1 >= row_numbers[0]
+    )
+    return tuple(sorted(selected, key=lambda cell: (cell.row, cell.column)))
+
+
+def _table_group_content(
+    cells: tuple[StructuredTableCell, ...], row_numbers: tuple[int, ...]
+) -> str:
+    if len(row_numbers) == 1:
+        return " | ".join(cell.text.strip() for cell in cells)
+    lines = []
+    for row in row_numbers:
+        row_cells = tuple(
+            cell.text.strip() for cell in cells if cell.row <= row < cell.row + cell.row_span
+        )
+        if row_cells:
+            lines.append(" | ".join(row_cells))
+    return "\n".join(lines)
 
 
 def _connected_row_groups(
@@ -552,7 +627,7 @@ def _draft_from_candidate(
     *,
     ordinal: int,
     document_defaults: InsuranceRuleMetadataDraft,
-    source_id: str | None,
+    source_id: str,
 ) -> InsuranceRuleUnitDraft:
     logical_key_payload = {
         "source_id": source_id,
@@ -566,7 +641,7 @@ def _draft_from_candidate(
         document_id=artifact.document_id,
         revision_id=artifact.revision_id,
         page_numbers=candidate.page_numbers,
-        anchor=candidate.anchor_parts[0],
+        anchor_parts=candidate.anchor_parts,
     )
     return InsuranceRuleUnitDraft(
         ordinal=ordinal,
@@ -587,6 +662,8 @@ def _draft_from_candidate(
         block_ids=candidate.block_ids,
         table_id=candidate.table_id,
         table_continuation_id=candidate.table_continuation_id,
+        table_title=candidate.table_title,
+        table_headers=candidate.table_headers,
         table_context=candidate.table_context,
         row_header=candidate.row_header,
         row_numbers=candidate.row_numbers,
@@ -598,17 +675,18 @@ def _draft_from_candidate(
 
 def _citation_uri(
     *,
-    source_id: str | None,
+    source_id: str,
     document_id: str,
     revision_id: str,
     page_numbers: tuple[int, ...],
-    anchor: str,
+    anchor_parts: tuple[str, ...],
 ) -> str:
-    source_segment = quote(source_id or "unbound", safe="")
+    source_segment = quote(source_id, safe="")
     document_segment = quote(document_id, safe="")
     revision_segment = quote(revision_id, safe="")
     pages = ",".join(str(page) for page in page_numbers)
-    fragment = quote(f"pages={pages};anchor={anchor}", safe="=;,._~!$&'()*+:@/%-")
+    anchor = "/".join(quote(part, safe="._~-") for part in anchor_parts)
+    fragment = f"pages={pages};anchor={anchor}"
     return (
         f"knowledge://source/{source_segment}/document/{document_segment}/revision/"
         f"{revision_segment}#{fragment}"
