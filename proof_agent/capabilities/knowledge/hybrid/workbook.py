@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 import hashlib
@@ -10,9 +11,11 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
+import posixpath
 import re
 from threading import RLock
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
@@ -32,6 +35,7 @@ from pydantic import (
 from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.insurance_rules import (
+    ApprovedInsuranceRuleMetadataRevision,
     InsuranceRuleApplicability,
     InsuranceRuleMetadataDraft,
     InsuranceRulePrecedence,
@@ -81,6 +85,17 @@ _CONFLICT_FIELDS = (
     "precedence_policy_revision_id",
     "precedence_authority_tier",
     "precedence_order",
+)
+_REQUIRED_APPROVED_METADATA_FIELDS = frozenset(_CONFLICT_FIELDS) - {
+    "effective_from",
+    "effective_to",
+}
+_REVIEW_STATES = (
+    "review_required",
+    "ready_for_review",
+    "approved",
+    "corrected",
+    "rejected",
 )
 _CELL_REFERENCE = re.compile(r"^([A-Z]{1,3})([1-9][0-9]*)$", re.IGNORECASE)
 
@@ -155,9 +170,17 @@ class WorkbookImportRecord(_WorkbookModel):
     source_id: NonBlankStr
     document_id: NonBlankStr
     revision_id: NonBlankStr
+    created_by: NonBlankStr
+    created_at: datetime
     original_ref: ExactArtifactRef
     normalized_ref: ExactArtifactRef
     rows: tuple[WorkbookImportRowIdentity, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_aware_timestamp(self) -> "WorkbookImportRecord":
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError("workbook import timestamp must be timezone-aware")
+        return self
 
 
 class InsuranceMetadataDraftInput(_WorkbookModel):
@@ -294,11 +317,39 @@ class InsuranceMetadataReview(_WorkbookModel):
     )
     resolution_reason: NonBlankStr | None = None
     resolved_by: NonBlankStr | None = None
+    approved_metadata_revision_id: NonBlankStr | None = None
     decision_history: tuple[InsuranceMetadataReviewDecision, ...] = ()
+
+
+class InsuranceMetadataReviewSummary(_WorkbookModel):
+    total: NonNegativeInt
+    unresolved: NonNegativeInt
+    review_required: NonNegativeInt
+    ready_for_review: NonNegativeInt
+    approved: NonNegativeInt
+    corrected: NonNegativeInt
+    rejected: NonNegativeInt
+    all_approved: StrictBool
+
+
+class InsuranceMetadataReviewPage(_WorkbookModel):
+    items: tuple[InsuranceMetadataReview, ...]
+    next_cursor: StrictStr | None = None
+    total: NonNegativeInt
+    summary: InsuranceMetadataReviewSummary
 
 
 class InsuranceMetadataReviewRepository(Protocol):
     def list(self, source_id: str) -> tuple[InsuranceMetadataReview, ...]: ...
+
+    def list_page(
+        self,
+        source_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        state: str | None = None,
+    ) -> InsuranceMetadataReviewPage: ...
 
     def get(self, source_id: str, review_id: str) -> InsuranceMetadataReview | None: ...
 
@@ -491,15 +542,74 @@ class FilesystemInsuranceMetadataReviewRepository:
         self._file_lock = FileLock(self._root / ".reviews.lock", timeout=10)
 
     def list(self, source_id: str) -> tuple[InsuranceMetadataReview, ...]:
+        items: list[InsuranceMetadataReview] = []
+        cursor: str | None = None
+        while True:
+            page = self.list_page(source_id, limit=100, cursor=cursor)
+            items.extend(page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                return tuple(items)
+
+    def list_page(
+        self,
+        source_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        state: str | None = None,
+    ) -> InsuranceMetadataReviewPage:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise WorkbookValidationError("metadata review page limit must be between 1 and 100")
+        if state is not None and state not in _REVIEW_STATES:
+            raise WorkbookValidationError("metadata review state filter is invalid")
+        after_name = _decode_review_cursor(cursor) if cursor is not None else None
         source_dir = self._source_dir(source_id)
-        if not source_dir.exists():
-            return ()
-        reviews = tuple(
-            InsuranceMetadataReview.model_validate_json(path.read_bytes())
-            for path in sorted(source_dir.glob("*.json"))
-            if path.is_file() and not path.is_symlink()
+        counts = {review_state: 0 for review_state in _REVIEW_STATES}
+        unresolved = 0
+        filtered_total = 0
+        items: list[InsuranceMetadataReview] = []
+        last_item_name: str | None = None
+        has_more = False
+        if source_dir.exists():
+            for path in sorted(source_dir.glob("*.json")):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                review = InsuranceMetadataReview.model_validate_json(path.read_bytes())
+                counts[review.state] += 1
+                if review.publication_blocked:
+                    unresolved += 1
+                if state is not None and review.state != state:
+                    continue
+                filtered_total += 1
+                if after_name is not None and path.name <= after_name:
+                    continue
+                if len(items) < limit:
+                    items.append(review)
+                    last_item_name = path.name
+                else:
+                    has_more = True
+        total = sum(counts.values())
+        summary = InsuranceMetadataReviewSummary(
+            total=total,
+            unresolved=unresolved,
+            review_required=counts["review_required"],
+            ready_for_review=counts["ready_for_review"],
+            approved=counts["approved"],
+            corrected=counts["corrected"],
+            rejected=counts["rejected"],
+            all_approved=total > 0 and counts["approved"] == total,
         )
-        return tuple(sorted(reviews, key=lambda item: item.review_id))
+        return InsuranceMetadataReviewPage(
+            items=tuple(items),
+            next_cursor=(
+                _encode_review_cursor(last_item_name)
+                if has_more and last_item_name is not None
+                else None
+            ),
+            total=filtered_total,
+            summary=summary,
+        )
 
     def get(self, source_id: str, review_id: str) -> InsuranceMetadataReview | None:
         path = self._review_path(source_id, review_id)
@@ -714,6 +824,10 @@ class FilesystemInsuranceMetadataReviewRepository:
                 raise WorkbookReviewConflictError("metadata review changed; reload exact identity")
             normalized_reason = _require_nonblank(reason, "reason")
             normalized_actor = _require_nonblank(actor, "actor")
+            if current.state in {"approved", "rejected"}:
+                raise WorkbookReviewConflictError(
+                    "terminal metadata reviews cannot be changed without explicit revocation"
+                )
             decision_corrections: Mapping[str, str | int | date | None] = {}
             next_state: Literal[
                 "review_required", "ready_for_review", "approved", "corrected", "rejected"
@@ -737,9 +851,13 @@ class FilesystemInsuranceMetadataReviewRepository:
                     raise WorkbookReviewConflictError(
                         "only a ready or corrected metadata review can be approved"
                     )
-                _validate_resolved_draft(current, {})
+                approved_metadata = _approved_metadata_revision(current)
                 next_state = "approved"
-                updates.update(state=next_state, publication_blocked=False)
+                updates.update(
+                    state=next_state,
+                    publication_blocked=False,
+                    approved_metadata_revision_id=approved_metadata.metadata_revision_id,
+                )
             elif action == "reject":
                 next_state = "rejected"
                 updates.update(state=next_state, publication_blocked=True)
@@ -747,10 +865,6 @@ class FilesystemInsuranceMetadataReviewRepository:
                 if current.pdf_draft is None:
                     raise WorkbookReviewConflictError(
                         "persisted PDF metadata draft is required before correction"
-                    )
-                if current.state in {"approved", "rejected"}:
-                    raise WorkbookReviewConflictError(
-                        "terminal metadata reviews cannot be corrected"
                     )
                 resolved = _validated_corrections(current, corrections or {})
                 if not resolved:
@@ -938,7 +1052,7 @@ def _preflight_package(
                 raise WorkbookValidationError(
                     "workbook expanded package exceeds the safe size limit"
                 )
-            if any(".." in Path(name).parts or name.startswith(("/", "\\")) for name in names):
+            if any(_unsafe_package_member_name(name) for name in names):
                 raise WorkbookValidationError("workbook package contains an unsafe path")
             folded_names = tuple(name.casefold() for name in names)
             if any(
@@ -968,7 +1082,11 @@ def _preflight_package(
                 except ElementTree.ParseError as exc:
                     raise WorkbookValidationError("workbook XML is malformed") from exc
                 if member.filename.casefold().endswith(".rels"):
-                    _validate_relationship_xml(root)
+                    _validate_relationship_xml(
+                        root,
+                        relationship_part=member.filename,
+                        package_members=frozenset(names),
+                    )
                 if member.filename.casefold() == "[content_types].xml":
                     _validate_content_types_xml(root)
                 if member.filename.casefold().startswith("xl/worksheets/"):
@@ -1058,7 +1176,25 @@ def _optional_load_workbook() -> Any:
     return loader
 
 
-def _validate_relationship_xml(root: ElementTree.Element) -> None:
+def _unsafe_package_member_name(name: str) -> bool:
+    if not name or "\\" in name or name.startswith(("/", "//")):
+        return True
+    if re.match(r"^[A-Za-z]:", name):
+        return True
+    parts = PurePosixPath(name).parts
+    return ".." in parts or any(part in {"", "."} for part in parts)
+
+
+def _validate_relationship_xml(
+    root: ElementTree.Element,
+    *,
+    relationship_part: str,
+    package_members: frozenset[str],
+) -> None:
+    rels_path = PurePosixPath(relationship_part)
+    if rels_path.parent.name != "_rels":
+        raise WorkbookValidationError("workbook relationship part has an unsafe path")
+    relationship_base = rels_path.parent.parent
     for relationship in root.iter():
         if _local_name(relationship.tag).casefold() != "relationship":
             continue
@@ -1072,11 +1208,30 @@ def _validate_relationship_xml(root: ElementTree.Element) -> None:
         parsed = urlsplit(target)
         if (
             target_mode == "external"
+            or not target
+            or "\\" in target
+            or target.startswith("//")
+            or re.match(r"^[A-Za-z]:", target) is not None
             or bool(parsed.scheme)
             or bool(parsed.netloc)
-            or target.startswith("//")
+            or bool(parsed.query)
+            or bool(parsed.fragment)
         ):
             raise WorkbookValidationError("workbook external links are not accepted")
+        # A single leading slash is an OPC package-root URI (not a host filesystem
+        # path).  Resolve both package-root and relative targets to a canonical
+        # member name, then require that exact member to exist in this archive.
+        target_path = parsed.path.lstrip("/")
+        candidate = (
+            target_path
+            if parsed.path.startswith("/")
+            else (relationship_base / PurePosixPath(target_path)).as_posix()
+        )
+        normalized_target = posixpath.normpath(candidate)
+        if normalized_target == ".." or normalized_target.startswith("../"):
+            raise WorkbookValidationError("workbook relationship escapes the package")
+        if normalized_target not in package_members:
+            raise WorkbookValidationError("workbook relationship target is not contained in package")
         if any(marker in relationship_type for marker in _DANGEROUS_OFFICE_MARKERS):
             raise WorkbookValidationError("workbook executable or embedded content is not accepted")
 
@@ -1292,6 +1447,10 @@ def _validated_corrections(
         raise WorkbookValidationError("corrections contain an unknown governed field")
     result: dict[str, str | int | date | None] = {}
     for key, value in corrections.items():
+        if value is None and key in _REQUIRED_APPROVED_METADATA_FIELDS:
+            raise WorkbookValidationError(
+                f"{key} is required for approved insurance rule metadata"
+            )
         if key == "precedence_order":
             if value is not None and (type(value) is not int or value < 0):
                 raise WorkbookValidationError("precedence_order correction must be nonnegative")
@@ -1337,11 +1496,93 @@ def _validate_resolved_draft(
         raise WorkbookValidationError("corrected metadata is invalid") from exc
 
 
+def _approved_metadata_revision(
+    review: InsuranceMetadataReview,
+) -> ApprovedInsuranceRuleMetadataRevision:
+    values = review.workbook_draft.model_dump()
+    values.update(dict(review.resolved_values))
+    required = {
+        field: values.get(field) for field in _REQUIRED_APPROVED_METADATA_FIELDS
+    }
+    if any(value is None for value in required.values()):
+        raise WorkbookReviewConflictError(
+            "required insurance rule metadata is incomplete and cannot be approved"
+        )
+    lineage = {
+        "source_id": review.source_id,
+        "document_id": review.document_id,
+        "revision_id": review.revision_id,
+        "canonical_anchor": review.canonical_anchor,
+        "workbook_draft_id": review.workbook_draft_id,
+        "pdf_draft_id": (
+            review.pdf_draft.metadata_draft_id if review.pdf_draft is not None else None
+        ),
+        "values": {
+            key: value.isoformat() if isinstance(value, date) else value
+            for key, value in values.items()
+        },
+    }
+    metadata_revision_id = (
+        f"approved_metadata_{hashlib.sha256(_canonical_json(lineage)).hexdigest()[:24]}"
+    )
+    try:
+        return ApprovedInsuranceRuleMetadataRevision(
+            metadata_revision_id=metadata_revision_id,
+            applicability=InsuranceRuleApplicability(
+                taxonomy_id=cast(str, values["taxonomy_id"]),
+                taxonomy_revision_id=cast(str, values["taxonomy_revision_id"]),
+            ),
+            effective_from=cast(date | None, values.get("effective_from")),
+            effective_to=cast(date | None, values.get("effective_to")),
+            authority=cast(str, values["authority"]),
+            precedence=InsuranceRulePrecedence(
+                policy_revision_id=cast(str, values["precedence_policy_revision_id"]),
+                authority_tier=cast(str, values["precedence_authority_tier"]),
+                order=cast(int, values["precedence_order"]),
+            ),
+        )
+    except (KeyError, TypeError, ValidationError, ValueError) as exc:
+        raise WorkbookReviewConflictError(
+            "required insurance rule metadata is invalid and cannot be approved"
+        ) from exc
+
+
 def _safe_identifier(value: str, field: str) -> str:
     normalized = _require_nonblank(value, field)
     if not all(character.isalnum() or character in "_-" for character in normalized):
         raise WorkbookValidationError(f"{field} contains unsafe characters")
     return normalized
+
+
+def _encode_review_cursor(filename: str) -> str:
+    payload = _canonical_json({"v": 1, "after": filename})
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_review_cursor(cursor: str) -> str:
+    if type(cursor) is not str or not cursor or len(cursor) > 512:
+        raise WorkbookValidationError("metadata review cursor is invalid")
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.b64decode(cursor + padding, altchars=b"-_", validate=True))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise WorkbookValidationError("metadata review cursor is invalid") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("v") != 1
+        or not isinstance(payload.get("after"), str)
+    ):
+        raise WorkbookValidationError("metadata review cursor is invalid")
+    after = cast(str, payload["after"])
+    if not after.endswith(".json"):
+        raise WorkbookValidationError("metadata review cursor is invalid")
+    try:
+        identifier = _safe_identifier(after.removesuffix(".json"), "cursor")
+    except WorkbookValidationError as exc:
+        raise WorkbookValidationError("metadata review cursor is invalid") from exc
+    if after != f"{identifier}.json":
+        raise WorkbookValidationError("metadata review cursor is invalid")
+    return after
 
 
 def _require_nonblank(value: str, field: str) -> str:

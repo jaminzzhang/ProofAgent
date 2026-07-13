@@ -1155,6 +1155,7 @@ export interface InsuranceMetadataReview {
   resolved_values: Record<string, string | number | null>
   resolution_reason: string | null
   resolved_by: string | null
+  approved_metadata_revision_id: string | null
   decision_history: Array<{
     sequence: number
     prior_review_identity: string
@@ -1169,7 +1170,23 @@ export interface InsuranceMetadataReview {
 
 export interface InsuranceMetadataReviewsResponse {
   data: InsuranceMetadataReview[]
-  meta: { total: number; unresolved: number }
+  meta: {
+    total: number
+    unresolved: number
+    next_cursor: string | null
+    summary: InsuranceMetadataReviewSummary
+  }
+}
+
+export interface InsuranceMetadataReviewSummary {
+  total: number
+  unresolved: number
+  review_required: number
+  ready_for_review: number
+  approved: number
+  corrected: number
+  rejected: number
+  all_approved: boolean
 }
 
 export interface InsuranceMetadataWorkbookArtifactRef {

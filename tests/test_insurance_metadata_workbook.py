@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -13,6 +14,7 @@ from proof_agent.capabilities.knowledge.hybrid.workbook import (
     WorkbookImportRecord,
     WorkbookImportRowIdentity,
     WorkbookKnownAnchor,
+    WorkbookReviewConflictError,
     WorkbookValidationError,
     import_metadata_workbook,
     reconcile_metadata_drafts,
@@ -60,6 +62,32 @@ def _fixture_with_external_relationship() -> bytes:
             payload = source.read(member.filename)
             if member.filename == "xl/_rels/workbook.xml.rels":
                 payload = payload.replace(b"</Relationships>", relationship + b"</Relationships>")
+            target.writestr(member, payload)
+    return output.getvalue()
+
+
+def _fixture_with_member_name(member_name: str) -> bytes:
+    output = BytesIO()
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            target.writestr(member, source.read(member.filename))
+        target.writestr(member_name, b"unsafe")
+    return output.getvalue()
+
+
+def _fixture_with_relationship_target(target_value: str) -> bytes:
+    output = BytesIO()
+    relationship = (
+        '<Relationship Id="rUnsafe" Type="urn:test" '
+        f'Target="{target_value}" />'
+    ).encode()
+    with ZipFile(FIXTURE) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/_rels/workbook.xml.rels":
+                payload = payload.replace(
+                    b"</Relationships>", relationship + b"</Relationships>"
+                )
             target.writestr(member, payload)
     return output.getvalue()
 
@@ -193,6 +221,32 @@ def test_workbook_rejects_structural_external_relationships_with_spaced_attribut
         )
 
 
+@pytest.mark.parametrize(
+    "member_name",
+    [r"xl\evil.xml", "/absolute.xml", "C:/evil.xml", "//server/share.xml"],
+)
+def test_workbook_rejects_cross_platform_unsafe_member_paths(member_name: str) -> None:
+    with pytest.raises(WorkbookValidationError, match="unsafe path"):
+        import_metadata_workbook(
+            _fixture_with_member_name(member_name),
+            known_anchors=(_known_anchor(),),
+        )
+
+
+@pytest.mark.parametrize(
+    "target_value",
+    [r"..\evil.xml", r"C:\evil.xml", r"\\server\share.xml", "../../evil.xml", "/missing.xml"],
+)
+def test_workbook_rejects_relationship_targets_outside_exact_package(
+    target_value: str,
+) -> None:
+    with pytest.raises(WorkbookValidationError, match="external|escapes|contained"):
+        import_metadata_workbook(
+            _fixture_with_relationship_target(target_value),
+            known_anchors=(_known_anchor(),),
+        )
+
+
 def test_workbook_rejects_nonempty_cells_beyond_template_bounds() -> None:
     with pytest.raises(WorkbookValidationError, match="template bounds"):
         import_metadata_workbook(
@@ -263,6 +317,8 @@ def _reconcile(
         source_id=row.source_id,
         document_id=row.document_id,
         revision_id=row.revision_id,
+        created_by="reviewer",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
         original_ref=imported.original_ref,
         normalized_ref=imported.normalized_ref,
         rows=(
@@ -314,6 +370,8 @@ def test_matching_drafts_are_ready_but_not_approved_or_publishable(tmp_path: Pat
     "corrections",
     [
         {"authority": "x" * 5_000_000},
+        {"authority": None},
+        {"taxonomy_id": None},
         {"effective_from": "not-a-date"},
         {"effective_from": "2027-01-01", "effective_to": "2026-01-01"},
     ],
@@ -344,3 +402,170 @@ def test_review_corrections_reject_unsafe_or_invalid_metadata(
         )
 
     assert repository.get(review.source_id, review.review_id) == review
+
+
+def test_approval_constructs_strict_governed_metadata_revision(tmp_path: Path) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="national"),
+        )
+    )
+
+    approved = repository.resolve(
+        source_id=review.source_id,
+        review_id=review.review_id,
+        expected_review_version=review.review_version,
+        expected_review_identity=review.review_identity,
+        action="approve",
+        actor="reviewer",
+        reason="Verified against the exact signed revision.",
+    )
+
+    assert approved.state == "approved"
+    assert approved.publication_blocked is False
+    assert approved.approved_metadata_revision_id is not None
+    assert approved.approved_metadata_revision_id.startswith("approved_metadata_")
+
+
+def test_approval_fails_closed_when_required_metadata_is_absent(tmp_path: Path) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    missing_pdf = _draft(origin="pdf", authority="national").model_copy(
+        update={"taxonomy_id": None}
+    )
+    missing_workbook = _draft(origin="workbook", authority="national").model_copy(
+        update={"taxonomy_id": None}
+    )
+    review = repository.put(_reconcile(tmp_path, missing_pdf, missing_workbook))
+    assert review.state == "ready_for_review"
+
+    with pytest.raises(WorkbookReviewConflictError, match="required insurance rule metadata"):
+        repository.resolve(
+            source_id=review.source_id,
+            review_id=review.review_id,
+            expected_review_version=review.review_version,
+            expected_review_identity=review.review_identity,
+            action="approve",
+            actor="reviewer",
+            reason="This incomplete proposal must remain blocked.",
+        )
+
+    assert repository.get(review.source_id, review.review_id) == review
+
+
+@pytest.mark.parametrize("terminal_action", ["approve", "correct", "reject"])
+def test_approved_review_is_immutable_without_revocation(
+    tmp_path: Path,
+    terminal_action: str,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="national"),
+        )
+    )
+    approved = repository.resolve(
+        source_id=review.source_id,
+        review_id=review.review_id,
+        expected_review_version=review.review_version,
+        expected_review_identity=review.review_identity,
+        action="approve",
+        actor="reviewer",
+        reason="Final approval.",
+    )
+
+    with pytest.raises(WorkbookReviewConflictError, match="terminal"):
+        repository.resolve(
+            source_id=approved.source_id,
+            review_id=approved.review_id,
+            expected_review_version=approved.review_version,
+            expected_review_identity=approved.review_identity,
+            action=terminal_action,  # type: ignore[arg-type]
+            actor="reviewer",
+            reason="Attempted terminal mutation.",
+            corrections={"authority": "regional"} if terminal_action == "correct" else None,
+        )
+
+    assert repository.get(approved.source_id, approved.review_id) == approved
+
+
+@pytest.mark.parametrize("terminal_action", ["approve", "correct", "reject"])
+def test_rejected_review_is_immutable_without_revocation(
+    tmp_path: Path,
+    terminal_action: str,
+) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    review = repository.put(
+        _reconcile(
+            tmp_path,
+            _draft(origin="pdf", authority="national"),
+            _draft(origin="workbook", authority="regional"),
+        )
+    )
+    rejected = repository.resolve(
+        source_id=review.source_id,
+        review_id=review.review_id,
+        expected_review_version=review.review_version,
+        expected_review_identity=review.review_identity,
+        action="reject",
+        actor="reviewer",
+        reason="Rejected as unsupported.",
+    )
+
+    with pytest.raises(WorkbookReviewConflictError, match="terminal"):
+        repository.resolve(
+            source_id=rejected.source_id,
+            review_id=rejected.review_id,
+            expected_review_version=rejected.review_version,
+            expected_review_identity=rejected.review_identity,
+            action=terminal_action,  # type: ignore[arg-type]
+            actor="reviewer",
+            reason="Attempted terminal mutation.",
+            corrections={"authority": "national"} if terminal_action == "correct" else None,
+        )
+
+    assert repository.get(rejected.source_id, rejected.review_id) == rejected
+
+
+def test_review_pages_are_bounded_and_include_global_server_summary(tmp_path: Path) -> None:
+    repository = FilesystemInsuranceMetadataReviewRepository(tmp_path)
+    base = _reconcile(
+        tmp_path,
+        _draft(origin="pdf", authority="national"),
+        _draft(origin="workbook", authority="national"),
+    )
+    reviews = []
+    for index in range(3):
+        candidate = base.model_copy(
+            update={
+                "review_id": f"metadata_review_page_{index}",
+                "review_identity": "0" * 64,
+                "workbook_row_number": index + 1,
+            }
+        )
+        reviews.append(
+            candidate.model_copy(
+                update={"review_identity": workbook_module._review_identity(candidate)}
+            )
+        )
+    repository.put_many(reviews)
+
+    first = repository.list_page(base.source_id, limit=2)
+    assert len(first.items) == 2
+    assert first.next_cursor is not None
+    assert first.total == 3
+    assert first.summary.total == 3
+    assert first.summary.ready_for_review == 3
+    assert first.summary.all_approved is False
+    second = repository.list_page(base.source_id, limit=2, cursor=first.next_cursor)
+    assert len(second.items) == 1
+    assert second.next_cursor is None
+
+    with pytest.raises(WorkbookValidationError):
+        repository.list_page(base.source_id, limit=101)
+    with pytest.raises(WorkbookValidationError):
+        repository.list_page(base.source_id, cursor="not-a-valid-cursor")

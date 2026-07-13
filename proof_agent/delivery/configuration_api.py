@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import yaml  # type: ignore[import-untyped]
 
@@ -66,6 +66,8 @@ from proof_agent.configuration.local_store import (
 )
 from proof_agent.contracts import (
     AgentValidationRecord,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
     EnvironmentModelCredentialReference,
@@ -1362,7 +1364,7 @@ def import_knowledge_metadata_workbook(
 ) -> dict[str, Any]:
     """Persist one bounded workbook import and its exact-anchor review batch."""
 
-    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
     if source.provider != "hybrid_index":
@@ -1451,12 +1453,14 @@ def import_knowledge_metadata_workbook(
                 known_anchors=known_anchors,
                 artifact_store=artifacts,
             )
-        import_record = WorkbookImportRecord(
+        proposed_import_record = WorkbookImportRecord(
             import_id=imported.import_id,
             template_revision=imported.template_revision,
             source_id=source_id,
             document_id=request.document_id,
             revision_id=request.revision_id,
+            created_by=actor,
+            created_at=datetime.now(UTC),
             original_ref=imported.original_ref,
             normalized_ref=imported.normalized_ref,
             rows=tuple(
@@ -1471,6 +1475,19 @@ def import_knowledge_metadata_workbook(
                 for row in imported.rows
             ),
         )
+        existing_import_record = repository.get_import_record(imported.import_id)
+        if existing_import_record is None:
+            import_record = proposed_import_record
+        else:
+            expected_existing_record = proposed_import_record.model_copy(
+                update={
+                    "created_by": existing_import_record.created_by,
+                    "created_at": existing_import_record.created_at,
+                }
+            )
+            if existing_import_record != expected_existing_record:
+                raise WorkbookReviewConflictError("workbook import identity already exists")
+            import_record = existing_import_record
         workbook_drafts = tuple(_workbook_row_draft(row) for row in imported.rows)
         reviews: list[InsuranceMetadataReview] = []
         for row, draft in zip(imported.rows, workbook_drafts, strict=True):
@@ -1496,6 +1513,23 @@ def import_knowledge_metadata_workbook(
                 )
             reviews.append(review)
         persisted = repository.put_import_with_reviews(import_record, reviews)
+        store.record_configuration_operation(
+            ConfigurationOperationAudit(
+                operation_id=f"op_{uuid4().hex[:8]}",
+                operation=ConfigurationOperation.IMPORTED,
+                actor=actor,
+                created_at=datetime.now(UTC).isoformat(),
+                summary=f"Imported insurance metadata workbook {imported.import_id}.",
+                metadata={
+                    "import_id": imported.import_id,
+                    "source_id": source_id,
+                    "document_id": request.document_id,
+                    "revision_id": request.revision_id,
+                    "original_ref_id": imported.original_ref.version_id,
+                    "normalized_ref_id": imported.normalized_ref.version_id,
+                },
+            )
+        )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     except (ImmutableArtifactError, WorkbookValidationError) as exc:
@@ -1516,6 +1550,9 @@ def import_knowledge_metadata_workbook(
 def list_knowledge_metadata_reviews(
     source_id: str,
     app_request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=512),
+    state: str | None = Query(default=None),
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """List trace-safe metadata review projections for one Hybrid Source."""
@@ -1525,12 +1562,22 @@ def list_knowledge_metadata_reviews(
     source = _require_knowledge_source(store, source_id)
     if source.provider != "hybrid_index":
         raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
-    reviews = _metadata_review_repository(store).list(source_id)
+    try:
+        page = _metadata_review_repository(store).list_page(
+            source_id,
+            limit=limit,
+            cursor=cursor,
+            state=state,
+        )
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "data": [_metadata_review_payload(review) for review in reviews],
+        "data": [_metadata_review_payload(review) for review in page.items],
         "meta": {
-            "total": len(reviews),
-            "unresolved": sum(1 for review in reviews if review.publication_blocked),
+            "total": page.total,
+            "unresolved": page.summary.unresolved,
+            "next_cursor": page.next_cursor,
+            "summary": page.summary.model_dump(mode="json"),
         },
     }
 

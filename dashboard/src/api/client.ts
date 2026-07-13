@@ -536,9 +536,14 @@ export function fetchKnowledgeSourcePublications(
 
 export function fetchInsuranceMetadataReviews(
   sourceId: string,
+  options: { limit?: number; cursor?: string; state?: InsuranceMetadataReview['state'] } = {},
 ): Promise<InsuranceMetadataReviewsResponse> {
+  const query = new URLSearchParams()
+  query.set('limit', String(options.limit ?? 50))
+  if (options.cursor) query.set('cursor', options.cursor)
+  if (options.state) query.set('state', options.state)
   return fetchJson<InsuranceMetadataReviewsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews`,
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews?${query.toString()}`,
   )
 }
 

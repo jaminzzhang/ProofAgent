@@ -142,7 +142,11 @@ describe('KnowledgeDetailPage', () => {
     })
     vi.mocked(fetchKnowledgeSourcePublications).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
-      data: [], meta: { total: 0, unresolved: 0 },
+      data: [],
+      meta: {
+        total: 0, unresolved: 0, next_cursor: null,
+        summary: { total: 0, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 0, corrected: 0, rejected: 0, all_approved: false },
+      },
     })
     vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
       source_id: 'ks_local_index',
@@ -419,9 +423,13 @@ describe('KnowledgeDetailPage', () => {
         resolved_values: {},
         resolution_reason: 'Approved against the signed source.',
         resolved_by: 'reviewer',
+        approved_metadata_revision_id: 'approved_metadata_1',
         decision_history: [],
       }],
-      meta: { total: 1, unresolved: 0 },
+      meta: {
+        total: 1, unresolved: 0, next_cursor: null,
+        summary: { total: 1, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 1, corrected: 0, rejected: 0, all_approved: true },
+      },
     })
 
     renderPage()

@@ -1002,6 +1002,11 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     promoted = unified.run_once()
     assert promoted is not None and promoted.outcome is not None
     assert promoted.outcome.state == "accepted"
+    queued_job = store.list_knowledge_ingestion_jobs("source_1")[0]
+    partial_result_path = store._knowledge_ingestion_job_path(  # noqa: SLF001
+        "source_1", queued_job.job_id
+    ).with_name("hybrid-artifact-result.json")
+    partial_result_path.write_bytes(b'{"schema_version":"partial-after-crash"')
     result = unified.run_once()
 
     assert result is not None and result.outcome is not None
@@ -1011,6 +1016,7 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     assert jobs[0].attempt_count == 1
     result_files = tuple((tmp_path / "config").rglob("hybrid-artifact-result.json"))
     assert len(result_files) == 1
+    assert tuple(partial_result_path.parent.glob("hybrid-artifact-result.json.invalid-*"))
     completed = store.get_completed_hybrid_artifact_build_result(
         source_id="source_1",
         document_id=jobs[0].document_id,
@@ -1026,6 +1032,19 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     assert len(authority) == 1
     assert authority[0].structured_build_id == completed.build_id
     assert authority[0].original_ref == completed.persisted_original_ref
+
+    # A replay without the live exact claim must fail before touching a partial
+    # result, even when the payload itself is the previously completed result.
+    partial_result_path.write_bytes(b'{"schema_version":"stale-claim-partial"')
+    with pytest.raises(ProofAgentError):
+        store.complete_hybrid_knowledge_ingestion_job(
+            source_id="source_1",
+            job_id=jobs[0].job_id,
+            claim_token="stale-claim-token",
+            artifact_path=completed.canonical_ref.artifact_uri,
+            artifact_result=completed.model_dump(mode="json"),
+        )
+    assert partial_result_path.read_bytes() == b'{"schema_version":"stale-claim-partial"'
 
 
 def test_localstore_exhausted_transient_is_not_classified_as_integrity_failure(tmp_path) -> None:

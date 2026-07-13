@@ -2474,16 +2474,25 @@ class LocalAgentConfigurationStore:
                     current_result = HybridArtifactBuildResult.model_validate_json(
                         result_path.read_bytes()
                     )
-                except (OSError, ValidationError, ValueError) as exc:
-                    raise _invalid_ingestion_transition(
-                        "Persisted Hybrid artifact result is invalid."
-                    ) from exc
-                if current_result != result:
-                    raise _invalid_ingestion_transition(
-                        "Persisted Hybrid artifact result conflicts with this completion."
+                except (OSError, ValidationError, ValueError):
+                    quarantine_path = result_path.with_name(
+                        f"{result_path.name}.invalid-{uuid4().hex}"
                     )
+                    try:
+                        os.replace(result_path, quarantine_path)
+                        _fsync_directory(result_path.parent)
+                    except OSError as quarantine_exc:
+                        raise _invalid_ingestion_transition(
+                            "Persisted Hybrid artifact result cannot be quarantined."
+                        ) from quarantine_exc
+                    _write_json_atomic(result_path, result.model_dump(mode="json"))
+                else:
+                    if current_result != result:
+                        raise _invalid_ingestion_transition(
+                            "Persisted Hybrid artifact result conflicts with this completion."
+                        )
             else:
-                _write_json(result_path, result.model_dump(mode="json"))
+                _write_json_atomic(result_path, result.model_dump(mode="json"))
             completed = job.model_copy(
                 update={
                     "state": "ready",
@@ -5108,10 +5117,21 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
     try:
         with os.fdopen(file_descriptor, "wb") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _jsonable(value: Any) -> Any:

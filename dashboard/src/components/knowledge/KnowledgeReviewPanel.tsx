@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Badge, Button, Input } from '@proofagent/ui'
 import {
   fetchInsuranceMetadataReviews,
   resolveInsuranceMetadataReview,
 } from '../../api/client'
-import type { InsuranceMetadataReview } from '../../api/types'
+import type { InsuranceMetadataReview, InsuranceMetadataReviewSummary } from '../../api/types'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 
 export function KnowledgeReviewPanel({
@@ -17,29 +17,91 @@ export function KnowledgeReviewPanel({
   onReady?: () => void
 }) {
   const [reviews, setReviews] = useState<readonly InsuranceMetadataReview[]>([])
+  const [summary, setSummary] = useState<InsuranceMetadataReviewSummary | null>(null)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [currentCursor, setCurrentCursor] = useState<string | null>(null)
+  const [previousCursors, setPreviousCursors] = useState<readonly (string | null)[]>([])
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(true)
-  const [busyReviewId, setBusyReviewId] = useState<string | null>(null)
+  const [loadingPage, setLoadingPage] = useState(false)
+  const [busyByReview, setBusyByReview] = useState<Record<string, boolean>>({})
+  const [errorByReview, setErrorByReview] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
+  const generationRef = useRef(0)
+  const pageRequestRef = useRef(0)
 
   useEffect(() => {
-    let cancelled = false
+    const generation = generationRef.current + 1
+    generationRef.current = generation
+    const pageRequest = pageRequestRef.current + 1
+    pageRequestRef.current = pageRequest
     setLoading(true)
-    fetchInsuranceMetadataReviews(sourceId)
+    setReviews([])
+    setSummary(null)
+    setNextCursor(null)
+    setCurrentCursor(null)
+    setPreviousCursors([])
+    setBusyByReview({})
+    setErrorByReview({})
+    fetchInsuranceMetadataReviews(sourceId, { limit: 100 })
       .then((response) => {
-        if (cancelled) return
+        if (generationRef.current !== generation || pageRequestRef.current !== pageRequest) return
         setReviews(response.data)
-        onPublicationBlockedChange?.(response.data.some((review) => review.publication_blocked))
+        setSummary(response.meta.summary)
+        setNextCursor(response.meta.next_cursor)
         setError(null)
       })
       .catch((caught: unknown) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : 'Unable to load metadata reviews.')
+        if (generationRef.current === generation && pageRequestRef.current === pageRequest) {
+          setError(caught instanceof Error ? caught.message : 'Unable to load metadata reviews.')
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (generationRef.current === generation && pageRequestRef.current === pageRequest) {
+          setLoading(false)
+        }
       })
-    return () => { cancelled = true }
-  }, [sourceId, onPublicationBlockedChange])
+    return () => {
+      if (generationRef.current === generation) generationRef.current += 1
+      if (pageRequestRef.current === pageRequest) pageRequestRef.current += 1
+    }
+  }, [sourceId])
+
+  useEffect(() => {
+    if (summary !== null) onPublicationBlockedChange?.(summary.unresolved > 0)
+  }, [summary, onPublicationBlockedChange])
+
+  async function loadPage(cursor: string | null, direction: 'next' | 'previous') {
+    const generation = generationRef.current
+    const pageRequest = pageRequestRef.current + 1
+    pageRequestRef.current = pageRequest
+    setLoadingPage(true)
+    setError(null)
+    try {
+      const response = await fetchInsuranceMetadataReviews(sourceId, {
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      })
+      if (generationRef.current !== generation || pageRequestRef.current !== pageRequest) return
+      setReviews(response.data)
+      setSummary(response.meta.summary)
+      setNextCursor(response.meta.next_cursor)
+      if (direction === 'next') {
+        setPreviousCursors((previous) => [...previous, currentCursor])
+      } else {
+        setPreviousCursors((previous) => previous.slice(0, -1))
+      }
+      setCurrentCursor(cursor)
+    } catch (caught) {
+      if (generationRef.current === generation && pageRequestRef.current === pageRequest) {
+        setError(caught instanceof Error ? caught.message : 'Unable to load metadata reviews.')
+      }
+    } finally {
+      if (generationRef.current === generation && pageRequestRef.current === pageRequest) {
+        setLoadingPage(false)
+      }
+    }
+  }
 
   async function resolveReview(
     review: InsuranceMetadataReview,
@@ -47,27 +109,44 @@ export function KnowledgeReviewPanel({
     corrections?: Record<string, string | number | null>,
   ) {
     if (!reason.trim()) return
-    setBusyReviewId(review.review_id)
-    setError(null)
+    const generation = generationRef.current
+    const requestedSourceId = sourceId
+    setBusyByReview((current) => ({ ...current, [review.review_id]: true }))
+    setErrorByReview((current) => {
+      const next = { ...current }
+      delete next[review.review_id]
+      return next
+    })
     try {
       const updated = await resolveInsuranceMetadataReview(sourceId, review, action, {
         reason: reason.trim(),
         corrections,
       })
-      const next = reviews.map((item) => item.review_id === updated.review_id ? updated : item)
-      setReviews(next)
-      onPublicationBlockedChange?.(next.some((item) => item.publication_blocked))
+      if (generationRef.current !== generation || sourceId !== requestedSourceId) return
+      setReviews((current) => current.map(
+        (item) => item.review_id === updated.review_id ? updated : item,
+      ))
+      setSummary((current) => current === null ? current : updateSummary(current, review, updated))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to resolve metadata review.')
+      if (generationRef.current === generation && sourceId === requestedSourceId) {
+        setErrorByReview((current) => ({
+          ...current,
+          [review.review_id]: caught instanceof Error ? caught.message : 'Unable to resolve metadata review.',
+        }))
+      }
     } finally {
-      setBusyReviewId(null)
+      if (generationRef.current === generation && sourceId === requestedSourceId) {
+        setBusyByReview((current) => {
+          const next = { ...current }
+          delete next[review.review_id]
+          return next
+        })
+      }
     }
   }
 
-  const publicationBlocked = reviews.some((review) => review.publication_blocked)
-  const publicationReady = reviews.length > 0 && reviews.every(
-    (review) => review.state === 'approved' && !review.publication_blocked,
-  )
+  const publicationBlocked = (summary?.unresolved ?? 0) > 0
+  const publicationReady = summary?.all_approved ?? false
 
   return (
     <section
@@ -117,6 +196,10 @@ export function KnowledgeReviewPanel({
       <div className="mt-4 space-y-4">
         {reviews.map((review) => (
           <article key={review.review_id} className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4">
+            {(() => {
+              const terminal = review.state === 'approved' || review.state === 'rejected'
+              const busy = busyByReview[review.review_id] === true
+              return <>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="font-mono text-xs text-[var(--text-primary)]">{review.document_id} · {review.revision_id}</div>
@@ -144,14 +227,14 @@ export function KnowledgeReviewPanel({
                         label="PDF draft"
                         value={conflict.pdf_value}
                         buttonLabel="Use PDF value"
-                        disabled={!reason.trim() || busyReviewId === review.review_id}
+                        disabled={!reason.trim() || busy || terminal}
                         onChoose={() => void resolveReview(review, 'correct', { [conflict.field]: conflict.pdf_value })}
                       />
                       <ValueChoice
                         label="Workbook draft"
                         value={conflict.workbook_value}
                         buttonLabel="Use workbook value"
-                        disabled={!reason.trim() || busyReviewId === review.review_id}
+                        disabled={!reason.trim() || busy || terminal}
                         onChoose={() => void resolveReview(review, 'correct', { [conflict.field]: conflict.workbook_value })}
                       />
                     </div>
@@ -167,23 +250,71 @@ export function KnowledgeReviewPanel({
                 type="button"
                 variant="destructive-outline"
                 onClick={() => void resolveReview(review, 'reject')}
-                disabled={!reason.trim() || busyReviewId === review.review_id || review.state === 'rejected'}
+                disabled={!reason.trim() || busy || terminal}
               >
                 Reject review
               </Button>
               <Button
                 type="button"
                 onClick={() => void resolveReview(review, 'approve')}
-                disabled={!reason.trim() || busyReviewId === review.review_id || review.conflicts.length > 0 || !['ready_for_review', 'corrected'].includes(review.state)}
+                disabled={!reason.trim() || busy || terminal || review.conflicts.length > 0 || !['ready_for_review', 'corrected'].includes(review.state)}
               >
                 Approve review
               </Button>
             </div>
+            {errorByReview[review.review_id] ? (
+              <p role="alert" className="mt-3 text-sm text-[var(--danger)]">
+                {errorByReview[review.review_id]}
+              </p>
+            ) : null}
+              </>
+            })()}
           </article>
         ))}
       </div>
+
+      {!loading && summary && summary.total > 0 ? (
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={previousCursors.length === 0 || loadingPage}
+            onClick={() => void loadPage(previousCursors.at(-1) ?? null, 'previous')}
+          >
+            Previous reviews
+          </Button>
+          <span className="text-xs text-[var(--text-muted)]">
+            Showing {reviews.length} of {summary.total} reviews
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={nextCursor === null || loadingPage}
+            onClick={() => nextCursor && void loadPage(nextCursor, 'next')}
+          >
+            Load next reviews
+          </Button>
+        </div>
+      ) : null}
     </section>
   )
+}
+
+function updateSummary(
+  summary: InsuranceMetadataReviewSummary,
+  previous: InsuranceMetadataReview,
+  updated: InsuranceMetadataReview,
+): InsuranceMetadataReviewSummary {
+  const next = { ...summary }
+  if (previous.state !== updated.state) {
+    next[previous.state] -= 1
+    next[updated.state] += 1
+  }
+  if (previous.publication_blocked !== updated.publication_blocked) {
+    next.unresolved += updated.publication_blocked ? 1 : -1
+  }
+  next.all_approved = next.total > 0 && next.approved === next.total
+  return next
 }
 
 function ValueChoice({

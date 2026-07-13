@@ -3839,9 +3839,44 @@ def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
         _configuration_store(client).root_dir
     ).get_import_record(payload["import_id"])
     assert import_record is not None
+    assert import_record.created_by == "test-operator"
+    assert import_record.created_at.tzinfo is not None
+    assert import_record.created_at.utcoffset() is not None
     assert import_record.rows[0].metadata_draft_id == payload["reviews"][0][
         "workbook_draft_id"
     ]
+    audit_payloads = [
+        json.loads(path.read_text())
+        for path in sorted(
+            (_configuration_store(client).root_dir / "configuration_audit").glob("*.json")
+        )
+    ]
+    import_audit = next(
+        item
+        for item in audit_payloads
+        if item["metadata"].get("import_id") == payload["import_id"]
+    )
+    assert import_audit["operation"] == "imported"
+    assert import_audit["actor"] == "test-operator"
+    assert set(import_audit["metadata"]) == {
+        "import_id",
+        "source_id",
+        "document_id",
+        "revision_id",
+        "original_ref_id",
+        "normalized_ref_id",
+    }
+    assert "content_base64" not in json.dumps(import_audit)
+    replayed = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert replayed.status_code == 200
+    assert replayed.json()["import_id"] == payload["import_id"]
+    replayed_record = FilesystemInsuranceMetadataReviewRepository(
+        _configuration_store(client).root_dir
+    ).get_import_record(payload["import_id"])
+    assert replayed_record == import_record
     listed = client.get(
         "/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews"
     )
@@ -3950,6 +3985,15 @@ def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
     path = f"/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/{seeded['review_id']}"
 
     listed = client.get(path.rsplit("/", 1)[0])
+    filtered = client.get(
+        path.rsplit("/", 1)[0], params={"limit": 1, "state": "review_required"}
+    )
+    invalid_cursor = client.get(
+        path.rsplit("/", 1)[0], params={"cursor": "not-a-valid-cursor"}
+    )
+    invalid_state = client.get(
+        path.rsplit("/", 1)[0], params={"state": "not-a-review-state"}
+    )
     blocked = client.post(
         f"{path}/approve",
         json={
@@ -3985,7 +4029,26 @@ def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
     )
 
     assert listed.status_code == 200
-    assert listed.json()["meta"] == {"total": 1, "unresolved": 1}
+    assert filtered.status_code == 200
+    assert filtered.json()["meta"]["total"] == 1
+    assert filtered.json()["meta"]["summary"] == listed.json()["meta"]["summary"]
+    assert invalid_cursor.status_code == 400
+    assert invalid_state.status_code == 400
+    assert listed.json()["meta"] == {
+        "total": 1,
+        "unresolved": 1,
+        "next_cursor": None,
+        "summary": {
+            "total": 1,
+            "unresolved": 1,
+            "review_required": 1,
+            "ready_for_review": 0,
+            "approved": 0,
+            "corrected": 0,
+            "rejected": 0,
+            "all_approved": False,
+        },
+    }
     assert "formula" not in json.dumps(listed.json()).lower()
     assert blocked.status_code == 409
     assert corrected.status_code == 200
