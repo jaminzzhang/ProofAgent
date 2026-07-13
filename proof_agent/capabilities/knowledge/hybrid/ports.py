@@ -222,6 +222,7 @@ class HybridKnowledgeJob(_PortModel):
     safe_reason: NonBlankStr | None = None
     completed_at: AwareTimestamp | None = None
     failure_code: NonBlankStr | None = None
+    failure_classification: Literal["non_recoverable", "recoverable_exhausted"] | None = None
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> Self:
@@ -250,6 +251,10 @@ class HybridKnowledgeJob(_PortModel):
             raise ValueError("FAILED jobs require failure_code")
         if self.state != "FAILED" and self.failure_code is not None:
             raise ValueError("only FAILED jobs accept failure_code")
+        if self.state == "FAILED" and self.failure_classification is None:
+            raise ValueError("FAILED jobs require a failure classification")
+        if self.state != "FAILED" and self.failure_classification is not None:
+            raise ValueError("only FAILED jobs accept a failure classification")
         if self.completed_at is not None:
             if self.completed_at < self.created_at:
                 raise ValueError("completed_at must not precede created_at")
@@ -375,6 +380,14 @@ class HybridKnowledgeArtifactLifecycle(Protocol):
     def require_review(self, claim: HybridKnowledgeJobClaim, *, safe_reason: str) -> object: ...
 
     def fail_integrity(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> object: ...
+
+    def fail_retries_exhausted(
         self,
         claim: HybridKnowledgeJobClaim,
         *,

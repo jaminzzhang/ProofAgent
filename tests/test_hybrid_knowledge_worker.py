@@ -7,6 +7,8 @@ from typing import Literal
 
 import pytest
 
+import proof_agent.capabilities.knowledge.ingestion.hybrid_worker as hybrid_worker_module
+
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeArtifactLifecycle,
     HybridKnowledgeJobClaim,
@@ -70,6 +72,17 @@ def _ref(content: bytes, *, media_type: str = "application/pdf") -> ExactArtifac
     )
 
 
+def _artifact_ref(label: str, content: bytes, media_type: str) -> ExactArtifactRef:
+    digest = hashlib.sha256(content).hexdigest()
+    return ExactArtifactRef(
+        artifact_uri=f"s3://private-artifacts/{label}/{digest}",
+        version_id=f"sha256:{digest}",
+        sha256=digest,
+        size_bytes=len(content),
+        media_type=media_type,
+    )
+
+
 def _build_request(
     original: bytes = b"%PDF-1.7\n", *, max_auto_retries: int = 2
 ) -> HybridArtifactBuildRequest:
@@ -126,6 +139,41 @@ def _artifact(request: HybridArtifactBuildRequest) -> StructuredKnowledgeDocumen
     )
 
 
+def _build_result(request: HybridArtifactBuildRequest) -> HybridArtifactBuildResult:
+    artifact = _artifact(request)
+    build = artifact.build_identity
+    return HybridArtifactBuildResult(
+        job_id=request.job_id,
+        request_identity=request.request_identity,
+        source_id=request.source_id,
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        build_id=build.build_id,
+        build_identity=build,
+        original_ref=request.original_ref,
+        persisted_original_ref=ExactArtifactRef(
+            artifact_uri=f"s3://private-artifacts/original/{request.original_ref.sha256}",
+            version_id=request.original_ref.version_id,
+            sha256=request.original_ref.sha256,
+            size_bytes=request.original_ref.size_bytes,
+            media_type="application/pdf",
+        ),
+        vendor_refs=(
+            hybrid_worker_module.HybridVendorArtifactRef(
+                adapter="docling",
+                ref=_artifact_ref("vendor", b"{}", "application/json"),
+            ),
+        ),
+        canonical_ref=_artifact_ref("canonical", b"{}", "application/json"),
+        preview_ref=_artifact_ref("preview", b"# preview", "text/markdown"),
+        build_identity_ref=_artifact_ref(
+            "build-identity",
+            hybrid_worker_module._canonical_json(build.model_dump(mode="json")),
+            "application/json",
+        ),
+    )
+
+
 class MemoryOriginalStore:
     def __init__(self, content: bytes) -> None:
         self.content = content
@@ -137,6 +185,18 @@ class MemoryOriginalStore:
 
     def put_immutable(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
         raise AssertionError("final artifacts use the dedicated artifact store")
+
+
+class RecordingArtifactStore:
+    def __init__(self) -> None:
+        self.put_calls: list[tuple[str, int, str]] = []
+
+    def put_immutable(self, *, key: str, content: bytes, media_type: str) -> ExactArtifactRef:
+        self.put_calls.append((key, len(content), media_type))
+        return _ref(content, media_type=media_type)
+
+    def get_exact(self, ref: ExactArtifactRef) -> bytes:
+        raise AssertionError("oversized output must fail before artifact reads")
 
 
 class FakePipeline:
@@ -197,6 +257,14 @@ class AlwaysTimeoutPipeline(FakePipeline):
         raise TransientKnowledgeServiceError("timeout")
 
 
+class PrebuiltPipeline:
+    def __init__(self, output: HybridParserBuildOutput) -> None:
+        self.output = output
+
+    def build(self, request: HybridArtifactBuildRequest) -> HybridParserBuildOutput:
+        return self.output
+
+
 class LeaseExpiringPipeline(FakePipeline):
     def __init__(self, clock: ManualHybridClock) -> None:
         super().__init__()
@@ -230,6 +298,7 @@ class FakeLifecycle:
         self.retry: tuple[int, str] | None = None
         self.review: str | None = None
         self.integrity_failure: tuple[str, str] | None = None
+        self.exhausted_failure: tuple[str, str] | None = None
         self.stale = False
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
@@ -274,6 +343,15 @@ class FakeLifecycle:
         safe_reason: str,
     ) -> None:
         self.integrity_failure = (failure_code, safe_reason)
+
+    def fail_retries_exhausted(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> None:
+        self.exhausted_failure = (failure_code, safe_reason)
 
 
 def _worker(
@@ -349,11 +427,113 @@ def test_hybrid_worker_bounds_retries_and_never_exposes_raw_service_error(tmp_pa
     assert outcome is not None and outcome.state == "failed"
     assert outcome.auto_retry_count == 2
     assert lifecycle.retry is None
-    assert lifecycle.integrity_failure == (
+    assert lifecycle.exhausted_failure == (
         "PA_HYBRID_WORKER_RETRY_EXHAUSTED",
         "Private parser service retry limit reached.",
     )
     assert "secret" not in repr(outcome)
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    ["MAX_HYBRID_VENDOR_ARTIFACT_BYTES", "MAX_HYBRID_VENDOR_AGGREGATE_BYTES"],
+)
+def test_hybrid_worker_rejects_oversized_vendor_output_before_any_artifact_write(
+    tmp_path, monkeypatch, limit_name: str
+) -> None:
+    monkeypatch.setattr(hybrid_worker_module, limit_name, 1)
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    lifecycle = FakeLifecycle(request)
+    artifacts = RecordingArtifactStore()
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=artifacts,
+        pipeline=FakePipeline(),
+        worker_id="worker_1",
+    )
+
+    outcome = worker.run_once()
+
+    assert outcome is not None and outcome.state == "failed"
+    assert lifecycle.integrity_failure == (
+        "PA_HYBRID_WORKER_INTEGRITY",
+        "Hybrid artifact build failed deterministic integrity validation.",
+    )
+    assert artifacts.put_calls == []
+
+
+def test_hybrid_worker_rechecks_resource_envelope_immediately_before_persistence(
+    tmp_path, monkeypatch
+) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    parsed = FakePipeline().build(request)
+    monkeypatch.setattr(hybrid_worker_module, "MAX_HYBRID_VENDOR_AGGREGATE_BYTES", 1)
+    lifecycle = FakeLifecycle(request)
+    artifacts = RecordingArtifactStore()
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=artifacts,
+        pipeline=PrebuiltPipeline(parsed),
+        worker_id="worker_1",
+    )
+
+    outcome = worker.run_once()
+
+    assert outcome is not None and outcome.state == "failed"
+    assert lifecycle.integrity_failure is not None
+    assert artifacts.put_calls == []
+
+
+def test_hybrid_parser_resource_envelope_accepts_exact_documented_boundaries() -> None:
+    envelope = hybrid_worker_module.HybridParserResourceEnvelope(
+        vendor_artifact_bytes=(
+            hybrid_worker_module.MAX_HYBRID_VENDOR_ARTIFACT_BYTES,
+            hybrid_worker_module.MAX_HYBRID_VENDOR_ARTIFACT_BYTES,
+        ),
+        aggregate_vendor_bytes=hybrid_worker_module.MAX_HYBRID_VENDOR_AGGREGATE_BYTES,
+        canonical_json_bytes=hybrid_worker_module.MAX_HYBRID_CANONICAL_BYTES,
+        preview_bytes=hybrid_worker_module.MAX_HYBRID_PREVIEW_BYTES,
+        build_identity_bytes=hybrid_worker_module.MAX_HYBRID_BUILD_IDENTITY_BYTES,
+        total_artifact_count=hybrid_worker_module.MAX_HYBRID_OUTPUT_ARTIFACT_COUNT,
+        total_artifact_bytes=hybrid_worker_module.MAX_HYBRID_OUTPUT_BYTES,
+    )
+
+    hybrid_worker_module._require_parser_output_within_limits(envelope)
+
+
+@pytest.mark.parametrize(
+    ("field", "limit_name"),
+    [
+        ("aggregate_vendor_bytes", "MAX_HYBRID_VENDOR_AGGREGATE_BYTES"),
+        ("canonical_json_bytes", "MAX_HYBRID_CANONICAL_BYTES"),
+        ("preview_bytes", "MAX_HYBRID_PREVIEW_BYTES"),
+        ("build_identity_bytes", "MAX_HYBRID_BUILD_IDENTITY_BYTES"),
+        ("total_artifact_count", "MAX_HYBRID_OUTPUT_ARTIFACT_COUNT"),
+        ("total_artifact_bytes", "MAX_HYBRID_OUTPUT_BYTES"),
+    ],
+)
+def test_hybrid_parser_resource_envelope_rejects_one_over_each_boundary(
+    field: str, limit_name: str
+) -> None:
+    envelope = hybrid_worker_module.HybridParserResourceEnvelope(
+        vendor_artifact_bytes=(1,),
+        aggregate_vendor_bytes=1,
+        canonical_json_bytes=1,
+        preview_bytes=1,
+        build_identity_bytes=1,
+        total_artifact_count=4,
+        total_artifact_bytes=4,
+    )
+    oversized = envelope.model_copy(
+        update={field: getattr(hybrid_worker_module, limit_name) + 1}
+    )
+
+    with pytest.raises(ValueError, match="exceed"):
+        hybrid_worker_module._require_parser_output_within_limits(oversized)
 
 
 def test_deterministic_quality_signal_enters_review_without_retry(tmp_path) -> None:
@@ -516,6 +696,7 @@ def test_real_repository_binds_exact_retry_limit_and_exhausts_safely(
     assert terminal.auto_retry_count == max_auto_retries
     assert terminal.max_auto_retries == max_auto_retries
     assert terminal.failure_code == "PA_HYBRID_WORKER_RETRY_EXHAUSTED"
+    assert terminal.failure_classification == "recoverable_exhausted"
     assert terminal.safe_reason == "Private parser service retry limit reached."
     assert worker.run_once() is None
 
@@ -550,6 +731,137 @@ def test_parser_cannot_commit_after_lease_expires_during_call(tmp_path) -> None:
     persisted = repository.get("job_1")
     assert persisted is not None and persisted.state == "LEASED"
     assert repository.get_build_result("job_1") is None
+
+
+@pytest.mark.parametrize("adapter", ["inmemory", "localstore"])
+def test_hybrid_lifecycle_adapters_reject_the_same_non_exact_result(
+    tmp_path, adapter: Literal["inmemory", "localstore"]
+) -> None:
+    if adapter == "inmemory":
+        request = _build_request()
+        lifecycle: HybridKnowledgeArtifactLifecycle = InMemoryHybridKnowledgeRepository(
+            clock=ManualHybridClock(NOW)
+        )
+        assert isinstance(lifecycle, InMemoryHybridKnowledgeRepository)
+        lifecycle.enqueue_artifact_build(
+            HybridKnowledgeJobRequest(
+                job_id=request.job_id,
+                idempotency_key="idempotency_1",
+                request_identity=request.request_identity,
+                request_sha256=request.request_sha256,
+                kind="parse",
+            ),
+            request,
+        )
+    else:
+        store = LocalAgentConfigurationStore(tmp_path / "config")
+        store.create_knowledge_source(
+            source_id="source_1",
+            name="Hybrid",
+            provider="hybrid_index",
+            params={},
+            actor="operator",
+        )
+        pdf_path = tmp_path / "scanned.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        with pdf_path.open("wb") as stream:
+            writer.write(stream)
+        store.stage_quarantined_knowledge_upload(
+            source_id="source_1",
+            filename="policy.pdf",
+            content_type="application/pdf",
+            content=pdf_path.read_bytes(),
+            actor="operator",
+        )
+        unified = create_knowledge_ingestion_worker(
+            tmp_path / "config",
+            hybrid_pipeline=FakePipeline(),
+            hybrid_build_config=HybridPrivateParserBuildConfig(
+                parser_revision="docling@2.112.0",
+                model_digests=("sha256:model",),
+                configuration_sha256="b" * 64,
+            ),
+        )
+        promoted = unified.run_once()
+        assert promoted is not None and promoted.outcome is not None
+        assert promoted.outcome.state == "accepted"
+        lifecycle = LocalStoreHybridWorkerLifecycle(
+            store=store,
+            original_store=LocalManagedOriginalStore(),
+        )
+
+    if adapter == "localstore":
+        selection = store.claim_next_knowledge_worker_task(
+            lease_seconds=60, providers={"hybrid_index"}
+        )
+        assert selection.task is not None and selection.task.ingestion_job is not None
+        claim = lifecycle.claim_from_job(selection.task.ingestion_job)
+    else:
+        claim = lifecycle.claim_next(worker_id="worker_1", lease_seconds=60)
+    assert claim is not None
+    request = lifecycle.load_build_request(claim)
+    result = _build_result(request)
+    mismatched_original = result.original_ref.model_copy(
+        update={"artifact_uri": "s3://attacker/substituted-original.pdf"}
+    )
+
+    with pytest.raises(ValueError, match="exact immutable original"):
+        lifecycle.commit_artifact_build(
+            claim,
+            result.model_copy(update={"original_ref": mismatched_original}),
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["build_configuration", "vendor_media", "version_id", "duplicate_required_ref"],
+)
+def test_exact_result_validator_rejects_build_and_artifact_ref_tampering(
+    tamper: str,
+) -> None:
+    request = _build_request()
+    result = _build_result(request)
+    if tamper == "build_configuration":
+        result = result.model_copy(
+            update={
+                "build_identity": result.build_identity.model_copy(
+                    update={"configuration_sha256": "c" * 64}
+                )
+            }
+        )
+    elif tamper == "vendor_media":
+        vendor = result.vendor_refs[0]
+        result = result.model_copy(
+            update={
+                "vendor_refs": (
+                    vendor.model_copy(
+                        update={
+                            "ref": vendor.ref.model_copy(update={"media_type": "text/plain"})
+                        }
+                    ),
+                )
+            }
+        )
+    elif tamper == "version_id":
+        result = result.model_copy(
+            update={
+                "canonical_ref": result.canonical_ref.model_copy(
+                    update={"version_id": "sha256:" + "0" * 64}
+                )
+            }
+        )
+    else:
+        result = result.model_copy(
+            update={
+                "preview_ref": result.preview_ref.model_copy(
+                    update={"artifact_uri": result.canonical_ref.artifact_uri}
+                )
+            }
+        )
+
+    with pytest.raises(ValueError):
+        hybrid_worker_module.validate_hybrid_artifact_build_result(request, result)
 
 
 def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -> None:
@@ -599,6 +911,64 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     assert jobs[0].attempt_count == 1
     result_files = tuple((tmp_path / "config").rglob("hybrid-artifact-result.json"))
     assert len(result_files) == 1
+
+
+def test_localstore_exhausted_transient_is_not_classified_as_integrity_failure(tmp_path) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    store.create_knowledge_source(
+        source_id="source_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    pdf_path = tmp_path / "scanned.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with pdf_path.open("wb") as stream:
+        writer.write(stream)
+    store.stage_quarantined_knowledge_upload(
+        source_id="source_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=pdf_path.read_bytes(),
+        actor="operator",
+    )
+    unified = create_knowledge_ingestion_worker(
+        tmp_path / "config",
+        hybrid_pipeline=FakePipeline(),
+        hybrid_build_config=HybridPrivateParserBuildConfig(
+            parser_revision="docling@2.112.0",
+            model_digests=("sha256:model",),
+            configuration_sha256="b" * 64,
+        ),
+    )
+    promoted = unified.run_once()
+    assert promoted is not None and promoted.outcome is not None
+    assert promoted.outcome.state == "accepted"
+    lifecycle = LocalStoreHybridWorkerLifecycle(
+        store=store,
+        original_store=LocalManagedOriginalStore(),
+    )
+    selection = store.claim_next_knowledge_worker_task(
+        lease_seconds=60, providers={"hybrid_index"}
+    )
+    assert selection.task is not None and selection.task.ingestion_job is not None
+    claim = lifecycle.claim_from_job(selection.task.ingestion_job)
+    assert claim is not None
+
+    lifecycle.fail_retries_exhausted(
+        claim,
+        failure_code="PA_HYBRID_WORKER_RETRY_EXHAUSTED",
+        safe_reason="Private parser service retry limit reached.",
+    )
+
+    job = store.list_knowledge_ingestion_jobs("source_1")[0]
+    assert job.state == "failed"
+    assert job.auto_retry_count == 0
+    assert job.last_failure_classification == "recoverable_exhausted"
+    assert job.error_code == "PA_HYBRID_WORKER_RETRY_EXHAUSTED"
+    assert job.error_message == "Private parser service retry limit reached."
 
 
 def test_localstore_request_integrity_failure_is_safe_and_releases_claim(tmp_path) -> None:

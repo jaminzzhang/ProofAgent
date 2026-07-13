@@ -2540,6 +2540,34 @@ class LocalAgentConfigurationStore:
                 completed_at=_now(),
             )
 
+    def fail_recoverable_exhausted_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        error_code: str,
+        error_message: str,
+    ) -> KnowledgeIngestionJob:
+        """Persist an exhausted recoverable failure without misclassifying integrity."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            self._require_active_knowledge_source_unlocked(source_id)
+            return self._fail_knowledge_ingestion_job_unlocked(
+                job=job,
+                document=document,
+                error_code=error_code,
+                error_message=_operator_error_message(error_message),
+                failure_classification="recoverable_exhausted",
+                auto_retry_count=job.auto_retry_count,
+                completed_at=_now(),
+            )
+
     def retry_failed_knowledge_ingestion_job(
         self,
         *,

@@ -17,6 +17,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    computed_field,
     model_validator,
 )
 
@@ -27,7 +28,10 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     KnowledgeArtifactStore,
 )
 from proof_agent.contracts._base import FrozenModel
-from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
+from proof_agent.contracts.hybrid_documents import (
+    StructuredArtifactBuildIdentity,
+    StructuredKnowledgeDocumentArtifact,
+)
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.contracts import KnowledgeIngestionJob
 
@@ -45,6 +49,18 @@ NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 _TRANSIENT_CODE = "PA_HYBRID_WORKER_TRANSIENT"
 _REVIEW_CODE = "PA_HYBRID_WORKER_REVIEW_REQUIRED"
 _RETRY_EXHAUSTED_CODE = "PA_HYBRID_WORKER_RETRY_EXHAUSTED"
+
+# One vendor artifact matches Task 8's 64 MiB private-response ceiling. Aggregate and
+# derived limits bound a 500-page escalation without contradicting that upstream contract.
+MAX_HYBRID_VENDOR_ARTIFACT_BYTES = 64 * 1024 * 1024
+MAX_HYBRID_VENDOR_AGGREGATE_BYTES = 128 * 1024 * 1024
+MAX_HYBRID_CANONICAL_BYTES = 64 * 1024 * 1024
+MAX_HYBRID_PREVIEW_BYTES = 16 * 1024 * 1024
+MAX_HYBRID_BUILD_IDENTITY_BYTES = 1024 * 1024
+MAX_HYBRID_OUTPUT_ARTIFACT_COUNT = 504
+MAX_HYBRID_PERSISTED_ARTIFACT_COUNT = 505
+MAX_HYBRID_OUTPUT_BYTES = 209 * 1024 * 1024
+MAX_HYBRID_PERSISTED_BYTES = 259 * 1024 * 1024
 
 
 class _HybridWorkerModel(FrozenModel):
@@ -98,9 +114,29 @@ class HybridVendorArtifact(_HybridWorkerModel):
     media_type: Literal["application/json"] = "application/json"
 
 
+class HybridParserResourceEnvelope(_HybridWorkerModel):
+    vendor_artifact_bytes: tuple[NonNegativeInt, ...]
+    aggregate_vendor_bytes: NonNegativeInt
+    canonical_json_bytes: NonNegativeInt
+    preview_bytes: NonNegativeInt
+    build_identity_bytes: NonNegativeInt
+    total_artifact_count: NonNegativeInt
+    total_artifact_bytes: NonNegativeInt
+
+
 class HybridParserBuildOutput(_HybridWorkerModel):
     artifact: StructuredKnowledgeDocumentArtifact
     vendor_artifacts: tuple[HybridVendorArtifact, ...] = Field(min_length=1, max_length=501)
+
+    @computed_field(return_type=HybridParserResourceEnvelope)  # type: ignore[prop-decorator]
+    @property
+    def resource_envelope(self) -> HybridParserResourceEnvelope:
+        return _measure_parser_output(self)
+
+    @model_validator(mode="after")
+    def validate_resource_envelope(self) -> Self:
+        _require_parser_output_within_limits(self.resource_envelope)
+        return self
 
 
 class HybridVendorArtifactRef(_HybridWorkerModel):
@@ -115,11 +151,19 @@ class HybridArtifactBuildResult(_HybridWorkerModel):
     document_id: NonBlankStr
     revision_id: NonBlankStr
     build_id: NonBlankStr
+    build_identity: StructuredArtifactBuildIdentity
     original_ref: ExactArtifactRef
+    persisted_original_ref: ExactArtifactRef
     vendor_refs: tuple[HybridVendorArtifactRef, ...] = Field(min_length=1)
     canonical_ref: ExactArtifactRef
     preview_ref: ExactArtifactRef
     build_identity_ref: ExactArtifactRef
+
+    @model_validator(mode="after")
+    def validate_build_id(self) -> Self:
+        if self.build_id != self.build_identity.build_id:
+            raise ValueError("result build_id must match its structured build identity")
+        return self
 
 
 class HybridWorkerOutcome(_HybridWorkerModel):
@@ -141,6 +185,71 @@ class HybridWorkerOutcome(_HybridWorkerModel):
         if self.state != "completed" and self.error_code is None:
             raise ValueError("non-completed Hybrid outcomes require a safe error code")
         return self
+
+
+def validate_hybrid_artifact_build_result(
+    request: HybridArtifactBuildRequest,
+    result: HybridArtifactBuildResult,
+) -> None:
+    """Validate one committed result identically for every lifecycle adapter."""
+
+    if (
+        result.job_id,
+        result.request_identity,
+        result.source_id,
+        result.document_id,
+        result.revision_id,
+    ) != (
+        request.job_id,
+        request.request_identity,
+        request.source_id,
+        request.document_id,
+        request.revision_id,
+    ):
+        raise ValueError("Hybrid result does not match the full owned request identity")
+    if result.original_ref != request.original_ref:
+        raise ValueError("Hybrid result must retain the exact immutable original reference")
+    build = result.build_identity
+    if (
+        result.build_id != build.build_id
+        or build.source_sha256 != request.original_ref.sha256
+        or build.parser_revision != request.parser_revision
+        or build.model_digests != request.model_digests
+        or build.configuration_sha256 != request.configuration_sha256
+    ):
+        raise ValueError("Hybrid result build identity does not match the build request")
+    persisted_original = result.persisted_original_ref
+    if (
+        persisted_original.sha256 != request.original_ref.sha256
+        or persisted_original.size_bytes != request.original_ref.size_bytes
+        or persisted_original.media_type != "application/pdf"
+    ):
+        raise ValueError("Hybrid persisted original does not match the exact original bytes")
+    if any(vendor.ref.media_type != "application/json" for vendor in result.vendor_refs):
+        raise ValueError("Hybrid vendor artifacts require application/json media type")
+    if (
+        result.canonical_ref.media_type != "application/json"
+        or result.preview_ref.media_type != "text/markdown"
+        or result.build_identity_ref.media_type != "application/json"
+    ):
+        raise ValueError("Hybrid result contains an invalid required artifact media type")
+    expected_build_identity_sha = hashlib.sha256(
+        _canonical_json(build.model_dump(mode="json"))
+    ).hexdigest()
+    if result.build_identity_ref.sha256 != expected_build_identity_sha:
+        raise ValueError("Hybrid build identity reference does not match the exact identity bytes")
+    persisted_refs = (
+        result.persisted_original_ref,
+        *(vendor.ref for vendor in result.vendor_refs),
+        result.canonical_ref,
+        result.preview_ref,
+        result.build_identity_ref,
+    )
+    if len({ref.artifact_uri for ref in persisted_refs}) != len(persisted_refs):
+        raise ValueError("Hybrid required artifact kinds must have distinct immutable references")
+    for ref in (result.original_ref, *persisted_refs):
+        if ref.version_id != f"sha256:{ref.sha256}" or ref.size_bytes <= 0:
+            raise ValueError("Hybrid result contains an invalid exact artifact reference")
 
 
 class TransientKnowledgeServiceError(RuntimeError):
@@ -202,6 +311,7 @@ class HybridKnowledgeWorker:
             claim = self._lifecycle.renew_claim(claim, lease_seconds=self._lease_seconds)
             self._validate_parser_output(request, parsed)
             result = self._persist_artifacts(request, original=original, parsed=parsed)
+            validate_hybrid_artifact_build_result(request, result)
         except (TransientKnowledgeServiceError, TimeoutError, ConnectionError):
             if request is None:
                 return self._fail_integrity(claim, request=None)
@@ -259,7 +369,7 @@ class HybridKnowledgeWorker:
         request: HybridArtifactBuildRequest,
     ) -> HybridWorkerOutcome:
         if request.auto_retry_count >= request.max_auto_retries:
-            self._lifecycle.fail_integrity(
+            self._lifecycle.fail_retries_exhausted(
                 claim,
                 failure_code=_RETRY_EXHAUSTED_CODE,
                 safe_reason="Private parser service retry limit reached.",
@@ -338,11 +448,12 @@ class HybridKnowledgeWorker:
         parsed: HybridParserBuildOutput,
     ) -> HybridArtifactBuildResult:
         artifact = parsed.artifact
+        _validate_parser_output_resource_limits(parsed, original_size=len(original))
         key_root = (
             f"hybrid/{request.original_ref.sha256}/"
             f"{hashlib.sha256(artifact.build_identity.build_id.encode()).hexdigest()}"
         )
-        original_ref = self._put_verified(
+        persisted_original_ref = self._put_verified(
             key=f"{key_root}/original.pdf",
             content=original,
             media_type="application/pdf",
@@ -381,7 +492,9 @@ class HybridKnowledgeWorker:
             document_id=request.document_id,
             revision_id=request.revision_id,
             build_id=artifact.build_identity.build_id,
-            original_ref=original_ref,
+            build_identity=artifact.build_identity,
+            original_ref=request.original_ref,
+            persisted_original_ref=persisted_original_ref,
             vendor_refs=vendor_refs,
             canonical_ref=canonical_ref,
             preview_ref=preview_ref,
@@ -442,6 +555,55 @@ def _preview_markdown(artifact: StructuredKnowledgeDocumentArtifact) -> bytes:
             lines.extend(cell.text for cell in table.cells if cell.text)
         lines.append("")
     return "\n".join(lines).encode("utf-8")
+
+
+def _measure_parser_output(parsed: HybridParserBuildOutput) -> HybridParserResourceEnvelope:
+    vendor_sizes = tuple(len(vendor.content) for vendor in parsed.vendor_artifacts)
+    canonical_size = len(_canonical_json(parsed.artifact.model_dump(mode="json", by_alias=True)))
+    preview_size = len(_preview_markdown(parsed.artifact))
+    build_identity_size = len(
+        _canonical_json(parsed.artifact.build_identity.model_dump(mode="json"))
+    )
+    aggregate_vendor = sum(vendor_sizes)
+    return HybridParserResourceEnvelope(
+        vendor_artifact_bytes=vendor_sizes,
+        aggregate_vendor_bytes=aggregate_vendor,
+        canonical_json_bytes=canonical_size,
+        preview_bytes=preview_size,
+        build_identity_bytes=build_identity_size,
+        total_artifact_count=len(vendor_sizes) + 3,
+        total_artifact_bytes=(
+            aggregate_vendor + canonical_size + preview_size + build_identity_size
+        ),
+    )
+
+
+def _require_parser_output_within_limits(envelope: HybridParserResourceEnvelope) -> None:
+    if any(size > MAX_HYBRID_VENDOR_ARTIFACT_BYTES for size in envelope.vendor_artifact_bytes):
+        raise ValueError("Hybrid vendor artifact exceeds the per-artifact byte limit")
+    if envelope.aggregate_vendor_bytes > MAX_HYBRID_VENDOR_AGGREGATE_BYTES:
+        raise ValueError("Hybrid vendor artifacts exceed the aggregate byte limit")
+    if envelope.canonical_json_bytes > MAX_HYBRID_CANONICAL_BYTES:
+        raise ValueError("Hybrid canonical JSON exceeds the byte limit")
+    if envelope.preview_bytes > MAX_HYBRID_PREVIEW_BYTES:
+        raise ValueError("Hybrid preview exceeds the byte limit")
+    if envelope.build_identity_bytes > MAX_HYBRID_BUILD_IDENTITY_BYTES:
+        raise ValueError("Hybrid build identity exceeds the byte limit")
+    if envelope.total_artifact_count > MAX_HYBRID_OUTPUT_ARTIFACT_COUNT:
+        raise ValueError("Hybrid parser output exceeds the artifact-count limit")
+    if envelope.total_artifact_bytes > MAX_HYBRID_OUTPUT_BYTES:
+        raise ValueError("Hybrid parser output exceeds the aggregate byte limit")
+
+
+def _validate_parser_output_resource_limits(
+    parsed: HybridParserBuildOutput, *, original_size: int
+) -> None:
+    envelope = _measure_parser_output(parsed)
+    _require_parser_output_within_limits(envelope)
+    if envelope.total_artifact_count + 1 > MAX_HYBRID_PERSISTED_ARTIFACT_COUNT:
+        raise ValueError("Hybrid persisted output exceeds the artifact-count limit")
+    if envelope.total_artifact_bytes + original_size > MAX_HYBRID_PERSISTED_BYTES:
+        raise ValueError("Hybrid persisted output exceeds the aggregate byte limit")
 
 
 class LocalManagedOriginalStore:
@@ -681,30 +843,7 @@ class LocalStoreHybridWorkerLifecycle:
         self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
     ) -> object:
         token, request = self._require_owned(claim)
-        if (
-            result.job_id != request.job_id
-            or result.request_identity != request.request_identity
-            or result.source_id != request.source_id
-            or result.document_id != request.document_id
-            or result.revision_id != request.revision_id
-            or result.original_ref.sha256 != request.original_ref.sha256
-            or result.original_ref.size_bytes != request.original_ref.size_bytes
-            or result.original_ref.media_type != "application/pdf"
-            or not result.vendor_refs
-            or result.canonical_ref.media_type != "application/json"
-            or result.preview_ref.media_type != "text/markdown"
-            or result.build_identity_ref.media_type != "application/json"
-        ):
-            raise ValueError("Hybrid result does not match the full owned LocalStore request")
-        for ref in (
-            result.original_ref,
-            *(vendor.ref for vendor in result.vendor_refs),
-            result.canonical_ref,
-            result.preview_ref,
-            result.build_identity_ref,
-        ):
-            if ref.version_id != f"sha256:{ref.sha256}" or ref.size_bytes <= 0:
-                raise ValueError("Hybrid result contains an invalid exact artifact reference")
+        validate_hybrid_artifact_build_result(request, result)
         completed = self._store.complete_hybrid_knowledge_ingestion_job(
             source_id=request.source_id,
             job_id=request.job_id,
@@ -756,6 +895,24 @@ class LocalStoreHybridWorkerLifecycle:
     ) -> object:
         token, request = self._require_owned(claim)
         failed = self._store.fail_knowledge_ingestion_job(
+            source_id=request.source_id,
+            job_id=request.job_id,
+            claim_token=token,
+            error_code=failure_code,
+            error_message=safe_reason,
+        )
+        self._release(claim.job_id)
+        return failed
+
+    def fail_retries_exhausted(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> object:
+        token, request = self._require_owned(claim)
+        failed = self._store.fail_recoverable_exhausted_knowledge_ingestion_job(
             source_id=request.source_id,
             job_id=request.job_id,
             claim_token=token,

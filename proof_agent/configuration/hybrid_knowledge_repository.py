@@ -211,31 +211,25 @@ class InMemoryHybridKnowledgeRepository:
         claim: HybridKnowledgeJobClaim,
         result: HybridArtifactBuildResult,
     ) -> HybridKnowledgeJob:
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            validate_hybrid_artifact_build_result,
+        )
+
         with self._lock:
             now = self._observe_now()
             self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
             request = self._build_requests.get(claim.job_id)
-            if request is None or (
-                result.job_id,
-                result.request_identity,
-                result.source_id,
-                result.document_id,
-                result.revision_id,
-            ) != (
-                request.job_id,
-                request.request_identity,
-                request.source_id,
-                request.document_id,
-                request.revision_id,
-            ):
+            if request is None:
                 raise HybridKnowledgeLeaseError(
-                    "artifact result does not match the current exact build request"
+                    "claimed parse job has no exact build request"
                 )
+            validate_hybrid_artifact_build_result(request, result)
             self._build_results[claim.job_id] = result
             return self._finish_unlocked(
                 claim=claim,
                 state="COMPLETED",
                 failure_code=None,
+                failure_classification=None,
                 safe_reason=None,
                 now=now,
             )
@@ -304,6 +298,28 @@ class InMemoryHybridKnowledgeRepository:
                 claim=claim,
                 state="FAILED",
                 failure_code=failure_code,
+                failure_classification="non_recoverable",
+                safe_reason=safe_reason,
+                now=now,
+            )
+
+    def fail_retries_exhausted(
+        self,
+        claim: HybridKnowledgeJobClaim,
+        *,
+        failure_code: str,
+        safe_reason: str,
+    ) -> HybridKnowledgeJob:
+        failure_code = _normalized_identifier(failure_code, field_name="failure_code")
+        safe_reason = _normalized_identifier(safe_reason, field_name="safe_reason")
+        with self._lock:
+            now = self._observe_now()
+            self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
+            return self._finish_unlocked(
+                claim=claim,
+                state="FAILED",
+                failure_code=failure_code,
+                failure_classification="recoverable_exhausted",
                 safe_reason=safe_reason,
                 now=now,
             )
@@ -430,6 +446,7 @@ class InMemoryHybridKnowledgeRepository:
                 claim=claim,
                 state=state,
                 failure_code=failure_code,
+                failure_classification=("non_recoverable" if state == "FAILED" else None),
                 safe_reason=(failure_code if state == "FAILED" else None),
                 now=now,
             )
@@ -440,6 +457,7 @@ class InMemoryHybridKnowledgeRepository:
         claim: HybridKnowledgeJobClaim,
         state: str,
         failure_code: str | None,
+        failure_classification: str | None,
         safe_reason: str | None,
         now: datetime,
     ) -> HybridKnowledgeJob:
@@ -449,6 +467,7 @@ class InMemoryHybridKnowledgeRepository:
             updated_at=now,
             completed_at=now,
             failure_code=failure_code,
+            failure_classification=failure_classification,
             safe_reason=safe_reason,
         )
         self._jobs[claim.job_id] = job
