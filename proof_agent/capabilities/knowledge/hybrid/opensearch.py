@@ -409,6 +409,65 @@ MAX_CONTENT_SOURCE_BYTES = 320_000
 MAX_CONTENT_BATCH_BYTES = 12_000_000
 CONTENT_FETCH_BATCH_SIZE = 32
 MAX_AUTHORITY_PROJECTION_BYTES = 16_384
+KEYWORD_IGNORE_ABOVE = 512
+KEYWORD_MAX_UTF8_BYTES = 512
+
+_PROJECTED_KEYWORD_FIELDS = (
+    "projection_id",
+    "source_id",
+    "document_id",
+    "revision_id",
+    "logical_rule_key",
+    "rule_unit_revision_id",
+    "structured_artifact_build_identity",
+    "index_generation_id",
+    "manifest_entry_core_sha256",
+    "metadata_revision_id",
+    "metadata_revision_digest",
+    "visibility_revision_id",
+    "visibility_revision_digest",
+    "content_sha256",
+    "authority_sha256",
+    "citation_uri",
+    "visibility",
+    "institution_mode",
+    "region_mode",
+    "channel_mode",
+    "role_mode",
+    "business_line_mode",
+    "allowed_institutions",
+    "allowed_regions",
+    "allowed_channels",
+    "allowed_roles",
+    "allowed_business_lines",
+    "taxonomy_id",
+    "taxonomy_revision_id",
+    "authority_tier",
+    "precedence_policy_revision",
+    "projection_revision",
+    "immutable_projection_sha256",
+    "projection_sha256",
+    "response_integrity_sha256",
+    "publication_attempt_id",
+    "embedding_sha256",
+    "lineage_sha256",
+    "block_ids",
+    "table_id",
+    "table_continuation_id",
+    "cell_coordinates",
+    "product_codes",
+    "rule_type",
+    "authority",
+    "supersedes_rule_unit_revision_ids",
+)
+
+_APPLICABILITY_KEYWORD_FIELDS = (
+    "key",
+    "operator",
+    "value_type",
+    "value_tokens",
+    "string_values",
+)
 
 
 _FLATTENED_AUTHORITY_FIELDS = frozenset(
@@ -474,57 +533,9 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
 
     if type(dimension) is not int or dimension <= 0 or dimension > 65_535:
         raise ValueError("dimension must be a positive integer no greater than 65535")
-    keyword = {"type": "keyword", "ignore_above": 512}
+    keyword = {"type": "keyword", "ignore_above": KEYWORD_IGNORE_ABOVE}
     properties: dict[str, dict[str, object]] = {
-        name: dict(keyword)
-        for name in (
-            "projection_id",
-            "source_id",
-            "document_id",
-            "revision_id",
-            "logical_rule_key",
-            "rule_unit_revision_id",
-            "structured_artifact_build_identity",
-            "index_generation_id",
-            "manifest_entry_core_sha256",
-            "metadata_revision_id",
-            "metadata_revision_digest",
-            "visibility_revision_id",
-            "visibility_revision_digest",
-            "content_sha256",
-            "authority_sha256",
-            "citation_uri",
-            "visibility",
-            "institution_mode",
-            "region_mode",
-            "channel_mode",
-            "role_mode",
-            "business_line_mode",
-            "allowed_institutions",
-            "allowed_regions",
-            "allowed_channels",
-            "allowed_roles",
-            "allowed_business_lines",
-            "taxonomy_id",
-            "taxonomy_revision_id",
-            "authority_tier",
-            "precedence_policy_revision",
-            "projection_revision",
-            "immutable_projection_sha256",
-            "projection_sha256",
-            "response_integrity_sha256",
-            "publication_attempt_id",
-            "embedding_sha256",
-            "lineage_sha256",
-            "block_ids",
-            "table_id",
-            "table_continuation_id",
-            "cell_coordinates",
-            "product_codes",
-            "rule_type",
-            "authority",
-            "supersedes_rule_unit_revision_ids",
-        )
+        name: dict(keyword) for name in _PROJECTED_KEYWORD_FIELDS
     }
     properties.update(
         {
@@ -537,11 +548,10 @@ def rule_unit_index_mapping(*, dimension: int) -> dict[str, object]:
             "applicability_predicates": {
                 "type": "nested",
                 "properties": {
-                    "key": dict(keyword),
-                    "operator": dict(keyword),
-                    "value_type": dict(keyword),
-                    "value_tokens": dict(keyword),
-                    "string_values": dict(keyword),
+                    **{
+                        field_name: dict(keyword)
+                        for field_name in _APPLICABILITY_KEYWORD_FIELDS
+                    },
                     "integer_values": {"type": "long"},
                     "numeric_values": {"type": "double"},
                     "boolean_values": {"type": "boolean"},
@@ -596,6 +606,52 @@ def _bounded_text(value: str, *, field_name: str, maximum: int) -> str:
     if len(value) > maximum:
         raise ValueError(f"{field_name} exceeds the maximum length")
     return value
+
+
+def _bounded_keyword_text(value: object, *, field_name: str) -> str:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{field_name} must be a nonblank keyword string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} must be valid UTF-8") from exc
+    if len(value) > KEYWORD_IGNORE_ABOVE:
+        raise ValueError(f"{field_name} exceeds the keyword character limit")
+    if len(encoded) > KEYWORD_MAX_UTF8_BYTES:
+        raise ValueError(f"{field_name} exceeds the keyword UTF-8 byte limit")
+    return value
+
+
+def _validate_keyword_projection_value(value: object, *, field_name: str) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _bounded_keyword_text(item, field_name=field_name)
+        return
+    _bounded_keyword_text(value, field_name=field_name)
+
+
+def _validate_projected_keyword_fields(projected: Mapping[str, object]) -> None:
+    for field_name in _PROJECTED_KEYWORD_FIELDS:
+        if field_name in projected:
+            _validate_keyword_projection_value(
+                projected[field_name], field_name=field_name
+            )
+
+    predicates = projected.get("applicability_predicates")
+    if not isinstance(predicates, list):
+        raise ValueError("applicability_predicates must be an array")
+    for predicate in predicates:
+        if not isinstance(predicate, Mapping):
+            raise ValueError("applicability_predicates must contain objects")
+        for field_name in _APPLICABILITY_KEYWORD_FIELDS:
+            if field_name not in predicate:
+                raise ValueError(
+                    f"applicability_predicates.{field_name} must be present"
+                )
+            _validate_keyword_projection_value(
+                predicate[field_name],
+                field_name=f"applicability_predicates.{field_name}",
+            )
 
 
 def _visibility_fields(
@@ -816,6 +872,7 @@ def project_rule_unit_document(
     projected["immutable_projection_sha256"] = _immutable_projection_sha256(projected)
     projected["projection_sha256"] = _mutable_projection_sha256(projected)
     projected["response_integrity_sha256"] = _response_integrity_sha256(projected)
+    _validate_projected_keyword_fields(projected)
     return projected
 
 
@@ -1117,9 +1174,20 @@ def _exact_string(
     *,
     field_name: str,
     maximum: int = 512,
+    maximum_utf8_bytes: int | None = None,
 ) -> str:
     if type(value) is not str or not value.strip() or len(value) > maximum:
         raise OpenSearchProjectionError(f"{field_name} must be a bounded nonblank string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise OpenSearchProjectionError(f"{field_name} must be valid UTF-8") from exc
+    if maximum_utf8_bytes is None and maximum == KEYWORD_IGNORE_ABOVE:
+        maximum_utf8_bytes = KEYWORD_MAX_UTF8_BYTES
+    if maximum_utf8_bytes is not None and len(encoded) > maximum_utf8_bytes:
+        raise OpenSearchProjectionError(
+            f"{field_name} must fit the bounded UTF-8 byte envelope"
+        )
     return value
 
 
@@ -2125,8 +2193,13 @@ class OpenSearchHybridIndex:
                 method="POST",
                 path=f"/{index_name}/_mget",
                 json_body={
-                    "ids": [candidate.projection_id for candidate in batch],
-                    "_source": sorted(_CONTENT_SOURCE_FIELDS),
+                    "docs": [
+                        {
+                            "_id": candidate.projection_id,
+                            "_source": sorted(_CONTENT_SOURCE_FIELDS),
+                        }
+                        for candidate in batch
+                    ]
                 },
             )
             self.verify_identity(request.identity)

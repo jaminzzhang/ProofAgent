@@ -320,7 +320,22 @@ class RecordingTransport:
             )
         if method == "POST" and path == f"/{index_name}/_mget":
             assert json_body is not None
-            requested_ids = json_body["ids"]
+            requested_docs = json_body["docs"]
+            assert isinstance(requested_docs, list)
+            assert all(
+                set(requested_doc) == {"_id", "_source"}
+                and requested_doc["_source"]
+                == sorted(
+                    {
+                        "projection_id",
+                        "content",
+                        "content_sha256",
+                        "immutable_projection_sha256",
+                        "response_integrity_sha256",
+                    }
+                )
+                for requested_doc in requested_docs
+            )
             by_id = {hit["_id"]: hit for hit in self.search_hits}
             return OpenSearchTransportResponse(
                 status_code=200,
@@ -328,11 +343,11 @@ class RecordingTransport:
                     "docs": [
                         {
                             "_index": index_name,
-                            "_id": projection_id,
+                            "_id": requested_doc["_id"],
                             "found": True,
-                            "_source": by_id[projection_id]["_content_source"],
+                            "_source": by_id[requested_doc["_id"]]["_content_source"],
                         }
-                        for projection_id in requested_ids
+                        for requested_doc in requested_docs
                     ]
                 },
             )
@@ -565,6 +580,86 @@ def test_projection_contains_only_approved_query_safe_fields() -> None:
     assert "approved_visibility" not in projected
     assert "vendor_payload" not in projected
     assert "metadata_draft" not in projected
+
+
+def test_keyword_projection_validator_covers_every_mapped_keyword_field() -> None:
+    mapping = rule_unit_index_mapping(dimension=2)
+    properties = mapping["properties"]
+    mapped_top_level_keywords = {
+        field_name
+        for field_name, field_mapping in properties.items()
+        if field_mapping["type"] == "keyword"
+    }
+    mapped_predicate_keywords = {
+        field_name
+        for field_name, field_mapping in properties["applicability_predicates"][
+            "properties"
+        ].items()
+        if field_mapping["type"] == "keyword"
+    }
+
+    assert set(opensearch_module._PROJECTED_KEYWORD_FIELDS) == mapped_top_level_keywords
+    assert set(opensearch_module._APPLICABILITY_KEYWORD_FIELDS) == (
+        mapped_predicate_keywords
+    )
+
+    projected = project_rule_unit_document(
+        projection_document(),
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+    overlong = "x" * 513
+    for field_name in mapped_top_level_keywords:
+        mutated = dict(projected)
+        original = mutated.get(field_name)
+        mutated[field_name] = [overlong] if isinstance(original, list) else overlong
+        with pytest.raises(ValueError, match=field_name):
+            opensearch_module._validate_projected_keyword_fields(mutated)
+
+    for field_name in mapped_predicate_keywords:
+        mutated = dict(projected)
+        predicates = [
+            dict(item) for item in projected["applicability_predicates"]
+        ]
+        original = predicates[0].get(field_name)
+        predicates[0][field_name] = (
+            [overlong] if isinstance(original, list) else overlong
+        )
+        mutated["applicability_predicates"] = predicates
+        with pytest.raises(ValueError, match=field_name):
+            opensearch_module._validate_projected_keyword_fields(mutated)
+
+
+def test_keyword_projection_enforces_character_and_utf8_byte_boundaries() -> None:
+    projected = project_rule_unit_document(
+        projection_document(),
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+
+    for accepted in ("x" * 512, "保" * 170, "😀" * 128):
+        assert len(accepted.encode("utf-8")) <= 512
+        mutated = {**projected, "projection_id": accepted}
+        opensearch_module._validate_projected_keyword_fields(mutated)
+
+    for rejected in ("x" * 513, "保" * 171, "😀" * 129):
+        mutated = {**projected, "projection_id": rejected}
+        with pytest.raises(ValueError, match="projection_id"):
+            opensearch_module._validate_projected_keyword_fields(mutated)
+
+
+def test_projection_rejects_oversized_taxonomy_keyword_before_bulk() -> None:
+    condition = TaxonomyCondition(
+        key="product_code", operator="EQ", values=("P-1",)
+    ).model_copy(update={"key": "保" * 171})
+    document = projection_document(metadata=metadata_with_condition(condition))
+
+    with pytest.raises(ValueError, match="applicability_predicates.key"):
+        project_rule_unit_document(
+            document,
+            identity=index_identity(),
+            publication_attempt_id="attempt-1",
+        )
 
 
 @pytest.mark.parametrize(
@@ -895,16 +990,22 @@ def test_search_normalizes_only_bounded_authorized_manifest_matching_hits() -> N
         for call in transport.calls
     ) == 3
     content_call = next(call for call in transport.calls if call["path"].endswith("/_mget"))
-    assert content_call["json_body"]["ids"] == ["projection-1"]
-    assert content_call["json_body"]["_source"] == sorted(
-        {
-            "projection_id",
-            "content",
-            "content_sha256",
-            "immutable_projection_sha256",
-            "response_integrity_sha256",
-        }
-    )
+    assert content_call["json_body"] == {
+        "docs": [
+            {
+                "_id": "projection-1",
+                "_source": sorted(
+                    {
+                        "projection_id",
+                        "content",
+                        "content_sha256",
+                        "immutable_projection_sha256",
+                        "response_integrity_sha256",
+                    }
+                ),
+            }
+        ]
+    }
 
 
 @pytest.mark.parametrize(
