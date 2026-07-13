@@ -46,6 +46,10 @@ class _RuleProjectionModel(FrozenModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
+class RuleUnitProjectionReviewRequired(ValueError):
+    """Canonical structure cannot form a coherent authority unit without human review."""
+
+
 PageBoundingBox = InsuranceRulePageBoundingBox
 RuleCellCoordinate = InsuranceRuleCellCoordinate
 
@@ -469,27 +473,12 @@ def _coherent_row_groups(
     groups: tuple[tuple[int, ...], ...],
     cells: tuple[StructuredTableCell, ...],
 ) -> tuple[tuple[int, ...], ...]:
-    pending = list(groups)
-    coherent: list[tuple[int, ...]] = []
-    index = 0
-    while index < len(pending):
-        group = pending[index]
-        if _is_coherent_table_group(cells, group):
-            coherent.append(group)
-            index += 1
-            continue
-        if index + 1 < len(pending):
-            pending[index + 1] = tuple(sorted({*group, *pending[index + 1]}))
-            index += 1
-            continue
-        if coherent:
-            merged = tuple(sorted({*coherent.pop(), *group}))
-            if _is_coherent_table_group(cells, merged):
-                coherent.append(merged)
-                index += 1
-                continue
-        raise ValueError("table cannot project an isolated cell as an authority rule unit")
-    return tuple(coherent)
+    for group in groups:
+        if not _is_coherent_table_group(cells, group):
+            raise RuleUnitProjectionReviewRequired(
+                "table contains an isolated cell without canonical row-group structure"
+            )
+    return groups
 
 
 def _is_coherent_table_group(
@@ -725,6 +714,7 @@ def _sha256_json(value: object) -> str:
 __all__ = [
     "InsuranceRuleUnitDraft",
     "PageBoundingBox",
+    "RuleUnitProjectionReviewRequired",
     "RuleCellCoordinate",
     "project_rule_units",
 ]

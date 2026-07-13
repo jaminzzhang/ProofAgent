@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from proof_agent.capabilities.knowledge.hybrid.rule_units import (
     InsuranceRuleUnitDraft,
+    RuleUnitProjectionReviewRequired,
     project_rule_units,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import (
@@ -460,7 +461,7 @@ def test_projection_rejects_empty_artifacts_and_out_of_page_geometry() -> None:
         project_rule_units(invalid, document_defaults=defaults(), source_id="source-1")
 
 
-def test_single_cell_row_is_merged_into_coherent_row_group() -> None:
+def test_unrelated_adjacent_rows_do_not_rescue_an_isolated_cell() -> None:
     artifact = canonical_artifact()
     page = artifact.pages[1]
     table = page.tables[0]
@@ -489,13 +490,8 @@ def test_single_cell_row_is_merged_into_coherent_row_group() -> None:
         }
     )
 
-    units = project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
-    table_units = [unit for unit in units if unit.table_id == "table-eligibility"]
-
-    assert len(table_units) == 1
-    assert table_units[0].unit_kind == "row_group"
-    assert table_units[0].row_numbers == (1, 2)
-    assert len(table_units[0].cell_coordinates) == 3
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="canonical row-group"):
+        project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
 
 
 def test_unmergeable_isolated_table_cell_blocks_projection() -> None:
@@ -512,7 +508,7 @@ def test_unmergeable_isolated_table_cell_blocks_projection() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="isolated cell"):
+    with pytest.raises(RuleUnitProjectionReviewRequired, match="isolated cell"):
         project_rule_units(artifact, document_defaults=defaults(), source_id="source-1")
 
 
