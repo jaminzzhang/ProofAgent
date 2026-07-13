@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 from types import ModuleType
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -179,6 +180,31 @@ def _write_incremental_pdf(path: Path, *, add_unreferenced_embedded_file: bool =
     return path
 
 
+def _write_commented_incremental_pdf(path: Path) -> Path:
+    base = _write_pdf(path).read_bytes()
+    previous = re.search(rb"startxref\s+(?P<offset>[0-9]+)\s+%%EOF\s*\Z", base)
+    assert previous is not None
+    leading_comment = b"% before first incremental object\n"
+    object_offset = len(base) + len(leading_comment)
+    incremental_object = b"5 0 obj\n<< /Label (benign) >>\nendobj\n"
+    trailing_comment = b"% after final incremental object\n"
+    xref_offset = object_offset + len(incremental_object) + len(trailing_comment)
+    revision = (
+        leading_comment
+        + incremental_object
+        + trailing_comment
+        + b"xref\n5 1\n"
+        + f"{object_offset:010d} 00000 n \n".encode("ascii")
+        + b"trailer\n<< /Size 6 /Prev "
+        + previous.group("offset")
+        + b" >>\nstartxref\n"
+        + str(xref_offset).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+    path.write_bytes(base + revision)
+    return path
+
+
 def _append_zip_payload(path: Path, *, filename: str, content: bytes) -> Path:
     archive = BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as writer:
@@ -338,6 +364,51 @@ def test_preflight_ignores_revision_markers_inside_benign_content_stream(
         limits=HybridIntakeLimits(),
     )
     assert result.page_count == 1
+
+
+def test_preflight_bounds_revision_marker_candidates(tmp_path: Path) -> None:
+    pypdf, generic = _modules()
+    path = tmp_path / "many-markers.pdf"
+    writer = pypdf.PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    content = generic.DecodedStreamObject()
+    content.set_data((b"startxref\n0\n%%EOF\n" * 300))
+    page[generic.NameObject("/Contents")] = writer._add_object(content)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    with pytest.raises(ProofAgentError) as exc:
+        preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
+    assert exc.value.code == "PA_HYBRID_INTAKE_006"
+
+
+def test_preflight_accepts_pdf_comments_at_incremental_object_boundaries(
+    tmp_path: Path,
+) -> None:
+    result = preflight_hybrid_pdf(
+        _write_commented_incremental_pdf(tmp_path / "commented-incremental.pdf"),
+        limits=HybridIntakeLimits(),
+    )
+    assert result.page_count == 1
+
+
+def test_native_page_profile_stops_at_bounded_text_sample() -> None:
+    callback_returned = False
+
+    class LargeTextPage:
+        mediabox = SimpleNamespace(width=612, height=792)
+
+        def extract_text(self, *, visitor_text: object) -> str:
+            nonlocal callback_returned
+            visitor_text("A" * 100_000, None, None, None, None)  # type: ignore[operator]
+            callback_returned = True
+            return "unbounded return should not be reached"
+
+    profile = hybrid_intake_module._profile_page(LargeTextPage(), 1)
+
+    assert callback_returned is False
+    assert profile.native_extracted_character_count == 4096
+    assert profile.requires_ocr is False
 
 
 def test_preflight_rejects_unreferenced_embedded_stream_in_incremental_xref(

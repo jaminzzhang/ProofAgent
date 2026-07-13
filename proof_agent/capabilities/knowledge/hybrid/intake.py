@@ -24,6 +24,8 @@ _PDF_SIGNATURE = b"%PDF-"
 _HASH_CHUNK_BYTES = 1024 * 1024
 _MIN_MEANINGFUL_CHARACTERS = 8
 _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
+_MAX_NATIVE_TEXT_SAMPLE_CHARS = 4096
+_MAX_NATIVE_TEXT_CALLBACKS = 4096
 _ACTIVE_KEYS = {"/OpenAction", "/AA", "/JS", "/JavaScript", "/Launch"}
 _ACTION_CONTAINER_KEYS = {"/A", "/PA", "/Next"}
 _ACTION_TYPES = {
@@ -51,6 +53,7 @@ _EMBEDDED_KEYS = {"/EmbeddedFiles", "/EF", "/AF"}
 _MAX_VISITED_PDF_OBJECTS = 100_000
 _MAX_INDEXED_PDF_OBJECTS = 100_000
 _MAX_PDF_REVISIONS = 32
+_MAX_REVISION_MARKER_CANDIDATES = 256
 _MAX_HISTORICAL_REVISION_BYTES = 100 * 1024 * 1024
 _PDF_TERMINAL_REGION = re.compile(
     rb"startxref[\x00\x09\x0a\x0c\x0d\x20]+"
@@ -59,6 +62,8 @@ _PDF_TERMINAL_REGION = re.compile(
 )
 _PDF_TERMINAL_SCAN_BYTES = 64 * 1024
 _PDF_REVISION_STRUCTURE_BYTES = 4 * 1024 * 1024
+_PDF_BOUNDARY_SCAN_BYTES = 4096
+_PDF_WHITESPACE = b"\x00\x09\x0a\x0c\x0d\x20"
 _SNAPSHOT_MEMORY_BYTES = 1024 * 1024
 _FIX = "Upload a safe, unencrypted PDF within the configured Hybrid intake limits."
 
@@ -191,23 +196,62 @@ def _profile_page(page: Any, page_number: int) -> HybridPdfPageProfile:
         raise _hybrid_error(
             "PA_HYBRID_INTAKE_006", "Hybrid PDF upload contains invalid page dimensions."
         )
-    extracted = unicodedata.normalize("NFC", page.extract_text() or "")
-    non_whitespace = [character for character in extracted if not character.isspace()]
+    extracted = unicodedata.normalize("NFC", _sample_native_page_text(page))
+    non_whitespace_count = sum(not character.isspace() for character in extracted)
     meaningful_count = sum(
-        unicodedata.category(character)[0] in {"L", "N"} for character in non_whitespace
+        not character.isspace() and unicodedata.category(character)[0] in {"L", "N"}
+        for character in extracted
     )
-    quality_ratio = meaningful_count / len(non_whitespace) if non_whitespace else 0.0
+    quality_ratio = meaningful_count / non_whitespace_count if non_whitespace_count else 0.0
     return HybridPdfPageProfile(
         page_number=page_number,
         width_points=width,
         height_points=height,
-        native_extracted_character_count=len(non_whitespace),
+        native_extracted_character_count=non_whitespace_count,
         native_text_quality_ratio=quality_ratio,
         requires_ocr=(
             meaningful_count < _MIN_MEANINGFUL_CHARACTERS
             or quality_ratio < _MIN_NATIVE_TEXT_QUALITY_RATIO
         ),
     )
+
+
+class _NativeTextSampleComplete(Exception):
+    pass
+
+
+class _NativeTextExtractionLimit(Exception):
+    pass
+
+
+def _sample_native_page_text(page: Any) -> str:
+    chunks: list[str] = []
+    sampled_characters = 0
+    callback_count = 0
+
+    def collect(text: str, *_args: Any) -> None:
+        nonlocal callback_count, sampled_characters
+        callback_count += 1
+        if callback_count > _MAX_NATIVE_TEXT_CALLBACKS:
+            raise _NativeTextExtractionLimit
+        remaining = _MAX_NATIVE_TEXT_SAMPLE_CHARS - sampled_characters
+        if remaining <= 0:
+            raise _NativeTextSampleComplete
+        chunks.append(text[:remaining])
+        sampled_characters += min(len(text), remaining)
+        if len(text) >= remaining:
+            raise _NativeTextSampleComplete
+
+    try:
+        page.extract_text(visitor_text=collect)
+    except _NativeTextSampleComplete:
+        pass
+    except _NativeTextExtractionLimit as exc:
+        raise _hybrid_error(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF native text extraction exceeds safety limits.",
+        ) from exc
+    return "".join(chunks)
 
 
 def _reject_polyglot_payload(source: IO[bytes]) -> None:
@@ -369,6 +413,11 @@ def _marker_offsets(source: IO[bytes], marker: bytes, *, before: int) -> list[in
             absolute_offset = searchable_offset + marker_index
             if not offsets or offsets[-1] != absolute_offset:
                 offsets.append(absolute_offset)
+                if len(offsets) > _MAX_REVISION_MARKER_CANDIDATES:
+                    raise _hybrid_error(
+                        "PA_HYBRID_INTAKE_006",
+                        "Hybrid PDF revision marker count exceeds safety limits.",
+                    )
             marker_index = searchable.find(marker, marker_index + 1)
         offset += len(chunk)
         remaining -= len(chunk)
@@ -406,7 +455,10 @@ def _validate_incremental_revision(
 
     prefix_size = xref_offset - previous_eof_end
     source.seek(previous_eof_end)
-    prefix_start = source.read(min(prefix_size, 128)).lstrip(b"\x00\x09\x0a\x0c\x0d\x20")
+    prefix_start_bytes = source.read(min(prefix_size, _PDF_BOUNDARY_SCAN_BYTES))
+    prefix_start = _strip_leading_pdf_trivia(prefix_start_bytes)
+    if prefix_start is None or (not prefix_start and prefix_size > len(prefix_start_bytes)):
+        raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental boundary is invalid.")
     if not prefix_start:
         return
     if (
@@ -420,12 +472,47 @@ def _validate_incremental_revision(
             "PA_HYBRID_INTAKE_009",
             "Hybrid PDF upload contains bytes outside a valid incremental revision.",
         )
-    source.seek(max(previous_eof_end, xref_offset - 128))
-    prefix_end = source.read(xref_offset - max(previous_eof_end, xref_offset - 128)).rstrip(
-        b"\x00\x09\x0a\x0c\x0d\x20"
-    )
-    if not prefix_end.endswith(b"endobj"):
+    prefix_end_start = max(previous_eof_end, xref_offset - _PDF_BOUNDARY_SCAN_BYTES)
+    source.seek(prefix_end_start)
+    prefix_end = _strip_trailing_pdf_trivia(source.read(xref_offset - prefix_end_start))
+    if prefix_end is None or not prefix_end.endswith(b"endobj"):
         raise _hybrid_error("PA_HYBRID_INTAKE_006", "Hybrid PDF incremental objects are invalid.")
+
+
+def _strip_leading_pdf_trivia(value: bytes) -> bytes | None:
+    position = 0
+    while position < len(value):
+        while position < len(value) and value[position] in _PDF_WHITESPACE:
+            position += 1
+        if position >= len(value) or value[position] != ord("%"):
+            return value[position:]
+        newline = min(
+            (
+                index
+                for index in (value.find(b"\n", position), value.find(b"\r", position))
+                if index >= 0
+            ),
+            default=-1,
+        )
+        if newline < 0:
+            return None
+        position = newline + 1
+    return b""
+
+
+def _strip_trailing_pdf_trivia(value: bytes) -> bytes | None:
+    end = len(value)
+    while end > 0:
+        while end > 0 and value[end - 1] in _PDF_WHITESPACE:
+            end -= 1
+        line_start = max(value.rfind(b"\n", 0, end), value.rfind(b"\r", 0, end)) + 1
+        line = value[line_start:end].lstrip(b"\x00\x09\x0c\x20")
+        if not line.startswith(b"%"):
+            return value[:end]
+        if line_start == 0 and len(value) == _PDF_BOUNDARY_SCAN_BYTES:
+            return None
+        end = line_start
+    return b""
 
 
 def _reject_unsafe_pdf_objects(reader: Any) -> None:
