@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenModel, freeze_value
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.contracts.insurance_rules import InsuranceEvidenceSlotRequirement
 
 
 class EvaluationExecutionSurface(str, Enum):
@@ -23,6 +25,230 @@ class EvaluationExpectedResolution(str, Enum):
     WAIT_FOR_APPROVAL = "wait_for_approval"
     SAFE_HANDOFF = "safe_handoff"
     TOOL_APPROVAL_DENIED = "tool_approval_denied"
+
+
+InsuranceKnowledgeQueryType = Literal[
+    "clause_lookup",
+    "conditional_guidance",
+    "comparison",
+]
+
+
+class InsuranceKnowledgeCase(FrozenModel):
+    """One exact gold case for governed insurance Knowledge evaluation."""
+
+    case_id: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    query_type: InsuranceKnowledgeQueryType
+    source_id: str = Field(min_length=1)
+    source_publication_id: str = Field(min_length=1)
+    source_publication_seq: int = Field(gt=0)
+    required_rule_unit_revision_ids: tuple[str, ...] = ()
+    required_evidence_slots: tuple[InsuranceEvidenceSlotRequirement, ...] = ()
+    expected_resolution: EvaluationExpectedResolution
+    expected_knowledge_outcome: Literal[
+        "answer_with_citations",
+        "ask_clarification",
+        "conflict",
+        "refuse_no_evidence",
+        "no_recommendation",
+    ] = "answer_with_citations"
+    expected_authority_outcome: Literal["PASS", "FAIL", "CONFLICT"] = "PASS"
+    normalized_conditions: Mapping[str, str] = Field(default_factory=dict)
+    expected_clarification_fields: tuple[str, ...] = ()
+    required_warning_codes: tuple[str, ...] = ()
+    acl_hard_negative_rule_unit_revision_ids: tuple[str, ...] = ()
+    document_slice: str = "unspecified"
+    parser_slice: str = "unspecified"
+    acl_slice: str = "public"
+
+    @field_validator("normalized_conditions", mode="after")
+    @classmethod
+    def freeze_conditions(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @model_validator(mode="after")
+    def require_comparison_slots(self) -> InsuranceKnowledgeCase:
+        if self.query_type == "comparison" and len(self.required_evidence_slots) < 2:
+            raise ValueError("comparison cases require at least two evidence slots")
+        if (
+            self.expected_knowledge_outcome == "answer_with_citations"
+            and not self.required_rule_unit_revision_ids
+        ):
+            raise ValueError("answered cases require gold Rule Unit revisions")
+        if (
+            self.expected_knowledge_outcome == "answer_with_citations"
+            and not self.required_evidence_slots
+        ):
+            raise ValueError("answered cases require gold evidence slots")
+        rule_ids = self.required_rule_unit_revision_ids
+        slot_ids = tuple(slot.slot_id for slot in self.required_evidence_slots)
+        hard_negatives = self.acl_hard_negative_rule_unit_revision_ids
+        if len(rule_ids) != len(set(rule_ids)):
+            raise ValueError("gold Rule Unit revisions must be unique")
+        if len(slot_ids) != len(set(slot_ids)):
+            raise ValueError("gold evidence slot ids must be unique")
+        if set(rule_ids).intersection(hard_negatives):
+            raise ValueError("ACL hard negatives must not overlap gold Rule Units")
+        if (
+            self.expected_knowledge_outcome == "ask_clarification"
+            and not self.expected_clarification_fields
+        ):
+            raise ValueError("clarification cases require explicit clarification fields")
+        return self
+
+
+class InsuranceRetrievalMetrics(FrozenModel):
+    """Ranking facts for one insurance Knowledge evaluation cohort."""
+
+    retrieval_case_count: int = Field(ge=0)
+    required_evidence_recall_at_20: float = Field(ge=0.0, le=1.0)
+    required_evidence_recall_at_50: float = Field(ge=0.0, le=1.0)
+    required_evidence_recall_at_100: float = Field(ge=0.0, le=1.0)
+    complete_evidence_top_5_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    complete_evidence_top_10_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    ndcg_at_10: float = Field(default=0.0, ge=0.0, le=1.0)
+    mrr_at_10: float = Field(default=0.0, ge=0.0, le=1.0)
+    citation_resolvability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    authority_failure_count: int = Field(default=0, ge=0)
+    unauthorized_candidate_exposure: int = Field(default=0, ge=0)
+
+
+class InsuranceKnowledgeObservation(FrozenModel):
+    """Trace-safe observed retrieval facts for one labeled case."""
+
+    case_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    source_publication_id: str = Field(min_length=1)
+    source_publication_seq: int = Field(gt=0)
+    ranked_rule_unit_revision_ids: tuple[str, ...]
+    evidence_slot_ranks: Mapping[str, int] = Field(default_factory=dict)
+    resolvable_citation_rule_unit_revision_ids: tuple[str, ...] = ()
+    authority_failure_count: int = Field(default=0, ge=0)
+
+    @field_validator("evidence_slot_ranks", mode="after")
+    @classmethod
+    def freeze_slot_ranks(cls, value: Any) -> Any:
+        if any(type(rank) is not int or rank <= 0 for rank in value.values()):
+            raise ValueError("evidence slot ranks must be positive integers")
+        return freeze_value(value)
+
+    @model_validator(mode="after")
+    def require_unique_ranked_identities(self) -> InsuranceKnowledgeObservation:
+        if len(self.ranked_rule_unit_revision_ids) != len(set(self.ranked_rule_unit_revision_ids)):
+            raise ValueError("ranked Rule Unit identities must be unique")
+        return self
+
+
+class InsuranceKnowledgeSliceMetrics(FrozenModel):
+    dimension: Literal["query_type", "document", "parser", "acl"]
+    value: str = Field(min_length=1)
+    case_count: int = Field(gt=0)
+    metrics: InsuranceRetrievalMetrics
+
+
+class InsuranceKnowledgeEvaluationReport(FrozenModel):
+    case_count: int = Field(gt=0)
+    overall: InsuranceRetrievalMetrics
+    slices: tuple[InsuranceKnowledgeSliceMetrics, ...]
+
+
+class ParserExpectedTableCell(FrozenModel):
+    table_id: str = Field(min_length=1)
+    page_number: int = Field(gt=0)
+    row: int = Field(ge=0)
+    column: int = Field(ge=0)
+    text: str = Field(min_length=1)
+
+
+class InsuranceParserCase(FrozenModel):
+    """Gold structural and OCR expectations for one document revision."""
+
+    case_id: str = Field(min_length=1)
+    document_id: str = Field(min_length=1)
+    revision_id: str = Field(min_length=1)
+    document_slice: str = Field(min_length=1)
+    parser_slice: str = Field(min_length=1)
+    query_slice: InsuranceKnowledgeQueryType
+    acl_slice: str = Field(min_length=1)
+    expected_reading_order: tuple[str, ...] = ()
+    expected_table_cells: tuple[ParserExpectedTableCell, ...] = ()
+    expected_cross_page_continuation_ids: tuple[str, ...] = ()
+    expected_ocr_text: str = ""
+    expected_citation_anchors: tuple[str, ...] = ()
+    mandatory_review_expected: bool
+
+    @model_validator(mode="after")
+    def require_parser_gold(self) -> InsuranceParserCase:
+        if not any(
+            (
+                self.expected_reading_order,
+                self.expected_table_cells,
+                self.expected_cross_page_continuation_ids,
+                self.expected_ocr_text,
+                self.expected_citation_anchors,
+            )
+        ):
+            raise ValueError("parser case requires at least one gold expectation")
+        return self
+
+
+class InsuranceParserObservation(FrozenModel):
+    case_id: str = Field(min_length=1)
+    observed_reading_order: tuple[str, ...] = ()
+    observed_table_cells: tuple[ParserExpectedTableCell, ...] = ()
+    observed_cross_page_continuation_ids: tuple[str, ...] = ()
+    observed_ocr_text: str = ""
+    observed_citation_anchors: tuple[str, ...] = ()
+    review_required: bool
+
+
+class ParserBenchmarkMetrics(FrozenModel):
+    character_recall: float = Field(ge=0.0, le=1.0)
+    reading_order_recall: float = Field(ge=0.0, le=1.0)
+    table_cell_recall: float = Field(ge=0.0, le=1.0)
+    cross_page_continuation_recall: float = Field(ge=0.0, le=1.0)
+    citation_anchor_recall: float = Field(ge=0.0, le=1.0)
+    review_required_recall: float = Field(ge=0.0, le=1.0)
+
+
+class ParserBenchmarkSliceMetrics(FrozenModel):
+    dimension: Literal["query_type", "document", "parser", "acl"]
+    value: str = Field(min_length=1)
+    case_count: int = Field(gt=0)
+    metrics: ParserBenchmarkMetrics
+
+
+class ParserBenchmarkReport(FrozenModel):
+    case_count: int = Field(gt=0)
+    overall: ParserBenchmarkMetrics
+    slices: tuple[ParserBenchmarkSliceMetrics, ...]
+
+
+class InsuranceKnowledgeGoldSuite(FrozenModel):
+    """Human-confirmed insurance Knowledge cases with the fixed query profile."""
+
+    suite_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    cases: tuple[InsuranceKnowledgeCase, ...] = Field(min_length=10)
+
+    @model_validator(mode="after")
+    def require_query_profile(self) -> InsuranceKnowledgeGoldSuite:
+        total = len(self.cases)
+        case_ids = tuple(case.case_id for case in self.cases)
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("insurance Knowledge suite case ids must be unique")
+        counts = {
+            query_type: sum(case.query_type == query_type for case in self.cases)
+            for query_type in ("clause_lookup", "conditional_guidance", "comparison")
+        }
+        if not (
+            counts["clause_lookup"] * 10 == total * 3
+            and counts["conditional_guidance"] * 10 == total * 5
+            and counts["comparison"] * 10 == total * 2
+        ):
+            raise ValueError("insurance Knowledge suite requires the 30/50/20 query mix")
+        return self
 
 
 class EvaluationArtifactSufficiencyStatus(str, Enum):
