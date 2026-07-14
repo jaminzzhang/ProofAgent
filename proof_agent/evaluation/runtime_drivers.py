@@ -11,6 +11,55 @@ from proof_agent.evaluation.errors import EvaluationInputError
 
 CAPACITY_DRIVER_GROUP = "proof_agent.knowledge_capacity_drivers"
 RECOVERY_DRIVER_GROUP = "proof_agent.knowledge_recovery_drivers"
+SHADOW_DRIVER_GROUP = "proof_agent.knowledge_shadow_drivers"
+ACCEPTANCE_DRIVER_GROUP = "proof_agent.knowledge_acceptance_drivers"
+ACCEPTANCE_VERIFIER_GROUP = "proof_agent.knowledge_acceptance_verifiers"
+OPERATIONS_PROVIDER_GROUP = "proof_agent.knowledge_operations_providers"
+RELEASE_AUTHORITY_GROUP = "proof_agent.knowledge_release_authorities"
+
+
+def load_release_authority(environ: Mapping[str, str]) -> Any:
+    authority = _load_driver(
+        environ=environ,
+        setting="PA_KNOWLEDGE_RELEASE_AUTHORITY",
+        group=RELEASE_AUTHORITY_GROUP,
+    )
+    _require_methods(authority, "verify_release_record")
+    return authority
+
+
+def load_operations_provider(environ: Mapping[str, str]) -> Any:
+    provider = _load_driver(
+        environ=environ,
+        setting="PA_KNOWLEDGE_OPERATIONS_PROVIDER",
+        group=OPERATIONS_PROVIDER_GROUP,
+    )
+    _require_methods(provider, "read_operations")
+    return provider
+
+
+def load_acceptance_driver(environ: Mapping[str, str]) -> Any:
+    """Load the private evaluator that owns the sealed cohort execution."""
+
+    driver = _load_driver(
+        environ=environ,
+        setting="PA_KNOWLEDGE_ACCEPTANCE_DRIVER",
+        group=ACCEPTANCE_DRIVER_GROUP,
+    )
+    _require_methods(driver, "run_acceptance")
+    return driver
+
+
+def load_acceptance_verifier(environ: Mapping[str, str]) -> Any:
+    """Load signature verification independently from the evaluator driver."""
+
+    verifier = _load_driver(
+        environ=environ,
+        setting="PA_KNOWLEDGE_ACCEPTANCE_VERIFIER",
+        group=ACCEPTANCE_VERIFIER_GROUP,
+    )
+    _require_methods(verifier, "verify_attestation")
+    return verifier
 
 
 def load_capacity_driver(environ: Mapping[str, str]) -> Any:
@@ -50,6 +99,18 @@ def load_recovery_driver(environ: Mapping[str, str]) -> Any:
     return driver
 
 
+def load_shadow_driver(environ: Mapping[str, str]) -> Any:
+    """Load the adapter that executes both pinned shadow bindings live."""
+
+    driver = _load_driver(
+        environ=environ,
+        setting="PA_KNOWLEDGE_SHADOW_DRIVER",
+        group=SHADOW_DRIVER_GROUP,
+    )
+    _require_methods(driver, "snapshot_active_pointers", "run_binding")
+    return driver
+
+
 def _load_driver(
     *,
     environ: Mapping[str, str],
@@ -84,8 +145,18 @@ def _require_methods(driver: Any, *names: str) -> None:
 
 
 __all__ = [
+    "ACCEPTANCE_DRIVER_GROUP",
+    "ACCEPTANCE_VERIFIER_GROUP",
     "CAPACITY_DRIVER_GROUP",
+    "OPERATIONS_PROVIDER_GROUP",
+    "RELEASE_AUTHORITY_GROUP",
     "RECOVERY_DRIVER_GROUP",
+    "SHADOW_DRIVER_GROUP",
     "load_capacity_driver",
+    "load_operations_provider",
+    "load_release_authority",
+    "load_acceptance_driver",
+    "load_acceptance_verifier",
     "load_recovery_driver",
+    "load_shadow_driver",
 ]

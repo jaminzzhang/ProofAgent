@@ -6,9 +6,9 @@ import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
-from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts._base import FrozenModel
@@ -56,33 +56,36 @@ class KnowledgeShadowResult(_ShadowModel):
 
 
 class KnowledgeShadowSuite(_ShadowModel):
-    schema_version: Literal["insurance-knowledge-shadow.v1"]
+    schema_version: Literal["insurance-knowledge-shadow.v2"]
     questions: tuple[ShadowQuestion, ...] = Field(min_length=1)
-    active_pointers_before: ActiveKnowledgePointers
-    active_pointers_after: ActiveKnowledgePointers
-    legacy_observations: tuple[ShadowObservation, ...]
-    hybrid_observations: tuple[ShadowObservation, ...]
+    legacy_binding_ref: str = Field(min_length=1)
+    hybrid_binding_ref: str = Field(min_length=1)
 
-    @model_validator(mode="after")
-    def require_exact_case_coverage(self) -> KnowledgeShadowSuite:
-        case_ids = tuple(item.case_id for item in self.questions)
+    @field_validator("questions")
+    @classmethod
+    def require_unique_cases(
+        cls, questions: tuple[ShadowQuestion, ...]
+    ) -> tuple[ShadowQuestion, ...]:
+        case_ids = tuple(item.case_id for item in questions)
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("shadow question case ids must be unique")
-        expected = set(case_ids)
-        for label, observations in (
-            ("legacy", self.legacy_observations),
-            ("hybrid", self.hybrid_observations),
-        ):
-            observed = tuple(item.case_id for item in observations)
-            if set(observed) != expected or len(observed) != len(expected):
-                raise ValueError(f"{label} shadow observations must cover every case exactly once")
-            if any(item.binding_kind != label for item in observations):
-                raise ValueError(f"{label} shadow observations use the wrong binding kind")
-        return self
+        return questions
 
 
 ShadowRunner = Callable[[ShadowQuestion], ShadowObservation]
 PointerReader = Callable[[], ActiveKnowledgePointers]
+
+
+class KnowledgeShadowDriver(Protocol):
+    def snapshot_active_pointers(self) -> ActiveKnowledgePointers: ...
+
+    def run_binding(
+        self,
+        *,
+        binding_kind: Literal["legacy", "hybrid"],
+        binding_ref: str,
+        question: ShadowQuestion,
+    ) -> ShadowObservation: ...
 
 
 def run_shadow_comparison(
@@ -139,15 +142,23 @@ def load_shadow_suite(path: Path | str) -> KnowledgeShadowSuite:
         raise EvaluationInputError(f"Invalid Knowledge shadow suite: {exc}") from exc
 
 
-def run_shadow_suite(suite: KnowledgeShadowSuite) -> KnowledgeShadowResult:
-    legacy = {item.case_id: item for item in suite.legacy_observations}
-    hybrid = {item.case_id: item for item in suite.hybrid_observations}
-    pointer_reads = iter((suite.active_pointers_before, suite.active_pointers_after))
+def run_shadow_suite(
+    suite: KnowledgeShadowSuite,
+    driver: KnowledgeShadowDriver,
+) -> KnowledgeShadowResult:
     return run_shadow_comparison(
         questions=suite.questions,
-        legacy_runner=lambda question: legacy[question.case_id],
-        hybrid_runner=lambda question: hybrid[question.case_id],
-        active_pointers=lambda: next(pointer_reads),
+        legacy_runner=lambda question: driver.run_binding(
+            binding_kind="legacy",
+            binding_ref=suite.legacy_binding_ref,
+            question=question,
+        ),
+        hybrid_runner=lambda question: driver.run_binding(
+            binding_kind="hybrid",
+            binding_ref=suite.hybrid_binding_ref,
+            question=question,
+        ),
+        active_pointers=driver.snapshot_active_pointers,
     )
 
 
@@ -155,6 +166,7 @@ __all__ = [
     "ActiveKnowledgePointers",
     "KnowledgeShadowResult",
     "KnowledgeShadowSuite",
+    "KnowledgeShadowDriver",
     "ShadowObservation",
     "ShadowQuestion",
     "run_shadow_comparison",

@@ -40,18 +40,33 @@ class SealedKnowledgeSuiteRef(FrozenModel):
 
 
 class SealedKnowledgeAcceptanceEnvelope(FrozenModel):
-    """Private evaluator input envelope without exposed case payloads."""
+    """Private evaluator request without aggregate or case payloads."""
 
     candidate_digest: str = Field(min_length=1)
     suite_ref: SealedKnowledgeSuiteRef
-    aggregate: KnowledgeAcceptanceAggregate
     gate_profile_id: str = INSURANCE_KNOWLEDGE_ACCEPTANCE_GATES_V1.profile_id
+
+
+class SealedKnowledgeAcceptanceAttestation(FrozenModel):
+    """Aggregate result bound to an independently verified evaluator identity."""
+
+    evaluator_id: str = Field(min_length=1)
+    key_id: str = Field(min_length=1)
+    candidate_digest: str = Field(min_length=1)
+    suite_ref: SealedKnowledgeSuiteRef
+    gate_profile_id: str = Field(min_length=1)
+    aggregate: KnowledgeAcceptanceAggregate
+    attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    signature: str = Field(min_length=1)
 
 
 class SealedKnowledgeAcceptanceResult(FrozenModel):
     """Tuner-safe aggregate result with no case-level feedback surface."""
 
     candidate_digest: str = Field(min_length=1)
+    evaluator_id: str = Field(min_length=1)
+    evaluator_key_id: str = Field(min_length=1)
+    attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     suite_id: str
     suite_version: str
     suite_artifact: ExactArtifactRef
@@ -70,7 +85,43 @@ class SealedKnowledgeAcceptanceResult(FrozenModel):
     blocking_reasons: tuple[str, ...] = ()
 
 
-AggregateProvider = Callable[[SealedKnowledgeSuiteRef], KnowledgeAcceptanceAggregate]
+AttestationProvider = Callable[
+    [str, SealedKnowledgeSuiteRef, str],
+    SealedKnowledgeAcceptanceAttestation,
+]
+AttestationVerifier = Callable[[SealedKnowledgeAcceptanceAttestation], bool]
+
+
+def seal_knowledge_acceptance_attestation(
+    *,
+    evaluator_id: str,
+    key_id: str,
+    candidate_digest: str,
+    suite_ref: SealedKnowledgeSuiteRef,
+    gate_profile_id: str,
+    aggregate: KnowledgeAcceptanceAggregate,
+    signature: str,
+) -> SealedKnowledgeAcceptanceAttestation:
+    """Build the canonical payload digest that an evaluator signs externally."""
+
+    payload = _attestation_payload(
+        evaluator_id=evaluator_id,
+        key_id=key_id,
+        candidate_digest=candidate_digest,
+        suite_ref=suite_ref,
+        gate_profile_id=gate_profile_id,
+        aggregate=aggregate,
+    )
+    return SealedKnowledgeAcceptanceAttestation(
+        evaluator_id=evaluator_id,
+        key_id=key_id,
+        candidate_digest=candidate_digest,
+        suite_ref=suite_ref,
+        gate_profile_id=gate_profile_id,
+        aggregate=aggregate,
+        attestation_sha256=_canonical_sha256(payload),
+        signature=signature,
+    )
 
 
 class SealedKnowledgeAcceptanceStore:
@@ -79,11 +130,13 @@ class SealedKnowledgeAcceptanceStore:
     def __init__(
         self,
         *,
-        aggregate_provider: AggregateProvider,
+        attestation_provider: AttestationProvider,
+        attestation_verifier: AttestationVerifier,
         attempt_store: Path | None = None,
         gate_profile: KnowledgeAcceptanceGateProfile = INSURANCE_KNOWLEDGE_ACCEPTANCE_GATES_V1,
     ) -> None:
-        self._aggregate_provider = aggregate_provider
+        self._attestation_provider = attestation_provider
+        self._attestation_verifier = attestation_verifier
         self._attempt_store = attempt_store
         self._gate_profile = gate_profile
         self._claimed_candidates: set[str] = set()
@@ -101,7 +154,32 @@ class SealedKnowledgeAcceptanceStore:
         if not normalized_digest:
             raise EvaluationInputError("candidate digest must be non-empty")
         self._claim_attempt(normalized_digest, sealed_suite_ref)
-        aggregate = self._aggregate_provider(sealed_suite_ref)
+        attestation = self._attestation_provider(
+            normalized_digest,
+            sealed_suite_ref,
+            self._gate_profile.profile_id,
+        )
+        if attestation.candidate_digest != normalized_digest:
+            raise EvaluationInputError("sealed attestation candidate digest mismatch")
+        if attestation.suite_ref != sealed_suite_ref:
+            raise EvaluationInputError("sealed attestation suite reference mismatch")
+        if attestation.gate_profile_id != self._gate_profile.profile_id:
+            raise EvaluationInputError("sealed attestation gate profile mismatch")
+        expected_attestation_sha256 = _canonical_sha256(
+            _attestation_payload(
+                evaluator_id=attestation.evaluator_id,
+                key_id=attestation.key_id,
+                candidate_digest=attestation.candidate_digest,
+                suite_ref=attestation.suite_ref,
+                gate_profile_id=attestation.gate_profile_id,
+                aggregate=attestation.aggregate,
+            )
+        )
+        if attestation.attestation_sha256 != expected_attestation_sha256:
+            raise EvaluationInputError("sealed attestation digest mismatch")
+        if not self._attestation_verifier(attestation):
+            raise EvaluationInputError("sealed attestation signature is not trusted")
+        aggregate = attestation.aggregate
         if aggregate.report.case_count != sealed_suite_ref.case_count:
             raise EvaluationInputError(
                 "sealed aggregate case count does not match the exact suite reference"
@@ -112,6 +190,9 @@ class SealedKnowledgeAcceptanceStore:
         )
         return SealedKnowledgeAcceptanceResult(
             candidate_digest=normalized_digest,
+            evaluator_id=attestation.evaluator_id,
+            evaluator_key_id=attestation.key_id,
+            attestation_sha256=attestation.attestation_sha256,
             suite_id=sealed_suite_ref.suite_id,
             suite_version=sealed_suite_ref.version,
             suite_artifact=sealed_suite_ref.artifact,
@@ -173,6 +254,35 @@ def _duplicate_attempt(candidate_digest: str) -> EvaluationInputError:
     )
 
 
+def _attestation_payload(
+    *,
+    evaluator_id: str,
+    key_id: str,
+    candidate_digest: str,
+    suite_ref: SealedKnowledgeSuiteRef,
+    gate_profile_id: str,
+    aggregate: KnowledgeAcceptanceAggregate,
+) -> dict[str, object]:
+    return {
+        "evaluator_id": evaluator_id,
+        "key_id": key_id,
+        "candidate_digest": candidate_digest,
+        "suite_ref": suite_ref,
+        "gate_profile_id": gate_profile_id,
+        "aggregate": aggregate,
+    }
+
+
+def _canonical_sha256(payload: dict[str, object]) -> str:
+    json_payload = {
+        key: value.model_dump(mode="json") if isinstance(value, FrozenModel) else value
+        for key, value in payload.items()
+    }
+    return hashlib.sha256(
+        json.dumps(json_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def write_sealed_knowledge_acceptance_result(
     path: Path,
     result: SealedKnowledgeAcceptanceResult,
@@ -183,10 +293,13 @@ def write_sealed_knowledge_acceptance_result(
 
 
 __all__ = [
-    "AggregateProvider",
+    "AttestationProvider",
+    "AttestationVerifier",
+    "SealedKnowledgeAcceptanceAttestation",
     "SealedKnowledgeAcceptanceEnvelope",
     "SealedKnowledgeAcceptanceResult",
     "SealedKnowledgeAcceptanceStore",
     "SealedKnowledgeSuiteRef",
+    "seal_knowledge_acceptance_attestation",
     "write_sealed_knowledge_acceptance_result",
 ]

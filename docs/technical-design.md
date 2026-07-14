@@ -1456,13 +1456,19 @@ a new Retrieval Profile Revision. Neither change mutates an active pointer in pl
 The release path is deliberately non-compensating:
 
 1. Run parser and visible Gold Suite evaluation.
-2. Run `proof-agent evaluate knowledge-shadow` against pinned legacy and Hybrid
-   observations. The artifact is rejected if either active pointer changes.
+2. [COMPUTED | HIGH] Run `proof-agent evaluate knowledge-shadow` against pinned legacy
+   and Hybrid binding references through an installed live driver. Suite files cannot
+   contain observations or before/after pointers; the driver reads both pointers and
+   executes both bindings, and the core rejects any pointer change.
 3. Run `proof-agent evaluate knowledge-capacity`; the core evaluator launches five
    authorized workers plus concurrent ingestion through a trusted deployment entry point.
    The envelope requires idle and active-ingestion raw references, records queue time
    separately from service time, and blocks excessive ingestion interference.
-4. Run the one-attempt sealed acceptance command. Unauthorized candidate exposure,
+4. [COMPUTED | HIGH] Run the one-attempt sealed acceptance command. The command input
+   contains only candidate, suite, and Gate Profile references. A private evaluator
+   returns a digest-bound attestation, and a separately resolved verifier checks its
+   evaluator identity, key identity, and detached signature before any aggregate is
+   scored. Unauthorized candidate exposure,
    wrong authority/version, unresolvable formal citations, advice under unresolved
    authority, and high-severity unsupported conclusions are hard-zero gates evaluated
    before quality or latency.
@@ -1470,14 +1476,35 @@ The release path is deliberately non-compensating:
    pointers and launches every supported fault through a trusted deployment entry point.
    Fault evidence is accepted only when both repository and bucket disposable markers
    are proven, the original pointers are restored, and every result digest matches.
-6. Publish the new Agent Version only after all artifact digests enter the release
-   record. Rollback changes the Active Agent Version pointer to the retained prior
+6. [COMPUTED | HIGH] Register a `knowledge-release-record.v1` containing exact Shadow,
+   Capacity, Acceptance, and Recovery artifact references. The record digest binds all
+   four references to the exact Draft Contract Bundle and Resolved Knowledge Binding
+   Set. `LocalAgentConfigurationStore.publish_version` rejects every Hybrid publication
+   without a registered matching record and freezes the record in the Published Agent
+   Version. Registration itself fails closed unless an independently configured Release
+   Evidence Authority verifies the four referenced artifacts. Rollback changes the Active Agent Version pointer to the retained prior
    version; Source rollback remains a new monotonic Source Publication.
 
 The operations projection is read-only and trace-safe. It exposes counts, rates,
 identifiers, queue/service timing, rebuild state, and hard-zero counters, but never raw
 Rule Unit content or unauthorized candidate identities. Missing telemetry itself is a
 release blocker.
+
+[COMPUTED | HIGH] The built-in `private-http` production adapter implements the
+Capacity, Recovery, Shadow, Acceptance, and Operations ports against one bounded private
+service protocol. It permits only allowlisted HTTPS origins, validates DNS answers against
+configured RFC1918 or IPv6 ULA networks, pins each connection to a validated numeric
+address, disables environment proxies, redirects, retries, and connection reuse, and
+bounds response bytes and JSON structure. Acceptance signature verification is resolved
+from a separate entry-point group; Release Evidence Authority is also independently
+resolved and reuses the private service only through its explicit verification RPC. The built-in `hmac-sha256` verifier additionally
+requires allowlisted evaluator and key identities.
+
+[COMPUTED | HIGH] `insurance-knowledge-assets.v1` validates external immutable artifact
+references for exactly 300 visible tuning cases, 200 access-controlled tuner-hidden
+acceptance cases, the 30/50/20 query-type mix in both cohorts, and a distinct 100-to-200
+case parser benchmark with a non-empty sealed slice. It validates provenance shape and
+counts but does not fabricate business cases.
 
 ## 24. Error Codes
 

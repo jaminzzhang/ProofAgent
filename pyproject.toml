@@ -32,6 +32,27 @@ all = ["proof-agent[hybrid,ingestion,openai,production,tree]"]
 [project.scripts]
 proof-agent = "proof_agent.delivery.cli:main"
 
+[project.entry-points."proof_agent.knowledge_capacity_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_recovery_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_shadow_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_acceptance_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_acceptance_verifiers"]
+hmac-sha256 = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_hmac_acceptance_verifier"
+
+[project.entry-points."proof_agent.knowledge_operations_providers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_release_authorities"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

@@ -4,7 +4,7 @@
 
 **Goal:** [FRAME | HIGH] Build a private, layout-aware, reviewable, version-pinned insurance Knowledge path that ingests long PDFs, publishes immutable Rule Unit revisions into an attested OpenSearch hybrid index, and answers governed institution-specialist queries without weakening authorization, authority, citation, or evidence gates.
 
-**Architecture:** [FRAME | HIGH] Add new provider-neutral contracts and focused Hybrid modules beside the retained Local Index path. PostgreSQL and S3-compatible storage remain authority, OpenSearch is a rebuildable projection, and all parser, embedding, reranker, and scheduler integrations are injected private-service ports. Delivery proceeds through five independently testable phases: contracts and trust context; structured ingestion and review; index publication; governed runtime retrieval; evaluation, operations, and cutover.
+**Architecture:** [FRAME | HIGH] Add new provider-neutral contracts and focused Hybrid modules beside the retained Local Index path. PostgreSQL and S3-compatible storage remain authority, OpenSearch is a rebuildable projection, and all parser, embedding, reranker, and scheduler integrations are injected private-service ports. Delivery proceeds through six independently testable phases: contracts and trust context; structured ingestion and review; index publication; governed runtime retrieval; evaluation and cutover mechanics; and production release-authority closure.
 
 **Tech Stack:** [FRAME | HIGH] Python 3.12, Pydantic v2 frozen contracts, FastAPI, Typer, PostgreSQL via psycopg, S3-compatible storage via boto3, self-hosted OpenSearch 3.x over an injected guarded HTTP transport, Docling and PaddleOCR PP-StructureV3 private service APIs, Qwen3 embedding and GTE reranker private service APIs, openpyxl for literal-cell workbook intake, React 19, TypeScript, pytest, Vitest.
 
@@ -23,6 +23,7 @@
 3. [FRAME | HIGH] Phase C — embedding, OpenSearch projection, manifest, attestation chain, and serialized Source publication.
 4. [FRAME | HIGH] Phase D — governed Hybrid runtime retrieval, authority/admission separation, degradation, Agent binding, and rollback.
 5. [FRAME | HIGH] Phase E — Gold Suite, parser benchmark, capacity envelope, operations, shadow run, and gated cutover.
+6. [FRAME | HIGH] Phase F — live deployment drivers, independent sealed-evaluator trust, candidate-bound Knowledge Release Record, production telemetry composition, and external asset-manifest enforcement.
 
 [FRAME | HIGH] Private model-serving images and their cluster lifecycle remain deployment-owned external services. This repository owns their typed client contracts, conformance tests, exact revision references, scheduler interaction, health checks, and release gates; it must not vendor Docling, PaddleOCR, embedding, or reranker weights into the Proof Agent image.
 
@@ -2151,6 +2152,30 @@ git add proof_agent/evaluation/knowledge_shadow.py proof_agent/evaluation/knowle
 git commit -m "docs: complete hybrid knowledge rollout"
 ```
 
+## Phase F — Production Release-Authority Closure
+
+### Task 26: Replace precomputed Shadow and Acceptance inputs with live trusted execution
+
+- [x] [COMPUTED | HIGH] `insurance-knowledge-shadow.v2` contains only question and pinned binding references; the core reads pointers and executes both bindings through a trusted driver.
+- [x] [COMPUTED | HIGH] Sealed Acceptance input contains no aggregate. A private evaluator driver returns a canonical attestation and a separately resolved verifier checks identity, key, digest, and detached signature.
+- [x] [COMPUTED | HIGH] Capacity, Recovery, Shadow, Acceptance, and Operations all have registered `private-http` entry points using the pinned private-network transport.
+
+### Task 27: Make release evidence an Agent Publication authority
+
+- [x] [COMPUTED | HIGH] Add `knowledge-release-record.v1` with exact Shadow, Capacity, Acceptance, and Recovery artifact references.
+- [x] [COMPUTED | HIGH] Bind the record to the exact Contract Bundle and Resolved Knowledge Binding Set and reject altered, stale, missing, unknown, or duplicate-digest records.
+- [x] [COMPUTED | HIGH] Require an independently resolved Release Evidence Authority to approve the four exact artifacts before record registration.
+- [x] [COMPUTED | HIGH] Block every Hybrid Agent publication without a matching registered record and freeze the record into the Published Agent Version.
+
+### Task 28: Close telemetry and real-asset configuration gaps
+
+- [x] [COMPUTED | HIGH] Compose a production Knowledge Operations provider at API startup and close its resources with the application.
+- [x] [COMPUTED | HIGH] Add `insurance-knowledge-assets.v1` for immutable external cohorts, exact 300/200 split, both 30/50/20 mixes, sealed custody, and a distinct 100-to-200 parser benchmark.
+- [x] [COMPUTED | HIGH] Add environment configuration, architecture documentation, ADR, domain terms, and regression tests.
+- [x] [COMPUTED | HIGH] Full backend verification: 2662 passed, 1 skipped, 8 opt-in deselected; Ruff and mypy passed.
+
+[INFERRED | HIGH] The remaining release-gate work is deployment/business execution, not missing framework mechanics: provision real human-confirmed cohorts and private endpoints, execute the four commands, conduct the assisted pilot and rollback drill, and record the resulting immutable evidence.
+
 ## Phase-Gate Command Matrix
 
 | Gate | Required services | Required configuration/fixtures | Command | Evidence artifact |
@@ -2160,6 +2185,7 @@ git commit -m "docs: complete hybrid knowledge rollout"
 | Phase C | [FRAME | HIGH] Disposable OpenSearch, PostgreSQL, MinIO | [FRAME | HIGH] `HYBRID_TEST_*` values from Task 16; migration and test-only bucket marker | `uv run --extra dev --extra hybrid --extra production python -m pytest -m hybrid_integration tests/integration/test_hybrid_opensearch.py tests/integration/test_hybrid_postgres_s3.py tests/integration/test_hybrid_generation_rebuild.py -q` | [FRAME | HIGH] Publication, orphan-reconciliation, rebuild manifest/attestation results |
 | Phase D | [FRAME | HIGH] Fake scheduled model/search services for default tests; private conformance environment for pre-cutover | [FRAME | HIGH] Pinned Agent/Source/Generation/Profile and authorized institution fixtures | `uv run --extra dev --extra hybrid python -m pytest tests/test_hybrid_request.py tests/test_hybrid_retrieval.py tests/test_insurance_authority_gate.py tests/test_hybrid_evidence_slots.py tests/test_insurance_answer_contract.py -q` | [FRAME | HIGH] Safe trace, Receipt, answer-validation and rollback results |
 | Phase E | [FRAME | HIGH] Disposable authority/search stack plus approved private parser/model services | [FRAME | HIGH] Sealed shadow, acceptance, and capacity suites; named test Source/Generation | [FRAME | HIGH] Run the four `proof-agent evaluate knowledge-*` commands from Task 25 | [FRAME | HIGH] Shadow, acceptance, capacity, and recovery artifacts whose digests enter the release record |
+| Phase F | [FRAME | HIGH] Approved private evaluation/operations service plus independent verifier trust | [FRAME | HIGH] Real external asset manifest, frozen candidate, four immutable passing artifacts | [FRAME | HIGH] Register the candidate-bound Knowledge Release Record and publish through Agent Configuration | [FRAME | HIGH] Published Agent Version containing the exact validated Knowledge Release Record |
 
 ## Final Release Gate
 

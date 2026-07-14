@@ -266,6 +266,7 @@ class DraftPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_run_id: str | None = None
+    knowledge_release_record_id: str | None = None
 
 
 class RollbackRequest(BaseModel):
@@ -1070,7 +1071,9 @@ def get_knowledge_source_operations(
     else:
         health = provider(source_id)
         if not isinstance(health, KnowledgeOperationsHealthSources):
-            raise HTTPException(status_code=503, detail="Knowledge operations telemetry is invalid.")
+            raise HTTPException(
+                status_code=503, detail="Knowledge operations telemetry is invalid."
+            )
         if health.source_id != source_id:
             raise HTTPException(status_code=503, detail="Knowledge operations Source mismatch.")
     return build_operations_projection(health).model_dump(mode="json")
@@ -2987,6 +2990,7 @@ def publish_config_draft(
             validation_run_id=validation_run_id,
             actor=actor,
             resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
+            knowledge_release_record_id=request.knowledge_release_record_id,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3569,6 +3573,11 @@ def _version_payload(version: Any) -> dict[str, Any]:
         "resolved_knowledge_bindings": (
             version.resolved_knowledge_bindings.model_dump(mode="json")
             if version.resolved_knowledge_bindings is not None
+            else None
+        ),
+        "knowledge_release_record": (
+            version.knowledge_release_record.model_dump(mode="json")
+            if version.knowledge_release_record is not None
             else None
         ),
         "effective_workflow_stage_configuration": (

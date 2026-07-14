@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ import yaml  # type: ignore[import-untyped]
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.knowledge_release import seal_knowledge_release_record
 from proof_agent.configuration.hybrid_knowledge_repository import (
     InMemoryHybridKnowledgeBindingAuthority,
 )
@@ -491,6 +493,9 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
     store = LocalAgentConfigurationStore(
         tmp_path / "config",
         hybrid_binding_authority=authority,
+        knowledge_release_evidence_authority=SimpleNamespace(
+            verify_release_record=lambda record: True
+        ),
     )
     draft = import_agent_package(
         Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
@@ -548,6 +553,37 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
         ),
     )
     frozen_bindings = ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
+    evidence_refs = tuple(
+        ExactArtifactRef(
+            artifact_uri=f"s3://release-evidence/{kind}.json",
+            version_id=f"{kind}-v1",
+            sha256=character * 64,
+            size_bytes=1024,
+            media_type="application/json",
+        )
+        for kind, character in (
+            ("shadow", "a"),
+            ("capacity", "b"),
+            ("acceptance", "c"),
+            ("recovery", "d"),
+        )
+    )
+    release_record = seal_knowledge_release_record(
+        record_id="knowledge-release-1",
+        contract_bundle=draft.contract_bundle,
+        resolved_knowledge_bindings=frozen_bindings,
+        shadow_artifact=evidence_refs[0],
+        capacity_artifact=evidence_refs[1],
+        acceptance_artifact=evidence_refs[2],
+        recovery_artifact=evidence_refs[3],
+        created_at="2026-07-14T00:00:00Z",
+        created_by="release-service",
+    )
+    store.record_knowledge_release(
+        record=release_record,
+        contract_bundle=draft.contract_bundle,
+        resolved_knowledge_bindings=frozen_bindings,
+    )
 
     version = store.publish_version(
         agent_id=draft.agent_id,
@@ -555,6 +591,7 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
         validation_run_id="run_validation_hybrid",
         actor="test-user",
         resolved_knowledge_bindings=frozen_bindings,
+        knowledge_release_record_id=release_record.record_id,
     )
     store._write_knowledge_source(
         source.model_copy(update={"published_snapshot_id": "publication_002"})
@@ -570,6 +607,7 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
     persisted = store.get_version(draft.agent_id, version.version_id)
     assert persisted is not None
     assert persisted.resolved_knowledge_bindings == frozen_bindings
+    assert persisted.knowledge_release_record == release_record
 
     newer_binding = _resolved_hybrid_binding(source_publication_id="publication_002").model_copy(
         update={"source_publication_seq": 2}

@@ -70,6 +70,7 @@ def test_hybrid_operations_endpoint_returns_safe_projection(tmp_path: Path) -> N
         conversations_dir=tmp_path / "conversations",
         published_agents={},
         agent_configuration_dir=tmp_path / "config",
+        knowledge_operations_provider=lambda source_id: fake_health_sources(),
     )
     client = TestClient(app)
     created = client.post(
@@ -82,11 +83,7 @@ def test_hybrid_operations_endpoint_returns_safe_projection(tmp_path: Path) -> N
         },
     )
     assert created.status_code == 200
-    app.state.knowledge_operations_provider = lambda source_id: fake_health_sources()
-
-    response = client.get(
-        "/api/config/knowledge-sources/ks_hybrid_index/operations"
-    )
+    response = client.get("/api/config/knowledge-sources/ks_hybrid_index/operations")
 
     assert response.status_code == 200
     assert response.json()["review_backlog"] == 12

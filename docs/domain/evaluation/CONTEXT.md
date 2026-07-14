@@ -112,6 +112,10 @@ _Avoid_: Raw consultation logs, parser-only benchmark, tune-on-test collection, 
 The access-controlled evaluation authority that permits one acceptance execution per frozen production candidate, withholds case content and case-level feedback from model and retrieval tuners, returns aggregate and hard-gate release results, and moves any deliberately revealed case into tuning while replenishing the 200-case unseen cohort before a later acceptance decision.
 _Avoid_: Repeated holdout probing, item-level failure dashboard, static exposed test set, evaluator-owned runtime policy
 
+**Sealed Knowledge Acceptance Attestation**:
+[FRAME | HIGH] The canonical digest-bound evaluator result that binds evaluator identity, key identity, production candidate, exact sealed suite, Gate Profile, and aggregate facts before a separately configured verifier accepts its detached signature.
+_Avoid_: Aggregate in command input, self-verified evaluator response, unsigned result, case-level feedback, release decision override
+
 **Insurance Knowledge Hard Release Gate**:
 The non-compensating release gate that requires zero unauthorized candidate exposure, zero wrong-version, wrong-effective-period, or wrong-precedence use, zero unresolvable formal citations, zero advisory answers under unresolved authority, and zero high-severity unsupported business conclusions in the unseen Insurance Knowledge Gold Suite.
 _Avoid_: Weighted safety score, judge-only release decision, warning-based authority bypass, average-quality offset

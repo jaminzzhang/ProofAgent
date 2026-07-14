@@ -8,6 +8,7 @@ from pydantic import Field, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
+from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
 from proof_agent.contracts.workflow_stage_configuration import (
     EffectiveWorkflowStageConfiguration,
     WorkflowStageAvailabilitySet,
@@ -184,6 +185,7 @@ class PublishedAgentVersion(FrozenModel):
     published_by: str
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+    knowledge_release_record: KnowledgeReleaseRecord | None = None
     workflow_stage_availability: WorkflowStageAvailabilitySet | None = None
     effective_workflow_stage_configuration: PublishedWorkflowStageConfigurationSnapshot | None = (
         None

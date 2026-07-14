@@ -136,6 +136,14 @@ _Avoid_: Manifest URL, draft preview link, frontend-only agent id
 The governed transition that promotes a validated Draft Agent into a Published Agent Version available to Run Execution API or Customer Run API callers.
 _Avoid_: Save draft, direct run, frontend-only enablement
 
+**Knowledge Release Record**:
+[FRAME | HIGH] The immutable candidate-bound authority required for every Published Agent Version containing a Resolved Hybrid Knowledge Binding; it binds the exact Draft Contract Bundle and Resolved Knowledge Binding Set to distinct Shadow, Capacity, Sealed Acceptance, and Recovery artifact references and is frozen into the published version.
+_Avoid_: Release checklist, mutable latest report, CI status, request-supplied approval, artifact directory
+
+**Knowledge Release Evidence Authority**:
+[FRAME | HIGH] The independently configured deployment authority that verifies all four exact Knowledge Release Record artifact references before the Configuration Store may register the record.
+_Avoid_: Request boolean, record self-attestation, Configuration Store inference, CI badge, operator checklist
+
 **Agent Validation Run**:
 A pre-publication governed run or validation pass that checks a Draft Agent's contract, retrieval behavior, workflow behavior, policy decisions, and receipt preview.
 _Avoid_: Production run, frontend preview only, unchecked smoke test

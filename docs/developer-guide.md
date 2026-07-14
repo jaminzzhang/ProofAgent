@@ -1139,6 +1139,27 @@ proof-agent evaluate knowledge-acceptance --suite var/knowledge-eval/sealed-acce
 proof-agent evaluate knowledge-recovery --source-id "$HYBRID_TEST_SOURCE_ID" --generation-id "$HYBRID_TEST_GENERATION_ID" --output var/knowledge-eval/recovery-result.json
 ```
 
+[COMPUTED | HIGH] Set the production driver selectors to `private-http` for the four
+commands. `knowledge-shadow` suite schema v2 contains only question references plus exact
+legacy and Hybrid binding references. `knowledge-acceptance` input contains only the
+candidate digest, sealed suite reference, and Gate Profile id; it never accepts an
+aggregate from the input file.
+
+```bash
+export PA_KNOWLEDGE_SHADOW_DRIVER=private-http
+export PA_KNOWLEDGE_CAPACITY_DRIVER=private-http
+export PA_KNOWLEDGE_RECOVERY_DRIVER=private-http
+export PA_KNOWLEDGE_ACCEPTANCE_DRIVER=private-http
+export PA_KNOWLEDGE_ACCEPTANCE_VERIFIER=hmac-sha256
+export PA_KNOWLEDGE_OPERATIONS_PROVIDER=private-http
+export PA_KNOWLEDGE_RELEASE_AUTHORITY=private-http
+```
+
+[FRAME | HIGH] Configure the private evaluation endpoint, exact host allowlist, private
+CIDR allowlist, bearer credential, trusted evaluator identities, key id, and verifier
+secret only through environment-backed deployment secrets. The deterministic demo leaves
+all selectors unset.
+
 The capacity suite declares the frozen experiment plan and thresholds, not measured
 results. `knowledge-capacity` launches the five online workers and concurrent offline
 ingestion through the installed `proof_agent.knowledge_capacity_drivers` entry point;
@@ -1155,6 +1176,17 @@ then snapshots pointers around each fault and verifies prior publication visibil
 exact manifest and attestation reproduction, idempotent cleanup, pre-cutover pointer
 stability, and Agent Version rollback. Arbitrary module paths and precomputed capacity
 results are not accepted as executable release evidence.
+
+[COMPUTED | HIGH] Hybrid Agent publication additionally requires a registered
+`KnowledgeReleaseRecord`. Its candidate digest covers the full Contract Bundle and exact
+Resolved Knowledge Binding Set; changing prompt/policy/tool files, Source Publication,
+Generation, Retrieval Profile Revision, manifest, or publication attestation invalidates
+the record. The Published Agent Version stores the complete immutable record, not a
+mutable latest pointer.
+
+[COMPUTED | HIGH] Record registration requires the separately configured
+`PA_KNOWLEDGE_RELEASE_AUTHORITY`; a missing, failed, or negative evidence verification
+blocks registration before the Configuration Store writes the immutable record.
 
 Use the Knowledge Operations panel to inspect release blockers before throughput. An
 operator should treat incomplete telemetry, any hard-zero counter, stale publication,

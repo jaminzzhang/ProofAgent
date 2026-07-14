@@ -25,16 +25,21 @@ from proof_agent.evaluation.knowledge_recovery import (
     run_recovery_drill,
     seal_recovery_drill,
 )
+from proof_agent.evaluation.knowledge_shadow import (
+    ActiveKnowledgePointers,
+    ShadowObservation,
+)
 from proof_agent.evaluation.sealed_knowledge_acceptance import (
     SealedKnowledgeAcceptanceEnvelope,
     SealedKnowledgeSuiteRef,
+    seal_knowledge_acceptance_attestation,
 )
 
 
 runner = CliRunner()
 
 
-def _sealed_cli_envelope() -> SealedKnowledgeAcceptanceEnvelope:
+def _sealed_cli_aggregate() -> KnowledgeAcceptanceAggregate:
     metrics = InsuranceRetrievalMetrics(
         retrieval_case_count=160,
         required_evidence_recall_at_20=0.94,
@@ -59,6 +64,19 @@ def _sealed_cli_envelope() -> SealedKnowledgeAcceptanceEnvelope:
             ("comparison", 40),
         )
     )
+    return KnowledgeAcceptanceAggregate(
+        report=InsuranceKnowledgeEvaluationReport(
+            case_count=200,
+            overall=metrics,
+            slices=slices,
+        ),
+        hard_facts=KnowledgeHardGateFacts(),
+        human_reviewed_support_precision=0.99,
+        hybrid_retrieval_p95_seconds=4.5,
+    )
+
+
+def _sealed_cli_envelope() -> SealedKnowledgeAcceptanceEnvelope:
     return SealedKnowledgeAcceptanceEnvelope(
         candidate_digest="candidate-cli",
         suite_ref=SealedKnowledgeSuiteRef(
@@ -71,16 +89,6 @@ def _sealed_cli_envelope() -> SealedKnowledgeAcceptanceEnvelope:
                 size_bytes=4096,
                 media_type="application/yaml",
             ),
-        ),
-        aggregate=KnowledgeAcceptanceAggregate(
-            report=InsuranceKnowledgeEvaluationReport(
-                case_count=200,
-                overall=metrics,
-                slices=slices,
-            ),
-            hard_facts=KnowledgeHardGateFacts(),
-            human_reviewed_support_precision=0.99,
-            hybrid_retrieval_p95_seconds=4.5,
         ),
     )
 
@@ -152,6 +160,26 @@ def test_evaluate_knowledge_acceptance_writes_aggregate_only_result(
     monkeypatch.setattr(
         "proof_agent.delivery.cli.load_sealed_knowledge_acceptance_envelope",
         lambda _path: envelope,
+    )
+    driver = SimpleNamespace(
+        run_acceptance=lambda *, candidate_digest, suite_ref, gate_profile_id: (
+            seal_knowledge_acceptance_attestation(
+                evaluator_id="insurance-evaluator-prod",
+                key_id="evaluator-key-2026-07",
+                candidate_digest=candidate_digest,
+                suite_ref=suite_ref,
+                gate_profile_id=gate_profile_id,
+                aggregate=_sealed_cli_aggregate(),
+                signature="detached-signature",
+            )
+        )
+    )
+    verifier = SimpleNamespace(
+        verify_attestation=lambda attestation: attestation.signature == "detached-signature"
+    )
+    monkeypatch.setattr("proof_agent.delivery.cli.load_acceptance_driver", lambda environ: driver)
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.load_acceptance_verifier", lambda environ: verifier
     )
     output = tmp_path / "acceptance-result.json"
 
@@ -253,7 +281,10 @@ def test_evaluate_knowledge_capacity_seals_digest_bearing_result(
     assert len(payload["envelope_sha256"]) == 64
 
 
-def test_evaluate_knowledge_shadow_proves_active_pointers_unchanged(tmp_path: Path) -> None:
+def test_evaluate_knowledge_shadow_proves_active_pointers_unchanged(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     suite = tmp_path / "shadow-suite.json"
     output = tmp_path / "shadow-result.json"
     pointers = {
@@ -263,34 +294,26 @@ def test_evaluate_knowledge_shadow_proves_active_pointers_unchanged(tmp_path: Pa
     suite.write_text(
         json.dumps(
             {
-                "schema_version": "insurance-knowledge-shadow.v1",
+                "schema_version": "insurance-knowledge-shadow.v2",
                 "questions": [{"case_id": "case-1", "question_ref": "sha256:question"}],
-                "active_pointers_before": pointers,
-                "active_pointers_after": pointers,
-                "legacy_observations": [
-                    {
-                        "case_id": "case-1",
-                        "binding_kind": "legacy",
-                        "outcome": "answered",
-                        "evidence_identity_hashes": ["a" * 64],
-                        "citation_identity_hashes": ["b" * 64],
-                        "latency_ms": 25,
-                    }
-                ],
-                "hybrid_observations": [
-                    {
-                        "case_id": "case-1",
-                        "binding_kind": "hybrid",
-                        "outcome": "answered",
-                        "evidence_identity_hashes": ["c" * 64],
-                        "citation_identity_hashes": ["d" * 64],
-                        "latency_ms": 30,
-                    }
-                ],
+                "legacy_binding_ref": "legacy-publication-3",
+                "hybrid_binding_ref": "hybrid-generation-8/profile-2",
             }
         ),
         encoding="utf-8",
     )
+    driver = SimpleNamespace(
+        snapshot_active_pointers=lambda: ActiveKnowledgePointers(**pointers),
+        run_binding=lambda *, binding_kind, binding_ref, question: ShadowObservation(
+            case_id=question.case_id,
+            binding_kind=binding_kind,
+            outcome="answered",
+            evidence_identity_hashes=("a" * 64,),
+            citation_identity_hashes=("b" * 64,),
+            latency_ms=25,
+        ),
+    )
+    monkeypatch.setattr("proof_agent.delivery.cli.load_shadow_driver", lambda environ: driver)
 
     result = runner.invoke(
         app,

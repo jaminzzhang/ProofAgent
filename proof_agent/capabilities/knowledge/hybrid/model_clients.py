@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import CancelledError, Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from functools import partial
@@ -1408,6 +1408,7 @@ class _HttpJsonTransport:
         *,
         timeout_seconds: float,
         expect_json: bool = True,
+        headers: Mapping[str, str] | None = None,
         cancellation: KnowledgeModelCancellation,
     ) -> object:
         client = self._create_pinned_client()
@@ -1418,7 +1419,13 @@ class _HttpJsonTransport:
             self._active_clients.add(client)
         unregister = cancellation.register(client.close)
         try:
-            with client.stream("POST", url, json=payload, timeout=timeout_seconds) as response:
+            with client.stream(
+                "POST",
+                url,
+                json=payload,
+                headers=headers,
+                timeout=timeout_seconds,
+            ) as response:
                 if 300 <= response.status_code < 400:
                     raise ValueError("private Knowledge service redirects are forbidden")
                 if response.status_code in {408, 425, 429} or response.status_code >= 500:

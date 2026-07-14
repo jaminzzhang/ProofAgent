@@ -49,6 +49,7 @@ from proof_agent.contracts import (
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
+    KnowledgeReleaseRecord,
     KnowledgeSource,
     KnowledgeSourceDeletionEligibility,
     KnowledgeSourceLifecycleState,
@@ -76,6 +77,10 @@ from proof_agent.contracts import (
     WorkflowStageAvailabilitySet,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
+from proof_agent.configuration.knowledge_release import (
+    KnowledgeReleaseEvidenceAuthority,
+    require_knowledge_release_record,
+)
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
@@ -143,9 +148,11 @@ class LocalAgentConfigurationStore:
         root_dir: Path,
         *,
         hybrid_binding_authority: HybridKnowledgeBindingAuthority | None = None,
+        knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
     ) -> None:
         self._root_dir = root_dir
         self._hybrid_binding_authority = hybrid_binding_authority
+        self._knowledge_release_evidence_authority = knowledge_release_evidence_authority
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -252,9 +259,33 @@ class LocalAgentConfigurationStore:
         validation_run_id: str,
         actor: str,
         resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
+        knowledge_release_record_id: str | None = None,
     ) -> PublishedAgentVersion:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             draft = self._require_draft(agent_id, draft_id)
+            knowledge_release_record: KnowledgeReleaseRecord | None = None
+            has_hybrid_binding = resolved_knowledge_bindings is not None and any(
+                isinstance(binding, ResolvedHybridKnowledgeBinding)
+                for binding in resolved_knowledge_bindings.bindings
+            )
+            if has_hybrid_binding:
+                assert resolved_knowledge_bindings is not None
+                if knowledge_release_record_id is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Hybrid Published Agent Version requires a Knowledge Release Record."
+                    )
+                knowledge_release_record = self.get_knowledge_release_record(
+                    knowledge_release_record_id
+                )
+                if knowledge_release_record is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Knowledge Release Record is not registered."
+                    )
+                require_knowledge_release_record(
+                    record=knowledge_release_record,
+                    contract_bundle=draft.contract_bundle,
+                    resolved_knowledge_bindings=resolved_knowledge_bindings,
+                )
             self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
             _require_no_unavailable_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
             if resolved_knowledge_bindings is not None:
@@ -282,6 +313,7 @@ class LocalAgentConfigurationStore:
                 published_at=_now(),
                 published_by=actor,
                 resolved_knowledge_bindings=resolved_knowledge_bindings,
+                knowledge_release_record=knowledge_release_record,
                 workflow_stage_availability=_build_workflow_stage_availability(
                     draft.contract_bundle.agent_yaml
                 ),
@@ -306,6 +338,58 @@ class LocalAgentConfigurationStore:
             )
             self._write_active_version(active)
             return version
+
+    def record_knowledge_release(
+        self,
+        *,
+        record: KnowledgeReleaseRecord,
+        contract_bundle: ContractBundle,
+        resolved_knowledge_bindings: ResolvedKnowledgeBindingSet,
+    ) -> KnowledgeReleaseRecord:
+        """Persist one validated immutable release authority record."""
+
+        require_knowledge_release_record(
+            record=record,
+            contract_bundle=contract_bundle,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
+        )
+        authority = self._knowledge_release_evidence_authority
+        if authority is None:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority is not configured."
+            )
+        try:
+            verified = authority.verify_release_record(record)
+        except Exception as exc:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority failed closed."
+            ) from exc
+        if not verified:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority rejected the artifacts."
+            )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self.get_knowledge_release_record(record.record_id)
+            if existing is not None:
+                if existing != record:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Knowledge Release Record id already names different evidence."
+                    )
+                return existing
+            _write_json_atomic(
+                self._knowledge_release_record_path(record.record_id),
+                record.model_dump(mode="json"),
+            )
+            return record
+
+    def get_knowledge_release_record(
+        self,
+        record_id: str,
+    ) -> KnowledgeReleaseRecord | None:
+        path = self._knowledge_release_record_path(record_id)
+        if not path.exists():
+            return None
+        return KnowledgeReleaseRecord.model_validate_json(path.read_bytes())
 
     def record_validation(
         self,
@@ -3747,6 +3831,27 @@ class LocalAgentConfigurationStore:
 
     def _validation_captures_root(self) -> Path:
         return self._root_dir / "validation_captures"
+
+    def _knowledge_release_record_path(self, record_id: str) -> Path:
+        raw_record_id = record_id.strip()
+        record_path = Path(raw_record_id)
+        if (
+            not raw_record_id
+            or raw_record_id != record_id
+            or raw_record_id in {".", ".."}
+            or record_path.is_absolute()
+            or len(record_path.parts) != 1
+            or "/" in raw_record_id
+            or "\\" in raw_record_id
+        ):
+            raise ValueError(f"Invalid Knowledge Release Record id: {record_id}")
+        root = (self._root_dir / "knowledge_release_records").resolve()
+        path = (root / f"{raw_record_id}.json").resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Invalid Knowledge Release Record id: {record_id}") from exc
+        return path
 
     def _validation_capture_dir(self, capture_id: str) -> Path:
         raw_capture_id = capture_id.strip()

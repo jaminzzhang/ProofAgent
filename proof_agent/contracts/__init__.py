@@ -83,6 +83,14 @@ from proof_agent.contracts.customer import (
     CustomerSafeSource,
     CustomerSessionType,
 )
+from proof_agent.contracts.knowledge_release import (
+    KnowledgeReleaseEvidenceSet,
+    KnowledgeReleaseRecord,
+)
+from proof_agent.contracts.knowledge_operations import (
+    KnowledgeOperationsHealthSources,
+    KnowledgeStageLatency,
+)
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceContribution, EvidenceStatus
 from proof_agent.contracts.evaluation import (
     EvaluationAnalysisSummary,
@@ -486,9 +494,12 @@ __all__ = [
     "KnowledgeBindingConfig",
     "KnowledgeDocument",
     "KnowledgeIngestionJob",
+    "KnowledgeOperationsHealthSources",
     "KnowledgeIndexGeneration",
     "KnowledgeProjectionAttestation",
     "KnowledgePublicationAttempt",
+    "KnowledgeReleaseEvidenceSet",
+    "KnowledgeReleaseRecord",
     "KnowledgeRetrievalProfileRevision",
     "KnowledgeSourceReferenceConfig",
     "KnowledgeSource",
@@ -499,6 +510,7 @@ __all__ = [
     "KnowledgeSourceReferenceSummary",
     "KnowledgeSourceSnapshotDocument",
     "KnowledgeSourceSnapshotManifest",
+    "KnowledgeStageLatency",
     "MCPToolSourcePublicationValidation",
     "MemoryConfig",
     "MemoryCapabilityConfig",

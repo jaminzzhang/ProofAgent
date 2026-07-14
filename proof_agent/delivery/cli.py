@@ -33,25 +33,35 @@ from proof_agent.evaluation.frozen_bundles import (
     verify_evaluation_subject_bundle,
 )
 from proof_agent.evaluation.gate_profiles import get_knowledge_gate_profile
-from proof_agent.evaluation.knowledge_gates import KnowledgeAcceptanceAggregate
 from proof_agent.evaluation.knowledge_capacity import (
     KnowledgeCapacityEnvelope,
     KnowledgeCapacitySuite,
     execute_capacity_suite,
     load_capacity_suite,
 )
-from proof_agent.evaluation.knowledge_shadow import load_shadow_suite, run_shadow_suite
+from proof_agent.evaluation.knowledge_shadow import (
+    KnowledgeShadowResult,
+    KnowledgeShadowSuite,
+    load_shadow_suite,
+    run_shadow_suite,
+)
 from proof_agent.evaluation.knowledge_recovery import (
     KnowledgeRecoveryDrillArtifact,
     execute_recovery_drill,
 )
 from proof_agent.evaluation.runtime_drivers import (
+    load_acceptance_driver,
+    load_acceptance_verifier,
     load_capacity_driver,
+    load_operations_provider,
     load_recovery_driver,
+    load_release_authority,
+    load_shadow_driver,
 )
 from proof_agent.evaluation.sealed_knowledge_acceptance import (
+    SealedKnowledgeAcceptanceEnvelope,
+    SealedKnowledgeAcceptanceResult,
     SealedKnowledgeAcceptanceStore,
-    SealedKnowledgeSuiteRef,
     write_sealed_knowledge_acceptance_result,
 )
 from proof_agent.evaluation.suites import (
@@ -195,6 +205,63 @@ def execute_knowledge_capacity_from_environment(
         _close_evaluation_driver(driver, primary)
 
 
+def execute_knowledge_shadow_from_environment(
+    suite: KnowledgeShadowSuite,
+) -> KnowledgeShadowResult:
+    """Execute pinned legacy and Hybrid bindings through one trusted live driver."""
+
+    driver = load_shadow_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return run_shadow_suite(suite, driver)
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge shadow driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def execute_knowledge_acceptance_from_environment(
+    envelope: SealedKnowledgeAcceptanceEnvelope,
+    *,
+    attempt_store: Path,
+) -> SealedKnowledgeAcceptanceResult:
+    """Run the private evaluator and verify its attestation through a separate trust adapter."""
+
+    profile = get_knowledge_gate_profile(envelope.gate_profile_id)
+    driver = load_acceptance_driver(os.environ)
+    verifier = load_acceptance_verifier(os.environ)
+    primary: Exception | None = None
+    try:
+        evaluator = SealedKnowledgeAcceptanceStore(
+            attestation_provider=lambda candidate, suite_ref, profile_id: driver.run_acceptance(
+                candidate_digest=candidate,
+                suite_ref=suite_ref,
+                gate_profile_id=profile_id,
+            ),
+            attestation_verifier=verifier.verify_attestation,
+            attempt_store=attempt_store,
+            gate_profile=profile,
+        )
+        return evaluator.run(
+            candidate_digest=envelope.candidate_digest,
+            sealed_suite_ref=envelope.suite_ref,
+        )
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Sealed Knowledge evaluator execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+        if verifier is not driver:
+            _close_evaluation_driver(verifier, primary)
+
+
 def _close_evaluation_driver(driver: Any, primary: Exception | None) -> None:
     close = getattr(driver, "close", None)
     if close is None:
@@ -205,9 +272,20 @@ def _close_evaluation_driver(driver: Any, primary: Exception | None) -> None:
         if primary is None:
             raise EvaluationInputError("Knowledge evaluation driver close failed") from close_exc
         primary.add_note(
-            "Knowledge evaluation driver close also failed: "
-            f"{type(close_exc).__name__}"
+            f"Knowledge evaluation driver close also failed: {type(close_exc).__name__}"
         )
+
+
+def _knowledge_operations_provider_from_environment() -> Any | None:
+    if not os.environ.get("PA_KNOWLEDGE_OPERATIONS_PROVIDER", "").strip():
+        return None
+    return load_operations_provider(os.environ)
+
+
+def _knowledge_release_authority_from_environment() -> Any | None:
+    if not os.environ.get("PA_KNOWLEDGE_RELEASE_AUTHORITY", "").strip():
+        return None
+    return load_release_authority(os.environ)
 
 
 @knowledge_app.command("reconcile-orphans")
@@ -579,23 +657,9 @@ def evaluate_knowledge_acceptance(
     output_path = Path(output)
     try:
         envelope = load_sealed_knowledge_acceptance_envelope(Path(suite))
-        profile = get_knowledge_gate_profile(envelope.gate_profile_id)
-
-        def provide_aggregate(
-            sealed_ref: SealedKnowledgeSuiteRef,
-        ) -> KnowledgeAcceptanceAggregate:
-            if sealed_ref != envelope.suite_ref:
-                raise EvaluationInputError("sealed suite reference changed during evaluation")
-            return envelope.aggregate
-
-        evaluator = SealedKnowledgeAcceptanceStore(
-            aggregate_provider=provide_aggregate,
+        result = execute_knowledge_acceptance_from_environment(
+            envelope,
             attempt_store=output_path.parent / ".knowledge-acceptance-attempts",
-            gate_profile=profile,
-        )
-        result = evaluator.run(
-            candidate_digest=envelope.candidate_digest,
-            sealed_suite_ref=envelope.suite_ref,
         )
         write_sealed_knowledge_acceptance_result(output_path, result)
     except EvaluationInputError as exc:
@@ -643,7 +707,7 @@ def evaluate_knowledge_shadow(
 
     output_path = Path(output)
     try:
-        result = run_shadow_suite(load_shadow_suite(Path(suite)))
+        result = execute_knowledge_shadow_from_environment(load_shadow_suite(Path(suite)))
         write_evaluation_artifact(output_path, result)
     except (EvaluationInputError, ValueError) as exc:
         typer.echo(str(exc), err=True)
@@ -909,7 +973,11 @@ def server(
     from proof_agent.observability.api.app import create_app
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
-    configuration_store = LocalAgentConfigurationStore(Path(config_dir))
+    release_authority = _knowledge_release_authority_from_environment()
+    configuration_store = LocalAgentConfigurationStore(
+        Path(config_dir),
+        knowledge_release_evidence_authority=release_authority,
+    )
     if seed_example_agent and _seed_default_dev_agent(configuration_store):
         typer.echo("Seeded local configuration with insurance_customer_service.")
 
@@ -936,6 +1004,8 @@ def server(
         history_dir=Path(history_dir),
         agent_configuration_store=configuration_store,
         agent_configuration_dir=Path(config_dir),
+        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+        knowledge_release_evidence_authority=release_authority,
     )
     uvicorn.run(app, host=host, port=port)
 
@@ -949,7 +1019,11 @@ def _create_server_app_from_env() -> Any:
     history_dir = Path(os.environ.get(SERVER_HISTORY_DIR_ENV, "runs/history"))
     config_dir = Path(os.environ.get(SERVER_CONFIG_DIR_ENV, "runs/config"))
     seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
-    configuration_store = LocalAgentConfigurationStore(config_dir)
+    release_authority = _knowledge_release_authority_from_environment()
+    configuration_store = LocalAgentConfigurationStore(
+        config_dir,
+        knowledge_release_evidence_authority=release_authority,
+    )
     if seed_example_agent:
         _seed_default_dev_agent(configuration_store)
 
@@ -957,6 +1031,8 @@ def _create_server_app_from_env() -> Any:
         history_dir=history_dir,
         agent_configuration_store=configuration_store,
         agent_configuration_dir=config_dir,
+        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+        knowledge_release_evidence_authority=release_authority,
     )
 
 

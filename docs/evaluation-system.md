@@ -406,8 +406,11 @@ MRR@10, citation resolvability, authority failures, ACL candidate exposure, and
 query/document/parser/ACL slices. Non-answer cases contribute hard facts without being
 invented as ranking gold.
 
-Sealed acceptance permits one execution for a frozen candidate and returns only
-aggregate and slice metrics. A nonzero unauthorized exposure, wrong version or
+[COMPUTED | HIGH] Sealed acceptance permits one execution for a frozen candidate and
+returns only aggregate and slice metrics. Its command envelope contains no aggregate;
+an independently resolved evaluator supplies a digest-bound attestation and a separately
+resolved verifier checks evaluator/key identity and detached signature before scoring.
+A nonzero unauthorized exposure, wrong version or
 precedence, unresolvable formal citation, advisory answer under authority uncertainty,
 or high-severity unsupported conclusion stops evaluation before quality and performance
 thresholds. Only then apply overall Recall@50 >= 0.95, every query slice >= 0.90,
@@ -415,13 +418,22 @@ conditional/comparison complete-evidence Top-10 >= 0.90, support precision >= 0.
 the pinned performance profile.
 
 Shadow, capacity, acceptance, and recovery outputs are immutable digest-bearing release
-Evidence. Shadow input contains safe hashes rather than question or Rule Unit content.
+Evidence. [COMPUTED | HIGH] Shadow suite v2 contains safe question references and exact pinned
+binding references, never observations or activity-pointer snapshots; a live driver
+produces those values during the run.
 Capacity Evidence requires exactly five authorized run identities, idle and
 active-ingestion samples, raw measurement references, and no more than the sealed
 ingestion-interference percentage (ten percent in the initial profile). The suite contains
 the experiment plan, never precomputed measurements. Recovery Evidence is accepted only
 after the driver proves marked disposable repository/bucket authority and the core
 orchestrator executes all four faults with stable pointers and valid per-fault digests.
+
+[COMPUTED | HIGH] `insurance-knowledge-assets.v1` validates immutable external cohort
+references, the exact 300/200 split, both 30/50/20 query mixes, sealed acceptance custody,
+and a distinct 100-to-200 parser benchmark. A candidate-bound Knowledge Release Record
+can be registered only after an independent Release Evidence Authority approves all four
+exact artifacts; Hybrid Agent publication then recomputes its candidate/record digests and
+freezes the record in the Published Agent Version.
 
 ## ReAct Loop Evaluation
 

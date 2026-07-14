@@ -59,6 +59,31 @@ Authoritative design doc: `docs/technical-design.md`.
 
 ## 2. Implementation Snapshot
 
+### Phase F Hybrid Knowledge production closure (2026-07-14)
+
+- [COMPUTED | HIGH] Shadow suite schema v2 contains no observations or pointer snapshots;
+  trusted live drivers execute both pinned bindings and the core proves active pointers
+  remain unchanged.
+- [COMPUTED | HIGH] Sealed Acceptance obtains aggregate facts only from an independently
+  resolved evaluator driver, verifies a canonical attestation digest, candidate/suite/Gate
+  Profile bindings, evaluator identity, key identity, and detached signature, then applies
+  deterministic gates.
+- [COMPUTED | HIGH] `KnowledgeReleaseRecord` binds the exact Draft Contract Bundle and
+  Resolved Hybrid Knowledge Bindings to four distinct immutable Shadow, Capacity,
+  Acceptance, and Recovery artifacts. Hybrid Agent publication fails closed without a
+  registered matching record and freezes it into the Published Agent Version.
+- [COMPUTED | HIGH] Release Record registration additionally requires an independent
+  Release Evidence Authority to approve all four exact artifact references; absent,
+  failed, or negative verification blocks persistence.
+- [COMPUTED | HIGH] The registered `private-http` adapter covers all evaluation drivers
+  and production operations telemetry over the pinned private-network transport. An
+  independently registered HMAC verifier supplies the acceptance trust decision.
+- [COMPUTED | HIGH] The external evaluation-asset manifest enforces the real 300/200 Gold
+  Suite split, both 30/50/20 query mixes, tuner-hidden sealed custody, and a distinct
+  100-to-200-case parser benchmark. No synthetic business corpus is committed.
+- [COMPUTED | HIGH] Phase F verification passed 2662 backend tests with 1 skipped and 8
+  opt-in tests deselected; Ruff passed and mypy passed all 257 source files.
+
 ### Phase E Hybrid Knowledge release controls (2026-07-14)
 
 - Insurance Knowledge and parser contracts now enforce the 30/50/20 Gold Suite profile,
