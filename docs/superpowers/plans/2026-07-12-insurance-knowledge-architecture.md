@@ -1491,6 +1491,11 @@ git commit -m "feat: publish attested hybrid knowledge sources"
 - [ ] Publish sequence 1, publish a delta at sequence 2, and prove a sequence-1 query still returns the sequence-1 Rule Unit revisions and visibility.
 - [ ] Force failure after OpenSearch refresh and prove PostgreSQL still exposes the prior publication while reconciliation lists the orphan attempt.
 - [ ] Rebuild one physical `source + generation` index from PostgreSQL plus S3 manifests and compare manifest roots and attestation coverage.
+- [ ] Close more than `1,000` retained memberships, fail in the second real restoration batch,
+      then prove a retry converges and a later publication succeeds.
+- [ ] Create a disposable PostgreSQL database from the complete historical Phase C migration DDL, apply
+      the current migration twice, and prove legacy rows plus new locator, orphan, validation,
+      constraint, and immutability behavior.
 
 ## Phase D — Governed Hybrid Runtime And Agent Activation
 

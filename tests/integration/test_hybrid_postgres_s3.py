@@ -175,6 +175,40 @@ def _request(
     )
 
 
+def _many_rule_request(
+    source_id: str,
+    generation: KnowledgeIndexGeneration,
+    identity: SearchIndexIdentity,
+    *,
+    count: int,
+    rule_prefix: str,
+    publication_seq_from: int,
+) -> HybridPublicationRequest:
+    requests = tuple(
+        _request(
+            source_id,
+            generation,
+            identity,
+            rule_suffix=f"{rule_prefix}-{index:04d}",
+            publication_seq_from=publication_seq_from,
+        )
+        for index in range(count)
+    )
+    request = requests[0].model_copy(
+        update={
+            "candidate_digest": "0" * 64,
+            "source_draft_version_id": f"draft-{publication_seq_from}-{rule_prefix}",
+            "source_snapshot_id": f"snapshot-{publication_seq_from}-{rule_prefix}",
+            "validation_id": (f"validation-{source_id}-{publication_seq_from}-{rule_prefix}"),
+            "memberships": tuple(item.memberships[0] for item in requests),
+            "projection_seeds": tuple(item.projection_seeds[0] for item in requests),
+        }
+    )
+    return request.model_copy(
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
+    )
+
+
 def _delete_prefix_versions(client: Any, bucket: str, prefix: str) -> None:
     paginator = client.get_paginator("list_object_versions")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
@@ -405,3 +439,277 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
         assert published_third.source_publication_seq == 3
     finally:
         _cleanup(env)
+
+
+def test_disposable_restoration_retries_after_second_real_batch_fails() -> None:
+    env = _environment()
+    try:
+        initial = _many_rule_request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            count=1_001,
+            rule_prefix="retained",
+            publication_seq_from=1,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=env["request"].source_draft_version_id,
+            expected_candidate_digest=env["request"].candidate_digest,
+            source_draft_version_id=initial.source_draft_version_id,
+            candidate_digest=initial.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=initial.validation_id,
+                source_id=initial.source_id,
+                source_draft_version_id=initial.source_draft_version_id,
+                candidate_digest=initial.candidate_digest,
+                generation_id=initial.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        publication = env["service"].publish(initial)
+
+        class FailAfterProjectionValidation:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(env["index"], name)
+
+            def validate_exact_projection(self, **_: Any) -> Any:
+                raise RuntimeError("integration failure after multi-batch closure")
+
+        failed = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="failed-replacement",
+            publication_seq_from=2,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=initial.source_draft_version_id,
+            expected_candidate_digest=initial.candidate_digest,
+            source_draft_version_id=failed.source_draft_version_id,
+            candidate_digest=failed.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=failed.validation_id,
+                source_id=failed.source_id,
+                source_draft_version_id=failed.source_draft_version_id,
+                candidate_digest=failed.candidate_digest,
+                generation_id=failed.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        env["service"].index = FailAfterProjectionValidation()
+        with pytest.raises(RuntimeError, match="after multi-batch closure"):
+            env["service"].publish(failed)
+        assert env["repository"].load_active_publication(env["source_id"]) == publication
+
+        class FailOnSecondRestorationBatch:
+            def __init__(self) -> None:
+                self.restoration_calls = 0
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(env["index"], name)
+
+            def restore_projection_memberships(self, **kwargs: Any) -> Any:
+                self.restoration_calls += 1
+                if self.restoration_calls == 2:
+                    raise RuntimeError("integration failure in restoration batch 2")
+                return env["index"].restore_projection_memberships(**kwargs)
+
+        faulting_index = FailOnSecondRestorationBatch()
+        first_recovery = HybridRecoveryService(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            index=OpenSearchRecoveryIndex(
+                index=cast(Any, faulting_index),
+                embedding=cast(Any, _Embedding()),
+                embedding_instruction=INSTRUCTION,
+            ),
+        )
+        dry_run = first_recovery.reconcile_orphans(source_id=env["source_id"])
+        assert len(dry_run.candidates) == 1
+        failed_recovery = first_recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
+        assert faulting_index.restoration_calls == 2
+        assert failed_recovery.retry_attempt_ids == dry_run.candidates
+
+        retry_recovery = HybridRecoveryService(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            index=OpenSearchRecoveryIndex(
+                index=env["index"],
+                embedding=cast(Any, _Embedding()),
+                embedding_instruction=INSTRUCTION,
+            ),
+        )
+        retried = retry_recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
+        assert retried.purged_attempt_ids == dry_run.candidates
+        assert retried.retry_attempt_ids == ()
+
+        env["service"].index = env["index"]
+        next_request = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="after-restoration-retry",
+            publication_seq_from=3,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=failed.source_draft_version_id,
+            expected_candidate_digest=failed.candidate_digest,
+            source_draft_version_id=next_request.source_draft_version_id,
+            candidate_digest=next_request.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=next_request.validation_id,
+                source_id=next_request.source_id,
+                source_draft_version_id=next_request.source_draft_version_id,
+                candidate_digest=next_request.candidate_digest,
+                generation_id=next_request.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        assert env["service"].publish(next_request).source_publication_seq == 3
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_postgres_upgrades_legacy_recovery_schema_in_place() -> None:
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    base_dsn = _required("HYBRID_TEST_POSTGRES_DSN")
+    connection_options = conninfo_to_dict(base_dsn)
+    admin_dsn = make_conninfo(**{**connection_options, "dbname": "postgres"})
+    legacy_database = f"proof_legacy_{uuid4().hex}"
+    legacy_dsn = make_conninfo(**{**connection_options, "dbname": legacy_database})
+    legacy_ddl = Path("tests/fixtures/hybrid_recovery_schema_legacy_2c70b7b.sql").read_text(
+        encoding="utf-8"
+    )
+    current_migration = Path(
+        "proof_agent/configuration/migrations/0001_hybrid_knowledge.sql"
+    ).read_text(encoding="utf-8")
+
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(legacy_database)))
+    try:
+        with psycopg.connect(legacy_dsn, autocommit=True) as connection:
+            connection.execute(legacy_ddl, prepare=False)
+            connection.execute(
+                """INSERT INTO hybrid_knowledge_source_authority
+                     (source_id, draft_version_id, candidate_digest, updated_at)
+                     VALUES ('legacy-source','legacy-draft',%s,now())""",
+                ("1" * 64,),
+            )
+            connection.execute(
+                """INSERT INTO hybrid_knowledge_generation
+                     (generation_id, source_id, identity_digest, mapping_sha256,
+                      generation_json, created_at)
+                     VALUES ('legacy-generation','legacy-source',%s,%s,'{}'::jsonb,now())""",
+                ("2" * 64, "3" * 64),
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, created_at, updated_at)
+                     VALUES ('legacy-rebuild','legacy-source','legacy-generation',
+                             'REBUILD','BUILDING',now(),now())"""
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_orphan_cleanup
+                     (attempt_id, source_id, generation_id, index_uuid,
+                      projection_locator, state, updated_at)
+                     VALUES ('legacy-rebuild','legacy-source','legacy-generation',
+                             'legacy-index-uuid',NULL,'DELETED',now())"""
+            )
+
+            connection.execute(current_migration, prepare=False)
+            connection.execute(current_migration, prepare=False)
+
+            legacy_operation = connection.execute(
+                """SELECT projection_locator, index_uuid
+                     FROM hybrid_projection_operation
+                     WHERE operation_id='legacy-rebuild'"""
+            ).fetchone()
+            assert legacy_operation == (None, None)
+            legacy_orphan = connection.execute(
+                """SELECT index_uuid, state
+                     FROM hybrid_projection_orphan_cleanup
+                     WHERE attempt_id='legacy-rebuild'"""
+            ).fetchone()
+            assert legacy_orphan == ("legacy-index-uuid", "DELETED")
+
+            index_uuid_nullable = connection.execute(
+                """SELECT is_nullable FROM information_schema.columns
+                     WHERE table_schema='public'
+                       AND table_name='hybrid_projection_orphan_cleanup'
+                       AND column_name='index_uuid'"""
+            ).fetchone()
+            assert index_uuid_nullable == ("YES",)
+            rebuild_validation_trigger = connection.execute(
+                """SELECT count(*)
+                     FROM pg_trigger trigger
+                     JOIN pg_class relation ON relation.oid=trigger.tgrelid
+                    WHERE relation.relname='hybrid_rebuild_validation'
+                      AND trigger.tgname='reject_update'
+                      AND NOT trigger.tgisinternal"""
+            ).fetchone()
+            assert rebuild_validation_trigger == (1,)
+
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    """INSERT INTO hybrid_projection_operation
+                         (operation_id, source_id, generation_id, operation_kind,
+                          state, created_at, updated_at)
+                         VALUES ('invalid-new-rebuild','legacy-source','legacy-generation',
+                                 'REBUILD','BUILDING',now(),now())"""
+                )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, projection_locator, created_at, updated_at)
+                     VALUES ('new-rebuild','legacy-source','legacy-generation',
+                             'REBUILD','BUILDING','pa-rebuild-aaaaaaaa',now(),now())"""
+            )
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    """INSERT INTO hybrid_projection_operation
+                         (operation_id, source_id, generation_id, operation_kind,
+                          state, projection_locator, created_at, updated_at)
+                         VALUES ('duplicate-locator','legacy-source','legacy-generation',
+                                 'REBUILD','BUILDING','pa-rebuild-aaaaaaaa',now(),now())"""
+                )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, created_at, updated_at)
+                     VALUES ('new-publication','legacy-source','legacy-generation',
+                             'PUBLICATION','BUILDING',now(),now())"""
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_orphan_cleanup
+                     (attempt_id, source_id, generation_id, index_uuid,
+                      projection_locator, state, updated_at)
+                     VALUES ('new-publication','legacy-source','legacy-generation',
+                             NULL,NULL,'PURGED',now())"""
+            )
+            upgraded_orphan = connection.execute(
+                """SELECT index_uuid, state
+                     FROM hybrid_projection_orphan_cleanup
+                     WHERE attempt_id='new-publication'"""
+            ).fetchone()
+            assert upgraded_orphan == (None, "PURGED")
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(legacy_database))
+            )
