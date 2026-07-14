@@ -32,6 +32,7 @@ import type {
 } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { KnowledgeReviewPanel } from '../components/knowledge/KnowledgeReviewPanel'
+import { KnowledgeOperationsPanel } from '../components/knowledge/KnowledgeOperationsPanel'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 
 type RoutingFormState = {
@@ -626,6 +627,10 @@ export function KnowledgeDetailPage() {
           <p className="mt-3 text-sm text-[var(--text-muted)]">No candidate snapshot is available.</p>
         )}
       </section>
+      )}
+
+      {isHybridIndexSource && (
+        <KnowledgeOperationsPanel sourceId={source.source_id} />
       )}
 
       {isHybridIndexSource && (

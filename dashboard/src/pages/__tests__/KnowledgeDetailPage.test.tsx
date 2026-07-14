@@ -7,6 +7,7 @@ import {
   archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
   fetchKnowledgeIngestionJobs,
+  fetchKnowledgeOperations,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
   fetchKnowledgeSourceDeletionEligibility,
@@ -30,6 +31,7 @@ vi.mock('../../api/client', () => ({
   archiveKnowledgeSource: vi.fn(),
   fetchCandidateKnowledgeSourceSnapshot: vi.fn(),
   fetchKnowledgeIngestionJobs: vi.fn(),
+  fetchKnowledgeOperations: vi.fn(),
   fetchKnowledgeDocuments: vi.fn(),
   fetchKnowledgeSource: vi.fn(),
   fetchKnowledgeSourceDeletionEligibility: vi.fn(),
@@ -62,6 +64,9 @@ function renderPage() {
 describe('KnowledgeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchKnowledgeOperations).mockRejectedValue(
+      new Error('Operations telemetry unavailable in this page fixture.'),
+    )
     vi.mocked(fetchKnowledgeSource).mockResolvedValue({
       source_id: 'ks_local_index',
       name: 'Local Index Policies',

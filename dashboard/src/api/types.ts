@@ -902,6 +902,45 @@ export interface KnowledgeSource {
   ready_document_count: number
 }
 
+export interface KnowledgeStageLatency {
+  stage: string
+  p95_ms: number
+}
+
+export interface KnowledgeOperationsProjection {
+  source_id: string
+  telemetry_complete: boolean
+  queue_age_seconds: number
+  retry_backlog: number
+  review_backlog: number
+  parser_escalation_count: number
+  ingestion_throughput_documents_per_hour: number
+  gpu_queue_depth: number
+  gpu_utilization_percent: number
+  embedding_backlog: number
+  index_lag_seconds: number
+  orphan_count: number
+  publication_age_seconds: number | null
+  rebuild_state: 'idle' | 'queued' | 'running' | 'failed' | 'unavailable'
+  scheduler_queue_p95_ms: number
+  retrieval_service_p95_ms: number
+  retrieval_p95_ms: number
+  stage_latencies: KnowledgeStageLatency[]
+  no_evidence_rate: number
+  clarification_rate: number
+  conflict_rate: number
+  refusal_rate: number
+  degradation_rate: number
+  citation_failure_count: number
+  complete_evidence_slot_coverage_rate: number
+  unauthorized_candidate_exposure: number
+  wrong_version_or_precedence: number
+  unresolvable_formal_citation: number
+  advice_under_authority_uncertainty: number
+  high_severity_unsupported_claim: number
+  release_blocker_count: number
+}
+
 export type KnowledgeSourceLifecycleState = 'ACTIVE' | 'ARCHIVED'
 
 export interface KnowledgeSourceReferenceSummary {

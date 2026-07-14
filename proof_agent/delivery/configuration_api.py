@@ -112,6 +112,10 @@ from proof_agent.delivery.agent_package_execution import (
     execute_agent_package_run,
 )
 from proof_agent.delivery.http_errors import proof_agent_http_exception
+from proof_agent.delivery.knowledge_operations import (
+    KnowledgeOperationsHealthSources,
+    build_operations_projection,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -1042,6 +1046,34 @@ def get_knowledge_source(
     store = _get_configuration_store(app_request)
     source = _require_knowledge_source(store, source_id)
     return _knowledge_source_payload(store, source)
+
+
+@router.get("/config/knowledge-sources/{source_id}/operations")
+def get_knowledge_source_operations(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return the read-only, trace-safe Hybrid Knowledge operations projection."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=400,
+            detail="Knowledge operations require a hybrid_index Source.",
+        )
+    provider = getattr(app_request.app.state, "knowledge_operations_provider", None)
+    if provider is None:
+        health = KnowledgeOperationsHealthSources(source_id=source_id)
+    else:
+        health = provider(source_id)
+        if not isinstance(health, KnowledgeOperationsHealthSources):
+            raise HTTPException(status_code=503, detail="Knowledge operations telemetry is invalid.")
+        if health.source_id != source_id:
+            raise HTTPException(status_code=503, detail="Knowledge operations Source mismatch.")
+    return build_operations_projection(health).model_dump(mode="json")
 
 
 @router.post("/config/knowledge-sources/{source_id}/archive")

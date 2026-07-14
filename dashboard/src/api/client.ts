@@ -26,6 +26,7 @@ import type {
   KnowledgeDocumentsResponse,
   KnowledgeIngestionJob,
   KnowledgeIngestionJobsResponse,
+  KnowledgeOperationsProjection,
   InsuranceMetadataReview,
   InsuranceMetadataReviewsResponse,
   InsuranceMetadataWorkbookImportResponse,
@@ -377,6 +378,14 @@ export function smokeTestModelConnection(
 
 export function fetchKnowledgeSource(sourceId: string): Promise<KnowledgeSource> {
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}`)
+}
+
+export function fetchKnowledgeOperations(
+  sourceId: string,
+): Promise<KnowledgeOperationsProjection> {
+  return fetchJson<KnowledgeOperationsProjection>(
+    `${BASE}/config/knowledge-sources/${sourceId}/operations`,
+  )
 }
 
 export function createKnowledgeSource(payload: {
