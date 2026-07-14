@@ -1445,7 +1445,41 @@ triple, and completes exact readback, smoke validation, immutable staging, and p
 compare-and-swap. Retrying the same durable recovery operation converges from any partial
 step without granting general interval-reopen authority.
 
-## 23. Error Codes
+## 23. Hybrid Knowledge Evaluation And Cutover
+
+Hybrid Knowledge changes cross three independent identities: the immutable Source
+Publication, the Index Generation plus Retrieval Profile Revision, and the Published
+Agent Version that pins the resolved binding. Parser/schema/embedding changes create a
+new Generation; query expansion, fusion, reranking, and candidate-budget changes create
+a new Retrieval Profile Revision. Neither change mutates an active pointer in place.
+
+The release path is deliberately non-compensating:
+
+1. Run parser and visible Gold Suite evaluation.
+2. Run `proof-agent evaluate knowledge-shadow` against pinned legacy and Hybrid
+   observations. The artifact is rejected if either active pointer changes.
+3. Run `proof-agent evaluate knowledge-capacity`; the core evaluator launches five
+   authorized workers plus concurrent ingestion through a trusted deployment entry point.
+   The envelope requires idle and active-ingestion raw references, records queue time
+   separately from service time, and blocks excessive ingestion interference.
+4. Run the one-attempt sealed acceptance command. Unauthorized candidate exposure,
+   wrong authority/version, unresolvable formal citations, advice under unresolved
+   authority, and high-severity unsupported conclusions are hard-zero gates evaluated
+   before quality or latency.
+5. Run `proof-agent evaluate knowledge-recovery`. Its core orchestrator snapshots
+   pointers and launches every supported fault through a trusted deployment entry point.
+   Fault evidence is accepted only when both repository and bucket disposable markers
+   are proven, the original pointers are restored, and every result digest matches.
+6. Publish the new Agent Version only after all artifact digests enter the release
+   record. Rollback changes the Active Agent Version pointer to the retained prior
+   version; Source rollback remains a new monotonic Source Publication.
+
+The operations projection is read-only and trace-safe. It exposes counts, rates,
+identifiers, queue/service timing, rebuild state, and hard-zero counters, but never raw
+Rule Unit content or unauthorized candidate identities. Missing telemetry itself is a
+release blocker.
+
+## 24. Error Codes
 
 | Code | Subsystem | Purpose |
 | --- | --- | --- |
@@ -1469,7 +1503,7 @@ step without granting general interval-reopen authority.
 | `PA_RECEIPT_001` | Receipt | receipt render error |
 | `PA_SECRET_001` | Secret | secret-looking config or content |
 
-## 24. Tests And Verification
+## 25. Tests And Verification
 
 Runtime changes should run:
 ```bash
@@ -1487,7 +1521,7 @@ git diff --check
 
 Remote provider tests must mock SDK clients and never require real API keys.
 
-## 25. Roadmap
+## 26. Roadmap
 
 | Phase | Goal |
 | --- | --- |
@@ -1499,7 +1533,7 @@ Remote provider tests must mock SDK clients and never require real API keys.
 | 5 | Agent Control Platform: Dashboard UI, Approval Console, RBAC, multi-template, external observability |
 | 6 | Controlled ReAct V3 Orchestrator: run-scoped start/resume interface, Control Plane state machine, Observation Records, approval snapshot resume, Action Constraint, evidence admission, stage projection, and real-LLM regression gate |
 
-## 26. Stability Rules
+## 27. Stability Rules
 
 1. New capabilities define contracts before adapters.
 2. New providers cannot break deterministic demo.

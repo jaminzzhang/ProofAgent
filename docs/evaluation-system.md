@@ -393,6 +393,36 @@ The built-in decision profile is `core_analyzer_release.v1`. It is a post-run de
 
 Otherwise the decision is `blocked` and includes stable blocking reason strings such as `required_case_pass_rate below release threshold` or `artifact_sufficiency_rate below release threshold`.
 
+## Insurance Knowledge Evaluation
+
+The Insurance Knowledge Gold Suite contains 300 visible tuning cases and a separate
+200-case sealed acceptance cohort. Both preserve the 30/50/20 clause lookup,
+conditional guidance, and comparison distribution. Parser acceptance is separate and
+covers reading order, tables, cross-page continuation, OCR, citation anchors, and
+mandatory review.
+
+Visible evaluation reports Recall@20/50/100, complete-evidence Top-5/10, nDCG@10,
+MRR@10, citation resolvability, authority failures, ACL candidate exposure, and
+query/document/parser/ACL slices. Non-answer cases contribute hard facts without being
+invented as ranking gold.
+
+Sealed acceptance permits one execution for a frozen candidate and returns only
+aggregate and slice metrics. A nonzero unauthorized exposure, wrong version or
+precedence, unresolvable formal citation, advisory answer under authority uncertainty,
+or high-severity unsupported conclusion stops evaluation before quality and performance
+thresholds. Only then apply overall Recall@50 >= 0.95, every query slice >= 0.90,
+conditional/comparison complete-evidence Top-10 >= 0.90, support precision >= 0.98, and
+the pinned performance profile.
+
+Shadow, capacity, acceptance, and recovery outputs are immutable digest-bearing release
+Evidence. Shadow input contains safe hashes rather than question or Rule Unit content.
+Capacity Evidence requires exactly five authorized run identities, idle and
+active-ingestion samples, raw measurement references, and no more than the sealed
+ingestion-interference percentage (ten percent in the initial profile). The suite contains
+the experiment plan, never precomputed measurements. Recovery Evidence is accepted only
+after the driver proves marked disposable repository/bucket authority and the core
+orchestrator executes all four faults with stable pointers and valid per-fault digests.
+
 ## ReAct Loop Evaluation
 
 This section defines the loop-specific evaluation regime mandated by [ADR-0033](adr/0033-react-loop-verification-regime.md). The Controlled ReAct Loop ([ADR-0032](adr/0032-controlled-react-loop-and-convergence-governance.md), [concepts/react-loop-control.md](concepts/react-loop-control.md)) has failure modes — divergence, ignored eligibility, non-convergence, oscillation — that only manifest under real LLM non-determinism. The deterministic baseline is therefore necessary but not sufficient for any loop-affecting release.

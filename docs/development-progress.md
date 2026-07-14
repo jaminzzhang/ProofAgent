@@ -59,6 +59,25 @@ Authoritative design doc: `docs/technical-design.md`.
 
 ## 2. Implementation Snapshot
 
+### Phase E Hybrid Knowledge release controls (2026-07-14)
+
+- Insurance Knowledge and parser contracts now enforce the 30/50/20 Gold Suite profile,
+  exact Source Publication identity, complete comparison slots, ACL hard negatives, and
+  sliced retrieval/parser metrics.
+- Sealed acceptance persists an atomic one-attempt claim per production candidate and
+  exposes aggregate-only results. Hard-zero authority, security, citation, and support
+  failures cannot be offset by retrieval quality or latency.
+- Knowledge Operations adds a read-only backend projection and Hybrid Source Dashboard
+  panel for blockers, backlog, throughput, GPU/scheduler timing, outcome rates, rebuild
+  state, citation/slot facts, and incomplete-telemetry blocking.
+- Shadow comparison, five-run capacity measurement, and disposable four-fault recovery
+  drill modules emit stable digest-bearing artifacts. CLI commands execute trusted
+  deployment drivers, validate core invariants, and atomically persist shadow, capacity,
+  sealed acceptance, and recovery results.
+- Real Hybrid integration harnesses cover five concurrent authorized searches during a
+  second publication and deletion/rebuild of a disposable Generation. They remain
+  opt-in under the `hybrid_integration` marker.
+
 | Area | Status |
 | --- | --- |
 | Contracts | Pydantic v2 frozen models for manifest, policy, ReAct action/review, evidence, approval, tools, model, Shared Model Connections, trace, receipt, run, dashboard, and Agent Configuration |

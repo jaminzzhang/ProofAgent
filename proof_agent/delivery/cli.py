@@ -21,6 +21,7 @@ from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.analyzer import analyze_evaluation
+from proof_agent.evaluation.artifact_io import write_evaluation_artifact
 from proof_agent.evaluation.campaigns import run_evaluation_campaign
 from proof_agent.evaluation.demo.scenarios import (
     REACT_DEMO_SCENARIOS,
@@ -33,6 +34,21 @@ from proof_agent.evaluation.frozen_bundles import (
 )
 from proof_agent.evaluation.gate_profiles import get_knowledge_gate_profile
 from proof_agent.evaluation.knowledge_gates import KnowledgeAcceptanceAggregate
+from proof_agent.evaluation.knowledge_capacity import (
+    KnowledgeCapacityEnvelope,
+    KnowledgeCapacitySuite,
+    execute_capacity_suite,
+    load_capacity_suite,
+)
+from proof_agent.evaluation.knowledge_shadow import load_shadow_suite, run_shadow_suite
+from proof_agent.evaluation.knowledge_recovery import (
+    KnowledgeRecoveryDrillArtifact,
+    execute_recovery_drill,
+)
+from proof_agent.evaluation.runtime_drivers import (
+    load_capacity_driver,
+    load_recovery_driver,
+)
 from proof_agent.evaluation.sealed_knowledge_acceptance import (
     SealedKnowledgeAcceptanceStore,
     SealedKnowledgeSuiteRef,
@@ -136,6 +152,64 @@ def _hybrid_recovery_service_from_environment() -> Any:
     return recovery_service_from_environment(os.environ)
 
 
+def execute_knowledge_recovery_from_environment(
+    source_id: str,
+    generation_id: str,
+) -> KnowledgeRecoveryDrillArtifact:
+    """Launch all guarded faults through the installed disposable deployment driver."""
+
+    driver = load_recovery_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return execute_recovery_drill(
+            source_id=source_id,
+            generation_id=generation_id,
+            driver=driver,
+        )
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge recovery driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def execute_knowledge_capacity_from_environment(
+    suite: KnowledgeCapacitySuite,
+) -> KnowledgeCapacityEnvelope:
+    """Launch the measured workload through the installed governed deployment driver."""
+
+    driver = load_capacity_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return execute_capacity_suite(suite=suite, driver=driver)
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge capacity driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def _close_evaluation_driver(driver: Any, primary: Exception | None) -> None:
+    close = getattr(driver, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as close_exc:
+        if primary is None:
+            raise EvaluationInputError("Knowledge evaluation driver close failed") from close_exc
+        primary.add_note(
+            "Knowledge evaluation driver close also failed: "
+            f"{type(close_exc).__name__}"
+        )
+
+
 @knowledge_app.command("reconcile-orphans")
 def reconcile_hybrid_orphans(
     source_id: str = typer.Option(..., "--source-id"),
@@ -166,8 +240,7 @@ def reconcile_hybrid_orphans(
             except Exception as close_exc:
                 if primary is not None:
                     primary.add_note(
-                        "Hybrid recovery close also failed: "
-                        f"{type(close_exc).__name__}"
+                        f"Hybrid recovery close also failed: {type(close_exc).__name__}"
                     )
                 else:
                     typer.echo("Hybrid recovery close failed.", err=True)
@@ -201,8 +274,7 @@ def rebuild_hybrid_generation(
             except Exception as close_exc:
                 if primary is not None:
                     primary.add_note(
-                        "Hybrid recovery close also failed: "
-                        f"{type(close_exc).__name__}"
+                        f"Hybrid recovery close also failed: {type(close_exc).__name__}"
                     )
                 else:
                     typer.echo("Hybrid recovery close failed.", err=True)
@@ -536,6 +608,71 @@ def evaluate_knowledge_acceptance(
     if result.blocking_reasons:
         typer.echo("Blocking Reasons: " + ", ".join(result.blocking_reasons))
     if result.status == "blocked":
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("knowledge-capacity")
+def evaluate_knowledge_capacity(
+    suite: str = typer.Option(..., "--suite", help="Approved Knowledge capacity suite"),
+    output: str = typer.Option(..., "--output", help="Sealed capacity result JSON"),
+) -> None:
+    """Launch and seal the measured five-run workload envelope."""
+
+    output_path = Path(output)
+    try:
+        capacity_suite = load_capacity_suite(Path(suite))
+        envelope = execute_knowledge_capacity_from_environment(capacity_suite)
+        write_evaluation_artifact(output_path, envelope)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Knowledge Capacity: {'passed' if envelope.passed else 'blocked'}")
+    typer.echo(f"Result: {output_path}")
+    if envelope.blocking_reasons:
+        typer.echo("Blocking Reasons: " + ", ".join(envelope.blocking_reasons))
+    if not envelope.passed:
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("knowledge-shadow")
+def evaluate_knowledge_shadow(
+    suite: str = typer.Option(..., "--suite", help="Approved safe shadow suite"),
+    output: str = typer.Option(..., "--output", help="Digest-bearing shadow result JSON"),
+) -> None:
+    """Compare pinned bindings while proving active pointers remain unchanged."""
+
+    output_path = Path(output)
+    try:
+        result = run_shadow_suite(load_shadow_suite(Path(suite)))
+        write_evaluation_artifact(output_path, result)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo("Knowledge Shadow: passed")
+    typer.echo(f"Result: {output_path}")
+
+
+@evaluate_app.command("knowledge-recovery")
+def evaluate_knowledge_recovery(
+    source_id: str = typer.Option(..., "--source-id"),
+    generation_id: str = typer.Option(..., "--generation-id"),
+    output: str = typer.Option(..., "--output", help="Digest-bearing recovery result JSON"),
+) -> None:
+    """Launch and seal the guarded disposable four-fault recovery drill."""
+
+    output_path = Path(output)
+    try:
+        artifact = execute_knowledge_recovery_from_environment(source_id, generation_id)
+        if artifact.source_id != source_id or artifact.generation_id != generation_id:
+            raise EvaluationInputError("recovery executor returned mismatched authority")
+        write_evaluation_artifact(output_path, artifact)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Knowledge Recovery: {'passed' if artifact.passed else 'blocked'}")
+    typer.echo(f"Result: {output_path}")
+    if not artifact.passed:
+        typer.echo("Failed Faults: " + ", ".join(artifact.failed_faults))
         raise typer.Exit(code=1)
 
 

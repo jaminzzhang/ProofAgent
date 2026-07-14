@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
@@ -20,6 +19,7 @@ from proof_agent.contracts.evaluation import (
 )
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.artifact_io import write_evaluation_artifact
 from proof_agent.evaluation.gate_profiles import (
     INSURANCE_KNOWLEDGE_ACCEPTANCE_GATES_V1,
     KnowledgeAcceptanceGateProfile,
@@ -179,34 +179,7 @@ def write_sealed_knowledge_acceptance_result(
 ) -> None:
     """Atomically persist only the tuner-safe result projection."""
 
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise EvaluationInputError(
-            f"Unable to create acceptance result directory: {path.parent}"
-        ) from exc
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_name = handle.name
-            handle.write(result.model_dump_json(indent=2))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-    except OSError as exc:
-        raise EvaluationInputError(f"Unable to write acceptance result: {path}") from exc
-    finally:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+    write_evaluation_artifact(path, result)
 
 
 __all__ = [

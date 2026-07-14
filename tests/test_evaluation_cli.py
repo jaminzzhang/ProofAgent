@@ -17,6 +17,14 @@ from proof_agent.evaluation.knowledge_gates import (
     KnowledgeAcceptanceAggregate,
     KnowledgeHardGateFacts,
 )
+from proof_agent.evaluation.knowledge_capacity import (
+    KnowledgeCapacityMeasurements,
+    seal_capacity_report,
+)
+from proof_agent.evaluation.knowledge_recovery import (
+    run_recovery_drill,
+    seal_recovery_drill,
+)
 from proof_agent.evaluation.sealed_knowledge_acceptance import (
     SealedKnowledgeAcceptanceEnvelope,
     SealedKnowledgeSuiteRef,
@@ -180,6 +188,164 @@ def test_evaluate_knowledge_acceptance_writes_aggregate_only_result(
     assert "one acceptance attempt" in repeated.output
 
 
+def test_evaluate_knowledge_capacity_seals_digest_bearing_result(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "capacity-result.json"
+
+    measurements = KnowledgeCapacityMeasurements(
+        corpus_digest="a" * 64,
+        suite_digest="b" * 64,
+        changed_documents=20,
+        changed_pages=400,
+        docling_pages=350,
+        paddle_pages=50,
+        table_density=0.3,
+        model_revision="model-v1",
+        retrieval_profile_revision="profile-v1",
+        hardware_label="approved-hardware",
+        active_run_ids=tuple(f"run-{index}" for index in range(5)),
+        reviewer_count=2,
+        target_agent_count=3,
+        warmup_count=10,
+        sample_count=100,
+        retrieval_p50_ms=1_000,
+        retrieval_p95_ms=4_000,
+        retrieval_p99_ms=4_800,
+        scheduler_queue_p95_ms=500,
+        full_run_p95_ms=30_000,
+        ingestion_documents_per_hour=40,
+        idle_retrieval_p95_ms=3_500,
+        active_ingestion_retrieval_p95_ms=3_800,
+        approved_to_active_seconds=7_200,
+        idle_raw_measurement_refs=("driver://idle",),
+        active_ingestion_raw_measurement_refs=("driver://active",),
+    )
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.execute_knowledge_capacity_from_environment",
+        lambda suite: seal_capacity_report(
+            measurements=measurements,
+            retrieval_p95_limit_ms=suite.thresholds.retrieval_p95_limit_ms,
+            approved_to_active_limit_seconds=suite.thresholds.approved_to_active_limit_seconds,
+            ingestion_interference_limit_percent=(
+                suite.thresholds.ingestion_interference_limit_percent
+            ),
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "knowledge-capacity",
+            "--suite",
+            "proof_agent/evaluation/suites/insurance_knowledge_capacity.sample.yaml",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Knowledge Capacity: passed" in result.output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert len(payload["measurements"]["active_run_ids"]) == 5
+    assert len(payload["envelope_sha256"]) == 64
+
+
+def test_evaluate_knowledge_shadow_proves_active_pointers_unchanged(tmp_path: Path) -> None:
+    suite = tmp_path / "shadow-suite.json"
+    output = tmp_path / "shadow-result.json"
+    pointers = {
+        "source_publication_id": "publication-7",
+        "agent_version_id": "agent-version-4",
+    }
+    suite.write_text(
+        json.dumps(
+            {
+                "schema_version": "insurance-knowledge-shadow.v1",
+                "questions": [{"case_id": "case-1", "question_ref": "sha256:question"}],
+                "active_pointers_before": pointers,
+                "active_pointers_after": pointers,
+                "legacy_observations": [
+                    {
+                        "case_id": "case-1",
+                        "binding_kind": "legacy",
+                        "outcome": "answered",
+                        "evidence_identity_hashes": ["a" * 64],
+                        "citation_identity_hashes": ["b" * 64],
+                        "latency_ms": 25,
+                    }
+                ],
+                "hybrid_observations": [
+                    {
+                        "case_id": "case-1",
+                        "binding_kind": "hybrid",
+                        "outcome": "answered",
+                        "evidence_identity_hashes": ["c" * 64],
+                        "citation_identity_hashes": ["d" * 64],
+                        "latency_ms": 30,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["evaluate", "knowledge-shadow", "--suite", str(suite), "--output", str(output)],
+    )
+
+    assert result.exit_code == 0
+    assert "Knowledge Shadow: passed" in result.output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["active_pointers"] == pointers
+    assert "question" not in payload
+
+
+def test_evaluate_knowledge_recovery_writes_guarded_drill_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "recovery-result.json"
+    result = run_recovery_drill(
+        fault="drop_generation_index",
+        disposable_test_marker=True,
+        expected_manifest_root="root-a",
+        rebuilt_manifest_root="root-a",
+    )
+    artifact = seal_recovery_drill(
+        source_id="ks-test",
+        generation_id="generation-test",
+        results=(result,),
+    )
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.execute_knowledge_recovery_from_environment",
+        lambda source_id, generation_id: artifact,
+    )
+
+    cli_result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "knowledge-recovery",
+            "--source-id",
+            "ks-test",
+            "--generation-id",
+            "generation-test",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert cli_result.exit_code == 0
+    assert "Knowledge Recovery: passed" in cli_result.output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["source_id"] == "ks-test"
+    assert len(payload["artifact_sha256"]) == 64
+
+
 def test_evaluate_run_suite_cli_creates_subjects_and_analysis(
     monkeypatch,
     tmp_path: Path,
@@ -236,9 +402,7 @@ cases:
             encoding="utf-8",
         )
         return SimpleNamespace(
-            final_output=(
-                "Travel meals are reimbursed. citation_refs: customer-support-policy"
-            ),
+            final_output=("Travel meals are reimbursed. citation_refs: customer-support-policy"),
             outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
             trace_path=trace_path,
             receipt_path=receipt_path,
@@ -266,17 +430,11 @@ cases:
     assert result.exit_code == 0
     assert "Subjects:" in result.output
     assert "Release Decision: passed" in result.output
-    subject_manifest = (
-        output_dir
-        / "v3_intent_execution"
-        / "evaluation_subjects.yaml"
-    )
+    subject_manifest = output_dir / "v3_intent_execution" / "evaluation_subjects.yaml"
     assert subject_manifest.exists()
     assert "v3_policy_answer" in subject_manifest.read_text(encoding="utf-8")
     assert (
-        output_dir
-        / "v3_intent_execution-v3_intent_execution_run_subjects"
-        / "evaluation_report.md"
+        output_dir / "v3_intent_execution-v3_intent_execution_run_subjects" / "evaluation_report.md"
     ).exists()
 
 

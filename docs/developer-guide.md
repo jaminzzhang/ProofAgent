@@ -1120,7 +1120,48 @@ Do not commit:
 - provider secrets
 - generated files under `runs/latest/`
 
-## 11. Operations Management
+## 11. Hybrid Knowledge Rollout
+
+Create Hybrid Sources only against private, hash-pinned parser, embedding, reranker,
+PostgreSQL, S3, and OpenSearch adapters. Import workbook metadata as a draft, resolve
+every PDF/workbook conflict through the review workflow, freeze the candidate, validate
+the exact Generation and Retrieval Profile Revision, and then publish. Runtime
+generation, manifest, attestation, ACL, and citation failures fail closed; only a
+profile-pinned and previously sealed BM25-only or RRF-without-reranker mode may degrade.
+
+The staged verification commands are:
+
+```bash
+docker compose -f docker-compose.hybrid-test.yml up -d --wait postgres minio minio-init opensearch
+proof-agent evaluate knowledge-shadow --suite var/knowledge-eval/approved-shadow-suite.yaml --output var/knowledge-eval/shadow-result.json
+proof-agent evaluate knowledge-capacity --suite var/knowledge-eval/approved-capacity-suite.yaml --output var/knowledge-eval/capacity-result.json
+proof-agent evaluate knowledge-acceptance --suite var/knowledge-eval/sealed-acceptance-suite.yaml --output var/knowledge-eval/acceptance-result.json
+proof-agent evaluate knowledge-recovery --source-id "$HYBRID_TEST_SOURCE_ID" --generation-id "$HYBRID_TEST_GENERATION_ID" --output var/knowledge-eval/recovery-result.json
+```
+
+The capacity suite declares the frozen experiment plan and thresholds, not measured
+results. `knowledge-capacity` launches the five online workers and concurrent offline
+ingestion through the installed `proof_agent.knowledge_capacity_drivers` entry point;
+the core evaluator owns concurrency, monotonic timing, percentile calculation, the
+ten-percent ingestion-interference gate, digest sealing, and atomic output. Select the
+approved adapter with `PA_KNOWLEDGE_CAPACITY_DRIVER`.
+
+`knowledge-recovery` launches all four supported faults through the installed
+`proof_agent.knowledge_recovery_drivers` entry point selected by
+`PA_KNOWLEDGE_RECOVERY_DRIVER`. The adapter must prove the repository and bucket carry
+disposable authority; the CLI additionally requires `HYBRID_TEST_DISPOSABLE_MARKER=1`
+and both repository and bucket markers to equal `disposable-test`. The core evaluator
+then snapshots pointers around each fault and verifies prior publication visibility,
+exact manifest and attestation reproduction, idempotent cleanup, pre-cutover pointer
+stability, and Agent Version rollback. Arbitrary module paths and precomputed capacity
+results are not accepted as executable release evidence.
+
+Use the Knowledge Operations panel to inspect release blockers before throughput. An
+operator should treat incomplete telemetry, any hard-zero counter, stale publication,
+failed rebuild, or growing review/retry/orphan backlog as a stop condition. Keep the
+prior Published Agent Version until the assisted pilot and scheduled rollback drill pass.
+
+## 12. Operations Management
 
 Every run should produce:
 ```text
@@ -1145,7 +1186,7 @@ AI Agent owners should regularly review:
 - if traces are complete
 - if receipts can explain the final outcome
 
-## 12. When to Extend the Framework
+## 13. When to Extend the Framework
 
 When adding new capabilities, first determine which layer it belongs to:
 
@@ -1161,7 +1202,7 @@ When adding new capabilities, first determine which layer it belongs to:
 
 Default rule: define the contract or port first, then implement the adapter. Do not let third-party SDK types enter public contracts, policies, traces, receipts, or dashboard contracts.
 
-## 13. Owner Acceptance Checklist
+## 14. Owner Acceptance Checklist
 
 Before launching, verify at least:
 - Agent runs successfully with the deterministic provider.
