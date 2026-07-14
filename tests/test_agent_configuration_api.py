@@ -1950,9 +1950,7 @@ def test_hybrid_publication_routes_dispatch_to_typed_authority_facade(tmp_path: 
     validations = client.get(
         "/api/config/knowledge-sources/ks_hybrid_index/publication-validations"
     )
-    publications = client.get(
-        "/api/config/knowledge-sources/ks_hybrid_index/publications"
-    )
+    publications = client.get("/api/config/knowledge-sources/ks_hybrid_index/publications")
 
     assert validated.json() == validation.model_dump(mode="json")
     assert published.json() == publication.model_dump(mode="json")
@@ -2927,6 +2925,37 @@ def test_bind_shared_knowledge_source_to_agent_draft(
         for binding in parsed["knowledge_bindings"]
     )
     assert loaded.json()["agent_yaml"] == bound.json()["agent_yaml"]
+
+
+def test_bind_hybrid_source_to_agent_draft_selects_retrieval_profile(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    created = _create_hybrid_index_source(client)
+    store = _configuration_store(client)
+    source = store.get_knowledge_source(created["source_id"])
+    assert source is not None
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_001"})
+    )
+
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={
+            "source_id": source.source_id,
+            "retrieval_profile_revision_id": "profile_002",
+        },
+    )
+
+    assert bound.status_code == 200
+    parsed = yaml.safe_load(bound.json()["agent_yaml"])
+    hybrid_binding = next(
+        binding
+        for binding in parsed["knowledge_bindings"]
+        if binding["source_ref"]["source_id"] == source.source_id
+    )
+    assert hybrid_binding["retrieval_profile_revision_id"] == "profile_002"
 
 
 def test_update_model_contract_after_binding_shared_source_preserves_package_sources(

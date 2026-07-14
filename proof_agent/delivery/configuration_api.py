@@ -557,6 +557,7 @@ class KnowledgeBindingAttachRequest(BaseModel):
 
     source_id: str = Field(min_length=1)
     binding_id: str | None = None
+    retrieval_profile_revision_id: str | None = Field(default=None, min_length=1)
     alias: str | None = None
     failure_mode: str = "required"
     fusion_weight: float = 1.0
@@ -2119,6 +2120,11 @@ def bind_knowledge_source_to_draft(
         raise HTTPException(status_code=400, detail="fusion_weight must be greater than 0.")
     if request.top_k is not None and request.top_k <= 0:
         raise HTTPException(status_code=400, detail="top_k must be greater than 0.")
+    if request.retrieval_profile_revision_id is not None and source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=400,
+            detail="retrieval_profile_revision_id requires a hybrid_index Source.",
+        )
 
     agent_yaml = _bind_source_in_agent_yaml(
         draft.contract_bundle.agent_yaml,
@@ -3632,6 +3638,8 @@ def _bind_source_in_agent_yaml(
     }
     if request.alias:
         binding_entry["alias"] = request.alias
+    if request.retrieval_profile_revision_id is not None:
+        binding_entry["retrieval_profile_revision_id"] = request.retrieval_profile_revision_id
     if request.top_k is not None:
         binding_entry["top_k"] = request.top_k
     _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)

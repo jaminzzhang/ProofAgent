@@ -1,15 +1,23 @@
 """Tests for resolving Published Agent Versions into governed execution."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    InMemoryHybridKnowledgeBindingAuthority,
+)
 from proof_agent.contracts import (
     ContractBundle,
     ExactArtifactRef,
+    HybridKnowledgePublicationRecord,
+    KnowledgeProjectionAttestation,
+    KnowledgeRetrievalProfileRevision,
     KnowledgeSourcePublicationRecord,
     KnowledgeSourceSnapshotManifest,
     ResolvedHybridKnowledgeBinding,
@@ -40,6 +48,59 @@ def _resolved_hybrid_binding(
             media_type="application/json",
         ),
         publication_attestation_id="attestation_001",
+    )
+
+
+def _seed_hybrid_binding_authority(
+    authority: InMemoryHybridKnowledgeBindingAuthority,
+    *,
+    source_draft_version_id: str,
+    publication_id: str = "publication_001",
+) -> None:
+    binding = _resolved_hybrid_binding(source_publication_id=publication_id)
+    attestation = KnowledgeProjectionAttestation(
+        attestation_id=binding.publication_attestation_id,
+        attestation_sha256="2" * 64,
+        source_id=binding.source_id,
+        generation_id=binding.index_generation_id,
+        publication_attempt_id="attempt_001",
+        index_uuid="index-uuid-001",
+        refresh_checkpoint="refresh-001",
+        manifest_root_sha256=binding.manifest_ref.sha256,
+        mapping_sha256="3" * 64,
+        covered_publication_sequences=(binding.source_publication_seq,),
+        projection_sha256="4" * 64,
+        validated_document_count=1,
+        validated_rule_unit_count=1,
+    )
+    authority.publish(
+        HybridKnowledgePublicationRecord(
+            publication_id=publication_id,
+            source_id=binding.source_id,
+            source_draft_version_id=source_draft_version_id,
+            source_snapshot_id=binding.source_snapshot_id,
+            source_publication_seq=binding.source_publication_seq,
+            candidate_digest="5" * 64,
+            generation_id=binding.index_generation_id,
+            manifest_ref=binding.manifest_ref,
+            attestation=attestation,
+            validation_id="validation_001",
+            published_at=datetime(2026, 7, 12, tzinfo=UTC),
+            published_by="test-user",
+        )
+    )
+    authority.publish_retrieval_profile(
+        source_id=binding.source_id,
+        profile=KnowledgeRetrievalProfileRevision(
+            profile_revision_id=binding.retrieval_profile_revision_id,
+            lexical_budget=100,
+            dense_budget=100,
+            rrf_window=50,
+            reranker_revision="reranker-001",
+            rerank_budget=50,
+            final_budget=16,
+        ),
+        make_default=True,
     )
 
 
@@ -80,6 +141,50 @@ def test_hybrid_shared_source_publication_guard_fails_closed_for_invalid_identit
 def test_hybrid_shared_source_publication_guard_accepts_exact_generic_publication(
     tmp_path: Path,
 ) -> None:
+    authority = InMemoryHybridKnowledgeBindingAuthority()
+    store = LocalAgentConfigurationStore(
+        tmp_path / "config",
+        hybrid_binding_authority=authority,
+    )
+    source = store.create_knowledge_source(
+        source_id="ks_hybrid",
+        name="Hybrid Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="test-user",
+    )
+    assert source.source_draft_version_id is not None
+    _seed_hybrid_binding_authority(
+        authority,
+        source_draft_version_id=source.source_draft_version_id,
+    )
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_001"})
+    )
+    store._write_knowledge_source_publication(
+        KnowledgeSourcePublicationRecord(
+            publication_id="record_001",
+            source_id=source.source_id,
+            resource_kind="hybrid_publication",
+            resource_id="publication_001",
+            source_draft_version_id=source.source_draft_version_id,
+            validation_id="validation_001",
+            change_note="Publish governed Hybrid index.",
+            published_at="2026-07-12T00:00:00Z",
+            published_by="test-user",
+            document_count=1,
+            smoke_query="policy",
+        )
+    )
+
+    store._require_resolved_shared_knowledge_sources_active_unlocked(
+        ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
+    )
+
+
+def test_hybrid_shared_source_publication_guard_rejects_missing_hybrid_authority(
+    tmp_path: Path,
+) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
     source = store.create_knowledge_source(
         source_id="ks_hybrid",
@@ -108,9 +213,13 @@ def test_hybrid_shared_source_publication_guard_accepts_exact_generic_publicatio
         )
     )
 
-    store._require_resolved_shared_knowledge_sources_active_unlocked(
-        ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
-    )
+    with pytest.raises(ProofAgentError) as exc:
+        store._require_resolved_shared_knowledge_sources_active_unlocked(
+            ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
+        )
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "authority" in exc.value.message
 
 
 def _publish_package(
@@ -368,14 +477,98 @@ audit:
     persisted_binding = persisted.resolved_knowledge_bindings.bindings[0]
     assert persisted_binding.source_version_id == "kssnapshot_001"
     assert Path(persisted_binding.provider_params["snapshot_path"]) == (
-        store.root_dir
-        / "knowledge_sources"
-        / "ks_policy"
-        / "snapshots"
-        / "kssnapshot_001"
+        store.root_dir / "knowledge_sources" / "ks_policy" / "snapshots" / "kssnapshot_001"
     )
     assert resolved_agent is not None
     assert resolved_agent.resolved_knowledge_bindings == persisted.resolved_knowledge_bindings
+
+
+def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
+    tmp_path: Path,
+) -> None:
+    authority = InMemoryHybridKnowledgeBindingAuthority()
+    store = LocalAgentConfigurationStore(
+        tmp_path / "config",
+        hybrid_binding_authority=authority,
+    )
+    draft = import_agent_package(
+        Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml"),
+        store=store,
+        actor="test-user",
+    )
+    source = store.create_knowledge_source(
+        source_id="ks_hybrid",
+        name="Hybrid Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="test-user",
+    )
+    assert source.source_draft_version_id is not None
+    _seed_hybrid_binding_authority(
+        authority,
+        source_draft_version_id=source.source_draft_version_id,
+    )
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_001"})
+    )
+    store._write_knowledge_source_publication(
+        KnowledgeSourcePublicationRecord(
+            publication_id="record_001",
+            source_id=source.source_id,
+            resource_kind="hybrid_publication",
+            resource_id="publication_001",
+            source_draft_version_id=source.source_draft_version_id,
+            validation_id="validation_001",
+            change_note="Publish governed Hybrid index.",
+            published_at="2026-07-12T00:00:00Z",
+            published_by="test-user",
+            document_count=1,
+            smoke_query="policy",
+        )
+    )
+    raw_agent = yaml.safe_load(draft.contract_bundle.agent_yaml)
+    raw_agent["knowledge_bindings"] = [
+        {
+            "binding_id": "kb_hybrid",
+            "source_ref": {"scope": "shared", "source_id": source.source_id},
+            "retrieval_profile_revision_id": "profile_001",
+        }
+    ]
+    draft = store.update_draft(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="test-user",
+        contract_bundle=ContractBundle(
+            agent_yaml=yaml.safe_dump(raw_agent, sort_keys=False),
+            policy_yaml=draft.contract_bundle.policy_yaml,
+            tools_yaml=draft.contract_bundle.tools_yaml,
+            extra_files=draft.contract_bundle.extra_files,
+            advanced_fields=draft.contract_bundle.advanced_fields,
+        ),
+    )
+    frozen_bindings = ResolvedKnowledgeBindingSet(bindings=(_resolved_hybrid_binding(),))
+
+    version = store.publish_version(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        validation_run_id="run_validation_hybrid",
+        actor="test-user",
+        resolved_knowledge_bindings=frozen_bindings,
+    )
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_002"})
+    )
+    resolved_agent = PublishedAgentRegistry(
+        agents={},
+        configuration_store=store,
+    ).resolve(draft.agent_id)
+
+    assert resolved_agent is not None
+    assert resolved_agent.agent_version_id == version.version_id
+    assert resolved_agent.resolved_knowledge_bindings == frozen_bindings
+    persisted = store.get_version(draft.agent_id, version.version_id)
+    assert persisted is not None
+    assert persisted.resolved_knowledge_bindings == frozen_bindings
 
 
 def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:
@@ -470,7 +663,9 @@ def test_execution_api_still_rejects_arbitrary_manifest_paths(tmp_path: Path) ->
     app = create_app(
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
-        published_agents={"enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")},
+        published_agents={
+            "enterprise_qa": Path("proof_agent/evaluation/demo/fixtures/enterprise_qa/agent.yaml")
+        },
     )
     client = TestClient(app)
 

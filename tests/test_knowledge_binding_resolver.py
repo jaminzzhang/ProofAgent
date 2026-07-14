@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,9 +13,16 @@ from proof_agent.bootstrap.knowledge_resolution import (
 )
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    HybridKnowledgeBindingAuthoritySnapshot,
+    InMemoryHybridKnowledgeBindingAuthority,
+)
 from proof_agent.contracts import (
     ExactArtifactRef,
     FrozenDict,
+    HybridKnowledgePublicationRecord,
+    KnowledgeProjectionAttestation,
+    KnowledgeRetrievalProfileRevision,
     KnowledgeSourceSnapshotManifest,
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
@@ -242,6 +250,65 @@ def _legacy_binding_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def _hybrid_publication(
+    *,
+    source_id: str,
+    source_draft_version_id: str,
+    publication_id: str = "publication-7",
+    source_publication_seq: int = 7,
+) -> HybridKnowledgePublicationRecord:
+    manifest_ref = ExactArtifactRef(
+        artifact_uri="s3://knowledge/manifests/root.json",
+        version_id="manifest-version-7",
+        sha256="1" * 64,
+        size_bytes=42,
+        media_type="application/json",
+    )
+    attestation = KnowledgeProjectionAttestation(
+        attestation_id="attestation-7",
+        attestation_sha256="2" * 64,
+        source_id=source_id,
+        generation_id="generation-7",
+        publication_attempt_id="attempt-7",
+        index_uuid="index-uuid-7",
+        refresh_checkpoint="refresh-7",
+        manifest_root_sha256=manifest_ref.sha256,
+        mapping_sha256="3" * 64,
+        covered_publication_sequences=(source_publication_seq,),
+        projection_sha256="4" * 64,
+        validated_document_count=1,
+        validated_rule_unit_count=1,
+    )
+    return HybridKnowledgePublicationRecord(
+        publication_id=publication_id,
+        source_id=source_id,
+        source_draft_version_id=source_draft_version_id,
+        source_snapshot_id="snapshot-7",
+        source_publication_seq=source_publication_seq,
+        candidate_digest="5" * 64,
+        generation_id="generation-7",
+        manifest_ref=manifest_ref,
+        attestation=attestation,
+        validation_id="validation-7",
+        published_at=datetime(2026, 7, 14, tzinfo=UTC),
+        published_by="operator",
+    )
+
+
+def _hybrid_profile(
+    profile_revision_id: str = "profile-2",
+) -> KnowledgeRetrievalProfileRevision:
+    return KnowledgeRetrievalProfileRevision(
+        profile_revision_id=profile_revision_id,
+        lexical_budget=100,
+        dense_budget=100,
+        rrf_window=50,
+        reranker_revision="reranker-2",
+        rerank_budget=50,
+        final_budget=16,
+    )
+
+
 def test_package_resolver_resolves_package_source(tmp_path: Path) -> None:
     agent_yaml = _write_agent_manifest(tmp_path, source_ref_scope="package")
 
@@ -274,6 +341,23 @@ def test_package_resolver_rejects_shared_source_ref(tmp_path: Path) -> None:
     assert "Configuration Store resolver" in exc.value.fix
 
 
+def test_package_resolver_rejects_hybrid_profile_selection(tmp_path: Path) -> None:
+    agent_yaml = _write_agent_manifest(tmp_path, source_ref_scope="package")
+    agent_yaml.write_text(
+        agent_yaml.read_text(encoding="utf-8").replace(
+            "    alias: policy_docs\n",
+            "    retrieval_profile_revision_id: profile_001\n    alias: policy_docs\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        PackageKnowledgeBindingResolver().resolve(load_agent_manifest(agent_yaml))
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "Hybrid" in exc.value.message
+
+
 def test_configuration_store_resolver_rejects_unpublished_source(tmp_path: Path) -> None:
     store = LocalAgentConfigurationStore(tmp_path / "config")
     store.create_knowledge_source(
@@ -296,6 +380,114 @@ def test_configuration_store_resolver_rejects_unpublished_source(tmp_path: Path)
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "published" in exc.value.message
+
+
+def test_configuration_store_resolver_pins_hybrid_publication_and_profile(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_local",
+        name="Hybrid Policy Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    publication = _hybrid_publication(
+        source_id=source.source_id,
+        source_draft_version_id=source.source_draft_version_id or "draft-7",
+    )
+    profile = _hybrid_profile()
+
+    class Authority:
+        def resolve_binding_authority(
+            self,
+            *,
+            source_id: str,
+            profile_revision_id: str | None,
+        ) -> HybridKnowledgeBindingAuthoritySnapshot | None:
+            assert source_id == source.source_id
+            assert profile_revision_id == profile.profile_revision_id
+            return HybridKnowledgeBindingAuthoritySnapshot(
+                publication=publication,
+                retrieval_profile=profile,
+            )
+
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": publication.publication_id})
+    )
+    agent_yaml = _write_agent_manifest(
+        tmp_path,
+        source_ref_scope="shared",
+        package_sources_yaml="package_knowledge_sources: []",
+    )
+    agent_yaml.write_text(
+        agent_yaml.read_text(encoding="utf-8").replace(
+            "    source_ref:\n      scope: shared\n      source_id: ks_local\n",
+            "    source_ref:\n      scope: shared\n      source_id: ks_local\n"
+            "    retrieval_profile_revision_id: profile-2\n",
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(
+        store,
+        hybrid_authority=Authority(),
+    ).resolve(load_agent_manifest(agent_yaml))
+
+    binding = resolved.bindings[0]
+    assert isinstance(binding, ResolvedHybridKnowledgeBinding)
+    assert binding.source_publication_id == publication.publication_id
+    assert binding.source_snapshot_id == publication.source_snapshot_id
+    assert binding.index_generation_id == publication.generation_id
+    assert binding.source_publication_seq == 7
+    assert binding.retrieval_profile_revision_id == profile.profile_revision_id
+    assert binding.manifest_ref == publication.manifest_ref
+    assert binding.publication_attestation_id == publication.attestation.attestation_id
+
+
+def test_configuration_store_resolver_inherits_hybrid_source_default_profile(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path / "config")
+    source = store.create_knowledge_source(
+        source_id="ks_local",
+        name="Hybrid Policy Knowledge",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    publication = _hybrid_publication(
+        source_id=source.source_id,
+        source_draft_version_id=source.source_draft_version_id or "draft-7",
+    )
+    profile = _hybrid_profile("profile-default")
+    authority = InMemoryHybridKnowledgeBindingAuthority()
+    authority.publish(publication)
+    authority.publish_retrieval_profile(
+        source_id=source.source_id,
+        profile=profile,
+        make_default=True,
+    )
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": publication.publication_id})
+    )
+    manifest = load_agent_manifest(
+        _write_agent_manifest(
+            tmp_path,
+            source_ref_scope="shared",
+            package_sources_yaml="package_knowledge_sources: []",
+        )
+    )
+
+    resolved = ConfigurationStoreKnowledgeBindingResolver(
+        store,
+        hybrid_authority=authority,
+    ).resolve(manifest)
+
+    binding = resolved.bindings[0]
+    assert isinstance(binding, ResolvedHybridKnowledgeBinding)
+    assert binding.retrieval_profile_revision_id == "profile-default"
 
 
 def test_configuration_store_resolver_rejects_archived_source_before_publication_lookup(
@@ -358,7 +550,9 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
         created_by="operator",
     )
     store._write_knowledge_source_snapshot(snapshot)
-    store._write_knowledge_source(source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id}))
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": snapshot.snapshot_id})
+    )
     manifest = load_agent_manifest(
         _write_agent_manifest(
             tmp_path,
@@ -375,11 +569,7 @@ def test_configuration_store_resolver_maps_published_local_index_snapshot(
     assert binding.source_version_id == snapshot.snapshot_id
     assert binding.provider == "local_index"
     assert binding.provider_params["snapshot_path"] == (
-        store.root_dir
-        / "knowledge_sources"
-        / "ks_local"
-        / "snapshots"
-        / snapshot.snapshot_id
+        store.root_dir / "knowledge_sources" / "ks_local" / "snapshots" / snapshot.snapshot_id
     )
     assert binding.provider_params["artifact_root"] == store.root_dir
     assert binding.provider_params["routing_model"] == {

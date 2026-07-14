@@ -117,6 +117,9 @@ VALIDATION_CAPTURE_EXCLUSION_METADATA = {
 }
 
 if TYPE_CHECKING:
+    from proof_agent.configuration.hybrid_knowledge_repository import (
+        HybridKnowledgeBindingAuthority,
+    )
     from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
         HybridArtifactBuildResult,
     )
@@ -135,13 +138,23 @@ class KnowledgeUploadStagingInput:
 class LocalAgentConfigurationStore:
     """File-backed Agent Configuration Store for local MVP workflows."""
 
-    def __init__(self, root_dir: Path) -> None:
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        hybrid_binding_authority: HybridKnowledgeBindingAuthority | None = None,
+    ) -> None:
         self._root_dir = root_dir
+        self._hybrid_binding_authority = hybrid_binding_authority
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def root_dir(self) -> Path:
         return self._root_dir
+
+    @property
+    def hybrid_binding_authority(self) -> HybridKnowledgeBindingAuthority | None:
+        return self._hybrid_binding_authority
 
     def create_draft(
         self,
@@ -2465,7 +2478,9 @@ class LocalAgentConfigurationStore:
                         structured_build_id=result.build_id,
                         original_ref=result.persisted_original_ref,
                         metadata_artifact_ref=result.insurance_metadata_ref,
-                        rule_unit_draft_id=authority_by_anchor[draft.canonical_anchor].rule_unit_draft_id,
+                        rule_unit_draft_id=authority_by_anchor[
+                            draft.canonical_anchor
+                        ].rule_unit_draft_id,
                         pdf_draft=draft,
                     )
                     for draft in metadata.pdf_drafts
@@ -2480,7 +2495,12 @@ class LocalAgentConfigurationStore:
                     authority_records=authority_records,
                     pdf_draft_records=pdf_draft_records,
                 )
-            except (OSError, ValidationError, WorkbookReviewConflictError, WorkbookValidationError) as exc:
+            except (
+                OSError,
+                ValidationError,
+                WorkbookReviewConflictError,
+                WorkbookValidationError,
+            ) as exc:
                 raise _invalid_ingestion_transition(
                     "Hybrid metadata registry projection failed exact validation."
                 ) from exc
@@ -3008,6 +3028,35 @@ class LocalAgentConfigurationStore:
                 if not has_publication:
                     raise _knowledge_source_lifecycle_conflict(
                         f"published Hybrid Knowledge Source publication is missing: {source.source_id}"
+                    )
+                authority = self._hybrid_binding_authority
+                if authority is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"Hybrid Knowledge binding authority is not configured: {source.source_id}"
+                    )
+                hybrid_snapshot = authority.resolve_binding_authority(
+                    source_id=source.source_id,
+                    profile_revision_id=binding.retrieval_profile_revision_id,
+                )
+                if hybrid_snapshot is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published Hybrid Knowledge binding authority is missing: {source.source_id}"
+                    )
+                publication = hybrid_snapshot.publication
+                profile = hybrid_snapshot.retrieval_profile
+                if (
+                    publication.source_id != binding.source_id
+                    or publication.publication_id != binding.source_publication_id
+                    or publication.source_snapshot_id != binding.source_snapshot_id
+                    or publication.generation_id != binding.index_generation_id
+                    or publication.source_publication_seq != binding.source_publication_seq
+                    or publication.manifest_ref != binding.manifest_ref
+                    or publication.attestation.attestation_id != binding.publication_attestation_id
+                    or profile.profile_revision_id != binding.retrieval_profile_revision_id
+                ):
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Published Agent Version requires exact Hybrid Knowledge authority. "
+                        "Revalidate the Draft Agent before publishing."
                     )
                 continue
             if binding.source_version_id != published_resource_id:

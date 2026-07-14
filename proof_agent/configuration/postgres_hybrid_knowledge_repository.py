@@ -31,6 +31,9 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     ProjectionAuthorityDocument,
     SearchIndexIdentity,
 )
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    HybridKnowledgeBindingAuthoritySnapshot,
+)
 from proof_agent.capabilities.knowledge.hybrid.recovery import (
     GenerationRebuildAuthority,
     GenerationRebuildOperation,
@@ -47,6 +50,7 @@ from proof_agent.contracts.knowledge_index import (
     KnowledgeIndexGeneration,
     KnowledgeProjectionAttestation,
     KnowledgePublicationAttempt,
+    KnowledgeRetrievalProfileRevision,
     RuleUnitManifestEntry,
     RuleUnitManifestRoot,
     RuleUnitManifestShard,
@@ -684,6 +688,115 @@ class PostgresHybridKnowledgeRepository:
         if row is None or row[0] is None:
             return None
         return _hydrate_jsonb_model(HybridKnowledgePublicationRecord, row[0])
+
+    def publish_retrieval_profile(
+        self,
+        *,
+        source_id: str,
+        profile: KnowledgeRetrievalProfileRevision,
+        make_default: bool = False,
+    ) -> None:
+        """Persist one immutable query-time profile and optionally select it as default."""
+
+        if any(item.source_id != source_id for item in profile.enabled_degradations):
+            raise ValueError("retrieval profile degradations must match the owning Source")
+        profile_json = profile.model_dump(mode="json")
+        profile_digest = stable_digest(profile_json)
+        now = datetime.now(UTC)
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO hybrid_knowledge_retrieval_profile
+                  (profile_revision_id, source_id, profile_digest, profile_json, created_at)
+                VALUES (%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (profile_revision_id) DO NOTHING
+                """,
+                (
+                    profile.profile_revision_id,
+                    source_id,
+                    profile_digest,
+                    _canonical_json(profile_json),
+                    now,
+                ),
+            )
+            stored = connection.execute(
+                """
+                SELECT source_id, profile_digest, profile_json
+                  FROM hybrid_knowledge_retrieval_profile
+                 WHERE profile_revision_id=%s
+                """,
+                (profile.profile_revision_id,),
+            ).fetchone()
+            if (
+                stored is None
+                or stored[0] != source_id
+                or stored[1] != profile_digest
+                or _json_object(stored[2]) != profile_json
+            ):
+                raise PublicationConflict("RETRIEVAL_PROFILE_CONFLICT")
+            if make_default:
+                connection.execute(
+                    """
+                    INSERT INTO hybrid_knowledge_source_retrieval_profile_default
+                      (source_id, profile_revision_id, updated_at)
+                    VALUES (%s,%s,%s)
+                    ON CONFLICT (source_id) DO UPDATE
+                      SET profile_revision_id=EXCLUDED.profile_revision_id,
+                          updated_at=EXCLUDED.updated_at
+                    """,
+                    (source_id, profile.profile_revision_id, now),
+                )
+
+    def resolve_binding_authority(
+        self,
+        *,
+        source_id: str,
+        profile_revision_id: str | None,
+    ) -> HybridKnowledgeBindingAuthoritySnapshot | None:
+        """Atomically resolve the active publication and explicit/default profile."""
+
+        with self._connection() as connection:
+            selected = connection.execute(
+                """
+                SELECT source.active_publication_id,
+                       COALESCE(%s::text, default_profile.profile_revision_id)
+                  FROM hybrid_knowledge_source_authority source
+                  LEFT JOIN hybrid_knowledge_source_retrieval_profile_default default_profile
+                    ON default_profile.source_id=source.source_id
+                 WHERE source.source_id=%s
+                """,
+                (profile_revision_id, source_id),
+            ).fetchone()
+            if selected is None or selected[0] is None or selected[1] is None:
+                return None
+            publication_row = connection.execute(
+                """
+                SELECT publication_json
+                  FROM hybrid_knowledge_publication
+                 WHERE publication_id=%s AND source_id=%s
+                """,
+                (selected[0], source_id),
+            ).fetchone()
+            profile_row = connection.execute(
+                """
+                SELECT profile_json
+                  FROM hybrid_knowledge_retrieval_profile
+                 WHERE profile_revision_id=%s AND source_id=%s
+                """,
+                (selected[1], source_id),
+            ).fetchone()
+        if publication_row is None or profile_row is None:
+            return None
+        return HybridKnowledgeBindingAuthoritySnapshot(
+            publication=_hydrate_jsonb_model(
+                HybridKnowledgePublicationRecord,
+                publication_row[0],
+            ),
+            retrieval_profile=_hydrate_jsonb_model(
+                KnowledgeRetrievalProfileRevision,
+                profile_row[0],
+            ),
+        )
 
     def _validate_staged_commit(self, commit: PublicationCommit) -> None:
         """Verify immutable staged material outside the final Source lock transaction."""

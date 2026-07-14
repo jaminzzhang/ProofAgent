@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS hybrid_knowledge_retrieval_profile (
   UNIQUE (source_id, profile_digest)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS hybrid_retrieval_profile_source_revision_uidx
+  ON hybrid_knowledge_retrieval_profile(source_id, profile_revision_id);
+
+CREATE TABLE IF NOT EXISTS hybrid_knowledge_source_retrieval_profile_default (
+  source_id text PRIMARY KEY REFERENCES hybrid_knowledge_source_authority(source_id),
+  profile_revision_id text NOT NULL,
+  updated_at timestamptz NOT NULL,
+  FOREIGN KEY (source_id, profile_revision_id)
+    REFERENCES hybrid_knowledge_retrieval_profile(source_id, profile_revision_id)
+);
+
 CREATE TABLE IF NOT EXISTS hybrid_knowledge_artifact_reference (
   artifact_ref_id text PRIMARY KEY,
   artifact_uri text NOT NULL,

@@ -68,8 +68,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
             checkpointer=_checkpointer_config_from_mapping(workflow.get("checkpointer")),
             template_descriptor_version=workflow.get("template_descriptor_version"),
             stages=tuple(
-                _workflow_stage_config_from_mapping(item)
-                for item in workflow.get("stages", ())
+                _workflow_stage_config_from_mapping(item) for item in workflow.get("stages", ())
             ),
         ),
         package_knowledge_sources=tuple(
@@ -155,6 +154,7 @@ def _knowledge_binding_config_from_mapping(raw: Any) -> KnowledgeBindingConfig:
             scope=source_ref["scope"],
             source_id=source_ref["source_id"],
         ),
+        retrieval_profile_revision_id=raw.get("retrieval_profile_revision_id"),
         alias=raw.get("alias"),
         failure_mode=raw.get("failure_mode", "required"),
         fusion_weight=raw.get("fusion_weight", 1.0),
@@ -383,9 +383,7 @@ def _workflow_stage_context_options_from_mapping(
     options: dict[str, bool] = {}
     for key, value in context.items():
         if not isinstance(value, bool):
-            raise TypeError(
-                f"workflow stage {stage_id} context option {key} must be a boolean"
-            )
+            raise TypeError(f"workflow stage {stage_id} context option {key} must be a boolean")
         options[str(key)] = value
     return options
 
@@ -404,9 +402,7 @@ def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
     # is read as max_plan_rounds so existing YAML keeps working.
     max_steps = raw["max_steps"]
     raw_max_plan_rounds = raw.get("max_plan_rounds")
-    max_plan_rounds = (
-        int(raw_max_plan_rounds) if raw_max_plan_rounds is not None else max_steps
-    )
+    max_plan_rounds = int(raw_max_plan_rounds) if raw_max_plan_rounds is not None else max_steps
     return ReActConfig(
         max_steps=max_steps,
         max_plan_rounds=max_plan_rounds,

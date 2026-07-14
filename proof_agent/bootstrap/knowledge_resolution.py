@@ -8,9 +8,14 @@ from proof_agent.contracts import (
     KnowledgeSourceLifecycleState,
     KnowledgeSourcePublicationRecord,
     KnowledgeSourceSnapshotManifest,
+    ResolvedHybridKnowledgeBinding,
+)
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    HybridKnowledgeBindingAuthority,
 )
 from proof_agent.contracts.knowledge_resolution import (
     ResolvedKnowledgeBinding,
+    ResolvedKnowledgeBindingItem,
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.errors import ProofAgentError
@@ -25,12 +30,16 @@ class KnowledgeBindingResolver(Protocol):
 
 class PackageKnowledgeBindingResolver:
     def resolve(self, manifest: AgentManifest) -> ResolvedKnowledgeBindingSet:
-        source_by_id = {
-            source.source_id: source for source in manifest.package_knowledge_sources
-        }
-        resolved: list[ResolvedKnowledgeBinding] = []
+        source_by_id = {source.source_id: source for source in manifest.package_knowledge_sources}
+        resolved: list[ResolvedKnowledgeBindingItem] = []
         for binding in manifest.knowledge_bindings:
             ref = binding.source_ref
+            if binding.retrieval_profile_revision_id is not None:
+                raise ProofAgentError(
+                    "PA_CONFIG_002",
+                    "Hybrid Retrieval Profile selection requires a shared hybrid_index Source.",
+                    "Remove the profile selection or bind a published shared Hybrid Source.",
+                )
             if ref.scope != "package":
                 raise ProofAgentError(
                     "PA_CONFIG_002",
@@ -57,14 +66,20 @@ class PackageKnowledgeBindingResolver:
 
 
 class ConfigurationStoreKnowledgeBindingResolver:
-    def __init__(self, store: LocalAgentConfigurationStore) -> None:
+    def __init__(
+        self,
+        store: LocalAgentConfigurationStore,
+        *,
+        hybrid_authority: HybridKnowledgeBindingAuthority | None = None,
+    ) -> None:
         self._store = store
+        self._hybrid_authority = hybrid_authority or store.hybrid_binding_authority
 
     def resolve(self, manifest: AgentManifest) -> ResolvedKnowledgeBindingSet:
         package_sources_by_id = {
             source.source_id: source for source in manifest.package_knowledge_sources
         }
-        resolved: list[ResolvedKnowledgeBinding] = []
+        resolved: list[ResolvedKnowledgeBindingItem] = []
         for binding in manifest.knowledge_bindings:
             ref = binding.source_ref
             if ref.scope == "package":
@@ -110,6 +125,20 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     f"shared Knowledge Source is not published: {ref.source_id}",
                     "Publish the Knowledge Source before binding it to an Agent.",
                 )
+            if shared_source.provider == "hybrid_index":
+                resolved.append(
+                    self._resolve_hybrid_binding(
+                        binding=binding,
+                        source=shared_source,
+                    )
+                )
+                continue
+            if binding.retrieval_profile_revision_id is not None:
+                raise ProofAgentError(
+                    "PA_CONFIG_002",
+                    "Hybrid Retrieval Profile selection requires a hybrid_index Source.",
+                    "Remove the profile selection or bind a published Hybrid Source.",
+                )
             if shared_source.provider == "http_json":
                 publication = _published_remote_config_publication(
                     store=self._store,
@@ -122,9 +151,7 @@ class ConfigurationStoreKnowledgeBindingResolver:
                         f"published remote Knowledge Source config is missing: {shared_source.source_id}",
                         "Publish the Knowledge Source again or repair the Configuration Store.",
                     )
-                provider_params = _provider_params_for_published_remote_source(
-                    shared_source
-                )
+                provider_params = _provider_params_for_published_remote_source(shared_source)
                 resolved.append(
                     ResolvedKnowledgeBinding(
                         binding_id=binding.binding_id,
@@ -173,6 +200,53 @@ class ConfigurationStoreKnowledgeBindingResolver:
             )
         return ResolvedKnowledgeBindingSet(bindings=tuple(resolved))
 
+    def _resolve_hybrid_binding(
+        self,
+        *,
+        binding: Any,
+        source: KnowledgeSource,
+    ) -> ResolvedHybridKnowledgeBinding:
+        authority = self._hybrid_authority
+        if authority is None:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"Hybrid Knowledge authority is not configured: {source.source_id}",
+                "Configure the Hybrid publication authority before validating this Agent.",
+            )
+        snapshot = authority.resolve_binding_authority(
+            source_id=source.source_id,
+            profile_revision_id=binding.retrieval_profile_revision_id,
+        )
+        if snapshot is None:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"published Hybrid Knowledge binding authority is missing: {source.source_id}",
+                "Publish the Source and Retrieval Profile before validating this Agent.",
+            )
+        publication = snapshot.publication
+        if (
+            publication.source_id != source.source_id
+            or publication.publication_id != source.published_snapshot_id
+        ):
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"published Hybrid Knowledge Source publication is stale: {source.source_id}",
+                "Revalidate the Source publication before validating this Agent.",
+            )
+        return ResolvedHybridKnowledgeBinding(
+            binding_id=binding.binding_id,
+            source_id=source.source_id,
+            source_publication_id=publication.publication_id,
+            source_snapshot_id=publication.source_snapshot_id,
+            index_generation_id=publication.generation_id,
+            source_publication_seq=publication.source_publication_seq,
+            retrieval_profile_revision_id=(snapshot.retrieval_profile.profile_revision_id),
+            manifest_ref=publication.manifest_ref,
+            publication_attestation_id=publication.attestation.attestation_id,
+            failure_mode=binding.failure_mode,
+            fusion_weight=binding.fusion_weight,
+        )
+
 
 def _published_remote_config_publication(
     *,
@@ -220,11 +294,7 @@ def _provider_params_for_published_source(
         )
     return {
         "snapshot_path": (
-            store_root
-            / "knowledge_sources"
-            / source.source_id
-            / "snapshots"
-            / snapshot.snapshot_id
+            store_root / "knowledge_sources" / source.source_id / "snapshots" / snapshot.snapshot_id
         ),
         "artifact_root": store_root,
         "routing_model": routing_model,

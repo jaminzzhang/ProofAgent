@@ -48,7 +48,11 @@ from proof_agent.contracts.insurance_rules import (
     InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
 )
-from proof_agent.contracts.knowledge_index import KnowledgeIndexGeneration, RuleUnitManifestEntry
+from proof_agent.contracts.knowledge_index import (
+    KnowledgeIndexGeneration,
+    KnowledgeRetrievalProfileRevision,
+    RuleUnitManifestEntry,
+)
 
 
 pytestmark = pytest.mark.hybrid_integration
@@ -437,6 +441,61 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
         )
         published_third = env["service"].publish(third)
         assert published_third.source_publication_seq == 3
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_postgres_resolves_explicit_and_default_retrieval_profiles() -> None:
+    env = _environment()
+    try:
+        publication = env["service"].publish(env["request"])
+        default_profile = KnowledgeRetrievalProfileRevision(
+            profile_revision_id="profile-default",
+            lexical_budget=100,
+            dense_budget=100,
+            rrf_window=50,
+            reranker_revision="reranker-default",
+            rerank_budget=50,
+            final_budget=16,
+        )
+        explicit_profile = default_profile.model_copy(
+            update={
+                "profile_revision_id": "profile-explicit",
+                "reranker_revision": "reranker-explicit",
+            }
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"],
+            profile=default_profile,
+            make_default=True,
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"],
+            profile=explicit_profile,
+        )
+
+        inherited = env["repository"].resolve_binding_authority(
+            source_id=env["source_id"],
+            profile_revision_id=None,
+        )
+        selected = env["repository"].resolve_binding_authority(
+            source_id=env["source_id"],
+            profile_revision_id=explicit_profile.profile_revision_id,
+        )
+
+        assert inherited is not None
+        assert inherited.publication == publication
+        assert inherited.retrieval_profile == default_profile
+        assert selected is not None
+        assert selected.publication == publication
+        assert selected.retrieval_profile == explicit_profile
+        assert (
+            env["repository"].resolve_binding_authority(
+                source_id=env["source_id"],
+                profile_revision_id="profile-missing",
+            )
+            is None
+        )
     finally:
         _cleanup(env)
 

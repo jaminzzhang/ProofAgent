@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 import os
@@ -11,7 +12,7 @@ import re
 import stat
 from threading import RLock
 from types import TracebackType
-from typing import TYPE_CHECKING, Iterator, Self
+from typing import TYPE_CHECKING, Iterator, Protocol, Self
 from urllib.parse import unquote, urlsplit
 
 try:
@@ -25,7 +26,11 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJobRequest,
     HybridClock,
 )
-from proof_agent.contracts.knowledge_index import ExactArtifactRef
+from proof_agent.contracts.knowledge_index import (
+    ExactArtifactRef,
+    HybridKnowledgePublicationRecord,
+    KnowledgeRetrievalProfileRevision,
+)
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
@@ -48,6 +53,25 @@ class HybridKnowledgeLeaseError(HybridKnowledgeRepositoryError):
 
 class ImmutableArtifactError(HybridKnowledgeRepositoryError):
     """An immutable artifact key or exact reference failed validation."""
+
+
+@dataclass(frozen=True, slots=True)
+class HybridKnowledgeBindingAuthoritySnapshot:
+    """Exact immutable Hybrid authority selected for one Draft binding."""
+
+    publication: HybridKnowledgePublicationRecord
+    retrieval_profile: KnowledgeRetrievalProfileRevision
+
+
+class HybridKnowledgeBindingAuthority(Protocol):
+    """Read-only seam that resolves an explicit or Source-default profile."""
+
+    def resolve_binding_authority(
+        self,
+        *,
+        source_id: str,
+        profile_revision_id: str | None,
+    ) -> HybridKnowledgeBindingAuthoritySnapshot | None: ...
 
 
 def _require_aware(value: datetime) -> datetime:
@@ -91,6 +115,65 @@ class ManualHybridClock:
         with self._lock:
             self._current += delta if delta is not None else timedelta(seconds=seconds)
             return self._current
+
+
+class InMemoryHybridKnowledgeBindingAuthority:
+    """Deterministic authority adapter for validation and offline exercises."""
+
+    def __init__(self) -> None:
+        self._active_publications: dict[str, HybridKnowledgePublicationRecord] = {}
+        self._profiles: dict[tuple[str, str], KnowledgeRetrievalProfileRevision] = {}
+        self._default_profiles: dict[str, str] = {}
+        self._lock = RLock()
+
+    def publish(self, publication: HybridKnowledgePublicationRecord) -> None:
+        with self._lock:
+            current = self._active_publications.get(publication.source_id)
+            if current is not None:
+                if current == publication:
+                    return
+                if publication.source_publication_seq <= current.source_publication_seq:
+                    raise HybridKnowledgeIdempotencyConflict(
+                        "Hybrid publication sequence must advance monotonically"
+                    )
+            self._active_publications[publication.source_id] = publication
+
+    def publish_retrieval_profile(
+        self,
+        *,
+        source_id: str,
+        profile: KnowledgeRetrievalProfileRevision,
+        make_default: bool = False,
+    ) -> None:
+        if any(item.source_id != source_id for item in profile.enabled_degradations):
+            raise ValueError("retrieval profile degradations must match the owning Source")
+        key = (source_id, profile.profile_revision_id)
+        with self._lock:
+            existing = self._profiles.get(key)
+            if existing is not None and existing != profile:
+                raise HybridKnowledgeIdempotencyConflict("Retrieval Profile revision is immutable")
+            self._profiles[key] = profile
+            if make_default:
+                self._default_profiles[source_id] = profile.profile_revision_id
+
+    def resolve_binding_authority(
+        self,
+        *,
+        source_id: str,
+        profile_revision_id: str | None,
+    ) -> HybridKnowledgeBindingAuthoritySnapshot | None:
+        with self._lock:
+            publication = self._active_publications.get(source_id)
+            selected_profile_id = profile_revision_id or self._default_profiles.get(source_id)
+            if publication is None or selected_profile_id is None:
+                return None
+            profile = self._profiles.get((source_id, selected_profile_id))
+            if profile is None:
+                return None
+            return HybridKnowledgeBindingAuthoritySnapshot(
+                publication=publication,
+                retrieval_profile=profile,
+            )
 
 
 class InMemoryHybridKnowledgeRepository:
@@ -220,9 +303,7 @@ class InMemoryHybridKnowledgeRepository:
             self._require_active_claim(claim.job_id, claim.worker_id, claim.fencing_token, now=now)
             request = self._build_requests.get(claim.job_id)
             if request is None:
-                raise HybridKnowledgeLeaseError(
-                    "claimed parse job has no exact build request"
-                )
+                raise HybridKnowledgeLeaseError("claimed parse job has no exact build request")
             validate_hybrid_artifact_build_result(request, result)
             self._build_results[claim.job_id] = result
             return self._finish_unlocked(
