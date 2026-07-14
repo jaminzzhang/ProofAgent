@@ -231,12 +231,65 @@ class ReActEnterpriseQAStageBehavior:
                 **_stage_context_applications_delta(state, stage_context),
                 "stage_llm_interactions": llm_interactions,
             }
+        hybrid_request_delta = self._governed_hybrid_request_delta(resolution)
+        if hybrid_request_delta.get("clarification_need") is not None:
+            clarification_need = hybrid_request_delta["clarification_need"]
+            self.trace.emit(
+                "clarification_requested",
+                status="waiting",
+                payload={
+                    "action_id": clarification_need["action_id"],
+                    "missing_fields": list(clarification_need["missing_fields"]),
+                    "clarification_type": "hybrid_authority_conditions",
+                },
+            )
+        if hybrid_request_delta.get("governance_refusal") is not None:
+            return {
+                "intent_resolution": _intent_resolution_state_dict(resolution),
+                **business_flow_delta,
+                **hybrid_request_delta,
+                **_stage_context_applications_delta(state, stage_context),
+                "stage_llm_interactions": llm_interactions,
+            }
         return {
             "intent_resolution": _intent_resolution_state_dict(resolution),
+            **hybrid_request_delta,
             **business_flow_delta,
             **_stage_context_applications_delta(state, stage_context),
             "stage_llm_interactions": llm_interactions,
         }
+
+    def _governed_hybrid_request_delta(
+        self,
+        resolution: IntentResolution,
+    ) -> dict[str, Any]:
+        factory = self.invocation.governed_hybrid_request_factory
+        if factory is None:
+            return {}
+        build = factory.build(resolution, self.invocation.institution_authorization)
+        if build.request is not None:
+            return {"governed_hybrid_request": build.request.model_dump(mode="json")}
+        if build.clarification is not None:
+            missing_fields = build.clarification.missing_fields
+            message = (
+                "Please provide "
+                f"{', '.join(missing_fields)} before I can search governed insurance rules."
+            )
+            return {
+                "governance_refusal": ReceiptOutcome.WAITING_FOR_USER_CLARIFICATION,
+                "governance_message": message,
+                "final_output": message,
+                "clarification_need": {
+                    "action_id": f"hybrid:{resolution.resolution_id}:clarify",
+                    "missing_fields": missing_fields,
+                    "message": message,
+                    "summary": {"reason": build.clarification.reason},
+                },
+            }
+        return _refusal(
+            "The governed insurance Knowledge request could not be admitted safely: "
+            f"{build.no_recommendation_reason}."
+        )
 
     def _business_flow_skill_pack_admission_delta(
         self,
@@ -1372,6 +1425,9 @@ def _intent_resolution_state_dict(resolution: IntentResolution) -> dict[str, Any
             }
             for item in resolution.retrieval_query_set
         ],
+        "insurance_condition_proposal": {
+            "values": dict(resolution.insurance_condition_proposal.values)
+        },
     }
 
 

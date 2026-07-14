@@ -33,6 +33,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
 from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.bootstrap.knowledge_resolution import (
@@ -389,6 +390,7 @@ class HarnessInvocation:
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
+    governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None
 
     def create_memory(self) -> SessionMemory:
         """Create per-run memory with the configured sensitivity boundary."""
@@ -406,6 +408,7 @@ def compose_harness_invocation(
     require_runtime_credentials: bool = True,
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
     institution_authorization: InstitutionAuthorizationContext | None = None,
+    governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
@@ -534,6 +537,7 @@ def compose_harness_invocation(
             else InMemoryContextBudgetCalibrationStore()
         ),
         institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
+        governed_hybrid_request_factory=governed_hybrid_request_factory,
     )
 
 
