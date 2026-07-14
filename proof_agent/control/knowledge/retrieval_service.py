@@ -16,6 +16,7 @@ from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.contracts import (
     EvidenceChunk,
     EvidenceContribution,
+    EvidenceStatus,
     EnforcementPoint,
     ModelCallRole,
     ModelConfig,
@@ -29,6 +30,15 @@ from proof_agent.contracts import (
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
+from proof_agent.control.knowledge.insurance_authority import (
+    InsuranceAuthorityCandidate,
+    InsuranceAuthorityContext,
+    evaluate_insurance_authority,
+)
+from proof_agent.control.knowledge.evidence_slots import (
+    AdmittedInsuranceEvidence,
+    evaluate_required_slots,
+)
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.errors import ProofAgentError
@@ -120,6 +130,97 @@ class _ProviderStepExecutionError(Exception):
 
 class _RetrievalExecutionCancelled(Exception):
     """Internal cooperative cancellation signal for timed retrieval work."""
+
+
+def _admit_governed_hybrid_evidence(
+    evidence: tuple[EvidenceChunk, ...],
+    *,
+    governed: GovernedHybridRetrievalRequest,
+    index_uuid: str,
+) -> tuple[tuple[EvidenceChunk, ...], str | None]:
+    """Apply authority then slot completeness before generic Evidence Admission."""
+
+    if not evidence:
+        return (), "zero_hybrid_candidates"
+    raw_facts = tuple(chunk.metadata.get("runtime_authority_facts") for chunk in evidence)
+    if any(not isinstance(item, Mapping) for item in raw_facts):
+        return evidence, "hybrid_authority_admission_pending"
+    context = InsuranceAuthorityContext(
+        source_id=governed.binding.source_id,
+        index_generation_id=governed.binding.index_generation_id,
+        index_uuid=index_uuid,
+        source_publication_seq=governed.binding.source_publication_seq,
+        as_of_date=governed.as_of_time.date(),
+        authorization=governed.authorization,
+        normalized_conditions=governed.normalized_conditions,
+    )
+    decisions = tuple(
+        evaluate_insurance_authority(
+            InsuranceAuthorityCandidate.model_validate(item),
+            context,
+        )
+        for item in raw_facts
+    )
+    authority_passed: list[tuple[EvidenceChunk, tuple[str, ...]]] = []
+    projected: list[EvidenceChunk] = []
+    for chunk, decision in zip(evidence, decisions, strict=True):
+        if not decision.admitted:
+            projected.append(
+                chunk.model_copy(
+                    update={
+                        "status": EvidenceStatus.REJECTED,
+                        "metadata": {
+                            **dict(chunk.metadata),
+                            "authority_outcome": decision.outcome,
+                        },
+                    }
+                )
+            )
+            continue
+        raw_slots = chunk.metadata.get("supported_evidence_slot_ids", ())
+        slots = tuple(item for item in raw_slots if isinstance(item, str))
+        authority_passed.append((chunk, slots))
+        projected.append(chunk)
+    if not authority_passed:
+        reason = (
+            "hybrid_authority_conflict"
+            if any(decision.outcome == "conflict" for decision in decisions)
+            else "hybrid_authority_rejected"
+        )
+        return tuple(projected), reason
+    slot_evidence = tuple(
+        AdmittedInsuranceEvidence(
+            evidence_id=chunk.evidence_id or chunk.source,
+            rule_unit_revision_id=chunk.chunk_id or chunk.evidence_id or chunk.source,
+            citation_uri=chunk.citation,
+            supported_slot_ids=slots,
+        )
+        for chunk, slots in authority_passed
+        if slots
+    )
+    slot_result = evaluate_required_slots(
+        governed.required_evidence_slots,
+        slot_evidence,
+    )
+    if not slot_result.complete:
+        return tuple(projected), "required_evidence_slots_incomplete"
+    passed_ids = {chunk.evidence_id for chunk, _slots in authority_passed}
+    admitted = tuple(
+        chunk.model_copy(
+            update={
+                "status": EvidenceStatus.ACCEPTED,
+                "authority_admitted": True,
+                "authority_outcome": "PASS",
+                "supported_evidence_slot_ids": tuple(
+                    chunk.metadata.get("supported_evidence_slot_ids", ())
+                ),
+            }
+        )
+        if chunk.evidence_id in passed_ids
+        else chunk
+        for chunk in projected
+    )
+    return admitted, None
 
 
 @dataclass
@@ -378,6 +479,11 @@ class KnowledgeRetrievalService:
                 "Activate the Agent Version with its exact Hybrid provider graph.",
             )
         evidence, provider_result = retrieve_governed(governed)
+        evidence, authority_reason = _admit_governed_hybrid_evidence(
+            evidence,
+            governed=governed,
+            index_uuid=provider_result.index_uuid,
+        )
         metrics = provider_result.metrics
         self._trace.emit(
             "hybrid_retrieval_summary",
@@ -394,13 +500,15 @@ class KnowledgeRetrievalService:
                 "embedding_service_time_ms": metrics.embedding_service_time_ms,
                 "reranker_queue_time_ms": metrics.reranker_queue_time_ms,
                 "reranker_service_time_ms": metrics.reranker_service_time_ms,
+                "degradation_mode": provider_result.degradation_mode,
             },
         )
         evidence_result = self._evaluate_evidence(
             evidence,
             min_score=request.min_score,
             no_evidence_reason_code=(
-                "hybrid_authority_admission_pending" if evidence else "zero_hybrid_candidates"
+                authority_reason
+                or ("zero_hybrid_candidates" if not evidence else None)
             ),
         )
         return KnowledgeRetrievalResult(

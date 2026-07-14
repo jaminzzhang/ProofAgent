@@ -31,6 +31,7 @@ from proof_agent.contracts import (
     KnowledgeIndexGeneration,
     KnowledgeProjectionAttestation,
     KnowledgeRetrievalProfileRevision,
+    PrevalidatedRetrievalDegradation,
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
     RetrievalQueryItem,
@@ -43,6 +44,7 @@ from proof_agent.control.knowledge.hybrid_retrieval import (
     HybridRetrievalAuthority,
     execute_hybrid_retrieval,
 )
+from proof_agent.control.knowledge.insurance_authority import InsuranceAuthorityCandidate
 from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalRequest,
     KnowledgeRetrievalService,
@@ -188,6 +190,34 @@ def _authority() -> HybridRetrievalAuthority:
     )
 
 
+def _authority_with_runtime_facts() -> HybridRetrievalAuthority:
+    base = _authority()
+    facts = InsuranceAuthorityCandidate(
+        rule_unit_revision_id="rule-1",
+        source_id="source-1",
+        index_generation_id="generation-7",
+        index_uuid="index-uuid-7",
+        publication_seq_from=1,
+        visibility="PUBLIC",
+        effective_from=datetime(2026, 1, 1, tzinfo=UTC).date(),
+        applicability_conditions={"region": "SHANGHAI"},
+        precedence_conflict=False,
+        citation_uri="proof://knowledge/source-1/document-1/rule-1",
+        manifest_citation_uri="proof://knowledge/source-1/document-1/rule-1",
+        metadata_digest_valid=True,
+        visibility_digest_valid=True,
+        manifest_digest_valid=True,
+    )
+    fact_payload = facts.model_dump(mode="python", warnings=False)
+    fact_payload["applicability_conditions"] = dict(facts.applicability_conditions)
+    return base.model_copy(
+        update={
+            "runtime_authority_facts_by_rule_unit_revision_id": {"rule-1": fact_payload},
+            "supported_evidence_slot_ids_by_rule_unit_revision_id": {"rule-1": ("governing-rule",)},
+        }
+    )
+
+
 def _hit() -> HybridSearchHit:
     return HybridSearchHit(
         rank=1,
@@ -258,6 +288,44 @@ class _RecordingReranker:
             queue_time_ms=5.0,
             service_time_ms=7.0,
         )
+
+
+class _FailingEmbedding(_RecordingEmbedding):
+    def embed(self, **kwargs: Any) -> Any:
+        self.priorities.append(kwargs["priority"])
+        raise RuntimeError("embedding unavailable")
+
+
+class _FailingReranker(_RecordingReranker):
+    def rerank(self, **kwargs: Any) -> Any:
+        self.priorities.append(kwargs["priority"])
+        raise RuntimeError("reranker unavailable")
+
+
+def _request_with_degradation(
+    mode: str,
+) -> GovernedHybridRetrievalRequest:
+    request = _request()
+    degradation = PrevalidatedRetrievalDegradation(
+        degradation_id=f"degradation-{mode.lower()}",
+        mode=mode,  # type: ignore[arg-type]
+        source_id="source-1",
+        query_type="conditional_guidance",
+        sealed_evaluation_ref=ExactArtifactRef(
+            artifact_uri="s3://knowledge/evaluations/sealed.json",
+            version_id="sealed-1",
+            sha256="9" * 64,
+            size_bytes=42,
+            media_type="application/json",
+        ),
+    )
+    return request.model_copy(
+        update={
+            "retrieval_profile": request.retrieval_profile.model_copy(
+                update={"enabled_degradations": (degradation,)}
+            )
+        }
+    )
 
 
 def test_attestation_is_verified_before_content_search() -> None:
@@ -332,6 +400,45 @@ def test_online_query_work_uses_shared_scheduler_priority_and_reports_separate_t
     assert result.metrics.reranker_service_time_ms == 7.0
 
 
+def test_embedding_failure_uses_only_exact_prevalidated_bm25_degradation() -> None:
+    search = _RecordingSearch()
+
+    result = execute_hybrid_retrieval(
+        _request_with_degradation("BM25_ONLY"),
+        authority=_authority(),
+        search=search,
+        embedding=_FailingEmbedding(),
+        reranker=_RecordingReranker(),
+    )
+
+    assert result.degradation_mode == "BM25_ONLY"
+    assert search.requests[0].retrieval_mode == "BM25_ONLY"
+
+
+def test_reranker_failure_uses_only_exact_prevalidated_rrf_degradation() -> None:
+    result = execute_hybrid_retrieval(
+        _request_with_degradation("RRF_WITHOUT_RERANKER"),
+        authority=_authority(),
+        search=_RecordingSearch(),
+        embedding=_RecordingEmbedding(),
+        reranker=_FailingReranker(),
+    )
+
+    assert result.degradation_mode == "RRF_WITHOUT_RERANKER"
+    assert result.candidates[0].rerank_score == 0.9
+
+
+def test_unsealed_degradation_failure_is_fail_closed() -> None:
+    with pytest.raises(RuntimeError, match="embedding unavailable"):
+        execute_hybrid_retrieval(
+            _request(),
+            authority=_authority(),
+            search=_RecordingSearch(),
+            embedding=_FailingEmbedding(),
+            reranker=_RecordingReranker(),
+        )
+
+
 def test_retrieval_service_delegates_exact_governed_request_without_admission_score(
     tmp_path: Path,
 ) -> None:
@@ -391,3 +498,39 @@ def test_blended_provider_activation_requires_and_binds_exact_hybrid_provider() 
     assert blended.bound_providers == ()
     assert len(blended.bound_hybrid_providers) == 1
     assert blended.bound_hybrid_providers[0].provider is provider
+
+
+def test_retrieval_service_admits_hybrid_evidence_only_after_authority_and_slots(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    provider = HybridIndexProvider(
+        authority=_authority_with_runtime_facts(),
+        search=_RecordingSearch(),
+        embedding=_RecordingEmbedding(),
+        reranker=_RecordingReranker(),
+    )
+    service = KnowledgeRetrievalService(
+        trace=TraceWriter(tmp_path / "trace-authority.jsonl", run_id="run-authority"),
+        policy=PolicyEngine.from_file(
+            Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/policy.yaml")
+        ),
+        knowledge_provider=BlendedKnowledgeProvider(
+            (),
+            (BoundHybridKnowledgeProvider(resolved=request.binding, provider=provider),),
+        ),
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="Does Product A apply in Shanghai?",
+            strategy="single_step",
+            top_k=2,
+            min_score=0.99,
+            governed_hybrid_request=request,
+        )
+    )
+
+    assert result.evidence_result.status == "passed"
+    assert result.evidence[0].authority_admitted is True
+    assert result.evidence[0].admission_score is None

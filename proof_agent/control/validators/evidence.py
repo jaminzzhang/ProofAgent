@@ -15,8 +15,13 @@ def evaluate_evidence(
         chunk
         for chunk in chunk_tuple
         if chunk.status != EvidenceStatus.REJECTED
-        and chunk.admission_score is not None
-        and chunk.admission_score >= min_score
+        and (
+            chunk.authority_admitted
+            or (
+                chunk.admission_score is not None
+                and chunk.admission_score >= min_score
+            )
+        )
     )
     passed = len(accepted) >= min_count
     accepted_ids = {id(chunk) for chunk in accepted}
@@ -35,6 +40,8 @@ def evaluate_evidence(
                     "admission_score": chunk.admission_score,
                     "provider_native_score": chunk.provider_native_score,
                     "fusion_rank": chunk.fusion_rank,
+                    "authority_admitted": chunk.authority_admitted,
+                    "authority_outcome": chunk.authority_outcome,
                     "status": "accepted" if id(chunk) in accepted_ids else "rejected",
                 }
                 for chunk in chunk_tuple

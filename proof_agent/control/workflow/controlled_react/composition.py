@@ -60,6 +60,10 @@ from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalService,
 )
 from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
+from proof_agent.control.knowledge.answer_validator import (
+    render_insurance_answer,
+    validate_serialized_insurance_answer,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -691,11 +695,44 @@ class _ModelAnswerSynthesisAdapter:
                 message=message,
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
-        return self._runner.run(
+        result = self._runner.run(
             state,
             action,
             answer_context,
             evidence=evidence,
+        )
+        governed = _governed_hybrid_request_from_controlled_state(
+            self._invocation,
+            state,
+        )
+        if governed is None:
+            return result
+        decision = validate_serialized_insurance_answer(
+            result.final_output,
+            evidence=evidence,
+            requirements=governed.required_evidence_slots,
+        )
+        if not decision.admitted or decision.deliverable_answer is None:
+            message = "Unable to provide an insurance recommendation because the generated answer was not fully supported."
+            return AnswerSynthesisResult(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                final_output=message,
+                message=message,
+                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+                evidence=evidence,
+                stage_llm_interactions=result.stage_llm_interactions,
+                stage_failure_diagnostics=result.stage_failure_diagnostics,
+            )
+        message = render_insurance_answer(decision.deliverable_answer)
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output=message,
+            message=message,
+            reasoning_summary=result.reasoning_summary,
+            model_usage_summary=result.model_usage_summary,
+            evidence=evidence,
+            stage_llm_interactions=result.stage_llm_interactions,
+            stage_failure_diagnostics=result.stage_failure_diagnostics,
         )
 
 

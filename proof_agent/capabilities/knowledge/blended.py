@@ -223,6 +223,8 @@ def _hybrid_candidate_chunk(
             "visibility_revision_digest": hit.visibility_revision_digest,
             "content_sha256": hit.content_sha256,
             "authority_sha256": hit.authority_sha256,
+            "runtime_authority_facts": candidate.authority_facts,
+            "supported_evidence_slot_ids": candidate.supported_evidence_slot_ids,
         },
         contributions=(contribution,),
     )

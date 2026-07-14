@@ -294,6 +294,7 @@ class ProjectionBulkResult(_PortModel):
 
 
 class HybridSearchRequest(_PortModel):
+    retrieval_mode: Literal["HYBRID", "BM25_ONLY"] = "HYBRID"
     identity: SearchIndexIdentity
     manifest_root_sha256: Sha256
     query_text: BoundedQuery

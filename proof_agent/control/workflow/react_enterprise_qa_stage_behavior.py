@@ -32,6 +32,10 @@ from proof_agent.contracts import (
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
 from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
+from proof_agent.control.knowledge.answer_validator import (
+    render_insurance_answer,
+    validate_serialized_insurance_answer,
+)
 from proof_agent.control.workflow.business_flow_skill_packs import (
     admit_business_flow_skill_pack,
 )
@@ -708,6 +712,42 @@ class ReActEnterpriseQAStageBehavior:
                     stage_context,
                     response_stage_context,
                 ),
+                "stage_llm_interactions": llm_interactions,
+            }
+        governed_request = _governed_hybrid_request_from_state(state)
+        if governed_request is not None:
+            insurance_decision = validate_serialized_insurance_answer(
+                model_response.content,
+                evidence=evidence,
+                requirements=governed_request.required_evidence_slots,
+            )
+            if not insurance_decision.admitted:
+                self.trace.emit(
+                    "final_answer_validation_failed",
+                    status="blocked",
+                    payload={
+                        "error_code": "insurance_answer_contract_failed",
+                        "reason": insurance_decision.reason,
+                    },
+                )
+                message = "I cannot provide an insurance recommendation because the generated answer was not fully supported."
+                return {
+                    "review_results": [review_event],
+                    "governance_refusal": ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                    "governance_message": message,
+                    "final_output": message,
+                    "stage_llm_interactions": llm_interactions,
+                }
+            if insurance_decision.deliverable_answer is None:
+                raise AssertionError("admitted insurance answer requires a deliverable")
+            final_message = render_insurance_answer(
+                insurance_decision.deliverable_answer
+            )
+            return {
+                "review_results": [review_event],
+                "final_output": final_message,
+                "governance_refusal": outcome,
+                "governance_message": final_message,
                 "stage_llm_interactions": llm_interactions,
             }
         final_answer_output, _ = structured_final_answer_output(

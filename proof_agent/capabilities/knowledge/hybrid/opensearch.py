@@ -1128,6 +1128,26 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
     """Build Source-local BM25+kNN retrieval with identical prefilters."""
 
     common_filter = build_common_filter(request)
+    lexical_query: dict[str, object] = {
+        "bool": {
+            "must": [
+                {
+                    "match": {
+                        "lexical_text": {
+                            "query": request.query_text,
+                        }
+                    }
+                }
+            ],
+            "filter": common_filter,
+        }
+    }
+    if request.retrieval_mode == "BM25_ONLY":
+        return {
+            "size": request.limit,
+            "_source": sorted(_CANDIDATE_SOURCE_FIELDS),
+            "query": lexical_query,
+        }
     return {
         "size": request.rrf_window,
         "_source": sorted(_CANDIDATE_SOURCE_FIELDS),
@@ -1135,20 +1155,7 @@ def build_hybrid_query(request: HybridSearchRequest) -> dict[str, object]:
             "hybrid": {
                 "pagination_depth": request.lexical_budget,
                 "queries": [
-                    {
-                        "bool": {
-                            "must": [
-                                {
-                                    "match": {
-                                        "lexical_text": {
-                                            "query": request.query_text,
-                                        }
-                                    }
-                                }
-                            ],
-                            "filter": common_filter,
-                        }
-                    },
+                    lexical_query,
                     {
                         "knn": {
                             "dense_vector": {
@@ -3008,26 +3015,35 @@ class OpenSearchHybridIndex:
         if validated != request:
             raise OpenSearchProjectionError("search request is not in canonical contract form")
         self.verify_identity(request.identity)
-        self._verify_pipeline(
-            pipeline=request.rrf_pipeline,
-            rank_constant=request.rrf_rank_constant,
-        )
+        if request.retrieval_mode == "HYBRID":
+            self._verify_pipeline(
+                pipeline=request.rrf_pipeline,
+                rank_constant=request.rrf_rank_constant,
+            )
         index_name = _identity_index_name(request.identity)
         query_body = build_hybrid_query(request)
-        pipeline = _exact_string(
-            query_body.pop("search_pipeline"), field_name="search_pipeline", maximum=128
-        )
+        pipeline = query_body.pop("search_pipeline", None)
+        query_params = None
+        if pipeline is not None:
+            query_params = {
+                "search_pipeline": _exact_string(
+                    pipeline,
+                    field_name="search_pipeline",
+                    maximum=128,
+                )
+            }
         response = self._transport.request(
             method="POST",
             path=f"/{index_name}/_search",
             json_body=query_body,
-            query_params={"search_pipeline": pipeline},
+            query_params=query_params,
         )
         self.verify_identity(request.identity)
-        self._verify_pipeline(
-            pipeline=request.rrf_pipeline,
-            rank_constant=request.rrf_rank_constant,
-        )
+        if request.retrieval_mode == "HYBRID":
+            self._verify_pipeline(
+                pipeline=request.rrf_pipeline,
+                rank_constant=request.rrf_rank_constant,
+            )
         candidates = _normalize_search_hits(
             response,
             request=request,
