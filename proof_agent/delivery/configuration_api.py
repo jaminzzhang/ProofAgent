@@ -1991,9 +1991,7 @@ def list_knowledge_source_publications(
     }
 
 
-@router.post(
-    "/config/knowledge-sources/{source_id}/publications/{publication_id}/rollback-drafts"
-)
+@router.post("/config/knowledge-sources/{source_id}/publications/{publication_id}/rollback-drafts")
 def create_hybrid_knowledge_source_rollback_draft(
     source_id: str,
     publication_id: str,
@@ -2014,11 +2012,7 @@ def create_hybrid_knowledge_source_rollback_draft(
     facade = _hybrid_publication_api(app_request)
     publications = tuple(facade.list_publications(source_id))
     selected = next(
-        (
-            item
-            for item in publications
-            if getattr(item, "publication_id", None) == publication_id
-        ),
+        (item for item in publications if getattr(item, "publication_id", None) == publication_id),
         None,
     )
     if selected is None:

@@ -740,9 +740,7 @@ class ReActEnterpriseQAStageBehavior:
                 }
             if insurance_decision.deliverable_answer is None:
                 raise AssertionError("admitted insurance answer requires a deliverable")
-            final_message = render_insurance_answer(
-                insurance_decision.deliverable_answer
-            )
+            final_message = render_insurance_answer(insurance_decision.deliverable_answer)
             return {
                 "review_results": [review_event],
                 "final_output": final_message,

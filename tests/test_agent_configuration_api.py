@@ -2018,8 +2018,7 @@ def test_hybrid_source_rollback_creates_a_new_draft_with_mandatory_republication
     client.app.state.hybrid_knowledge_publication_api = Facade()
 
     response = client.post(
-        "/api/config/knowledge-sources/ks_hybrid_index/publications/"
-        "publication-1/rollback-drafts",
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/publication-1/rollback-drafts",
         json={"reason": "Revert the superseded underwriting rule."},
     )
 
@@ -2049,8 +2048,7 @@ def test_hybrid_source_rollback_creates_a_new_draft_with_mandatory_republication
     ]
 
     current = client.post(
-        "/api/config/knowledge-sources/ks_hybrid_index/publications/"
-        "publication-2/rollback-drafts",
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/publication-2/rollback-drafts",
         json={"reason": "This is not historical."},
     )
     assert current.status_code == 409

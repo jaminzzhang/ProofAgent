@@ -51,9 +51,7 @@ def safe_trace_payload(
     if value != TraceEventType.HYBRID_RETRIEVAL_SUMMARY.value:
         return dict(payload), ()
     projected = {
-        str(key): item
-        for key, item in payload.items()
-        if str(key) in _HYBRID_RETRIEVAL_SAFE_FIELDS
+        str(key): item for key, item in payload.items() if str(key) in _HYBRID_RETRIEVAL_SAFE_FIELDS
     }
     removed = tuple(sorted(str(key) for key in payload if str(key) not in projected))
     return projected, removed
@@ -91,7 +89,9 @@ class TraceWriter:
 
         with self._lock:
             self._sequence += 1
-            event_type_value = event_type.value if isinstance(event_type, TraceEventType) else event_type
+            event_type_value = (
+                event_type.value if isinstance(event_type, TraceEventType) else event_type
+            )
             projected_payload, omitted_fields = safe_trace_payload(event_type_value, payload)
             redacted_payload, redaction = redact_payload(projected_payload)
             if omitted_fields:
@@ -115,8 +115,7 @@ class TraceWriter:
             # JSONL keeps the trace stream append-friendly and easy to inspect in CLI tools.
             with self.trace_path.open("a", encoding="utf-8") as handle:
                 handle.write(
-                    json.dumps(_jsonable(event.model_dump(warnings=False)), sort_keys=True)
-                    + "\n"
+                    json.dumps(_jsonable(event.model_dump(warnings=False)), sort_keys=True) + "\n"
                 )
             return event
 

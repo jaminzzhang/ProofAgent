@@ -17,10 +17,7 @@ def evaluate_evidence(
         if chunk.status != EvidenceStatus.REJECTED
         and (
             chunk.authority_admitted
-            or (
-                chunk.admission_score is not None
-                and chunk.admission_score >= min_score
-            )
+            or (chunk.admission_score is not None and chunk.admission_score >= min_score)
         )
     )
     passed = len(accepted) >= min_count

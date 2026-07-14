@@ -274,13 +274,8 @@ admission:
     assert "| Decision | admitted |" in receipt
     assert "| Selected Pack | enterprise_policy_qa |" in receipt
     assert "| Recommendation Type | single_pack |" in receipt
-    assert "| enterprise_policy_qa | 0.84 | Only published Business Flow Skill Pack. |" in (
-        receipt
-    )
-    assert (
-        "| plan | enterprise_policy_qa | business_context, task_instructions |"
-        in receipt
-    )
+    assert "| enterprise_policy_qa | 0.84 | Only published Business Flow Skill Pack. |" in (receipt)
+    assert "| plan | enterprise_policy_qa | business_context, task_instructions |" in receipt
     assert admitted_context not in receipt
 
 
@@ -336,9 +331,9 @@ admission:
     )
 
     receipt = result.receipt_path.read_text(encoding="utf-8")
-    business_flow_section = receipt.split("## Business Flow Skill Pack", maxsplit=1)[
-        1
-    ].split("\n## ", maxsplit=1)[0]
+    business_flow_section = receipt.split("## Business Flow Skill Pack", maxsplit=1)[1].split(
+        "\n## ", maxsplit=1
+    )[0]
 
     assert "## Business Flow Skill Pack" in receipt
     assert "| Decision | failed_closed |" in business_flow_section
@@ -357,14 +352,17 @@ def test_receipt_renders_actionable_react_clarification(tmp_path: Path) -> None:
     )
 
     receipt = result.receipt_path.read_text(encoding="utf-8")
-    clarification_section = receipt.split("## Clarification", maxsplit=1)[1].split(
-        "\n## ",
-        maxsplit=1,
-    )[0].strip()
+    clarification_section = (
+        receipt.split("## Clarification", maxsplit=1)[1]
+        .split(
+            "\n## ",
+            maxsplit=1,
+        )[0]
+        .strip()
+    )
 
     assert "## Clarification" in receipt
     assert any(
-        detail in receipt
-        for detail in ("customer_id", "policy_id", "claim_type", "Please provide")
+        detail in receipt for detail in ("customer_id", "policy_id", "claim_type", "Please provide")
     )
     assert clarification_section != "- waiting"

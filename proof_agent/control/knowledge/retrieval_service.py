@@ -273,11 +273,7 @@ def _admit_governed_hybrid_evidence(
             True,
             len(slot_result.satisfied_slot_ids),
             0,
-            sum(
-                1
-                for chunk in admitted
-                if chunk.authority_admitted and chunk.citation is not None
-            ),
+            sum(1 for chunk in admitted if chunk.authority_admitted and chunk.citation is not None),
         ),
     )
 
@@ -571,9 +567,7 @@ class KnowledgeRetrievalService:
                 "authority_passed_count": admission_audit.authority_passed_count,
                 "authority_rejected_count": admission_audit.authority_rejected_count,
                 "evidence_slots_complete": admission_audit.evidence_slots_complete,
-                "satisfied_evidence_slot_count": (
-                    admission_audit.satisfied_evidence_slot_count
-                ),
+                "satisfied_evidence_slot_count": (admission_audit.satisfied_evidence_slot_count),
                 "missing_evidence_slot_count": admission_audit.missing_evidence_slot_count,
                 "citation_count": admission_audit.citation_count,
             },
@@ -582,8 +576,7 @@ class KnowledgeRetrievalService:
             evidence,
             min_score=request.min_score,
             no_evidence_reason_code=(
-                authority_reason
-                or ("zero_hybrid_candidates" if not evidence else None)
+                authority_reason or ("zero_hybrid_candidates" if not evidence else None)
             ),
         )
         return KnowledgeRetrievalResult(
@@ -891,9 +884,7 @@ class KnowledgeRetrievalService:
         step_context["query_execution"] = "sequential"
         self._trace.emit("retrieval_step", status="ok", payload=step_context)
 
-        execution_context = _RetrievalExecutionContext.with_timeout(
-            request.query_timeout_seconds
-        )
+        execution_context = _RetrievalExecutionContext.with_timeout(request.query_timeout_seconds)
         executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="proof-retrieval-query",
@@ -1011,14 +1002,14 @@ class KnowledgeRetrievalService:
         execution_mode: str | None,
     ) -> _ProviderStepResult:
         max_workers = min(request.query_concurrency, len(items))
-        execution_context = _RetrievalExecutionContext.with_timeout(
-            request.query_timeout_seconds
-        )
+        execution_context = _RetrievalExecutionContext.with_timeout(request.query_timeout_seconds)
         executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="proof-retrieval-query",
         )
-        future_entries: dict[Future[_ParallelProviderStepResult], tuple[int, RetrievalQueryItem]] = {}
+        future_entries: dict[
+            Future[_ParallelProviderStepResult], tuple[int, RetrievalQueryItem]
+        ] = {}
         try:
             for index, item in enumerate(items, start=1):
                 round_id = f"query_set_{index:02d}"
@@ -1082,9 +1073,7 @@ class KnowledgeRetrievalService:
             except _ProviderStepExecutionError as exc:
                 payload = dict(exc.payload)
                 payload["no_evidence_reason_code"] = (
-                    "required_provider_failure"
-                    if item.required
-                    else "optional_provider_failure"
+                    "required_provider_failure" if item.required else "optional_provider_failure"
                 )
                 self._trace.emit(
                     "retrieval_result",
@@ -1301,7 +1290,9 @@ class KnowledgeRetrievalService:
                 raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
 
         fused_candidates = _fuse_bound_candidates(raw_candidates)
-        evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        evidence = (
+            fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        )
         if request.force_empty:
             evidence = ()
         step_payload: dict[str, Any] = {
@@ -1557,7 +1548,9 @@ class KnowledgeRetrievalService:
                 raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
 
         fused_candidates = _fuse_bound_candidates(raw_candidates)
-        evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        evidence = (
+            fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        )
         if request.force_empty:
             evidence = ()
         self._trace.emit(
@@ -1730,7 +1723,9 @@ def _query_set_provider_supports_parallel_retrieval(
 ) -> bool:
     bound_providers = _bound_providers(knowledge_provider)
     if bound_providers is not None:
-        return all(_provider_supports_parallel_retrieval(bound.provider) for bound in bound_providers)
+        return all(
+            _provider_supports_parallel_retrieval(bound.provider) for bound in bound_providers
+        )
     return _provider_supports_parallel_retrieval(knowledge_provider)
 
 
@@ -1820,9 +1815,7 @@ def _route_bound_providers(
     preferred_id_set = frozenset(preferred_binding_ids)
     if preferred_id_set:
         preferred = tuple(
-            bound
-            for bound in bound_providers
-            if bound.resolved.binding_id in preferred_id_set
+            bound for bound in bound_providers if bound.resolved.binding_id in preferred_id_set
         )
         if preferred:
             return _RoutingDecision(
@@ -1843,11 +1836,7 @@ def _route_bound_providers(
             selection_reason="single_binding",
         )
 
-    matched = tuple(
-        bound
-        for bound in bound_providers
-        if _routing_metadata_matches(query, bound)
-    )
+    matched = tuple(bound for bound in bound_providers if _routing_metadata_matches(query, bound))
     if matched:
         selected = matched[:selection_budget]
         reason = (
@@ -2239,9 +2228,7 @@ def _routing_model_request_payload(
         "message_count": len(request.messages),
         "prompt_length": sum(len(message.content) for message in request.messages),
         "system_prompt_length": sum(
-            len(message.content)
-            for message in request.messages
-            if message.role == ModelRole.SYSTEM
+            len(message.content) for message in request.messages if message.role == ModelRole.SYSTEM
         ),
         "estimated_tokens": estimated_tokens,
         "stream": request.stream,

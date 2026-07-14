@@ -577,9 +577,7 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
     newer = version.model_copy(
         update={
             "version_id": "version_newer",
-            "resolved_knowledge_bindings": ResolvedKnowledgeBindingSet(
-                bindings=(newer_binding,)
-            ),
+            "resolved_knowledge_bindings": ResolvedKnowledgeBindingSet(bindings=(newer_binding,)),
         }
     )
     store._write_version(newer)
