@@ -12,13 +12,73 @@ from proof_agent.contracts import (
     EvaluationResponseProjection,
     EvaluationResponseProjectionAudience,
     EvaluationSubject,
+    InsuranceKnowledgeEvaluationReport,
+    InsuranceKnowledgeSliceMetrics,
+    InsuranceRetrievalMetrics,
     ReceiptOutcome,
 )
 from proof_agent.evaluation.artifact_reader import read_evaluation_artifacts
 from proof_agent.evaluation.errors import EvaluationInputError
 from proof_agent.evaluation.gate_profiles import get_gate_profile
 from proof_agent.evaluation.gates import evaluate_case_gates
+from proof_agent.evaluation.knowledge_gates import (
+    KnowledgeAcceptanceAggregate,
+    KnowledgeHardGateFacts,
+    evaluate_knowledge_release,
+)
 import pytest
+
+
+def _knowledge_metrics(
+    *, recall_50: float = 0.96, complete_top_10: float = 0.92
+) -> InsuranceRetrievalMetrics:
+    return InsuranceRetrievalMetrics(
+        retrieval_case_count=100,
+        required_evidence_recall_at_20=0.94,
+        required_evidence_recall_at_50=recall_50,
+        required_evidence_recall_at_100=0.99,
+        complete_evidence_top_5_rate=0.88,
+        complete_evidence_top_10_rate=complete_top_10,
+        ndcg_at_10=0.93,
+        mrr_at_10=0.95,
+        citation_resolvability_rate=1.0,
+    )
+
+
+def _knowledge_aggregate(
+    *,
+    hard_facts: KnowledgeHardGateFacts | None = None,
+    overall_recall_50: float = 0.96,
+    conditional_complete_top_10: float = 0.92,
+    retrieval_p95_seconds: float = 4.5,
+) -> KnowledgeAcceptanceAggregate:
+    slices = tuple(
+        InsuranceKnowledgeSliceMetrics(
+            dimension="query_type",
+            value=query_type,
+            case_count=case_count,
+            metrics=_knowledge_metrics(
+                complete_top_10=(
+                    conditional_complete_top_10 if query_type == "conditional_guidance" else 0.92
+                )
+            ),
+        )
+        for query_type, case_count in (
+            ("clause_lookup", 60),
+            ("conditional_guidance", 100),
+            ("comparison", 40),
+        )
+    )
+    return KnowledgeAcceptanceAggregate(
+        report=InsuranceKnowledgeEvaluationReport(
+            case_count=200,
+            overall=_knowledge_metrics(recall_50=overall_recall_50),
+            slices=slices,
+        ),
+        hard_facts=hard_facts or KnowledgeHardGateFacts(),
+        human_reviewed_support_precision=0.99,
+        hybrid_retrieval_p95_seconds=retrieval_p95_seconds,
+    )
 
 
 def test_core_gate_profile_lists_required_and_diagnostic_gates() -> None:
@@ -800,3 +860,73 @@ def _tool_scope_subject(
             ref=response_path,
         ),
     )
+
+
+def test_knowledge_hard_gate_failure_skips_compensating_quality_and_performance() -> None:
+    aggregate = _knowledge_aggregate(
+        hard_facts=KnowledgeHardGateFacts(unauthorized_candidate_exposure=1)
+    )
+
+    result = evaluate_knowledge_release(aggregate)
+
+    assert result.status == "blocked"
+    assert result.hard_gate_failures == 1
+    assert result.quality_evaluated is False
+    assert result.performance_evaluated is False
+    assert result.quality_gate_failures == 0
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "reason"),
+    (
+        (_knowledge_aggregate(overall_recall_50=0.949), "overall Recall@50"),
+        (
+            _knowledge_aggregate(conditional_complete_top_10=0.899),
+            "conditional_guidance complete-evidence Top-10",
+        ),
+        (_knowledge_aggregate(retrieval_p95_seconds=5.001), "retrieval P95"),
+    ),
+)
+def test_knowledge_quality_and_performance_thresholds_are_independent(
+    aggregate: KnowledgeAcceptanceAggregate,
+    reason: str,
+) -> None:
+    result = evaluate_knowledge_release(aggregate)
+
+    assert result.status == "blocked"
+    assert result.hard_gate_failures == 0
+    assert any(reason in item for item in result.blocking_reasons)
+
+
+def test_knowledge_release_passes_only_after_all_gate_stages_pass() -> None:
+    result = evaluate_knowledge_release(_knowledge_aggregate())
+
+    assert result.status == "passed"
+    assert result.hard_gate_failures == 0
+    assert result.quality_gate_failures == 0
+    assert result.performance_gate_failures == 0
+    assert result.quality_evaluated is True
+    assert result.performance_evaluated is True
+
+
+@pytest.mark.parametrize(
+    ("metrics_update", "reason"),
+    (
+        ({"unauthorized_candidate_exposure": 1}, "unauthorized_candidate_exposure"),
+        ({"citation_resolvability_rate": 0.99}, "unresolvable_formal_citation"),
+    ),
+)
+def test_knowledge_hard_gate_derives_nonzero_facts_from_retrieval_report(
+    metrics_update: dict[str, float | int],
+    reason: str,
+) -> None:
+    aggregate = _knowledge_aggregate()
+    report = aggregate.report.model_copy(
+        update={"overall": aggregate.report.overall.model_copy(update=metrics_update)}
+    )
+
+    result = evaluate_knowledge_release(aggregate.model_copy(update={"report": report}))
+
+    assert result.status == "blocked"
+    assert result.quality_evaluated is False
+    assert any(reason in item for item in result.blocking_reasons)

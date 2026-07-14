@@ -31,7 +31,17 @@ from proof_agent.evaluation.frozen_bundles import (
     freeze_evaluation_subject_bundle,
     verify_evaluation_subject_bundle,
 )
-from proof_agent.evaluation.suites import load_evaluation_suite
+from proof_agent.evaluation.gate_profiles import get_knowledge_gate_profile
+from proof_agent.evaluation.knowledge_gates import KnowledgeAcceptanceAggregate
+from proof_agent.evaluation.sealed_knowledge_acceptance import (
+    SealedKnowledgeAcceptanceStore,
+    SealedKnowledgeSuiteRef,
+    write_sealed_knowledge_acceptance_result,
+)
+from proof_agent.evaluation.suites import (
+    load_evaluation_suite,
+    load_sealed_knowledge_acceptance_envelope,
+)
 from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
@@ -476,6 +486,56 @@ def evaluate_analyze(
             "Release Blocking Reasons: " + ", ".join(summary.release_decision.blocking_reasons)
         )
     if summary.release_decision.status == EvaluationReleaseDecisionStatus.BLOCKED:
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("knowledge-acceptance")
+def evaluate_knowledge_acceptance(
+    suite: str = typer.Option(
+        ...,
+        "--suite",
+        help="Access-controlled aggregate acceptance envelope",
+    ),
+    output: str = typer.Option(
+        ...,
+        "--output",
+        help="Aggregate-only acceptance result JSON",
+    ),
+) -> None:
+    """Apply one-attempt sealed Knowledge acceptance release gates."""
+
+    output_path = Path(output)
+    try:
+        envelope = load_sealed_knowledge_acceptance_envelope(Path(suite))
+        profile = get_knowledge_gate_profile(envelope.gate_profile_id)
+
+        def provide_aggregate(
+            sealed_ref: SealedKnowledgeSuiteRef,
+        ) -> KnowledgeAcceptanceAggregate:
+            if sealed_ref != envelope.suite_ref:
+                raise EvaluationInputError("sealed suite reference changed during evaluation")
+            return envelope.aggregate
+
+        evaluator = SealedKnowledgeAcceptanceStore(
+            aggregate_provider=provide_aggregate,
+            attempt_store=output_path.parent / ".knowledge-acceptance-attempts",
+            gate_profile=profile,
+        )
+        result = evaluator.run(
+            candidate_digest=envelope.candidate_digest,
+            sealed_suite_ref=envelope.suite_ref,
+        )
+        write_sealed_knowledge_acceptance_result(output_path, result)
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"Knowledge Acceptance: {result.status}")
+    typer.echo(f"Result: {output_path}")
+    typer.echo(f"Hard Gate Failures: {result.hard_gate_failures}")
+    if result.blocking_reasons:
+        typer.echo("Blocking Reasons: " + ", ".join(result.blocking_reasons))
+    if result.status == "blocked":
         raise typer.Exit(code=1)
 
 

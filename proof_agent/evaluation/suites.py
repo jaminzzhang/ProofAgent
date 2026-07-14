@@ -3,10 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import EvaluationSuite
 from proof_agent.evaluation.errors import EvaluationInputError
+from proof_agent.evaluation.sealed_knowledge_acceptance import (
+    SealedKnowledgeAcceptanceEnvelope,
+)
 
 BUILTIN_SUITES = {
     "smoke": "insurance_qa_smoke.yaml",
@@ -27,6 +31,26 @@ def load_evaluation_suite(path: Path | str) -> EvaluationSuite:
     _reject_duplicate_scenario_ids(suite)
     _reject_duplicate_scenario_step_ids(suite)
     return suite
+
+
+def load_sealed_knowledge_acceptance_envelope(
+    path: Path | str,
+) -> SealedKnowledgeAcceptanceEnvelope:
+    """Load the aggregate-only envelope visible to the acceptance command."""
+
+    envelope_path = Path(path)
+    try:
+        raw = yaml.safe_load(envelope_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise EvaluationInputError(
+            f"Unable to read sealed Knowledge acceptance envelope: {envelope_path}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise EvaluationInputError("Sealed Knowledge acceptance envelope must be a mapping.")
+    try:
+        return SealedKnowledgeAcceptanceEnvelope.model_validate(_plain_mapping(raw))
+    except ValidationError as exc:
+        raise EvaluationInputError(f"Invalid sealed Knowledge acceptance envelope: {exc}") from exc
 
 
 def _plain_mapping(value: dict[Any, Any]) -> dict[str, Any]:

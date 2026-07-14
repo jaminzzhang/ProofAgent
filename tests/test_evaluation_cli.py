@@ -5,11 +5,76 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from proof_agent.contracts import ReceiptOutcome
+from proof_agent.contracts import (
+    ExactArtifactRef,
+    InsuranceKnowledgeEvaluationReport,
+    InsuranceKnowledgeSliceMetrics,
+    InsuranceRetrievalMetrics,
+    ReceiptOutcome,
+)
 from proof_agent.delivery.cli import app
+from proof_agent.evaluation.knowledge_gates import (
+    KnowledgeAcceptanceAggregate,
+    KnowledgeHardGateFacts,
+)
+from proof_agent.evaluation.sealed_knowledge_acceptance import (
+    SealedKnowledgeAcceptanceEnvelope,
+    SealedKnowledgeSuiteRef,
+)
 
 
 runner = CliRunner()
+
+
+def _sealed_cli_envelope() -> SealedKnowledgeAcceptanceEnvelope:
+    metrics = InsuranceRetrievalMetrics(
+        retrieval_case_count=160,
+        required_evidence_recall_at_20=0.94,
+        required_evidence_recall_at_50=0.96,
+        required_evidence_recall_at_100=0.99,
+        complete_evidence_top_5_rate=0.88,
+        complete_evidence_top_10_rate=0.92,
+        ndcg_at_10=0.93,
+        mrr_at_10=0.95,
+        citation_resolvability_rate=1.0,
+    )
+    slices = tuple(
+        InsuranceKnowledgeSliceMetrics(
+            dimension="query_type",
+            value=query_type,
+            case_count=count,
+            metrics=metrics,
+        )
+        for query_type, count in (
+            ("clause_lookup", 60),
+            ("conditional_guidance", 100),
+            ("comparison", 40),
+        )
+    )
+    return SealedKnowledgeAcceptanceEnvelope(
+        candidate_digest="candidate-cli",
+        suite_ref=SealedKnowledgeSuiteRef(
+            suite_id="insurance-knowledge-acceptance",
+            version="2026-07-14",
+            artifact=ExactArtifactRef(
+                artifact_uri="s3://proof-agent-private-eval/sealed/suite.yaml",
+                version_id="sealed-suite-v1",
+                sha256="a" * 64,
+                size_bytes=4096,
+                media_type="application/yaml",
+            ),
+        ),
+        aggregate=KnowledgeAcceptanceAggregate(
+            report=InsuranceKnowledgeEvaluationReport(
+                case_count=200,
+                overall=metrics,
+                slices=slices,
+            ),
+            hard_facts=KnowledgeHardGateFacts(),
+            human_reviewed_support_precision=0.99,
+            hybrid_retrieval_p95_seconds=4.5,
+        ),
+    )
 
 
 def test_evaluate_analyze_cli_writes_artifacts_and_returns_one_when_required_case_fails(
@@ -69,6 +134,50 @@ def test_evaluate_analyze_cli_returns_one_when_release_decision_is_blocked(
 
     assert result.exit_code == 1
     assert "Release Decision: blocked" in result.output
+
+
+def test_evaluate_knowledge_acceptance_writes_aggregate_only_result(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    envelope = _sealed_cli_envelope()
+    monkeypatch.setattr(
+        "proof_agent.delivery.cli.load_sealed_knowledge_acceptance_envelope",
+        lambda _path: envelope,
+    )
+    output = tmp_path / "acceptance-result.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "knowledge-acceptance",
+            "--suite",
+            str(tmp_path / "private-suite.yaml"),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Knowledge Acceptance: passed" in result.output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["case_count"] == 200
+    assert "case_results" not in payload
+
+    repeated = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "knowledge-acceptance",
+            "--suite",
+            str(tmp_path / "private-suite.yaml"),
+            "--output",
+            str(output),
+        ],
+    )
+    assert repeated.exit_code == 2
+    assert "one acceptance attempt" in repeated.output
 
 
 def test_evaluate_run_suite_cli_creates_subjects_and_analysis(
