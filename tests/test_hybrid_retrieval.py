@@ -265,6 +265,13 @@ class _ManifestMismatchSearch(_RecordingSearch):
         return (_hit().model_copy(update={"manifest_entry_core_sha256": "f" * 64}),)
 
 
+class _EmptySearch(_RecordingSearch):
+    def search(self, request: HybridSearchRequest) -> tuple[HybridSearchHit, ...]:
+        self.content_query_count += 1
+        self.requests.append(request)
+        return ()
+
+
 class _RecordingEmbedding:
     def __init__(self) -> None:
         self.priorities: list[str] = []
@@ -534,3 +541,41 @@ def test_retrieval_service_admits_hybrid_evidence_only_after_authority_and_slots
     assert result.evidence_result.status == "passed"
     assert result.evidence[0].authority_admitted is True
     assert result.evidence[0].admission_score is None
+
+
+def test_zero_hybrid_candidates_returns_no_evidence_without_fallback(tmp_path: Path) -> None:
+    request = _request()
+    service = KnowledgeRetrievalService(
+        trace=TraceWriter(tmp_path / "trace-empty.jsonl", run_id="run-empty"),
+        policy=PolicyEngine.from_file(
+            Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa/policy.yaml")
+        ),
+        knowledge_provider=BlendedKnowledgeProvider(
+            (),
+            (
+                BoundHybridKnowledgeProvider(
+                    resolved=request.binding,
+                    provider=HybridIndexProvider(
+                        authority=_authority(),
+                        search=_EmptySearch(),
+                        embedding=_RecordingEmbedding(),
+                        reranker=_RecordingReranker(),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    result = service.retrieve_reviewed(
+        KnowledgeRetrievalRequest(
+            question="Is there a governing rule?",
+            strategy="single_step",
+            top_k=2,
+            min_score=0.5,
+            governed_hybrid_request=request,
+        )
+    )
+
+    assert result.evidence == ()
+    assert result.evidence_result.status == "failed"
+    assert result.evidence_result.metadata["no_evidence_reason_code"] == ("zero_hybrid_candidates")

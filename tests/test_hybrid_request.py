@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from proof_agent.contracts import (
     ExactArtifactRef,
     InstitutionAuthorizationContext,
@@ -258,3 +260,61 @@ def test_governed_request_uses_trusted_scope_pinned_authority_and_profile_budget
         "exclusion_or_exception",
         "precedence_source",
     )
+
+
+@pytest.mark.parametrize(
+    ("domain_intent", "proposal", "expected_type", "expected_slots"),
+    (
+        (
+            "insurance_clause_lookup",
+            {"product": "product-a"},
+            "clause_lookup",
+            ("requested-clause",),
+        ),
+        (
+            "insurance_product_comparison",
+            {"product_left": "product-a", "product_right": "product-b"},
+            "comparison",
+            ("comparison:PRODUCT-A", "comparison:PRODUCT-B"),
+        ),
+    ),
+)
+def test_clause_and_comparison_requests_pin_exact_evidence_slots(
+    domain_intent: str,
+    proposal: dict[str, str],
+    expected_type: str,
+    expected_slots: tuple[str, ...],
+) -> None:
+    taxonomy = ApprovedInsuranceConditionTaxonomy(
+        taxonomy_id="insurance-guidance",
+        taxonomy_revision_id="taxonomy-3",
+        allowed_values={
+            **dict(_approved_taxonomy().allowed_values),
+            "product_left": ("PRODUCT-A", "PRODUCT-B"),
+            "product_right": ("PRODUCT-A", "PRODUCT-B"),
+        },
+        authority_required_fields=("region", "channel"),
+    )
+    intent = _conditional_intent().model_copy(
+        update={
+            "domain_intent": domain_intent,
+            "insurance_condition_proposal": InsuranceConditionProposal(values=proposal),
+        }
+    )
+
+    result = build_governed_hybrid_request(
+        intent=intent,
+        authorization=InstitutionAuthorizationContext(
+            institutions=("INST-1",),
+            regions=("SHANGHAI",),
+            channels=("AGENCY",),
+        ),
+        binding=_hybrid_binding(),
+        retrieval_profile=_retrieval_profile(),
+        taxonomy=taxonomy,
+        as_of_time=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    assert result.request is not None
+    assert result.request.query_type == expected_type
+    assert tuple(slot.slot_id for slot in result.request.required_evidence_slots) == expected_slots
