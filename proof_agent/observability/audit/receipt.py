@@ -74,6 +74,7 @@ def _build_context(
         _extract_business_flow_stage_context_applications(events)
     )
     model_usage = _extract_model_usage(events)
+    hybrid_retrieval_summaries = _extract_hybrid_retrieval_summaries(events)
     redacted_fields = [
         field
         for event in events
@@ -106,10 +107,49 @@ def _build_context(
             business_flow_stage_context_applications
         ),
         "model_usage": model_usage,
+        "hybrid_retrieval_summaries": hybrid_retrieval_summaries,
         "trace_path": trace_path,
         "receipt_path": receipt_path,
         "redacted_fields": redacted_fields,
     }
+
+
+def _extract_hybrid_retrieval_summaries(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    summaries: list[dict[str, str]] = []
+    fields = (
+        "binding_id",
+        "source_id",
+        "source_publication_seq",
+        "generation_id",
+        "profile_revision_id",
+        "manifest_sha256",
+        "attestation_id",
+        "fused_candidate_count",
+        "reranked_candidate_count",
+        "excluded_count",
+        "authority_outcome",
+        "authority_passed_count",
+        "authority_rejected_count",
+        "evidence_slots_complete",
+        "satisfied_evidence_slot_count",
+        "missing_evidence_slot_count",
+        "citation_count",
+        "embedding_queue_time_ms",
+        "embedding_service_time_ms",
+        "reranker_queue_time_ms",
+        "reranker_service_time_ms",
+        "degradation_mode",
+    )
+    for event in events:
+        if event.get("event_type") != "hybrid_retrieval_summary":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        summaries.append({field: _audit_value(payload.get(field)) for field in fields})
+    return summaries
 
 
 def _extract_business_flow_skill_pack_recommendation(

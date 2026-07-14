@@ -43,6 +43,79 @@ def test_receipt_renders_evidence_summary_without_raw_content(tmp_path: Path) ->
     assert "Travel meals require receipts." not in text
 
 
+def test_receipt_renders_safe_hybrid_authority_and_slot_summary(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    receipt_path = tmp_path / "governance_receipt.md"
+    events = [
+        {
+            "schema_version": "trace.v1",
+            "run_id": "run_test",
+            "event_id": "evt_0001",
+            "sequence": 1,
+            "timestamp": "2026-07-14T00:00:00Z",
+            "event_type": "hybrid_retrieval_summary",
+            "span_id": "span_hybrid",
+            "parent_span_id": None,
+            "status": "ok",
+            "payload": {
+                "binding_id": "kb_hybrid",
+                "source_id": "ks_insurance",
+                "source_publication_seq": 7,
+                "generation_id": "generation_007",
+                "profile_revision_id": "profile_003",
+                "manifest_sha256": "1" * 64,
+                "attestation_id": "attestation_007",
+                "fused_candidate_count": 4,
+                "reranked_candidate_count": 2,
+                "excluded_count": 1,
+                "authority_outcome": "PASS",
+                "authority_passed_count": 2,
+                "authority_rejected_count": 0,
+                "evidence_slots_complete": True,
+                "missing_evidence_slot_count": 0,
+                "citation_count": 2,
+                "embedding_queue_time_ms": 1.5,
+                "embedding_service_time_ms": 3.5,
+                "reranker_queue_time_ms": 2.0,
+                "reranker_service_time_ms": 4.0,
+                "degradation_mode": None,
+            },
+            "redaction": {"applied": False, "fields": []},
+        },
+        {
+            "schema_version": "trace.v1",
+            "run_id": "run_test",
+            "event_id": "evt_0002",
+            "sequence": 2,
+            "timestamp": "2026-07-14T00:00:01Z",
+            "event_type": "final_output",
+            "span_id": "span_final",
+            "parent_span_id": None,
+            "status": "ok",
+            "payload": {
+                "agent_name": "insurance_agent",
+                "question": "Can this product be sold?",
+                "outcome": "ANSWERED_WITH_CITATIONS",
+            },
+            "redaction": {"applied": False, "fields": []},
+        },
+    ]
+    trace_path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    generate_receipt(trace_path, receipt_path)
+    receipt = receipt_path.read_text(encoding="utf-8")
+
+    assert "## Hybrid Knowledge Retrieval" in receipt
+    assert "| Generation | generation_007 |" in receipt
+    assert "| Authority Outcome | PASS |" in receipt
+    assert "| Evidence Slots Complete | true |" in receipt
+    assert "| Citation Count | 2 |" in receipt
+    assert "restricted underwriting rule" not in receipt
+
+
 def test_receipt_renders_mcp_tool_result_summary_without_raw_payload(
     tmp_path: Path,
 ) -> None:

@@ -187,6 +187,32 @@ Question: {{ question }}
 - No evidence events recorded.
 {% endif %}
 
+{% if hybrid_retrieval_summaries %}
+## Hybrid Knowledge Retrieval
+
+{% for item in hybrid_retrieval_summaries %}
+| Field | Value |
+| --- | --- |
+| Binding | {{ item.binding_id }} |
+| Source | {{ item.source_id }} |
+| Source Publication Sequence | {{ item.source_publication_seq }} |
+| Generation | {{ item.generation_id }} |
+| Retrieval Profile | {{ item.profile_revision_id }} |
+| Manifest SHA-256 | {{ item.manifest_sha256 }} |
+| Attestation | {{ item.attestation_id }} |
+| Fused / Reranked / Excluded Candidates | {{ item.fused_candidate_count }} / {{ item.reranked_candidate_count }} / {{ item.excluded_count }} |
+| Authority Outcome | {{ item.authority_outcome }} |
+| Authority Passed / Rejected | {{ item.authority_passed_count }} / {{ item.authority_rejected_count }} |
+| Evidence Slots Complete | {{ item.evidence_slots_complete }} |
+| Satisfied / Missing Evidence Slots | {{ item.satisfied_evidence_slot_count }} / {{ item.missing_evidence_slot_count }} |
+| Citation Count | {{ item.citation_count }} |
+| Embedding Queue / Service ms | {{ item.embedding_queue_time_ms }} / {{ item.embedding_service_time_ms }} |
+| Reranker Queue / Service ms | {{ item.reranker_queue_time_ms }} / {{ item.reranker_service_time_ms }} |
+| Degradation Mode | {{ item.degradation_mode }} |
+
+{% endfor %}
+{% endif %}
+
 ## Tools
 
 {% if tool_result_summaries %}

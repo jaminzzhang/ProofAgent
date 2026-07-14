@@ -1985,6 +1985,78 @@ def test_hybrid_publication_routes_dispatch_to_typed_authority_facade(tmp_path: 
     ]
 
 
+def test_hybrid_source_rollback_creates_a_new_draft_with_mandatory_republication(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, str]] = []
+
+    class Publication(BaseModel):
+        publication_id: str
+        source_publication_seq: int
+
+    class RollbackDraft(BaseModel):
+        draft_id: str
+        based_on_publication_id: str
+
+    class Facade:
+        def list_publications(self, source_id: str) -> list[BaseModel]:
+            assert source_id == "ks_hybrid_index"
+            return [
+                Publication(publication_id="publication-1", source_publication_seq=1),
+                Publication(publication_id="publication-2", source_publication_seq=2),
+            ]
+
+        def create_rollback_draft(self, **kwargs: str) -> BaseModel:
+            calls.append(kwargs)
+            return RollbackDraft(
+                draft_id="source-rollback-draft-1",
+                based_on_publication_id=kwargs["historical_publication_id"],
+            )
+
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/"
+        "publication-1/rollback-drafts",
+        json={"reason": "Revert the superseded underwriting rule."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rollback_kind"] == "source_content_republication"
+    assert payload["historical_publication_id"] == "publication-1"
+    assert payload["source_rollback_draft"] == {
+        "draft_id": "source-rollback-draft-1",
+        "based_on_publication_id": "publication-1",
+    }
+    assert payload["required_next_steps"] == [
+        "source_review",
+        "source_validation",
+        "new_monotonic_source_publication",
+        "explicit_agent_binding_upgrade",
+        "agent_validation",
+        "new_agent_publication",
+    ]
+    assert calls == [
+        {
+            "source_id": "ks_hybrid_index",
+            "historical_publication_id": "publication-1",
+            "reason": "Revert the superseded underwriting rule.",
+            "actor": "local-user",
+        }
+    ]
+
+    current = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/"
+        "publication-2/rollback-drafts",
+        json={"reason": "This is not historical."},
+    )
+    assert current.status_code == 409
+    assert len(calls) == 1
+
+
 def test_hybrid_publication_routes_return_stable_unavailable_and_conflict_errors(
     tmp_path: Path,
 ) -> None:

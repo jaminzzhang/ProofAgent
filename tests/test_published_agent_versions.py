@@ -13,6 +13,7 @@ from proof_agent.configuration.hybrid_knowledge_repository import (
     InMemoryHybridKnowledgeBindingAuthority,
 )
 from proof_agent.contracts import (
+    ActiveAgentVersion,
     ContractBundle,
     ExactArtifactRef,
     HybridKnowledgePublicationRecord,
@@ -569,6 +570,48 @@ def test_published_agent_version_freezes_hybrid_binding_after_source_advances(
     persisted = store.get_version(draft.agent_id, version.version_id)
     assert persisted is not None
     assert persisted.resolved_knowledge_bindings == frozen_bindings
+
+    newer_binding = _resolved_hybrid_binding(source_publication_id="publication_002").model_copy(
+        update={"source_publication_seq": 2}
+    )
+    newer = version.model_copy(
+        update={
+            "version_id": "version_newer",
+            "resolved_knowledge_bindings": ResolvedKnowledgeBindingSet(
+                bindings=(newer_binding,)
+            ),
+        }
+    )
+    store._write_version(newer)
+    store._write_active_version(
+        ActiveAgentVersion(
+            agent_id=draft.agent_id,
+            version_id=newer.version_id,
+            activated_at="2026-07-14T00:00:00Z",
+            activated_by="test-user",
+        )
+    )
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            runs_dir=tmp_path / "latest",
+            published_agents={},
+            agent_configuration_store=store,
+        )
+    )
+
+    rollback = client.post(
+        f"/api/config/agents/{draft.agent_id}/versions/{version.version_id}/rollback",
+        json={},
+    )
+
+    assert rollback.status_code == 200
+    assert rollback.json()["rollback_kind"] == "agent_version_pointer"
+    assert rollback.json()["rollback_from_version_id"] == newer.version_id
+    restored = rollback.json()["restored_resolved_knowledge_bindings"]["bindings"][0]
+    assert restored["source_publication_id"] == "publication_001"
+    assert restored["source_publication_seq"] == 1
+    assert store.get_active_version(draft.agent_id).version_id == version.version_id
 
 
 def test_chat_production_run_records_resolved_agent_version_id(tmp_path: Path) -> None:

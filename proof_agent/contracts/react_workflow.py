@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.policy import EnforcementPoint, PolicyDecisionType
@@ -92,6 +92,10 @@ class InsuranceConditionProposal(FrozenModel):
             normalized[key] = raw_value.strip()
         return freeze_value(normalized)
 
+    @field_serializer("values")
+    def serialize_values(self, value: Mapping[str, str]) -> dict[str, str]:
+        return dict(value)
+
 
 class InsuranceConditionAdmission(FrozenModel):
     """Deterministic Control Plane decision for proposed insurance conditions."""
@@ -105,6 +109,10 @@ class InsuranceConditionAdmission(FrozenModel):
     @classmethod
     def freeze_normalized_values(cls, value: Any) -> Any:
         return freeze_value(value)
+
+    @field_serializer("normalized_values")
+    def serialize_normalized_values(self, value: Mapping[str, str]) -> dict[str, str]:
+        return dict(value)
 
 
 class IntentResolution(FrozenModel):

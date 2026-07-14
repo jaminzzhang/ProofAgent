@@ -132,19 +132,38 @@ class _RetrievalExecutionCancelled(Exception):
     """Internal cooperative cancellation signal for timed retrieval work."""
 
 
+@dataclass(frozen=True)
+class _HybridAdmissionAudit:
+    authority_outcome: str
+    authority_passed_count: int
+    authority_rejected_count: int
+    evidence_slots_complete: bool
+    satisfied_evidence_slot_count: int
+    missing_evidence_slot_count: int
+    citation_count: int
+
+
 def _admit_governed_hybrid_evidence(
     evidence: tuple[EvidenceChunk, ...],
     *,
     governed: GovernedHybridRetrievalRequest,
     index_uuid: str,
-) -> tuple[tuple[EvidenceChunk, ...], str | None]:
+) -> tuple[tuple[EvidenceChunk, ...], str | None, _HybridAdmissionAudit]:
     """Apply authority then slot completeness before generic Evidence Admission."""
 
     if not evidence:
-        return (), "zero_hybrid_candidates"
+        return (
+            (),
+            "zero_hybrid_candidates",
+            _HybridAdmissionAudit("NO_CANDIDATES", 0, 0, False, 0, 0, 0),
+        )
     raw_facts = tuple(chunk.metadata.get("runtime_authority_facts") for chunk in evidence)
     if any(not isinstance(item, Mapping) for item in raw_facts):
-        return evidence, "hybrid_authority_admission_pending"
+        return (
+            evidence,
+            "hybrid_authority_admission_pending",
+            _HybridAdmissionAudit("PENDING", 0, 0, False, 0, 0, 0),
+        )
     context = InsuranceAuthorityContext(
         source_id=governed.binding.source_id,
         index_generation_id=governed.binding.index_generation_id,
@@ -187,7 +206,19 @@ def _admit_governed_hybrid_evidence(
             if any(decision.outcome == "conflict" for decision in decisions)
             else "hybrid_authority_rejected"
         )
-        return tuple(projected), reason
+        return (
+            tuple(projected),
+            reason,
+            _HybridAdmissionAudit(
+                "FAIL",
+                0,
+                len(decisions),
+                False,
+                0,
+                len(governed.required_evidence_slots),
+                0,
+            ),
+        )
     slot_evidence = tuple(
         AdmittedInsuranceEvidence(
             evidence_id=chunk.evidence_id or chunk.source,
@@ -203,7 +234,19 @@ def _admit_governed_hybrid_evidence(
         slot_evidence,
     )
     if not slot_result.complete:
-        return tuple(projected), "required_evidence_slots_incomplete"
+        return (
+            tuple(projected),
+            "required_evidence_slots_incomplete",
+            _HybridAdmissionAudit(
+                "PASS",
+                len(authority_passed),
+                len(decisions) - len(authority_passed),
+                False,
+                len(slot_result.satisfied_slot_ids),
+                len(slot_result.missing_slot_ids),
+                0,
+            ),
+        )
     passed_ids = {chunk.evidence_id for chunk, _slots in authority_passed}
     admitted = tuple(
         chunk.model_copy(
@@ -220,7 +263,23 @@ def _admit_governed_hybrid_evidence(
         else chunk
         for chunk in projected
     )
-    return admitted, None
+    return (
+        admitted,
+        None,
+        _HybridAdmissionAudit(
+            "PASS",
+            len(authority_passed),
+            len(decisions) - len(authority_passed),
+            True,
+            len(slot_result.satisfied_slot_ids),
+            0,
+            sum(
+                1
+                for chunk in admitted
+                if chunk.authority_admitted and chunk.citation is not None
+            ),
+        ),
+    )
 
 
 @dataclass
@@ -479,7 +538,7 @@ class KnowledgeRetrievalService:
                 "Activate the Agent Version with its exact Hybrid provider graph.",
             )
         evidence, provider_result = retrieve_governed(governed)
-        evidence, authority_reason = _admit_governed_hybrid_evidence(
+        evidence, authority_reason, admission_audit = _admit_governed_hybrid_evidence(
             evidence,
             governed=governed,
             index_uuid=provider_result.index_uuid,
@@ -493,6 +552,9 @@ class KnowledgeRetrievalService:
                 "source_id": governed.binding.source_id,
                 "source_publication_seq": governed.binding.source_publication_seq,
                 "profile_revision_id": governed.retrieval_profile.profile_revision_id,
+                "generation_id": governed.binding.index_generation_id,
+                "manifest_sha256": governed.binding.manifest_ref.sha256,
+                "attestation_id": governed.binding.publication_attestation_id,
                 "searched_query_count": metrics.searched_query_count,
                 "fused_candidate_count": metrics.fused_candidate_count,
                 "reranked_candidate_count": metrics.reranked_candidate_count,
@@ -501,6 +563,19 @@ class KnowledgeRetrievalService:
                 "reranker_queue_time_ms": metrics.reranker_queue_time_ms,
                 "reranker_service_time_ms": metrics.reranker_service_time_ms,
                 "degradation_mode": provider_result.degradation_mode,
+                "excluded_count": max(
+                    metrics.fused_candidate_count - metrics.reranked_candidate_count,
+                    0,
+                ),
+                "authority_outcome": admission_audit.authority_outcome,
+                "authority_passed_count": admission_audit.authority_passed_count,
+                "authority_rejected_count": admission_audit.authority_rejected_count,
+                "evidence_slots_complete": admission_audit.evidence_slots_complete,
+                "satisfied_evidence_slot_count": (
+                    admission_audit.satisfied_evidence_slot_count
+                ),
+                "missing_evidence_slot_count": admission_audit.missing_evidence_slot_count,
+                "citation_count": admission_audit.citation_count,
             },
         )
         evidence_result = self._evaluate_evidence(

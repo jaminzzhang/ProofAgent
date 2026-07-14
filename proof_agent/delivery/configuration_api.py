@@ -119,6 +119,7 @@ from proof_agent.observability.api.operator_identity import (
     OperatorPermission,
     require_operator_permission,
 )
+from proof_agent.observability.api.serializers import serialize_agent_version_rollback
 from proof_agent.observability.storage.run_store import RunStore
 
 
@@ -267,6 +268,14 @@ class RollbackRequest(BaseModel):
     """Request body for switching the Active Agent Version pointer."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class KnowledgeSourceRollbackDraftRequest(BaseModel):
+    """Request a new Source Draft from one immutable historical publication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=2_000)
 
 
 class KnowledgeSourceCreateRequest(BaseModel):
@@ -515,6 +524,15 @@ class HybridKnowledgePublicationApi(Protocol):
     def list_validations(self, source_id: str) -> Sequence[BaseModel]: ...
 
     def list_publications(self, source_id: str) -> Sequence[BaseModel]: ...
+
+    def create_rollback_draft(
+        self,
+        *,
+        source_id: str,
+        historical_publication_id: str,
+        reason: str,
+        actor: str,
+    ) -> BaseModel: ...
 
 
 def _hybrid_publication_api(app_request: Request) -> HybridKnowledgePublicationApi:
@@ -1973,6 +1991,75 @@ def list_knowledge_source_publications(
     }
 
 
+@router.post(
+    "/config/knowledge-sources/{source_id}/publications/{publication_id}/rollback-drafts"
+)
+def create_hybrid_knowledge_source_rollback_draft(
+    source_id: str,
+    publication_id: str,
+    request: KnowledgeSourceRollbackDraftRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Create a new Source Draft; never repoint or mutate an old publication."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=409,
+            detail="Source rollback drafts require a hybrid_index Knowledge Source.",
+        )
+    facade = _hybrid_publication_api(app_request)
+    publications = tuple(facade.list_publications(source_id))
+    selected = next(
+        (
+            item
+            for item in publications
+            if getattr(item, "publication_id", None) == publication_id
+        ),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Hybrid Knowledge publication not found: {source_id}/{publication_id}",
+        )
+    latest_sequence = max(
+        (getattr(item, "source_publication_seq", 0) for item in publications),
+        default=0,
+    )
+    if getattr(selected, "source_publication_seq", 0) >= latest_sequence:
+        raise HTTPException(
+            status_code=409,
+            detail="Source rollback draft must select a historical publication.",
+        )
+    try:
+        draft = facade.create_rollback_draft(
+            source_id=source_id,
+            historical_publication_id=publication_id,
+            reason=request.reason,
+            actor=actor,
+        )
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
+    return {
+        "rollback_kind": "source_content_republication",
+        "source_id": source_id,
+        "historical_publication_id": publication_id,
+        "source_rollback_draft": draft.model_dump(mode="json"),
+        "required_next_steps": [
+            "source_review",
+            "source_validation",
+            "new_monotonic_source_publication",
+            "explicit_agent_binding_upgrade",
+            "agent_validation",
+            "new_agent_publication",
+        ],
+    }
+
+
 @router.get("/config/agents")
 def list_config_agents(
     app_request: Request,
@@ -2923,7 +3010,10 @@ def rollback_config_version(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return active.model_dump(mode="json")
+    restored = store.get_version(agent_id, version_id)
+    if restored is None:  # guarded by rollback_active_version; preserves fail-closed typing.
+        raise HTTPException(status_code=409, detail="Restored Agent Version disappeared.")
+    return serialize_agent_version_rollback(active, restored)
 
 
 def _agent_summary_payload(
