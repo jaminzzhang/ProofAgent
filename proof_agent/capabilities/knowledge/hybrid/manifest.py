@@ -850,12 +850,21 @@ def _validate_attestation(
     return validated
 
 
+def validate_projection_attestation(
+    attestation: KnowledgeProjectionAttestation,
+) -> KnowledgeProjectionAttestation:
+    """Validate one persisted attestation without creating a descendant record."""
+
+    return _validate_attestation(attestation)
+
+
 __all__ = [
     "ManifestRuleUnitMembership",
     "PersistedRuleUnitManifestShard",
     "ProjectionValidationEvidence",
     "RuleUnitManifestMaterialization",
     "append_projection_attestation",
+    "validate_projection_attestation",
     "build_rule_unit_manifest",
     "decode_manifest_root_artifact",
     "decode_manifest_shard_artifact",

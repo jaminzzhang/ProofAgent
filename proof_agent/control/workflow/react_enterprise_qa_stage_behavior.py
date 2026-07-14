@@ -31,6 +31,7 @@ from proof_agent.contracts import (
     RetrievalQueryItem,
 )
 from proof_agent.control.knowledge import KnowledgeRetrievalRequest, KnowledgeRetrievalService
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 from proof_agent.control.workflow.business_flow_skill_packs import (
     admit_business_flow_skill_pack,
 )
@@ -527,6 +528,7 @@ class ReActEnterpriseQAStageBehavior:
                     self.invocation.business_flow_skill_packs,
                 ),
                 force_empty=state["question"] == UNSUPPORTED_QUESTION,
+                governed_hybrid_request=_governed_hybrid_request_from_state(state),
             ),
             execution_mode="react_reviewed_retrieval",
         )
@@ -1445,6 +1447,15 @@ def _retrieval_query_set_from_state(
         if isinstance(raw_item, Mapping):
             items.append(RetrievalQueryItem.model_validate(dict(raw_item)))
     return tuple(items)
+
+
+def _governed_hybrid_request_from_state(
+    state: Mapping[str, Any],
+) -> GovernedHybridRetrievalRequest | None:
+    raw = state.get("governed_hybrid_request")
+    if raw is None:
+        return None
+    return GovernedHybridRetrievalRequest.model_validate(raw)
 
 
 def _conversation_context_summary(conversation_context: ContextAdmission | None) -> str:

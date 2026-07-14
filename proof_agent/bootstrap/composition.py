@@ -61,6 +61,11 @@ from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     PrivatePaddleClient,
 )
 from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
+from proof_agent.capabilities.knowledge.hybrid.provider import (
+    HybridIndexProvider,
+    HybridRetrievalAuthority,
+)
+from proof_agent.capabilities.knowledge.hybrid.ports import HybridSearchIndex
 from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
 from proof_agent.capabilities.knowledge.hybrid.publication import (
     HybridProjectionWriter,
@@ -206,6 +211,21 @@ class HybridKnowledgeComposition:
             artifact_store=artifact_store,
             index=index,
             embedding=self.embedding,
+        )
+
+    def compose_retrieval_provider(
+        self,
+        *,
+        authority: HybridRetrievalAuthority,
+        index: HybridSearchIndex,
+    ) -> HybridIndexProvider:
+        """Attach online retrieval to the same scheduler-owned model clients."""
+
+        return HybridIndexProvider(
+            authority=authority,
+            search=index,
+            embedding=self.embedding,
+            reranker=self.reranker,
         )
 
 
@@ -409,6 +429,7 @@ def compose_harness_invocation(
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
     institution_authorization: InstitutionAuthorizationContext | None = None,
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
+    hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
@@ -516,6 +537,7 @@ def compose_harness_invocation(
             resolve_blended_knowledge_provider(
                 resolved_bindings,
                 configuration_store=configuration_store,
+                hybrid_providers=hybrid_providers,
             ),
         ),
         resolved_knowledge_bindings=resolved_bindings,

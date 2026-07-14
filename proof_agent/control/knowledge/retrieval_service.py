@@ -28,6 +28,7 @@ from proof_agent.contracts import (
     ValidationResult,
 )
 from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.errors import ProofAgentError
@@ -70,6 +71,7 @@ class KnowledgeRetrievalRequest:
     query_timeout_seconds: float = 10.0
     preferred_binding_ids: tuple[str, ...] = ()
     force_empty: bool = False
+    governed_hybrid_request: GovernedHybridRetrievalRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -322,6 +324,8 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
+        if request.governed_hybrid_request is not None:
+            return self._run_governed_hybrid(request, reviewed=reviewed)
         if request.strategy == "single_step":
             return self._run_single_step(
                 request,
@@ -336,6 +340,73 @@ class KnowledgeRetrievalService:
             )
         _ensure_retrieval_strategy_is_executable(request.strategy)
         raise AssertionError("unreachable")
+
+    def _run_governed_hybrid(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        reviewed: bool,
+    ) -> KnowledgeRetrievalResult:
+        governed = request.governed_hybrid_request
+        if governed is None:
+            raise AssertionError("governed Hybrid branch requires an exact request")
+        if not reviewed:
+            decision = self._policy.evaluate(
+                EnforcementPoint.BEFORE_RETRIEVAL,
+                {
+                    "question": request.question,
+                    "strategy": "governed_hybrid",
+                    "binding_id": governed.binding.binding_id,
+                },
+            )
+            _emit_policy(self._trace, decision)
+            if not _allowed(decision):
+                return self._result_for_evidence(
+                    (),
+                    step_id="hybrid_retrieval",
+                    min_score=request.min_score,
+                )
+        retrieve_governed = getattr(
+            self._knowledge_provider,
+            "retrieve_governed_hybrid",
+            None,
+        )
+        if not callable(retrieve_governed):
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "The composed Knowledge provider cannot execute governed Hybrid requests.",
+                "Activate the Agent Version with its exact Hybrid provider graph.",
+            )
+        evidence, provider_result = retrieve_governed(governed)
+        metrics = provider_result.metrics
+        self._trace.emit(
+            "hybrid_retrieval_summary",
+            status="ok",
+            payload={
+                "binding_id": governed.binding.binding_id,
+                "source_id": governed.binding.source_id,
+                "source_publication_seq": governed.binding.source_publication_seq,
+                "profile_revision_id": governed.retrieval_profile.profile_revision_id,
+                "searched_query_count": metrics.searched_query_count,
+                "fused_candidate_count": metrics.fused_candidate_count,
+                "reranked_candidate_count": metrics.reranked_candidate_count,
+                "embedding_queue_time_ms": metrics.embedding_queue_time_ms,
+                "embedding_service_time_ms": metrics.embedding_service_time_ms,
+                "reranker_queue_time_ms": metrics.reranker_queue_time_ms,
+                "reranker_service_time_ms": metrics.reranker_service_time_ms,
+            },
+        )
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=(
+                "hybrid_authority_admission_pending" if evidence else "zero_hybrid_candidates"
+            ),
+        )
+        return KnowledgeRetrievalResult(
+            evidence=evidence,
+            evidence_result=evidence_result,
+        )
 
     def _run_single_step(
         self,

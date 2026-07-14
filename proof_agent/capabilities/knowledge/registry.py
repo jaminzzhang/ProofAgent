@@ -25,6 +25,12 @@ def resolve_knowledge_provider(
     *,
     configuration_store: LocalAgentConfigurationStore | None = None,
 ) -> KnowledgeProvider:
+    if knowledge_config.provider == "hybrid_index":
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_001",
+            "hybrid_index requires frozen authority and cannot be resolved from mutable params.",
+            "Compose HybridIndexProvider from a resolved Agent binding and attestation.",
+        )
     if knowledge_config.provider == "local_index":
         from proof_agent.capabilities.knowledge.local_index import LocalIndexProvider
 
@@ -37,6 +43,7 @@ def resolve_knowledge_provider(
         raise ProofAgentError(
             "PA_KNOWLEDGE_001",
             f"unsupported knowledge provider: {knowledge_config.provider}",
-            f"Supported providers: {', '.join(sorted((*PROVIDER_MAP, 'local_index')))}.",
+            f"Supported providers: {', '.join(sorted((*PROVIDER_MAP, 'local_index')))}. "
+            "hybrid_index is available only through governed composition.",
         )
     return provider_cls.from_config(knowledge_config)

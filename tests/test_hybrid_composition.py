@@ -130,6 +130,27 @@ def test_publication_service_borrows_graph_embedding_and_never_closes_scheduler(
     assert scheduler_transport.close_count == 1
 
 
+def test_retrieval_provider_borrows_graph_online_clients_and_shared_scheduler() -> None:
+    scheduler_transport = SchedulerTransport()
+    graph = compose_hybrid_knowledge(
+        settings=_settings(),
+        transports=_transports(scheduler_transport),
+    )
+
+    provider = graph.compose_retrieval_provider(
+        authority=cast(Any, object()),
+        index=cast(Any, object()),
+    )
+
+    assert provider.embedding is graph.embedding
+    assert provider.reranker is graph.reranker
+    assert provider.embedding.scheduler is graph.scheduler
+    assert provider.reranker.scheduler is graph.scheduler
+    assert graph.parser.scheduler is graph.scheduler
+    assert graph.ingestion_worker.scheduler is graph.scheduler
+    graph.close()
+
+
 def test_default_production_composition_never_builds_an_in_memory_queue() -> None:
     graph = compose_hybrid_knowledge(settings=_settings())
     try:

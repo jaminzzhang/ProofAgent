@@ -59,6 +59,7 @@ from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalRequest,
     KnowledgeRetrievalService,
 )
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 from proof_agent.errors import ProofAgentError
 
 
@@ -296,6 +297,10 @@ class _InvocationKnowledgeObservationAdapter:
                 max_queries=retrieval.max_queries,
                 query_concurrency=retrieval.query_concurrency,
                 query_timeout_seconds=retrieval.query_timeout_seconds,
+                governed_hybrid_request=_governed_hybrid_request_from_controlled_state(
+                    self._invocation,
+                    state,
+                ),
             )
         )
         evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
@@ -1017,6 +1022,17 @@ def _governed_hybrid_terminal_action(
         parameters=parameters,
         risk_level="high",
     )
+
+
+def _governed_hybrid_request_from_controlled_state(
+    invocation: HarnessInvocation,
+    state: ControlledReActRunState,
+) -> GovernedHybridRetrievalRequest | None:
+    factory = invocation.governed_hybrid_request_factory
+    if factory is None or state.intent_resolution is None:
+        return None
+    intent = IntentResolution.model_validate(state.intent_resolution)
+    return factory.build(intent, state.institution_authorization).request
 
 
 def _tool_answer_from_answer_context(
