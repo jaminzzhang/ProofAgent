@@ -98,6 +98,27 @@ def test_disposable_generation_rebuild_creates_fresh_uuid_with_same_root_and_cov
         assert rebuilt.covered_publication_sequences == (
             publication.attestation.covered_publication_sequences
         )
+        import psycopg
+
+        with psycopg.connect(env["dsn"], autocommit=True) as connection:
+            staged = connection.execute(
+                """SELECT validation_sha256, validation_json
+                     FROM hybrid_rebuild_validation WHERE operation_id=%s""",
+                (rebuilt.publication_attempt_id,),
+            ).fetchone()
+            assert staged is not None
+            with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+                connection.execute(
+                    """UPDATE hybrid_projection_materialization
+                          SET projection_material_sha256=%s WHERE source_id=%s""",
+                    ("0" * 64, env["source_id"]),
+                )
+            with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+                connection.execute(
+                    """UPDATE hybrid_rebuild_validation SET validation_sha256=%s
+                        WHERE operation_id=%s""",
+                    ("0" * 64, rebuilt.publication_attempt_id),
+                )
         authority = env["repository"].load_generation_rebuild(
             env["source_id"], env["generation"].generation_id
         )

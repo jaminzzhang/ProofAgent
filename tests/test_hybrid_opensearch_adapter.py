@@ -28,7 +28,9 @@ from proof_agent.capabilities.knowledge.hybrid.opensearch import (
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     ProjectionBulkRequest,
+    ProjectionClosure,
     ProjectionDocument,
+    ProjectionMembershipRestoration,
     ProjectionSmokeRequest,
     SearchIndexIdentity,
 )
@@ -36,6 +38,7 @@ from proof_agent.capabilities.knowledge.hybrid.publication import (
     projection_smoke_authorization,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
+from proof_agent.capabilities.knowledge.hybrid.versioning import rebuild_projection_locator
 from proof_agent.contracts import (
     ApprovedInsuranceKnowledgeVisibilityScope,
     ApprovedInsuranceRuleMetadataRevision,
@@ -273,6 +276,26 @@ def test_projection_locator_defaults_compatibly_and_rejects_forged_redirect() ->
     forged = identity.model_copy(update={"projection_locator": "foreign-index"})
     with pytest.raises(OpenSearchProjectionError, match="locator"):
         opensearch_module._identity_index_name(forged)
+
+
+@pytest.mark.parametrize(
+    "projection_locator",
+    (
+        physical_index_name("source-1", "generation-1") + "-shadow",
+        "knowledge-" + "a" * 64,
+        "pa-rebuild-" + "a" * 63,
+        "pa-rebuild-" + "a" * 65,
+        "pa-rebuild-" + "g" * 64,
+        "pa-rebuild-" + "A" * 64,
+    ),
+)
+def test_projection_locator_policy_rejects_noncanonical_primary_and_malformed_rebuild_families(
+    projection_locator: str,
+) -> None:
+    identity = index_identity().model_copy(update={"projection_locator": projection_locator})
+
+    with pytest.raises(OpenSearchProjectionError, match="locator"):
+        opensearch_module._identity_index_name(identity)
 
 
 class RecordingTransport:
@@ -767,7 +790,7 @@ def test_full_write_fence_digest_binds_every_omitted_projection_class(
     assert opensearch_module._immutable_projection_sha256(projected) != baseline
 
 
-def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_close() -> None:
+def test_bulk_upsert_is_attempt_scoped_and_rejects_mutable_authority_rewrites() -> None:
     transport = RecordingTransport()
     adapter = OpenSearchHybridIndex(transport=transport)
     request = ProjectionBulkRequest(
@@ -793,7 +816,10 @@ def test_bulk_upsert_is_attempt_scoped_and_allows_only_idempotence_or_interval_c
     assert "immutable_projection_sha256" in update["script"]["source"]
     assert "manifest entry core conflict" in update["script"]["source"]
     assert "publication_seq_to" in update["script"]["source"]
-    assert update["script"]["params"]["doc"]["publication_attempt_id"] == "attempt-1"
+    assert "mutable projection conflict" in update["script"]["source"]
+    assert "logical publication authority conflict" in update["script"]["source"]
+    assert update["script"]["params"]["doc"]["last_publication_attempt_id"] == "attempt-1"
+    assert update["script"]["params"]["doc"]["projection_operation_id"] == "attempt-1"
     assert "authority_manifest_digests" not in update["script"]["params"]["doc"]
     assert update["script"]["params"]["doc"]["manifest_entry_core_sha256"]
     assert result.accepted_count == 1
@@ -834,7 +860,943 @@ def test_delete_by_query_puts_conflicts_only_in_query_parameters() -> None:
 
     call = next(item for item in transport.calls if item["path"].endswith("/_delete_by_query"))
     assert call["query_params"] == {"conflicts": "abort"}
-    assert call["json_body"] == {"query": {"term": {"publication_attempt_id": "attempt-orphan"}}}
+    assert call["json_body"] == {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"projection_operation_id": "attempt-orphan"}},
+                    {"term": {"source_id": "source-1"}},
+                    {"term": {"index_generation_id": "generation-1"}},
+                ]
+            }
+        }
+    }
+
+
+def rebuild_identity(*, index_uuid: str = "rebuild-uuid-1") -> SearchIndexIdentity:
+    return index_identity(index_uuid=index_uuid).model_copy(
+        update={
+            "projection_locator": rebuild_projection_locator(
+                source_id="source-1",
+                generation_id="generation-1",
+                operation_id="rebuild-operation-1",
+            )
+        }
+    )
+
+
+def rebuild_identity_response(
+    identity: SearchIndexIdentity,
+    *,
+    index_uuid: str | None = None,
+) -> OpenSearchTransportResponse:
+    locator = identity.projection_locator
+    assert locator is not None
+    mappings = rule_unit_index_mapping(dimension=2)
+    mappings["_meta"] = {
+        "source_id": "source-1",
+        "generation_id": "generation-1",
+        "embedding_dimension": 2,
+        "mapping_sha256": rule_unit_mapping_sha256(dimension=2),
+        "analyzer_sha256": rule_unit_analyzer_sha256(),
+        "mapping_normalization_policy": "opensearch-3.1-knn-empty-parameters.v1",
+    }
+    return OpenSearchTransportResponse(
+        status_code=200,
+        body={
+            locator: {
+                "settings": {
+                    "index": {
+                        "uuid": index_uuid or identity.index_uuid,
+                        "number_of_replicas": "1",
+                        "analysis": rule_unit_analysis_settings(),
+                    }
+                },
+                "mappings": mappings,
+            }
+        },
+    )
+
+
+class RebuildLifecycleTransport(RecordingTransport):
+    def __init__(self, identity: SearchIndexIdentity) -> None:
+        super().__init__()
+        self.identity = identity
+        self.projected: dict[str, object] | None = None
+
+    def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+        locator = self.identity.projection_locator
+        assert locator is not None
+        method = kwargs["method"]
+        path = kwargs["path"]
+        if method == "PUT" and path == f"/{locator}":
+            self.calls.append(kwargs)
+            return OpenSearchTransportResponse(status_code=200, body={"acknowledged": True})
+        if method == "GET" and path == f"/{locator}":
+            self.calls.append(kwargs)
+            return rebuild_identity_response(self.identity)
+        if method == "POST" and path == f"/{locator}/_bulk":
+            self.calls.append(kwargs)
+            content = kwargs["content"]
+            assert isinstance(content, bytes)
+            lines = content.decode().splitlines()
+            action = json.loads(lines[0])
+            update = json.loads(lines[1])
+            self.projected = update["script"]["params"]["doc"]
+            return OpenSearchTransportResponse(
+                status_code=200,
+                body={
+                    "errors": False,
+                    "items": [
+                        {
+                            "update": {
+                                "status": 201,
+                                "_id": action["update"]["_id"],
+                                "_index": locator,
+                                "result": "created",
+                                "_seq_no": 0,
+                                "_primary_term": 1,
+                                "_version": 1,
+                                "_shards": {"total": 1, "successful": 1, "failed": 0},
+                            }
+                        }
+                    ],
+                },
+            )
+        if method == "POST" and path == f"/{locator}/_refresh":
+            self.calls.append(kwargs)
+            return OpenSearchTransportResponse(
+                status_code=200,
+                body={"_shards": {"total": 1, "successful": 1, "failed": 0}},
+            )
+        if method == "POST" and path == f"/{locator}/_mget":
+            self.calls.append(kwargs)
+            assert self.projected is not None
+            json_body = kwargs["json_body"]
+            assert json_body == {"ids": ["projection-1"]}
+            return OpenSearchTransportResponse(
+                status_code=200,
+                body={
+                    "docs": [
+                        {
+                            "_index": locator,
+                            "_id": "projection-1",
+                            "found": True,
+                            "_source": self.projected,
+                        }
+                    ]
+                },
+            )
+        if method == "POST" and path == f"/{locator}/_count":
+            self.calls.append(kwargs)
+            return OpenSearchTransportResponse(status_code=200, body={"count": 1})
+        return super().request(**kwargs)
+
+
+def test_created_rebuild_identity_supports_bulk_exact_readback_and_identity_verification() -> None:
+    expected = rebuild_identity()
+    transport = RebuildLifecycleTransport(expected)
+    adapter = OpenSearchHybridIndex(transport=transport)
+    locator = expected.projection_locator
+    assert locator is not None
+
+    created = adapter.create_rebuild_index(
+        expected.generation,
+        operation_id="rebuild-operation-1",
+        projection_locator=locator,
+        rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+        rrf_rank_constant=60,
+    )
+    document = projection_document()
+    bulk = adapter.bulk_upsert(
+        ProjectionBulkRequest(
+            identity=created,
+            publication_attempt_id="rebuild-operation-1",
+            manifest_root_sha256=SHA_B,
+            documents=(document,),
+        )
+    )
+    authority = adapter.materialize_authority(
+        document,
+        identity=created,
+        publication_attempt_id="rebuild-operation-1",
+    )
+    readback = adapter.validate_exact_projection(
+        identity=created,
+        publication_attempt_id="rebuild-operation-1",
+        manifest_root_sha256=SHA_B,
+        documents=(authority,),
+    )
+
+    assert created == expected
+    assert adapter.verify_identity(created) == created
+    assert bulk.accepted_count == 1
+    assert readback.validated_document_count == 1
+    assert readback.validated_rule_unit_count == 1
+    assert ("POST", f"/{locator}/_bulk") in [
+        (str(call["method"]), str(call["path"])) for call in transport.calls
+    ]
+
+
+def test_rebuild_preserves_logical_attempt_while_changing_physical_owner() -> None:
+    adapter = OpenSearchHybridIndex(transport=RecordingTransport())
+    document = projection_document().model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-1"}
+    )
+    original = adapter.materialize_authority(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-1",
+    )
+    rebuilt = adapter.materialize_authority(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="rebuild-operation-7",
+    )
+    projected = project_rule_unit_document(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="rebuild-operation-7",
+    )
+
+    assert rebuilt == original
+    assert rebuilt.last_publication_attempt_id == "publication-attempt-1"
+    assert projected["last_publication_attempt_id"] == "publication-attempt-1"
+    assert projected["projection_operation_id"] == "rebuild-operation-7"
+    assert stable_digest(
+        {
+            "schema_version": "hybrid-publication-projection.v2",
+            "documents": [original.model_dump(mode="json")],
+        }
+    ) == stable_digest(
+        {
+            "schema_version": "hybrid-publication-projection.v2",
+            "documents": [rebuilt.model_dump(mode="json")],
+        }
+    )
+
+
+def test_exact_readback_rejects_projection_owner_tamper() -> None:
+    identity = rebuild_identity()
+    transport = RebuildLifecycleTransport(identity)
+    adapter = OpenSearchHybridIndex(transport=transport)
+    locator = identity.projection_locator
+    assert locator is not None
+    created = adapter.create_rebuild_index(
+        identity.generation,
+        operation_id="rebuild-operation-1",
+        projection_locator=locator,
+        rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+        rrf_rank_constant=60,
+    )
+    document = projection_document().model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-1"}
+    )
+    adapter.bulk_upsert(
+        ProjectionBulkRequest(
+            identity=created,
+            publication_attempt_id="rebuild-operation-1",
+            manifest_root_sha256=SHA_B,
+            documents=(document,),
+        )
+    )
+    authority = adapter.materialize_authority(
+        document,
+        identity=created,
+        publication_attempt_id="rebuild-operation-1",
+    )
+    assert transport.projected is not None
+    transport.projected["projection_operation_id"] = "forged-owner"
+
+    with pytest.raises(OpenSearchProjectionError, match="authority mismatch"):
+        adapter.validate_exact_projection(
+            identity=created,
+            publication_attempt_id="rebuild-operation-1",
+            manifest_root_sha256=SHA_B,
+            documents=(authority,),
+        )
+
+
+def test_post_rebuild_closure_guards_logical_attempt_and_sets_physical_owner() -> None:
+    transport = RecordingTransport()
+    adapter = OpenSearchHybridIndex(transport=transport)
+    document = projection_document().model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-1"}
+    )
+    prior = adapter.materialize_authority(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="rebuild-operation-7",
+    )
+    closed = prior.model_copy(
+        update={
+            "manifest_entry": prior.manifest_entry.model_copy(update={"publication_seq_to": 2}),
+            "last_publication_attempt_id": "publication-attempt-3",
+        }
+    )
+
+    adapter.close_projection_memberships(
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-3",
+        manifest_root_sha256=SHA_C,
+        closures=(ProjectionClosure(prior=prior, closed=closed),),
+    )
+
+    call = next(item for item in transport.calls if item["path"].endswith("/_bulk"))
+    params = json.loads(call["content"].decode().splitlines()[1])["script"]["params"]
+    assert params["expected_attempt_id"] == "publication-attempt-1"
+    assert params["last_publication_attempt_id"] == "publication-attempt-3"
+    assert params["projection_operation_id"] == "publication-attempt-3"
+
+
+def test_recovery_restoration_has_exact_failed_closure_guards_and_is_separate_from_bulk() -> None:
+    transport = RecordingTransport()
+    adapter = OpenSearchHybridIndex(transport=transport)
+    prior = adapter.materialize_authority(
+        projection_document().model_copy(
+            update={"last_publication_attempt_id": "publication-attempt-1"}
+        ),
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-1",
+    )
+
+    result = adapter.restore_projection_memberships(
+        identity=index_identity(),
+        recovery_operation_id="recovery-operation-1",
+        manifest_root_sha256=SHA_C,
+        restorations=(
+            ProjectionMembershipRestoration(
+                prior=prior,
+                orphan_attempt_id="publication-attempt-2",
+                reserved_publication_seq=2,
+            ),
+        ),
+    )
+
+    call = next(item for item in transport.calls if item["path"].endswith("/_bulk"))
+    update = json.loads(call["content"].decode().splitlines()[1])
+    script = update["script"]["source"]
+    params = update["script"]["params"]
+    assert "ctx._source.source_id == params.expected_source_id" in script
+    assert "ctx._source.index_generation_id == params.expected_generation_id" in script
+    assert "ctx._source.projection_material_sha256" in script
+    assert "ctx._source.immutable_projection_sha256" in script
+    assert "ctx._source.manifest_entry_core_sha256" in script
+    assert "ctx._source.publication_seq_from" in script
+    assert "ctx._source.publication_seq_to == params.failed_publication_seq_to" in script
+    assert "ctx._source.last_publication_attempt_id == params.orphan_attempt_id" in script
+    assert "ctx._source.projection_operation_id == params.orphan_attempt_id" in script
+    assert "ctx._source.response_integrity_sha256" in script
+    assert "historical closed membership cannot reopen" in script
+    assert params["expected_source_id"] == "source-1"
+    assert params["expected_generation_id"] == "generation-1"
+    assert params["failed_publication_seq_to"] == 1
+    assert params["orphan_attempt_id"] == "publication-attempt-2"
+    assert params["recovery_operation_id"] == "recovery-operation-1"
+    assert params["prior_last_publication_attempt_id"] == "publication-attempt-1"
+    assert params["failed_projection_sha256"] != params["prior_projection_sha256"]
+    assert (
+        params["failed_response_integrity_sha256"] != (params["recovery_response_integrity_sha256"])
+    )
+    assert "historical closed membership cannot reopen" not in (
+        opensearch_module._INTERVAL_UPDATE_SCRIPT
+    )
+    assert "closed interval cannot reopen or change" in opensearch_module._INTERVAL_UPDATE_SCRIPT
+    assert result.accepted_count == 1
+
+
+def test_recovery_restoration_marks_historical_prior_as_no_reopen_only() -> None:
+    adapter = OpenSearchHybridIndex(transport=RecordingTransport())
+    prior = adapter.materialize_authority(
+        projection_document(publication_seq_to=1).model_copy(
+            update={"last_publication_attempt_id": "publication-attempt-2"}
+        ),
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-2",
+    )
+    params = opensearch_module._restoration_script_params(
+        ProjectionMembershipRestoration(
+            prior=prior,
+            orphan_attempt_id="publication-attempt-3",
+            reserved_publication_seq=3,
+        ),
+        index_identity(),
+        recovery_operation_id="recovery-operation-1",
+    )
+
+    assert params["prior_closed"] is True
+    assert params["prior_seq_to"] == 1
+    assert params["failed_publication_seq_to"] == 2
+    assert params["failed_projection_sha256"] == params["prior_projection_sha256"]
+
+
+def test_recovery_restoration_rejects_nonhistorical_boundary_and_wrong_uuid() -> None:
+    adapter = OpenSearchHybridIndex(transport=RecordingTransport())
+    prior = adapter.materialize_authority(
+        projection_document(),
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-1",
+    )
+    with pytest.raises(ValueError, match="precede"):
+        ProjectionMembershipRestoration(
+            prior=prior,
+            orphan_attempt_id="publication-attempt-2",
+            reserved_publication_seq=1,
+        )
+    with pytest.raises(OpenSearchProjectionError, match="UUID"):
+        adapter.restore_projection_memberships(
+            identity=index_identity(index_uuid="wrong"),
+            recovery_operation_id="recovery-operation-1",
+            manifest_root_sha256=SHA_C,
+            restorations=(
+                ProjectionMembershipRestoration(
+                    prior=prior,
+                    orphan_attempt_id="publication-attempt-2",
+                    reserved_publication_seq=2,
+                ),
+            ),
+        )
+
+
+class GuardedRestorationTransport(RecordingTransport):
+    def __init__(self, source: dict[str, object]) -> None:
+        super().__init__()
+        self.source = source
+
+    def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+        if kwargs["path"].endswith("/_bulk"):
+            lines = kwargs["content"].decode().splitlines()
+            update = json.loads(lines[1])
+            assert update["script"]["source"] == (opensearch_module._MEMBERSHIP_RESTORATION_SCRIPT)
+            params = update["script"]["params"]
+            source = self.source
+            authority_matches = (
+                source.get("source_id") == params["expected_source_id"]
+                and source.get("index_generation_id") == params["expected_generation_id"]
+                and source.get("projection_material_sha256") == params["expected_material_sha256"]
+                and source.get("immutable_projection_sha256") == params["expected_immutable_sha256"]
+                and source.get("manifest_entry_core_sha256") == params["expected_entry_core_sha256"]
+                and source.get("publication_seq_from") == params["expected_seq_from"]
+            )
+            prior_interval = (
+                source.get("publication_seq_to") == params["prior_seq_to"]
+                if params["prior_closed"]
+                else "publication_seq_to" not in source
+            )
+            exact_prior = (
+                authority_matches
+                and prior_interval
+                and source.get("projection_sha256") == params["prior_projection_sha256"]
+                and source.get("last_publication_attempt_id")
+                == params["prior_last_publication_attempt_id"]
+            )
+            exact_failed = (
+                authority_matches
+                and not params["prior_closed"]
+                and source.get("publication_seq_to") == params["failed_publication_seq_to"]
+                and source.get("projection_sha256") == params["failed_projection_sha256"]
+                and source.get("response_integrity_sha256")
+                == params["failed_response_integrity_sha256"]
+                and source.get("last_publication_attempt_id") == params["orphan_attempt_id"]
+                and source.get("projection_operation_id") == params["orphan_attempt_id"]
+            )
+            if not exact_prior and not exact_failed:
+                return OpenSearchTransportResponse(
+                    status_code=200,
+                    body={"errors": True, "items": [{"update": {"status": 409}}]},
+                )
+            result = "noop"
+            if exact_failed:
+                source.pop("publication_seq_to")
+                source["projection_sha256"] = params["prior_projection_sha256"]
+                source["response_integrity_sha256"] = params["recovery_response_integrity_sha256"]
+                source["last_publication_attempt_id"] = params["prior_last_publication_attempt_id"]
+                source["projection_operation_id"] = params["recovery_operation_id"]
+                result = "updated"
+            index = physical_index_name("source-1", "generation-1")
+            self.calls.append(kwargs)
+            return OpenSearchTransportResponse(
+                status_code=200,
+                body={
+                    "errors": False,
+                    "items": [
+                        {
+                            "update": {
+                                "status": 200,
+                                "_id": "projection-1",
+                                "_index": index,
+                                "result": result,
+                                "_seq_no": 8,
+                                "_primary_term": 2,
+                                "_version": 4,
+                                "_shards": {"total": 1, "successful": 1, "failed": 0},
+                            }
+                        }
+                    ],
+                },
+            )
+        return super().request(**kwargs)
+
+
+def restoration_fixture() -> tuple[
+    ProjectionMembershipRestoration,
+    dict[str, object],
+]:
+    prior_document = projection_document().model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-1"}
+    )
+    prior = OpenSearchHybridIndex(transport=RecordingTransport()).materialize_authority(
+        prior_document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-1",
+    )
+    closed_document = prior_document.model_copy(
+        update={
+            "manifest_entry": prior_document.manifest_entry.model_copy(
+                update={"publication_seq_to": 1}
+            ),
+            "last_publication_attempt_id": "publication-attempt-2",
+        }
+    )
+    failed_source = project_rule_unit_document(
+        closed_document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-2",
+    )
+    return (
+        ProjectionMembershipRestoration(
+            prior=prior,
+            orphan_attempt_id="publication-attempt-2",
+            reserved_publication_seq=2,
+        ),
+        failed_source,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("publication_seq_to", 9),
+        ("projection_operation_id", "wrong-owner"),
+        ("last_publication_attempt_id", "wrong-logical"),
+        ("projection_material_sha256", SHA_A),
+        ("source_id", "source-2"),
+        ("index_generation_id", "generation-2"),
+        ("response_integrity_sha256", SHA_B),
+    ),
+)
+def test_recovery_restoration_rejects_inexact_failed_closure(
+    field: str,
+    value: object,
+) -> None:
+    restoration, failed_source = restoration_fixture()
+    failed_source[field] = value
+    adapter = OpenSearchHybridIndex(transport=GuardedRestorationTransport(failed_source))
+
+    with pytest.raises(OpenSearchProjectionError, match="rejected"):
+        adapter.restore_projection_memberships(
+            identity=index_identity(),
+            recovery_operation_id="recovery-operation-1",
+            manifest_root_sha256=SHA_C,
+            restorations=(restoration,),
+        )
+
+
+def test_recovery_restoration_exact_retry_is_idempotent() -> None:
+    restoration, failed_source = restoration_fixture()
+    transport = GuardedRestorationTransport(failed_source)
+    adapter = OpenSearchHybridIndex(transport=transport)
+    request = {
+        "identity": index_identity(),
+        "recovery_operation_id": "recovery-operation-1",
+        "manifest_root_sha256": SHA_C,
+        "restorations": (restoration,),
+    }
+
+    first = adapter.restore_projection_memberships(**request)
+    retry = adapter.restore_projection_memberships(**request)
+
+    bulk_calls = [item for item in transport.calls if item["path"].endswith("/_bulk")]
+    assert first.accepted_count == retry.accepted_count == 1
+    assert len(bulk_calls) == 2
+    assert "publication_seq_to" not in transport.source
+    assert transport.source["projection_operation_id"] == "recovery-operation-1"
+
+
+def test_recovery_restoration_already_prior_logical_state_is_owner_agnostic_noop() -> None:
+    restoration, _ = restoration_fixture()
+    prior_document = projection_document().model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-1"}
+    )
+    prior_source = project_rule_unit_document(
+        prior_document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-1",
+    )
+    prior_source["projection_operation_id"] = "prior-rebuild-operation"
+    prior_source["response_integrity_sha256"] = SHA_A
+    transport = GuardedRestorationTransport(prior_source)
+
+    OpenSearchHybridIndex(transport=transport).restore_projection_memberships(
+        identity=index_identity(),
+        recovery_operation_id="recovery-operation-1",
+        manifest_root_sha256=SHA_C,
+        restorations=(restoration,),
+    )
+
+    assert transport.source["projection_operation_id"] == "prior-rebuild-operation"
+
+
+def test_recovery_restoration_never_reopens_legitimate_historical_membership() -> None:
+    closed_document = projection_document(publication_seq_to=1).model_copy(
+        update={"last_publication_attempt_id": "publication-attempt-2"}
+    )
+    prior = OpenSearchHybridIndex(transport=RecordingTransport()).materialize_authority(
+        closed_document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-2",
+    )
+    restoration = ProjectionMembershipRestoration(
+        prior=prior,
+        orphan_attempt_id="publication-attempt-3",
+        reserved_publication_seq=3,
+    )
+    closed_source = project_rule_unit_document(
+        closed_document,
+        identity=index_identity(),
+        publication_attempt_id="publication-attempt-2",
+    )
+    transport = GuardedRestorationTransport(closed_source)
+    adapter = OpenSearchHybridIndex(transport=transport)
+
+    adapter.restore_projection_memberships(
+        identity=index_identity(),
+        recovery_operation_id="recovery-operation-1",
+        manifest_root_sha256=SHA_C,
+        restorations=(restoration,),
+    )
+    assert transport.source["publication_seq_to"] == 1
+    transport.source.pop("publication_seq_to")
+    with pytest.raises(OpenSearchProjectionError, match="rejected"):
+        adapter.restore_projection_memberships(
+            identity=index_identity(),
+            recovery_operation_id="recovery-operation-1",
+            manifest_root_sha256=SHA_C,
+            restorations=(restoration,),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), (("source_id", "source-2"), ("generation_id", "generation-2"))
+)
+def test_rebuild_identity_rejects_cross_generation_index_metadata(
+    field: str,
+    value: str,
+) -> None:
+    identity = rebuild_identity()
+
+    class CrossGenerationTransport(RebuildLifecycleTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            response = super().request(**kwargs)
+            if kwargs["method"] == "GET" and kwargs["path"] == f"/{identity.projection_locator}":
+                details = response.body[identity.projection_locator]  # type: ignore[index]
+                details["mappings"]["_meta"][field] = value  # type: ignore[index]
+            return response
+
+    with pytest.raises(OpenSearchProjectionError, match="identity|generation"):
+        OpenSearchHybridIndex(transport=CrossGenerationTransport(identity)).verify_identity(
+            identity
+        )
+
+
+class ScriptedRebuildDeleteTransport:
+    def __init__(self, responses: list[OpenSearchTransportResponse | BaseException]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str]] = []
+        self.requests: list[dict[str, object]] = []
+
+    def request(
+        self,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, object] | None = None,
+        content: bytes | None = None,
+        content_type: str = "application/json",
+        query_params: dict[str, str] | None = None,
+    ) -> OpenSearchTransportResponse:
+        assert content is None
+        assert content_type == "application/json"
+        self.calls.append((method, path))
+        self.requests.append(
+            {"method": method, "path": path, "json_body": json_body, "query_params": query_params}
+        )
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+@pytest.mark.parametrize("identity_failure", ("disconnect", "malformed_mapping"))
+def test_rebuild_create_put_success_identity_failure_leaves_durable_locator_for_reconcile(
+    identity_failure: str,
+) -> None:
+    identity = rebuild_identity()
+    locator = identity.projection_locator
+    assert locator is not None
+
+    class AmbiguousCreateTransport(RecordingTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            if kwargs["method"] == "PUT" and kwargs["path"] == f"/{locator}":
+                self.calls.append(kwargs)
+                return OpenSearchTransportResponse(status_code=200, body={"acknowledged": True})
+            if kwargs["method"] == "GET" and kwargs["path"] == f"/{locator}":
+                self.calls.append(kwargs)
+                if identity_failure == "disconnect":
+                    raise OpenSearchProjectionError("identity read disconnected")
+                response = rebuild_identity_response(identity)
+                response.body[locator]["mappings"] = {}  # type: ignore[index]
+                return response
+            return super().request(**kwargs)
+
+    transport = AmbiguousCreateTransport()
+    with pytest.raises(OpenSearchProjectionError):
+        OpenSearchHybridIndex(transport=transport).create_rebuild_index(
+            identity.generation,
+            operation_id="rebuild-operation-1",
+            projection_locator=locator,
+            rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+            rrf_rank_constant=60,
+        )
+
+    assert ("PUT", f"/{locator}") in [
+        (str(call["method"]), str(call["path"])) for call in transport.calls
+    ]
+    assert all(call["method"] != "DELETE" for call in transport.calls)
+
+
+def test_rebuild_create_rejects_caller_supplied_locator_before_transport() -> None:
+    transport = RecordingTransport()
+
+    with pytest.raises(OpenSearchProjectionError, match="operation-derived"):
+        OpenSearchHybridIndex(transport=transport).create_rebuild_index(
+            index_identity().generation,
+            operation_id="rebuild-operation-1",
+            projection_locator="pa-rebuild-caller-supplied",
+            rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+            rrf_rank_constant=60,
+        )
+
+    assert transport.calls == []
+
+
+def test_rebuild_locator_is_deterministic_unique_and_bounded() -> None:
+    first = rebuild_projection_locator(
+        source_id="source-1",
+        generation_id="generation-1",
+        operation_id="rebuild-operation-1",
+    )
+    second = rebuild_projection_locator(
+        source_id="source-1",
+        generation_id="generation-1",
+        operation_id="rebuild-operation-2",
+    )
+
+    assert first != second
+    assert len(first.encode()) <= 255
+    assert first == rebuild_identity().projection_locator
+
+
+def purge_rebuild(index: OpenSearchHybridIndex, identity: SearchIndexIdentity) -> None:
+    assert identity.projection_locator is not None
+    index.purge_rebuild_projection(
+        generation=identity.generation,
+        projection_locator=identity.projection_locator,
+        operation_id="rebuild-operation-1",
+        expected_index_uuid=identity.index_uuid,
+    )
+
+
+def test_purge_rebuild_projection_treats_preflight_404_as_already_absent() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [OpenSearchTransportResponse(status_code=404, body={})]
+    )
+
+    purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert transport.calls == [("GET", f"/{identity.projection_locator}")]
+
+
+def test_purge_rebuild_projection_treats_delete_by_query_404_as_success() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchTransportResponse(status_code=404, body={}),
+        ]
+    )
+
+    purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST"]
+
+
+def test_purge_rebuild_projection_response_lost_then_zero_count_is_success() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchProjectionError("delete response lost"),
+            OpenSearchTransportResponse(status_code=200, body={"count": 0}),
+        ]
+    )
+
+    purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST", "POST"]
+
+
+@pytest.mark.parametrize("invalid_count", (False, 0.0, "0", None))
+def test_purge_rebuild_projection_requires_exact_integer_zero_count(
+    invalid_count: object,
+) -> None:
+    identity = rebuild_identity()
+    count_body = {} if invalid_count is None else {"count": invalid_count}
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchProjectionError("delete response lost"),
+            OpenSearchTransportResponse(status_code=200, body=count_body),
+        ]
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="payload still exists"):
+        purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST", "POST"]
+
+
+def test_purge_rebuild_projection_ambiguous_response_and_remaining_token_is_retryable() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchTransportResponse(status_code=200, body={"timed_out": True}),
+            OpenSearchTransportResponse(status_code=200, body={"count": 1}),
+        ]
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="payload still exists"):
+        purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST", "POST"]
+
+
+def test_purge_rebuild_projection_refresh_disconnect_rechecks_zero_token_count() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchTransportResponse(
+                status_code=200,
+                body={"timed_out": False, "failures": [], "version_conflicts": 0},
+            ),
+            OpenSearchProjectionError("refresh response lost"),
+            OpenSearchTransportResponse(status_code=200, body={"count": 0}),
+        ]
+    )
+
+    purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST", "POST", "POST"]
+
+
+def test_purge_rebuild_projection_auth_rejection_is_never_treated_as_absent() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchTransportResponse(status_code=401, body={}),
+        ]
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="rejected"):
+        purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET", "POST"]
+
+
+def test_purge_rebuild_projection_replacement_uuid_before_purge_fails_closed() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity, index_uuid="replacement-uuid"),
+        ]
+    )
+
+    with pytest.raises(OpenSearchProjectionError, match="UUID"):
+        purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert [method for method, _ in transport.calls] == ["GET"]
+
+
+def test_purge_rebuild_projection_never_uses_whole_index_delete_and_binds_operation_scope() -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport(
+        [
+            rebuild_identity_response(identity),
+            OpenSearchTransportResponse(
+                status_code=200,
+                body={
+                    "timed_out": False,
+                    "failures": [],
+                    "version_conflicts": 0,
+                    "total": 0,
+                    "deleted": 0,
+                },
+            ),
+            OpenSearchTransportResponse(status_code=200, body={}),
+            OpenSearchTransportResponse(status_code=200, body={"count": 0}),
+        ]
+    )
+
+    purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert all(method != "DELETE" for method, _ in transport.calls)
+    assert [method for method, _ in transport.calls] == ["GET", "POST", "POST", "POST"]
+    purge_request = transport.requests[1]
+    assert purge_request["query_params"] == {"conflicts": "abort"}
+    assert purge_request["json_body"] == {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"projection_operation_id": "rebuild-operation-1"}},
+                    {"term": {"source_id": "source-1"}},
+                    {"term": {"index_generation_id": "generation-1"}},
+                ]
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        OpenSearchTransportResponse(status_code=401, body={}),
+        OpenSearchProjectionError("network unavailable"),
+    ),
+)
+def test_purge_rebuild_projection_does_not_treat_auth_or_network_lookup_failure_as_absent(
+    failure: OpenSearchTransportResponse | BaseException,
+) -> None:
+    identity = rebuild_identity()
+    transport = ScriptedRebuildDeleteTransport([failure])
+
+    with pytest.raises(OpenSearchProjectionError):
+        purge_rebuild(OpenSearchHybridIndex(transport=transport), identity)
+
+    assert transport.calls == [("GET", f"/{identity.projection_locator}")]
 
 
 def test_projection_smoke_uses_sequence_acl_and_returns_citation_bound_evidence() -> None:
@@ -1026,7 +1988,7 @@ def test_refresh_checkpoint_binds_exact_projection_state_and_is_idempotent() -> 
     )
     identical_retry_reordered = ProjectionBulkRequest(
         identity=index_identity(),
-        publication_attempt_id="attempt-2",
+        publication_attempt_id="attempt-1",
         manifest_root_sha256=SHA_A,
         documents=(second, base),
     )
@@ -1209,6 +2171,46 @@ def test_search_rejects_backend_hits_that_bypass_governed_filters(
 
     with pytest.raises(OpenSearchProjectionError):
         adapter.search(search_request())
+
+
+@pytest.mark.parametrize("tampered_authority", ("metadata", "visibility"))
+def test_search_rejects_self_consistent_response_integrity_authority_digest_tamper(
+    tampered_authority: str,
+) -> None:
+    document = projection_document()
+    metadata = document.approved_metadata
+    visibility = document.rule_unit.visibility_scope
+    if tampered_authority == "metadata":
+        metadata = metadata.model_copy(update={"authority": "forged-authority"})
+        preserved_digest = "metadata_revision_digest"
+    else:
+        visibility = visibility.model_copy(
+            update={
+                "institutions": visibility.institutions.model_copy(update={"values": ("INST-2",)})
+            }
+        )
+        preserved_digest = "visibility_revision_digest"
+    hit = projected_search_hit(document=document)
+    source = hit["_source"]
+    assert isinstance(source, dict)
+    flattened = opensearch_module._authority_projection_fields(metadata, visibility)
+    source.update({key: value for key, value in flattened.items() if key != preserved_digest})
+    source["authority_sha256"] = stable_digest(
+        {
+            "approved_metadata": metadata.model_dump(mode="json"),
+            "approved_visibility": visibility.model_dump(mode="json"),
+        }
+    )
+    entry = document.manifest_entry.model_copy(
+        update={"authority_sha256": source["authority_sha256"]}
+    )
+    source["manifest_entry_core_sha256"] = manifest_entry_core_sha256(entry)
+    source["response_integrity_sha256"] = opensearch_module._response_integrity_sha256(source)
+
+    with pytest.raises(OpenSearchProjectionError, match=f"{tampered_authority} digest"):
+        OpenSearchHybridIndex(transport=RecordingTransport(search_hits=[hit])).search(
+            search_request()
+        )
 
 
 def test_search_rejects_hit_from_another_physical_index() -> None:

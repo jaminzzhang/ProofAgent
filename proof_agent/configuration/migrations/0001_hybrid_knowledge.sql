@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS hybrid_projection_operation (
   operation_kind text NOT NULL CHECK (operation_kind IN ('PUBLICATION','REBUILD')),
   state text NOT NULL CHECK (state IN ('BUILDING','VALIDATED','COMMITTED','FAILED')),
   failure_code text,
+  projection_locator text,
+  index_uuid text,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL CHECK (updated_at >= created_at),
   CHECK ((state = 'FAILED') = (failure_code IS NOT NULL)),
@@ -37,6 +39,19 @@ CREATE TABLE IF NOT EXISTS hybrid_projection_operation (
   FOREIGN KEY (source_id, generation_id)
     REFERENCES hybrid_knowledge_generation(source_id, generation_id)
 );
+
+ALTER TABLE hybrid_projection_operation
+  ADD COLUMN IF NOT EXISTS projection_locator text;
+ALTER TABLE hybrid_projection_operation
+  ADD COLUMN IF NOT EXISTS index_uuid text;
+CREATE UNIQUE INDEX IF NOT EXISTS hybrid_projection_operation_locator_unique
+  ON hybrid_projection_operation(projection_locator)
+  WHERE projection_locator IS NOT NULL;
+ALTER TABLE hybrid_projection_operation
+  DROP CONSTRAINT IF EXISTS hybrid_projection_operation_rebuild_locator_check;
+ALTER TABLE hybrid_projection_operation
+  ADD CONSTRAINT hybrid_projection_operation_rebuild_locator_check
+  CHECK (operation_kind <> 'REBUILD' OR projection_locator IS NOT NULL) NOT VALID;
 
 CREATE TABLE IF NOT EXISTS hybrid_knowledge_retrieval_profile (
   profile_revision_id text PRIMARY KEY,
@@ -265,6 +280,27 @@ CREATE TABLE IF NOT EXISTS hybrid_projection_attestation (
     REFERENCES hybrid_projection_attestation(source_id, generation_id, attestation_sha256)
 );
 
+CREATE TABLE IF NOT EXISTS hybrid_rebuild_validation (
+  operation_id text PRIMARY KEY REFERENCES hybrid_projection_operation(operation_id),
+  source_id text NOT NULL REFERENCES hybrid_knowledge_source_authority(source_id),
+  generation_id text NOT NULL,
+  projection_locator text NOT NULL,
+  index_uuid text NOT NULL,
+  parent_attestation_sha256 text NOT NULL
+    CHECK (parent_attestation_sha256 ~ '^[0-9a-f]{64}$'),
+  attestation_sha256 text NOT NULL CHECK (attestation_sha256 ~ '^[0-9a-f]{64}$'),
+  validation_sha256 text NOT NULL CHECK (validation_sha256 ~ '^[0-9a-f]{64}$'),
+  validation_json jsonb NOT NULL,
+  created_at timestamptz NOT NULL,
+  UNIQUE (source_id, generation_id, operation_id),
+  FOREIGN KEY (source_id, generation_id)
+    REFERENCES hybrid_knowledge_generation(source_id, generation_id),
+  FOREIGN KEY (source_id, generation_id, operation_id)
+    REFERENCES hybrid_projection_operation(source_id, generation_id, operation_id),
+  FOREIGN KEY (source_id, generation_id, parent_attestation_sha256)
+    REFERENCES hybrid_projection_attestation(source_id, generation_id, attestation_sha256)
+);
+
 CREATE TABLE IF NOT EXISTS hybrid_knowledge_publication (
   publication_id text PRIMARY KEY,
   source_id text NOT NULL REFERENCES hybrid_knowledge_source_authority(source_id),
@@ -321,7 +357,7 @@ CREATE TABLE IF NOT EXISTS hybrid_projection_orphan_cleanup (
   generation_id text NOT NULL,
   index_uuid text NOT NULL,
   projection_locator text,
-  state text NOT NULL CHECK (state IN ('PENDING','DELETED','RETRY')),
+  state text NOT NULL CHECK (state IN ('PENDING','PURGED','RESOLVED','RETRY','DELETED')),
   retry_count integer NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   last_failure_code text,
   updated_at timestamptz NOT NULL,
@@ -331,6 +367,16 @@ CREATE TABLE IF NOT EXISTS hybrid_projection_orphan_cleanup (
   FOREIGN KEY (source_id, generation_id, attempt_id)
     REFERENCES hybrid_projection_operation(source_id, generation_id, operation_id)
 );
+
+ALTER TABLE hybrid_projection_orphan_cleanup
+  ALTER COLUMN index_uuid DROP NOT NULL;
+ALTER TABLE hybrid_projection_orphan_cleanup
+  DROP CONSTRAINT IF EXISTS hybrid_projection_orphan_cleanup_state_check;
+ALTER TABLE hybrid_projection_orphan_cleanup
+  DROP CONSTRAINT IF EXISTS hybrid_projection_orphan_cleanup_state_v2_check;
+ALTER TABLE hybrid_projection_orphan_cleanup
+  ADD CONSTRAINT hybrid_projection_orphan_cleanup_state_v2_check
+  CHECK (state IN ('PENDING','PURGED','RESOLVED','RETRY','DELETED'));
 
 CREATE OR REPLACE FUNCTION reject_hybrid_immutable_update() RETURNS trigger AS $$
 BEGIN
@@ -350,7 +396,8 @@ BEGIN
     'hybrid_knowledge_publication_validation_claim', 'hybrid_rule_unit_manifest',
     'hybrid_projection_materialization',
     'hybrid_rule_unit_manifest_shard', 'hybrid_rule_unit_manifest_member',
-    'hybrid_projection_attestation', 'hybrid_knowledge_publication'
+    'hybrid_projection_attestation', 'hybrid_rebuild_validation',
+    'hybrid_knowledge_publication'
   ] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS reject_update ON %I', table_name);
     EXECUTE format(

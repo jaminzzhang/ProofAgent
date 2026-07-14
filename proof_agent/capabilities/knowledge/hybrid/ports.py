@@ -94,6 +94,10 @@ class ProjectionDocument(_PortModel):
     approved_metadata: ApprovedInsuranceRuleMetadataRevision
     projection_revision: NonBlankStr
     embedding: tuple[FiniteStrictFloat, ...] = Field(min_length=1)
+    # Logical authority: the publication that last changed this document's
+    # content or membership interval.  Routine publication may omit it and
+    # defaults to the request attempt; rebuilds must carry the retained value.
+    last_publication_attempt_id: NonBlankStr | None = None
 
     @model_validator(mode="after")
     def validate_approved_projection(self) -> Self:
@@ -136,6 +140,28 @@ class ProjectionClosure(_PortModel):
 
 
 class ProjectionClosureResult(_PortModel):
+    accepted_count: PositiveInt
+    refresh_checkpoint: NonBlankStr
+
+
+class ProjectionMembershipRestoration(_PortModel):
+    """Recovery-only authority for undoing one failed publication closure."""
+
+    prior: ProjectionAuthorityDocument
+    orphan_attempt_id: NonBlankStr
+    reserved_publication_seq: PositiveInt
+
+    @model_validator(mode="after")
+    def validate_failed_closure_boundary(self) -> Self:
+        entry = self.prior.manifest_entry
+        if entry.publication_seq_to is None and (
+            self.reserved_publication_seq <= entry.publication_seq_from
+        ):
+            raise ValueError("an open prior interval must precede the orphan reservation")
+        return self
+
+
+class ProjectionMembershipRestorationResult(_PortModel):
     accepted_count: PositiveInt
     refresh_checkpoint: NonBlankStr
 
@@ -222,6 +248,15 @@ class HybridProjectionPublicationPort(Protocol):
         manifest_root_sha256: str,
         closures: tuple[ProjectionClosure, ...],
     ) -> ProjectionClosureResult: ...
+
+    def restore_projection_memberships(
+        self,
+        *,
+        identity: SearchIndexIdentity,
+        recovery_operation_id: str,
+        manifest_root_sha256: str,
+        restorations: tuple[ProjectionMembershipRestoration, ...],
+    ) -> ProjectionMembershipRestorationResult: ...
 
 
 class ProjectionBulkRequest(_PortModel):

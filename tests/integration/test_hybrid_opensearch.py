@@ -20,6 +20,7 @@ from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridSearchRequest,
     ProjectionBulkRequest,
+    ProjectionClosure,
     ProjectionDocument,
 )
 from proof_agent.contracts import (
@@ -218,32 +219,27 @@ def test_disposable_opensearch_supports_exact_filtered_hybrid_rrf_and_interval_c
         assert hits[0].rule_unit_revision_id == "rule-first"
         assert all(hit.source_id == source_id for hit in hits)
 
-        closed = _document(
-            source_id=source_id,
-            identifier="first",
-            content="住院保险金符合合同条件时给付。",
-            embedding=(1.0, 0.0),
-            publication_seq_to=1,
+        prior = adapter.materialize_authority(
+            first,
+            identity=identity,
+            publication_attempt_id="attempt-1",
         )
-        second_with_new_manifest = _document(
-            source_id=source_id,
-            identifier="second",
-            content="门诊责任另行约定。",
-            embedding=(0.0, 1.0),
+        closed = prior.model_copy(
+            update={
+                "manifest_entry": prior.manifest_entry.model_copy(update={"publication_seq_to": 1}),
+                "last_publication_attempt_id": "attempt-2",
+            }
         )
-        adapter.bulk_upsert(
-            ProjectionBulkRequest(
-                identity=identity,
-                publication_attempt_id="attempt-2",
-                manifest_root_sha256=SHA_B,
-                documents=(closed, second_with_new_manifest),
-            )
+        closure = adapter.close_projection_memberships(
+            identity=identity,
+            publication_attempt_id="attempt-2",
+            manifest_root_sha256=SHA_B,
+            closures=(ProjectionClosure(prior=prior, closed=closed),),
         )
+        assert closure.accepted_count == 1
         assert any(hit.rule_unit_revision_id == "rule-first" for hit in adapter.search(request))
         later_hits = adapter.search(
-            request.model_copy(
-                update={"source_publication_seq": 2, "manifest_root_sha256": SHA_B}
-            )
+            request.model_copy(update={"source_publication_seq": 2, "manifest_root_sha256": SHA_B})
         )
         assert all(hit.rule_unit_revision_id != "rule-first" for hit in later_hits)
         assert any(hit.rule_unit_revision_id == "rule-second" for hit in later_hits)

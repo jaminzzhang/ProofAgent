@@ -1391,6 +1391,60 @@ Dependency rules:
 - local index dependencies belong in `[tree]`.
 - dashboard runtime belongs in `[dashboard]`.
 
+### Hybrid rebuild cleanup semantics
+
+Automatic recovery never issues whole-index deletion against OpenSearch because the
+index-name API has no UUID compare-and-swap guarantee. A rebuild locator is derived
+from a durable, globally unique operation identifier and persisted before index
+creation. Recovery removes only documents whose `projection_operation_id`
+simultaneously matches the operation identifier, Source identifier, and generation
+identifier. A `PURGED` cleanup state
+therefore means that the operation-scoped projection payload is absent; the physical
+index shell is intentionally retained for restricted-credential operations cleanup.
+`RESOLVED` means the rebuilt projection became the authoritative generation pointer,
+so no payload cleanup was performed.
+
+Before the final generation-pointer compare-and-swap, PostgreSQL independently rebuilds
+the expected `hybrid-publication-projection.v2` digest from retained manifest authority,
+approved Rule Unit and metadata rows, immutable projection-materialization digests, and
+each retained document's logical `last_publication_attempt_id`. It persists that
+result once in an immutable rebuild-validation row and transitions the operation to
+`VALIDATED`. The final short
+transaction reads only that staged record plus the current parent pointer; it never scans
+the retained authority union while holding the generation-pointer lock. Rebuild embedding
+output must reproduce the stored embedding and immutable-projection digests exactly.
+Because V1 stores the embedding digest rather than the original vector artifact, a
+non-deterministic or changed embedding result fails closed instead of replacing published
+projection authority.
+
+The OpenSearch projection keeps logical publication authority separate from physical
+write ownership. `last_publication_attempt_id` changes only when content or a publication
+membership interval changes, and a generation rebuild reproduces it exactly from
+PostgreSQL retained authority. `projection_operation_id` identifies the bulk, closure, or
+rebuild operation that physically wrote the current document and is the only identifier
+used for operation-scoped orphan cleanup. The physical owner is excluded from
+`hybrid-publication-projection.v2`, projection-material, immutable-projection, and mutable
+membership digests, but is included in the response-integrity digest and validated as a
+bounded exact string on readback and retrieval. This lets rebuilds preserve attested
+logical projection identity while still supporting precise cleanup of failed physical
+writes.
+
+A failed routine publication may have refreshed both new documents and interval closures
+before exact readback, smoke validation, staging, or the final Source compare-and-swap
+fails. PostgreSQL therefore binds every publication orphan to the attempt's reserved
+Source Publication Sequence. Referenced-index recovery first applies a recovery-only
+guarded inverse for prior memberships: an already-exact prior state is a no-op; an open
+prior interval can be restored only when the current document is the exact failed closure
+owned logically and physically by that orphan at `reserved_sequence - 1`, including its
+Source, generation, material, immutable, membership-core, mutable, and response-integrity
+digests. A legitimately historical closed interval is never reopened. This inverse is a
+separate OpenSearch script and does not weaken routine bulk projection's closed-interval
+rule. Recovery then replays PostgreSQL prior authority under the durable recovery owner,
+purges only remaining new payload owned by the orphan's Source-generation-operation
+triple, and completes exact readback, smoke validation, immutable staging, and pointer
+compare-and-swap. Retrying the same durable recovery operation converges from any partial
+step without granting general interval-reopen authority.
+
 ## 23. Error Codes
 
 | Code | Subsystem | Purpose |

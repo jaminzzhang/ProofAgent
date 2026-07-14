@@ -280,9 +280,7 @@ def manifest_shard_fingerprint(
             ),
             "shard_id": "fingerprint-validation",
             "source_id": _canonical_nonblank_string(source_id, field_name="source_id"),
-            "generation_id": _canonical_nonblank_string(
-                generation_id, field_name="generation_id"
-            ),
+            "generation_id": _canonical_nonblank_string(generation_id, field_name="generation_id"),
             "document_id": _canonical_nonblank_string(document_id, field_name="document_id"),
             "entries": validated_entries,
             "sha256": _VALIDATION_SHA256,
@@ -340,9 +338,7 @@ def manifest_root_fingerprint(
             "source_publication_seq": _positive_integer(
                 source_publication_seq, field_name="source_publication_seq"
             ),
-            "generation_id": _canonical_nonblank_string(
-                generation_id, field_name="generation_id"
-            ),
+            "generation_id": _canonical_nonblank_string(generation_id, field_name="generation_id"),
             "shards": validated_shards,
             "document_count": _positive_integer(document_count, field_name="document_count"),
             "rule_unit_count": _positive_integer(rule_unit_count, field_name="rule_unit_count"),
@@ -399,9 +395,7 @@ def projection_attestation_fingerprint(
     payload: dict[str, object] = {
         "fingerprint_schema": "knowledge-projection-attestation-fingerprint.v1",
         "source_id": _canonical_nonblank_string(source_id, field_name="source_id"),
-        "generation_id": _canonical_nonblank_string(
-            generation_id, field_name="generation_id"
-        ),
+        "generation_id": _canonical_nonblank_string(generation_id, field_name="generation_id"),
         "publication_attempt_id": _canonical_nonblank_string(
             publication_attempt_id, field_name="publication_attempt_id"
         ),
@@ -409,9 +403,7 @@ def projection_attestation_fingerprint(
         "refresh_checkpoint": _canonical_nonblank_string(
             refresh_checkpoint, field_name="refresh_checkpoint"
         ),
-        "manifest_root_sha256": _sha256(
-            manifest_root_sha256, field_name="manifest_root_sha256"
-        ),
+        "manifest_root_sha256": _sha256(manifest_root_sha256, field_name="manifest_root_sha256"),
         "mapping_sha256": _sha256(mapping_sha256, field_name="mapping_sha256"),
         "covered_publication_sequences": list(sequences),
         "parent_attestation_sha256": _optional_sha256(
@@ -434,6 +426,25 @@ def projection_attestation_fingerprint(
         }
     )
     return digest
+
+
+def rebuild_projection_locator(
+    *,
+    source_id: str,
+    generation_id: str,
+    operation_id: str,
+) -> str:
+    """Derive the never-reused rebuild locator solely from durable operation authority."""
+
+    digest = stable_digest(
+        {
+            "fingerprint_schema": "hybrid-rebuild-locator.v1",
+            "source_id": _canonical_nonblank_string(source_id, field_name="source_id"),
+            "generation_id": _canonical_nonblank_string(generation_id, field_name="generation_id"),
+            "operation_id": _canonical_nonblank_string(operation_id, field_name="operation_id"),
+        }
+    )
+    return f"pa-rebuild-{digest}"
 
 
 def _snapshot_canonical_json(

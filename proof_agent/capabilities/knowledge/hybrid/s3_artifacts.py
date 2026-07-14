@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -46,6 +47,7 @@ class S3ExactArtifactStore:
         endpoint_url: str | None = None,
         region_name: str | None = None,
         allow_endpoint_proxy: bool = False,
+        allow_insecure_endpoint: bool = False,
     ) -> S3ExactArtifactStore:
         """Construct lazily with custom endpoints direct unless proxying is explicit."""
 
@@ -55,6 +57,24 @@ class S3ExactArtifactStore:
             raise RuntimeError(
                 "Hybrid production artifact storage requires the 'production' extra"
             ) from exc
+        if endpoint_url is not None:
+            parsed = urlsplit(endpoint_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or parsed.hostname is None
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("custom S3 endpoint is invalid")
+            loopback = parsed.hostname == "localhost"
+            try:
+                loopback = loopback or ipaddress.ip_address(parsed.hostname).is_loopback
+            except ValueError:
+                pass
+            if parsed.scheme == "http" and not loopback and not allow_insecure_endpoint:
+                raise ValueError("non-loopback custom S3 HTTP endpoint requires explicit opt-in")
         client_kwargs: dict[str, Any] = {
             "endpoint_url": endpoint_url,
             "region_name": region_name,

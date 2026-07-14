@@ -6,7 +6,7 @@ import hashlib
 from collections.abc import Mapping
 from typing import Annotated, Literal, Protocol
 
-from pydantic import ConfigDict, Field, StrictStr, StringConstraints
+from pydantic import ConfigDict, Field, StrictInt, StrictStr, StringConstraints
 
 from proof_agent.capabilities.knowledge.hybrid.manifest import (
     ProjectionValidationEvidence,
@@ -18,6 +18,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
     ProjectionAuthorityDocument,
     ProjectionBulkRequest,
     ProjectionDocument,
+    ProjectionMembershipRestoration,
     ProjectionReadbackResult,
     ProjectionSmokeRequest,
     SearchIndexIdentity,
@@ -33,7 +34,6 @@ from proof_agent.capabilities.knowledge.hybrid.publication import (
 from proof_agent.capabilities.knowledge.hybrid.model_clients import PrivateEmbeddingClient
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     OpenSearchHybridIndex,
-    physical_index_name,
     rrf_pipeline_name,
 )
 from proof_agent.capabilities.knowledge.hybrid.versioning import (
@@ -56,6 +56,7 @@ from proof_agent.contracts.insurance_rules import (
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+PositiveInt = Annotated[StrictInt, Field(gt=0)]
 
 
 class OrphanProjection(FrozenModel):
@@ -64,7 +65,59 @@ class OrphanProjection(FrozenModel):
     attempt_id: NonBlankStr
     source_id: NonBlankStr
     identity: SearchIndexIdentity
+    reserved_publication_seq: PositiveInt
     state: Literal["PENDING", "RETRY"] = "PENDING"
+
+
+class RebuildProjectionOrphan(FrozenModel):
+    """Durable rebuild cleanup intent; UUID can be unknown after an ambiguous PUT."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: NonBlankStr
+    source_id: NonBlankStr
+    generation: KnowledgeIndexGeneration
+    projection_locator: NonBlankStr
+    index_uuid: NonBlankStr | None = None
+    state: Literal["PENDING", "RETRY"] = "PENDING"
+
+
+class GenerationRebuildOperation(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation_id: NonBlankStr
+    source_id: NonBlankStr
+    generation_id: NonBlankStr
+    projection_locator: NonBlankStr
+
+
+class GenerationRebuildValidation(FrozenModel):
+    """Immutable PostgreSQL-attested authority staged before the final pointer CAS."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation_id: NonBlankStr
+    source_id: NonBlankStr
+    generation_id: NonBlankStr
+    projection_locator: NonBlankStr
+    index_uuid: NonBlankStr
+    parent_index_uuid: NonBlankStr
+    parent_projection_locator: NonBlankStr | None = None
+    parent_attestation_sha256: Sha256
+    candidate_digest: Sha256
+    manifest_root_sha256: Sha256
+    mapping_sha256: Sha256
+    covered_publication_sequences: tuple[int, ...] = Field(min_length=1)
+    projection_sha256: Sha256
+    validated_document_count: int = Field(ge=1)
+    validated_rule_unit_count: int = Field(ge=1)
+    attestation_sha256: Sha256
+
+
+class RebuildSwapResolution(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["COMMITTED", "PARENT_CURRENT", "RECONCILIATION_REQUIRED"]
 
 
 class OrphanReconciliationReport(FrozenModel):
@@ -73,9 +126,12 @@ class OrphanReconciliationReport(FrozenModel):
     source_id: NonBlankStr
     dry_run: bool
     candidates: tuple[NonBlankStr, ...] = ()
-    deleted_attempt_ids: tuple[NonBlankStr, ...] = ()
+    purged_attempt_ids: tuple[NonBlankStr, ...] = ()
+    resolved_attempt_ids: tuple[NonBlankStr, ...] = ()
     refused_attempt_ids: tuple[NonBlankStr, ...] = ()
     retry_attempt_ids: tuple[NonBlankStr, ...] = ()
+    cleanup_scope: Literal["OPERATION_PAYLOAD"] = "OPERATION_PAYLOAD"
+    physical_index_retained: Literal[True] = True
 
 
 class RebuildProjectionAuthority(FrozenModel):
@@ -85,6 +141,7 @@ class RebuildProjectionAuthority(FrozenModel):
     projection_revision: NonBlankStr
     rule_unit: InsuranceRuleUnitRevision
     approved_metadata: ApprovedInsuranceRuleMetadataRevision
+    last_publication_attempt_id: NonBlankStr
 
 
 class RetainedManifestAuthority(FrozenModel):
@@ -111,11 +168,15 @@ class GenerationRebuildAuthority(FrozenModel):
 
 
 class RecoveryAuthorityRepository(Protocol):
-    def list_orphan_projections(self, source_id: str) -> tuple[OrphanProjection, ...]: ...
+    def list_orphan_projections(
+        self, source_id: str
+    ) -> tuple[OrphanProjection | RebuildProjectionOrphan, ...]: ...
 
     def projection_is_referenced(self, orphan: OrphanProjection) -> bool: ...
 
-    def record_orphan_deleted(self, attempt_id: str) -> None: ...
+    def record_orphan_purged(self, attempt_id: str) -> None: ...
+
+    def record_orphan_resolved(self, attempt_id: str) -> None: ...
 
     def record_orphan_retry(self, attempt_id: str, failure_code: str) -> None: ...
 
@@ -123,14 +184,47 @@ class RecoveryAuthorityRepository(Protocol):
         self, source_id: str, generation_id: str
     ) -> GenerationRebuildAuthority: ...
 
-    def begin_generation_rebuild(self, authority: GenerationRebuildAuthority) -> str: ...
+    def begin_generation_rebuild(
+        self, authority: GenerationRebuildAuthority
+    ) -> GenerationRebuildOperation: ...
+
+    def resolve_rebuild_swap(
+        self,
+        *,
+        operation: GenerationRebuildOperation,
+        authority: GenerationRebuildAuthority,
+        rebuilt_identity: SearchIndexIdentity | None,
+        attestation: KnowledgeProjectionAttestation | None,
+    ) -> RebuildSwapResolution: ...
+
+    def rebuild_orphan_is_active(
+        self,
+        orphan: RebuildProjectionOrphan,
+        identity: SearchIndexIdentity,
+    ) -> bool: ...
+
+    def record_rebuild_projection_identity(
+        self,
+        orphan: RebuildProjectionOrphan,
+        identity: SearchIndexIdentity,
+    ) -> None: ...
 
     def fail_recovery_operation(
         self,
         operation_id: str,
         failure_code: str,
         projection_identity: SearchIndexIdentity | None = None,
+        *,
+        requires_reconciliation: bool = False,
     ) -> None: ...
+
+    def stage_generation_rebuild_validation(
+        self,
+        *,
+        authority: GenerationRebuildAuthority,
+        rebuilt_identity: SearchIndexIdentity,
+        attestation: KnowledgeProjectionAttestation,
+    ) -> GenerationRebuildValidation: ...
 
     def swap_generation_projection(
         self,
@@ -141,15 +235,6 @@ class RecoveryAuthorityRepository(Protocol):
     ) -> None: ...
 
 
-class RecoveryProjectionCleanupRequired(RuntimeError):
-    def __init__(self, identity: SearchIndexIdentity) -> None:
-        self.identity = identity
-        super().__init__("failed rebuild projection requires authority cleanup")
-
-
-_REBUILD_ORPHAN_IDENTITY_ATTRIBUTE = "_proofagent_rebuild_orphan_identity"
-
-
 class RecoveryIndex(Protocol):
     def delete_attempt_projection(self, orphan: OrphanProjection) -> None: ...
 
@@ -157,7 +242,7 @@ class RecoveryIndex(Protocol):
         self,
         authority: GenerationRebuildAuthority,
         *,
-        operation_id: str,
+        operation: GenerationRebuildOperation,
         root: RuleUnitManifestRoot,
         shard_contents: tuple[bytes, ...],
         documents: tuple[ProjectionDocument, ...],
@@ -173,17 +258,26 @@ class RecoveryIndex(Protocol):
         documents: tuple[ProjectionDocument, ...],
     ) -> ProjectionValidationEvidence: ...
 
-    def discard_rebuild_projection(self, identity: SearchIndexIdentity) -> bool: ...
+    def resolve_rebuild_projection(
+        self, orphan: RebuildProjectionOrphan
+    ) -> SearchIndexIdentity | None: ...
+
+    def purge_rebuild_projection(
+        self,
+        orphan: RebuildProjectionOrphan,
+        identity: SearchIndexIdentity,
+    ) -> None: ...
 
 
 class RecoveryProjectionValidationIndex(HybridProjectionPublicationPort, Protocol):
-    def create_index(
+    def create_rebuild_index(
         self,
         generation: KnowledgeIndexGeneration,
         *,
+        operation_id: str,
+        projection_locator: str,
         rrf_pipeline: str,
         rrf_rank_constant: int,
-        physical_name_override: str,
     ) -> SearchIndexIdentity: ...
 
     def delete_attempt_projection(
@@ -193,7 +287,23 @@ class RecoveryProjectionValidationIndex(HybridProjectionPublicationPort, Protoco
         publication_attempt_id: str,
     ) -> str: ...
 
-    def delete_rebuild_index(self, identity: SearchIndexIdentity) -> None: ...
+    def purge_rebuild_projection(
+        self,
+        *,
+        generation: KnowledgeIndexGeneration,
+        projection_locator: str,
+        operation_id: str,
+        expected_index_uuid: str | None,
+    ) -> None: ...
+
+    def resolve_rebuild_projection(
+        self,
+        *,
+        generation: KnowledgeIndexGeneration,
+        projection_locator: str,
+        operation_id: str,
+        expected_index_uuid: str | None,
+    ) -> SearchIndexIdentity | None: ...
 
 
 class ExactArtifactReader(Protocol):
@@ -227,9 +337,33 @@ class HybridRecoveryService:
     ) -> OrphanReconciliationReport:
         candidates = self.repository.list_orphan_projections(source_id)
         refused: list[str] = []
-        deleted: list[str] = []
+        purged: list[str] = []
+        resolved: list[str] = []
         retry: list[str] = []
         for orphan in candidates:
+            if isinstance(orphan, RebuildProjectionOrphan):
+                if not apply:
+                    continue
+                try:
+                    identity = self.index.resolve_rebuild_projection(orphan)
+                    if identity is None:
+                        self.repository.record_orphan_purged(orphan.attempt_id)
+                        purged.append(orphan.attempt_id)
+                    else:
+                        self.repository.record_rebuild_projection_identity(orphan, identity)
+                    if identity is not None and self.repository.rebuild_orphan_is_active(
+                        orphan, identity
+                    ):
+                        self.repository.record_orphan_resolved(orphan.attempt_id)
+                        resolved.append(orphan.attempt_id)
+                    elif identity is not None:
+                        self.index.purge_rebuild_projection(orphan, identity)
+                        self.repository.record_orphan_purged(orphan.attempt_id)
+                        purged.append(orphan.attempt_id)
+                except Exception:
+                    self.repository.record_orphan_retry(orphan.attempt_id, "CLEANUP_RETRY")
+                    retry.append(orphan.attempt_id)
+                continue
             if self.repository.projection_is_referenced(orphan):
                 operation_id: str | None = None
                 try:
@@ -240,7 +374,8 @@ class HybridRecoveryService:
                     root, _, documents = self._verified_inputs(authority)
                     if not apply:
                         continue
-                    operation_id = self.repository.begin_generation_rebuild(authority)
+                    operation = self.repository.begin_generation_rebuild(authority)
+                    operation_id = operation.operation_id
                     evidence = self.index.repair_attempt_projection(
                         authority,
                         orphan,
@@ -265,13 +400,18 @@ class HybridRecoveryService:
                         authority.current_identity,
                         evidence,
                     )
+                    self.repository.stage_generation_rebuild_validation(
+                        authority=authority,
+                        rebuilt_identity=authority.current_identity,
+                        attestation=attestation,
+                    )
                     self.repository.swap_generation_projection(
                         authority=authority,
                         rebuilt_identity=authority.current_identity,
                         attestation=attestation,
                     )
-                    self.repository.record_orphan_deleted(orphan.attempt_id)
-                    deleted.append(orphan.attempt_id)
+                    self.repository.record_orphan_purged(orphan.attempt_id)
+                    purged.append(orphan.attempt_id)
                 except PublicationConflict as exc:
                     if operation_id is not None:
                         self.repository.fail_recovery_operation(operation_id, exc.code)
@@ -290,13 +430,14 @@ class HybridRecoveryService:
                 self.repository.record_orphan_retry(orphan.attempt_id, "CLEANUP_RETRY")
                 retry.append(orphan.attempt_id)
             else:
-                self.repository.record_orphan_deleted(orphan.attempt_id)
-                deleted.append(orphan.attempt_id)
+                self.repository.record_orphan_purged(orphan.attempt_id)
+                purged.append(orphan.attempt_id)
         return OrphanReconciliationReport(
             source_id=source_id,
             dry_run=not apply,
             candidates=tuple(item.attempt_id for item in candidates),
-            deleted_attempt_ids=tuple(deleted),
+            purged_attempt_ids=tuple(purged),
+            resolved_attempt_ids=tuple(resolved),
             refused_attempt_ids=tuple(refused),
             retry_attempt_ids=tuple(retry),
         )
@@ -309,12 +450,13 @@ class HybridRecoveryService:
     ) -> KnowledgeProjectionAttestation:
         authority = self.repository.load_generation_rebuild(source_id, generation_id)
         root, shard_contents, documents = self._verified_inputs(authority)
-        operation_id = self.repository.begin_generation_rebuild(authority)
+        operation = self.repository.begin_generation_rebuild(authority)
         fresh_identity: SearchIndexIdentity | None = None
+        attestation: KnowledgeProjectionAttestation | None = None
         try:
             rebuilt_identity, evidence = self.index.rebuild_generation(
                 authority,
-                operation_id=operation_id,
+                operation=operation,
                 root=root,
                 shard_contents=shard_contents,
                 documents=documents,
@@ -324,7 +466,7 @@ class HybridRecoveryService:
             fresh_identity = rebuilt_identity
             if (
                 rebuilt_identity.generation != authority.current_identity.generation
-                or evidence.publication_attempt_id != operation_id
+                or evidence.publication_attempt_id != operation.operation_id
                 or evidence.candidate_digest != authority.candidate_digest
                 or evidence.identity != rebuilt_identity
                 or evidence.manifest_root_sha256 != root.root_sha256
@@ -336,6 +478,11 @@ class HybridRecoveryService:
             ):
                 raise PublicationConflict("ATTESTATION_MISMATCH")
             attestation = _rebuild_attestation(authority, rebuilt_identity, evidence)
+            self.repository.stage_generation_rebuild_validation(
+                authority=authority,
+                rebuilt_identity=rebuilt_identity,
+                attestation=attestation,
+            )
             self.repository.swap_generation_projection(
                 authority=authority,
                 rebuilt_identity=rebuilt_identity,
@@ -343,27 +490,45 @@ class HybridRecoveryService:
             )
             return attestation
         except BaseException as exc:
+            resolution = RebuildSwapResolution(state="RECONCILIATION_REQUIRED")
+            try:
+                resolution = self.repository.resolve_rebuild_swap(
+                    operation=operation,
+                    authority=authority,
+                    rebuilt_identity=fresh_identity,
+                    attestation=attestation,
+                )
+            except Exception as resolution_exc:
+                exc.add_note("rebuild swap resolution failed: " + type(resolution_exc).__name__)
+            if resolution.state == "COMMITTED" and attestation is not None:
+                return attestation
             code = exc.code if isinstance(exc, PublicationConflict) else "REBUILD_FAILED"
             orphan_identity: SearchIndexIdentity | None = None
-            marked_identity = getattr(exc, _REBUILD_ORPHAN_IDENTITY_ATTRIBUTE, None)
-            if isinstance(marked_identity, SearchIndexIdentity):
-                orphan_identity = marked_identity
-            elif isinstance(exc, RecoveryProjectionCleanupRequired):
-                orphan_identity = exc.identity
-            elif fresh_identity is not None:
+            if fresh_identity is not None and resolution.state == "PARENT_CURRENT":
                 try:
-                    deleted = self.index.discard_rebuild_projection(fresh_identity)
+                    orphan = RebuildProjectionOrphan(
+                        attempt_id=operation.operation_id,
+                        source_id=operation.source_id,
+                        generation=fresh_identity.generation,
+                        projection_locator=operation.projection_locator,
+                        index_uuid=fresh_identity.index_uuid,
+                    )
+                    self.index.purge_rebuild_projection(orphan, fresh_identity)
                 except Exception as cleanup_exc:
                     orphan_identity = fresh_identity
                     exc.add_note(f"fresh rebuild cleanup failed: {type(cleanup_exc).__name__}")
-                else:
-                    if not deleted:
-                        orphan_identity = fresh_identity
+            elif resolution.state == "RECONCILIATION_REQUIRED":
+                orphan_identity = fresh_identity
             try:
                 self.repository.fail_recovery_operation(
-                    operation_id,
+                    operation.operation_id,
                     code,
                     orphan_identity,
+                    requires_reconciliation=(
+                        orphan_identity is not None
+                        or fresh_identity is None
+                        or resolution.state == "RECONCILIATION_REQUIRED"
+                    ),
                 )
             except Exception as failure_exc:
                 exc.add_note(
@@ -472,6 +637,7 @@ class HybridRecoveryService:
                 approved_metadata=projection_by_id[rule_id].approved_metadata,
                 projection_revision=projection_by_id[rule_id].projection_revision,
                 embedding=(0.0,) * authority.current_identity.generation.embedding_dimension,
+                last_publication_attempt_id=(projection_by_id[rule_id].last_publication_attempt_id),
             )
             for rule_id, entry in sorted(entry_by_id.items())
         )
@@ -497,29 +663,38 @@ class OpenSearchRecoveryIndex:
         self.rrf_rank_constant = rrf_rank_constant
 
     def delete_attempt_projection(self, orphan: OrphanProjection) -> None:
-        canonical = physical_index_name(orphan.source_id, orphan.identity.generation.generation_id)
-        if (
-            orphan.identity.projection_locator is not None
-            and orphan.identity.projection_locator != canonical
-        ):
-            self.index.delete_rebuild_index(orphan.identity)
-        else:
-            self.index.delete_attempt_projection(
-                identity=orphan.identity,
-                publication_attempt_id=orphan.attempt_id,
-            )
+        self.index.delete_attempt_projection(
+            identity=orphan.identity,
+            publication_attempt_id=orphan.attempt_id,
+        )
 
-    def discard_rebuild_projection(self, identity: SearchIndexIdentity) -> bool:
-        """Delete only a noncanonical rebuild index; old active indexes fail closed."""
+    def resolve_rebuild_projection(
+        self, orphan: RebuildProjectionOrphan
+    ) -> SearchIndexIdentity | None:
+        return self.index.resolve_rebuild_projection(
+            generation=orphan.generation,
+            projection_locator=orphan.projection_locator,
+            operation_id=orphan.attempt_id,
+            expected_index_uuid=orphan.index_uuid,
+        )
 
-        self.index.delete_rebuild_index(identity)
-        return True
+    def purge_rebuild_projection(
+        self,
+        orphan: RebuildProjectionOrphan,
+        identity: SearchIndexIdentity,
+    ) -> None:
+        self.index.purge_rebuild_projection(
+            generation=orphan.generation,
+            projection_locator=orphan.projection_locator,
+            operation_id=orphan.attempt_id,
+            expected_index_uuid=identity.index_uuid,
+        )
 
     def rebuild_generation(
         self,
         authority: GenerationRebuildAuthority,
         *,
-        operation_id: str,
+        operation: GenerationRebuildOperation,
         root: RuleUnitManifestRoot,
         shard_contents: tuple[bytes, ...],
         documents: tuple[ProjectionDocument, ...],
@@ -530,65 +705,54 @@ class OpenSearchRecoveryIndex:
             generation.embedding_instruction_sha256
         ):
             raise PublicationConflict("GENERATION_MISMATCH")
-        suffix = operation_id.rsplit("-", 1)[-1][:24].casefold()
-        name = (
-            f"{physical_index_name(authority.source_id, authority.generation_id)}-rebuild-{suffix}"
-        )
-        identity = self.index.create_index(
+        identity = self.index.create_rebuild_index(
             generation,
+            operation_id=operation.operation_id,
+            projection_locator=operation.projection_locator,
             rrf_pipeline=rrf_pipeline_name(rank_constant=self.rrf_rank_constant),
             rrf_rank_constant=self.rrf_rank_constant,
-            physical_name_override=name,
         )
-        try:
-            projected = self._embed_documents(generation, documents)
-            refresh_checkpoint = self._bulk_projected(
-                identity=identity,
-                operation_id=operation_id,
-                manifest_root_sha256=root.root_sha256,
-                documents=projected,
-            )
-            authorities, readback = self._validate_projected_authority(
-                identity=identity,
-                operation_id=operation_id,
-                root=root,
-                documents=projected,
-            )
-            smoke_checkpoint = self._validate_smoke(
-                identity=identity,
-                operation_id=operation_id,
-                root=root,
-                source_publication_seq=root.source_publication_seq,
-                documents=projected,
-                authorities=authorities,
-            )
-            return identity, ProjectionValidationEvidence(
-                publication_attempt_id=operation_id,
-                candidate_digest=authority.candidate_digest,
-                identity=identity,
-                refresh_checkpoint=stable_digest(
-                    {
-                        "schema_version": "hybrid-rebuild-validation.v1",
-                        "bulk_refresh": refresh_checkpoint,
-                        "readback_refresh": readback.refresh_checkpoint,
-                        "smoke_checkpoint": smoke_checkpoint,
-                    }
-                ),
-                manifest_root_sha256=root.root_sha256,
-                covered_publication_sequences=(
-                    authority.current_attestation.covered_publication_sequences
-                ),
-                projection_sha256=readback.projection_sha256,
-                validated_document_count=readback.validated_document_count,
-                validated_rule_unit_count=readback.validated_rule_unit_count,
-            )
-        except BaseException as primary:
-            try:
-                self.index.delete_rebuild_index(identity)
-            except Exception as cleanup_exc:
-                primary.add_note("fresh rebuild cleanup failed: " + type(cleanup_exc).__name__)
-                setattr(primary, _REBUILD_ORPHAN_IDENTITY_ATTRIBUTE, identity)
-            raise
+        projected = self._embed_documents(generation, documents)
+        refresh_checkpoint = self._bulk_projected(
+            identity=identity,
+            operation_id=operation.operation_id,
+            manifest_root_sha256=root.root_sha256,
+            documents=projected,
+        )
+        authorities, readback = self._validate_projected_authority(
+            identity=identity,
+            operation_id=operation.operation_id,
+            root=root,
+            documents=projected,
+        )
+        smoke_checkpoint = self._validate_smoke(
+            identity=identity,
+            operation_id=operation.operation_id,
+            root=root,
+            source_publication_seq=root.source_publication_seq,
+            documents=projected,
+            authorities=authorities,
+        )
+        return identity, ProjectionValidationEvidence(
+            publication_attempt_id=operation.operation_id,
+            candidate_digest=authority.candidate_digest,
+            identity=identity,
+            refresh_checkpoint=stable_digest(
+                {
+                    "schema_version": "hybrid-rebuild-validation.v1",
+                    "bulk_refresh": refresh_checkpoint,
+                    "readback_refresh": readback.refresh_checkpoint,
+                    "smoke_checkpoint": smoke_checkpoint,
+                }
+            ),
+            manifest_root_sha256=root.root_sha256,
+            covered_publication_sequences=(
+                authority.current_attestation.covered_publication_sequences
+            ),
+            projection_sha256=readback.projection_sha256,
+            validated_document_count=readback.validated_document_count,
+            validated_rule_unit_count=readback.validated_rule_unit_count,
+        )
 
     def repair_attempt_projection(
         self,
@@ -603,6 +767,37 @@ class OpenSearchRecoveryIndex:
             raise PublicationConflict("FENCE_LOST")
         generation = authority.current_identity.generation
         projected = self._embed_documents(generation, documents)
+        restorations = tuple(
+            ProjectionMembershipRestoration(
+                prior=self.index.materialize_authority(
+                    document,
+                    identity=authority.current_identity,
+                    publication_attempt_id=operation_id,
+                ),
+                orphan_attempt_id=orphan.attempt_id,
+                reserved_publication_seq=orphan.reserved_publication_seq,
+            )
+            for document in projected
+            if document.manifest_entry.publication_seq_to is None
+        )
+        restoration_checkpoints: list[str] = []
+        for offset in range(0, len(restorations), 1_000):
+            batch = restorations[offset : offset + 1_000]
+            result = self.index.restore_projection_memberships(
+                identity=authority.current_identity,
+                recovery_operation_id=operation_id,
+                manifest_root_sha256=root.root_sha256,
+                restorations=batch,
+            )
+            if result.accepted_count != len(batch):
+                raise PublicationConflict("PROJECTION_INCOMPLETE")
+            restoration_checkpoints.append(result.refresh_checkpoint)
+        restoration_checkpoint = stable_digest(
+            {
+                "schema_version": "hybrid-membership-restoration-refresh.v1",
+                "checkpoints": restoration_checkpoints,
+            }
+        )
         bulk_refresh_checkpoint = self._bulk_projected(
             identity=authority.current_identity,
             operation_id=operation_id,
@@ -634,6 +829,7 @@ class OpenSearchRecoveryIndex:
             refresh_checkpoint=stable_digest(
                 {
                     "schema_version": "hybrid-repair-refresh.v1",
+                    "membership_restoration": restoration_checkpoint,
                     "bulk_refresh": bulk_refresh_checkpoint,
                     "cleanup_refresh": cleanup_checkpoint,
                     "readback_refresh": readback.refresh_checkpoint,
@@ -912,6 +1108,9 @@ def recovery_service_from_environment(
             key_prefix=environ.get("HYBRID_S3_KEY_PREFIX", ""),
             endpoint_url=environ.get("HYBRID_S3_ENDPOINT"),
             region_name=environ.get("HYBRID_S3_REGION"),
+            allow_insecure_endpoint=(
+                environ.get("HYBRID_S3_ALLOW_INSECURE_ENDPOINT", "").strip() == "1"
+            ),
         )
         owned.append(store)
         repository = PostgresHybridKnowledgeRepository.from_dsn(environ["HYBRID_POSTGRES_DSN"])

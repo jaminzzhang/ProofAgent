@@ -33,6 +33,8 @@ from proof_agent.capabilities.knowledge.hybrid.recovery import (
 from proof_agent.capabilities.knowledge.hybrid.s3_artifacts import S3ExactArtifactStore
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.capabilities.knowledge.hybrid.ports import SearchIndexIdentity
+from proof_agent.capabilities.knowledge.hybrid.ports import HybridSearchRequest
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.configuration.postgres_hybrid_knowledge_repository import (
     PostgresHybridKnowledgeRepository,
 )
@@ -187,6 +189,7 @@ def _delete_prefix_versions(client: Any, bucket: str, prefix: str) -> None:
 
 def _environment():
     import boto3
+    from botocore.config import Config
     import psycopg
 
     dsn = _required("HYBRID_TEST_POSTGRES_DSN")
@@ -200,12 +203,14 @@ def _environment():
     )
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(migration, prepare=False)
+        connection.execute(migration, prepare=False)
     s3_client = boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=_required("HYBRID_TEST_S3_ACCESS_KEY"),
         aws_secret_access_key=_required("HYBRID_TEST_S3_SECRET_KEY"),
         region_name="us-east-1",
+        config=Config(proxies={}),
     )
     store = S3ExactArtifactStore(client=s3_client, bucket=bucket, key_prefix=prefix)
     source_id = f"integration-{run_id}"
@@ -260,6 +265,7 @@ def _environment():
     )
     return {
         "bucket": bucket,
+        "dsn": dsn,
         "prefix": prefix,
         "s3": s3_client,
         "transport": transport,
@@ -293,21 +299,20 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
         assert publication.source_publication_seq == 1
         assert env["store"].get_exact(publication.manifest_ref)
 
-        class FailAfterRefresh:
+        class FailAfterProjectionValidation:
             def materialize_authority(self, *args: Any, **kwargs: Any) -> Any:
                 return env["index"].materialize_authority(*args, **kwargs)
 
             def bulk_upsert(self, request: Any) -> Any:
-                env["index"].bulk_upsert(request)
-                raise RuntimeError("integration failure after refresh")
+                return env["index"].bulk_upsert(request)
 
-            def close_projection_memberships(self, request: Any) -> Any:
-                return env["index"].close_projection_memberships(request)
+            def close_projection_memberships(self, **kwargs: Any) -> Any:
+                return env["index"].close_projection_memberships(**kwargs)
 
-            def validate_exact_projection(self, request: Any) -> Any:
-                return env["index"].validate_exact_projection(request)
+            def validate_exact_projection(self, **_: Any) -> Any:
+                raise RuntimeError("integration failure after exact projection writes")
 
-        env["service"].index = FailAfterRefresh()
+        env["service"].index = FailAfterProjectionValidation()
         second = _request(
             env["source_id"],
             env["generation"],
@@ -333,7 +338,7 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
                 validated_by="integration-validator",
             )
         )
-        with pytest.raises(RuntimeError, match="after refresh"):
+        with pytest.raises(RuntimeError, match="after exact projection writes"):
             env["service"].publish(second)
         assert env["repository"].load_active_publication(env["source_id"]) == publication
         recovery = HybridRecoveryService(
@@ -348,7 +353,55 @@ def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() ->
         dry_run = recovery.reconcile_orphans(source_id=env["source_id"])
         assert dry_run.candidates
         applied = recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
-        assert applied.deleted_attempt_ids == dry_run.candidates
+        assert applied.purged_attempt_ids == dry_run.candidates
+        assert applied.cleanup_scope == "OPERATION_PAYLOAD"
+        assert applied.physical_index_retained is True
         assert env["index"].verify_identity(env["identity"]) == env["identity"]
+        prior_hits = env["index"].search(
+            HybridSearchRequest(
+                identity=env["identity"],
+                manifest_root_sha256=publication.manifest_ref.sha256,
+                query_text="Exact integration insurance rule one.",
+                query_embedding=(1.0, 0.0),
+                source_publication_seq=1,
+                authorization=InstitutionAuthorizationContext(),
+                as_of_date=date(2026, 7, 14),
+                lexical_budget=10,
+                dense_budget=10,
+                rrf_window=10,
+                rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+                rrf_rank_constant=60,
+                limit=10,
+            )
+        )
+        assert any(hit.rule_unit_revision_id.endswith("-one") for hit in prior_hits)
+        env["service"].index = env["index"]
+        third = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="next",
+            publication_seq_from=3,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=second.source_draft_version_id,
+            expected_candidate_digest=second.candidate_digest,
+            source_draft_version_id=third.source_draft_version_id,
+            candidate_digest=third.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=third.validation_id,
+                source_id=third.source_id,
+                source_draft_version_id=third.source_draft_version_id,
+                candidate_digest=third.candidate_digest,
+                generation_id=third.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        published_third = env["service"].publish(third)
+        assert published_third.source_publication_seq == 3
     finally:
         _cleanup(env)
