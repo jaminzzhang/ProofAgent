@@ -1,0 +1,22 @@
+schema_version: insurance-knowledge-capacity.v1
+# Structure only. Replace every fixture/ref/hardware value with an approved sealed suite.
+plan:
+  corpus_digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  suite_digest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  changed_documents: 20
+  changed_pages: 400
+  docling_pages: 350
+  paddle_pages: 50
+  table_density: 0.30
+  model_revision: placeholder-model-revision
+  retrieval_profile_revision: placeholder-profile-revision
+  hardware_label: placeholder-approved-hardware
+  active_run_ids: [fixture-run-1, fixture-run-2, fixture-run-3, fixture-run-4, fixture-run-5]
+  reviewer_count: 2
+  target_agent_count: 3
+  warmup_count: 10
+  sample_count: 100
+thresholds:
+  retrieval_p95_limit_ms: 5000
+  approved_to_active_limit_seconds: 14400
+  ingestion_interference_limit_percent: 10

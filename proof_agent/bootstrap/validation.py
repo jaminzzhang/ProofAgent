@@ -29,7 +29,13 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "audit",
 }
 
-SUPPORTED_KNOWLEDGE_PROVIDERS = {"http_json", "local_markdown", "local_index", "remote_search"}
+SUPPORTED_KNOWLEDGE_PROVIDERS = {
+    "http_json",
+    "hybrid_index",
+    "local_markdown",
+    "local_index",
+    "remote_search",
+}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
 SUPPORTED_MODEL_PROVIDERS = {
     "deterministic",
@@ -1126,6 +1132,13 @@ def _validate_knowledge_provider_params(
     field_prefix: str,
     manifest_path: Path,
 ) -> None:
+    if provider == "hybrid_index":
+        validate_hybrid_index_params(
+            params,
+            field_prefix=field_prefix,
+            artifact_path=manifest_path,
+        )
+        return
     if provider == "local_markdown":
         path = _required_param(params, "path", provider, manifest_path, field_prefix=field_prefix)
         require_directory(Path(path), f"{field_prefix}.path", manifest_path)
@@ -1175,6 +1188,38 @@ def _validate_knowledge_provider_params(
             manifest_path=manifest_path,
         )
         return
+
+
+def validate_hybrid_index_params(
+    params: Mapping[str, Any],
+    *,
+    field_prefix: str,
+    artifact_path: Path | str | None = None,
+) -> None:
+    """Validate the provider-specific, secret-free Hybrid intake envelope."""
+
+    from pydantic import ValidationError
+
+    from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
+
+    validate_secret_safe_params(
+        params,
+        field_prefix=field_prefix,
+        artifact_path=artifact_path,
+    )
+    try:
+        HybridIntakeLimits.model_validate(dict(params), strict=True)
+    except ValidationError as exc:
+        invalid_fields = ", ".join(
+            f"{field_prefix}.{'.'.join(str(part) for part in error['loc'])}"
+            for error in exc.errors()
+        )
+        raise ProofAgentError(
+            "PA_CONFIG_001",
+            f"Invalid Hybrid Index intake parameter(s): {invalid_fields}.",
+            "Use only strict positive Hybrid intake limit integers within supported ceilings.",
+            artifact_path=artifact_path,
+        ) from exc
 
 
 def _validate_http_json_provider_params(

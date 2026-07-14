@@ -1,9 +1,12 @@
 """Integration tests for the Agent Configuration API."""
 
 import base64
+import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi.testclient import TestClient
 import pytest
@@ -14,12 +17,28 @@ import proof_agent.bootstrap.composition as bootstrap_composition
 import proof_agent.delivery.configuration_api as configuration_api_module
 import proof_agent.capabilities.knowledge.http_json as http_json_module
 from proof_agent.capabilities.knowledge.ingestion import parse_quarantined_upload
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataDraftInput,
+)
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+    HybridArtifactBuildRequest,
+    HybridInsuranceMetadataArtifact,
+    HybridKnowledgeWorker,
+    HybridParserBuildOutput,
+    HybridVendorArtifact,
+    LocalManagedOriginalStore,
+    LocalStoreHybridWorkerLifecycle,
+)
 from proof_agent.capabilities.knowledge.ingestion.artifacts import (
     ARTIFACT_META_FILENAME,
     REQUIRED_LLAMA_INDEX_FILES,
     local_index_artifact_metadata,
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    FileSystemKnowledgeArtifactStore,
+)
 from proof_agent.control.knowledge.source_publication import (
     LocalIndexPublicationSmokeResult,
 )
@@ -33,12 +52,22 @@ from proof_agent.contracts import (
     ReceiptOutcome,
     RunResult,
 )
+from proof_agent.contracts.hybrid_documents import (
+    BoundingBox,
+    StructuredArtifactBuildIdentity,
+    StructuredBlock,
+    StructuredKnowledgeDocumentArtifact,
+    StructuredPage,
+)
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
     OperatorPermission,
 )
+from pydantic import BaseModel
+from pypdf import PdfWriter
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -53,12 +82,18 @@ def _client(tmp_path: Path) -> TestClient:
 
 
 class _StaticOperatorIdentityProvider:
-    def __init__(self, permissions: set[OperatorPermission]) -> None:
+    def __init__(
+        self,
+        permissions: set[OperatorPermission],
+        *,
+        operator_id: str = "test-operator",
+    ) -> None:
         self._permissions = permissions
+        self._operator_id = operator_id
 
     def current_identity(self) -> OperatorIdentityContext:
         return OperatorIdentityContext(
-            operator_id="test-operator",
+            operator_id=self._operator_id,
             display_name="Test Operator",
             permissions=frozenset(self._permissions),
         )
@@ -67,6 +102,8 @@ class _StaticOperatorIdentityProvider:
 def _client_with_operator_permissions(
     tmp_path: Path,
     permissions: set[OperatorPermission],
+    *,
+    operator_id: str = "test-operator",
 ) -> TestClient:
     app = create_app(
         history_dir=tmp_path / "history",
@@ -75,7 +112,10 @@ def _client_with_operator_permissions(
         published_agents={},
         agent_configuration_dir=tmp_path / "config",
     )
-    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(permissions)
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        permissions,
+        operator_id=operator_id,
+    )
     return TestClient(app)
 
 
@@ -434,6 +474,198 @@ def _create_local_index_source(
     )
     assert response.status_code == 200
     return response.json()
+
+
+def _create_hybrid_index_source(
+    client: TestClient,
+    *,
+    params: dict[str, object] | None = None,
+) -> dict:
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_hybrid_index",
+            "name": "Hybrid Index Policies",
+            "provider": "hybrid_index",
+            "params": params or {},
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _persist_completed_hybrid_metadata_authority(
+    client: TestClient,
+    *,
+    include_pdf_draft: bool = True,
+) -> tuple[str, str]:
+    store = _configuration_store(client)
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    original_buffer = BytesIO()
+    writer.write(original_buffer)
+    original = original_buffer.getvalue()
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="ks_hybrid_index",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=original,
+        actor="test-operator",
+    )
+    claimed_upload = store.claim_next_quarantined_knowledge_upload(source_id="ks_hybrid_index")
+    assert claimed_upload is not None and claimed_upload.claim_token is not None
+    document, _job = store.accept_hybrid_quarantined_knowledge_upload(
+        source_id="ks_hybrid_index",
+        upload_id=upload.upload_id,
+        claim_token=claimed_upload.claim_token,
+        source_sha256=hashlib.sha256(original).hexdigest(),
+        source_size_bytes=len(original),
+        page_count=1,
+        parser_revision="test-parser@1",
+        model_digests=("sha256:test-model",),
+        configuration_sha256="b" * 64,
+    )
+
+    class MetadataPipeline:
+        def build(
+            self, request: HybridArtifactBuildRequest, *, cancellation
+        ) -> HybridParserBuildOutput:
+            cancellation.raise_if_cancelled()
+            build_identity = StructuredArtifactBuildIdentity(
+                build_id="build_server_managed",
+                source_sha256=request.original_ref.sha256,
+                parser_adapter="test-parser",
+                parser_revision=request.parser_revision,
+                model_digests=request.model_digests,
+                canonical_schema_version="structured-knowledge.v1",
+                configuration_sha256=request.configuration_sha256,
+            )
+            canonical = StructuredKnowledgeDocumentArtifact(
+                schema_version="structured-knowledge.v1",
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+                original_sha256=request.original_ref.sha256,
+                build_identity=build_identity,
+                pages=(
+                    StructuredPage(
+                        page_number=1,
+                        width=612,
+                        height=792,
+                        native_text_ratio=1,
+                        blocks=(
+                            StructuredBlock(
+                                block_id="section:eligibility",
+                                kind="paragraph",
+                                text="Eligibility is governed by the signed policy.",
+                                bbox=BoundingBox(x0=1, y0=1, x1=300, y1=30),
+                                reading_order=0,
+                                heading_path=("Eligibility",),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            common = {
+                "metadata_draft_id": "pdf-metadata-eligibility",
+                "origin": "pdf",
+                "source_id": request.source_id,
+                "document_id": request.document_id,
+                "revision_id": request.revision_id,
+                "canonical_anchor": "section:eligibility",
+                "authority": "regional",
+                "effective_from": "2026-01-01",
+                "effective_to": "2026-12-31",
+                "taxonomy_id": "insurance-product-applicability",
+                "taxonomy_revision_id": "taxonomy-2026-01",
+                "precedence_policy_revision_id": "precedence-2026-01",
+                "precedence_authority_tier": "policy_terms",
+                "precedence_order": 10,
+            }
+            return HybridParserBuildOutput(
+                artifact=canonical,
+                vendor_artifacts=(
+                    HybridVendorArtifact(
+                        adapter="test-parser",
+                        content=b"{}",
+                    ),
+                ),
+                insurance_metadata=HybridInsuranceMetadataArtifact(
+                    source_id=request.source_id,
+                    document_id=request.document_id,
+                    revision_id=request.revision_id,
+                    structured_build_id=build_identity.build_id,
+                    original_sha256=request.original_ref.sha256,
+                    document_defaults=InsuranceRuleMetadataDraft(
+                        metadata_draft_id="document-defaults",
+                        document_id=request.document_id,
+                        revision_id=request.revision_id,
+                    ),
+                    pdf_drafts=(
+                        (InsuranceMetadataDraftInput(**common),) if include_pdf_draft else ()
+                    ),
+                ),
+            )
+
+    claimed_job = store.claim_next_knowledge_ingestion_job(source_id="ks_hybrid_index")
+    assert claimed_job is not None and claimed_job.claim_token is not None
+    original_store = LocalManagedOriginalStore()
+    lifecycle = LocalStoreHybridWorkerLifecycle(
+        store=store,
+        original_store=original_store,
+    )
+    claim = lifecycle.claim_from_job(claimed_job)
+    with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+        outcome = HybridKnowledgeWorker(
+            lifecycle=lifecycle,
+            original_store=original_store,
+            artifact_store=artifacts,
+            pipeline=MetadataPipeline(),
+            worker_id="test-hybrid-worker",
+        ).process_claim(claim)
+    assert outcome.state == "completed"
+    result = store.get_completed_hybrid_artifact_build_result(
+        source_id="ks_hybrid_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+    )
+    repository = FilesystemInsuranceMetadataReviewRepository(store.root_dir)
+    authority = repository.list_authority_records(
+        source_id="ks_hybrid_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+    )
+    assert len(authority) == 1
+    assert authority[0].structured_build_id == result.build_id
+    assert authority[0].original_ref == result.persisted_original_ref
+    pdf_records = repository.list_pdf_draft_records(
+        source_id="ks_hybrid_index",
+        document_id=document.document_id,
+        revision_id=document.revision_id,
+    )
+    assert len(pdf_records) == (1 if include_pdf_draft else 0)
+    if pdf_records:
+        assert pdf_records[0].metadata_artifact_ref == result.insurance_metadata_ref
+        assert pdf_records[0].rule_unit_draft_id == authority[0].rule_unit_draft_id
+    return document.document_id, document.revision_id
+
+
+def _metadata_workbook_for_revision(
+    document_id: str,
+    revision_id: str,
+    *,
+    canonical_anchor: str = "section:eligibility",
+) -> bytes:
+    fixture = Path("tests/fixtures/knowledge/hybrid/metadata-workbook.xlsx")
+    output = BytesIO()
+    with ZipFile(fixture) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/worksheets/sheet1.xml":
+                payload = payload.replace(b"doc_policy_terms", document_id.encode())
+                payload = payload.replace(b"rev_2026_01", revision_id.encode())
+                payload = payload.replace(b"section:eligibility", canonical_anchor.encode())
+            target.writestr(member, payload)
+    return output.getvalue()
 
 
 def test_create_http_json_knowledge_source_accepts_safe_remote_params(tmp_path: Path) -> None:
@@ -1684,6 +1916,203 @@ def test_http_json_source_publication_validation_and_publish_api(
     assert publications.json() == {"data": [published.json()], "meta": {"total": 1}}
 
 
+def test_hybrid_publication_routes_dispatch_to_typed_authority_facade(tmp_path: Path) -> None:
+    calls: list[tuple[str, dict[str, str] | str]] = []
+
+    class Payload(BaseModel):
+        record_id: str
+
+    validation = Payload(record_id="validation-hybrid-1")
+    publication = Payload(record_id="publication-hybrid-1")
+
+    class Facade:
+        def validate(self, **kwargs: str) -> BaseModel:
+            calls.append(("validate", kwargs))
+            return validation
+
+        def publish(self, **kwargs: str) -> BaseModel:
+            calls.append(("publish", kwargs))
+            return publication
+
+        def list_validations(self, source_id: str) -> list[BaseModel]:
+            calls.append(("list-validations", source_id))
+            return [validation]
+
+        def list_publications(self, source_id: str) -> list[BaseModel]:
+            calls.append(("list-publications", source_id))
+            return [publication]
+
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+
+    validated = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+    published = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/publish",
+        json={"validation_id": "validation-hybrid-1", "change_note": "publish"},
+    )
+    validations = client.get(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication-validations"
+    )
+    publications = client.get("/api/config/knowledge-sources/ks_hybrid_index/publications")
+
+    assert validated.json() == validation.model_dump(mode="json")
+    assert published.json() == publication.model_dump(mode="json")
+    assert validations.json() == {
+        "data": [validation.model_dump(mode="json")],
+        "meta": {"total": 1},
+    }
+    assert publications.json() == {
+        "data": [publication.model_dump(mode="json")],
+        "meta": {"total": 1},
+    }
+    assert calls == [
+        (
+            "validate",
+            {
+                "source_id": "ks_hybrid_index",
+                "smoke_query": "exact rule",
+                "actor": "local-user",
+            },
+        ),
+        (
+            "publish",
+            {
+                "source_id": "ks_hybrid_index",
+                "validation_id": "validation-hybrid-1",
+                "change_note": "publish",
+                "actor": "local-user",
+            },
+        ),
+        ("list-validations", "ks_hybrid_index"),
+        ("list-publications", "ks_hybrid_index"),
+    ]
+
+
+def test_hybrid_source_rollback_creates_a_new_draft_with_mandatory_republication(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, str]] = []
+
+    class Publication(BaseModel):
+        publication_id: str
+        source_publication_seq: int
+
+    class RollbackDraft(BaseModel):
+        draft_id: str
+        based_on_publication_id: str
+
+    class Facade:
+        def list_publications(self, source_id: str) -> list[BaseModel]:
+            assert source_id == "ks_hybrid_index"
+            return [
+                Publication(publication_id="publication-1", source_publication_seq=1),
+                Publication(publication_id="publication-2", source_publication_seq=2),
+            ]
+
+        def create_rollback_draft(self, **kwargs: str) -> BaseModel:
+            calls.append(kwargs)
+            return RollbackDraft(
+                draft_id="source-rollback-draft-1",
+                based_on_publication_id=kwargs["historical_publication_id"],
+            )
+
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/publication-1/rollback-drafts",
+        json={"reason": "Revert the superseded underwriting rule."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rollback_kind"] == "source_content_republication"
+    assert payload["historical_publication_id"] == "publication-1"
+    assert payload["source_rollback_draft"] == {
+        "draft_id": "source-rollback-draft-1",
+        "based_on_publication_id": "publication-1",
+    }
+    assert payload["required_next_steps"] == [
+        "source_review",
+        "source_validation",
+        "new_monotonic_source_publication",
+        "explicit_agent_binding_upgrade",
+        "agent_validation",
+        "new_agent_publication",
+    ]
+    assert calls == [
+        {
+            "source_id": "ks_hybrid_index",
+            "historical_publication_id": "publication-1",
+            "reason": "Revert the superseded underwriting rule.",
+            "actor": "local-user",
+        }
+    ]
+
+    current = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publications/publication-2/rollback-drafts",
+        json={"reason": "This is not historical."},
+    )
+    assert current.status_code == 409
+    assert len(calls) == 1
+
+
+def test_hybrid_publication_routes_return_stable_unavailable_and_conflict_errors(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+    unavailable = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+
+    class ConflictFacade:
+        def publish(self, **_: str) -> BaseModel:
+            raise configuration_api_module.PublicationConflict("STALE_VALIDATION")
+
+    client.app.state.hybrid_knowledge_publication_api = ConflictFacade()
+    conflict = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/publish",
+        json={"validation_id": "validation-1", "change_note": "publish"},
+    )
+
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == (
+        "Hybrid Knowledge publication authority is not configured."
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {"code": "STALE_VALIDATION"}
+
+
+def test_hybrid_publication_routes_reuse_existing_operator_permissions(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Facade:
+        def validate(self, **_: str) -> BaseModel:
+            calls.append("called")
+            return BaseModel()
+
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.KNOWLEDGE_SOURCE_EDIT},
+    )
+    _create_hybrid_index_source(client)
+    client.app.state.hybrid_knowledge_publication_api = Facade()
+    denied = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/publication/validate",
+        json={"smoke_query": "exact rule"},
+    )
+
+    assert denied.status_code == 403
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     ("filename", "content_type", "content"),
     [
@@ -1712,6 +2141,177 @@ def test_upload_stages_format_failures_for_asynchronous_rejection(
     assert uploaded.status_code == 200
     assert uploaded.json()["state"] == "queued"
     assert _configuration_store(client).list_knowledge_documents("ks_local_index") == []
+
+
+def test_hybrid_upload_accepts_single_and_batch_pdf_only(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source = _create_hybrid_index_source(client)
+    pdf = b"%PDF-1.7\nrequest-envelope-only"
+
+    single = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename="scan.pdf",
+        content_type="application/pdf",
+        content=pdf,
+    )
+    batch = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": "mixed.pdf",
+                "content_type": "application/pdf",
+                "content_base64": base64.b64encode(pdf).decode("ascii"),
+            }
+        ],
+    )
+
+    assert source["provider"] == "hybrid_index"
+    assert single.status_code == 200
+    assert batch.status_code == 200
+    uploads = _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index")
+    assert [upload.filename for upload in uploads] == ["scan.pdf", "mixed.pdf"]
+    assert all(upload.storage_path.startswith("knowledge_sources/") for upload in uploads)
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "content"),
+    [
+        ("policy.md", "text/markdown", b"# Markdown"),
+        ("archive.zip", "application/zip", b"PK\x03\x04"),
+        ("program.exe", "application/octet-stream", b"MZ"),
+        ("policy.pdf", "text/markdown", b"%PDF-1.7\n"),
+        ("policy.pdf", "application/pdf", b"not-a-pdf"),
+    ],
+)
+def test_hybrid_upload_rejects_non_pdf_and_mismatched_envelopes_synchronously(
+    tmp_path: Path,
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(client)
+
+    response = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename=filename,
+        content_type=content_type,
+        content=content,
+    )
+
+    assert response.status_code == 400
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+def test_hybrid_upload_applies_provider_specific_file_batch_and_capacity_limits_atomically(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(
+        client,
+        params={
+            "max_file_bytes": 24,
+            "max_pdf_pages": 20,
+            "max_batch_files": 2,
+            "max_source_documents": 1,
+        },
+    )
+    encoded = base64.b64encode(b"%PDF-1.7\nsmall").decode("ascii")
+
+    over_capacity = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": "first.pdf",
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            },
+            {
+                "filename": "second.pdf",
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            },
+        ],
+    )
+    over_bytes = _upload(
+        client,
+        source_id="ks_hybrid_index",
+        filename="large.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n" + b"x" * 30,
+    )
+
+    assert over_capacity.status_code == 503
+    assert over_capacity.json()["detail"]["code"] == "PA_INGESTION_004"
+    assert over_bytes.status_code == 400
+    assert "encoded upload envelope exceeds 32 characters" in over_bytes.json()["detail"]
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+def test_hybrid_batch_limit_rejects_whole_batch_before_reservation(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_hybrid_index_source(
+        client,
+        params={"max_batch_files": 1, "max_source_documents": 10},
+    )
+    encoded = base64.b64encode(b"%PDF-1.7\nsmall").decode("ascii")
+    response = _batch_upload(
+        client,
+        source_id="ks_hybrid_index",
+        documents=[
+            {
+                "filename": name,
+                "content_type": "application/pdf",
+                "content_base64": encoded,
+            }
+            for name in ("first.pdf", "second.pdf")
+        ],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "PA_INGESTION_002"
+    assert _configuration_store(client).list_quarantined_knowledge_uploads("ks_hybrid_index") == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"max_batch_files": True},
+        {"max_batch_files": "5"},
+        {"index_path": "/tmp/index"},
+        {"snapshot_path": "/tmp/snapshot"},
+        {"endpoint": "https://example.invalid"},
+        {"api_key": "secret"},
+    ],
+)
+def test_hybrid_source_rejects_invalid_unknown_local_and_secret_params(
+    tmp_path: Path,
+    params: dict[str, object],
+) -> None:
+    client = _client(tmp_path)
+    response = client.post(
+        "/api/config/knowledge-sources",
+        json={
+            "source_id": "ks_hybrid_index",
+            "name": "Hybrid",
+            "provider": "hybrid_index",
+            "params": params,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_hybrid_intake_is_not_exposed_as_a_customer_upload_route(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    response = client.post(
+        "/api/customer/knowledge-sources/ks_hybrid_index/documents",
+        json={},
+    )
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -2402,6 +3002,37 @@ def test_bind_shared_knowledge_source_to_agent_draft(
         for binding in parsed["knowledge_bindings"]
     )
     assert loaded.json()["agent_yaml"] == bound.json()["agent_yaml"]
+
+
+def test_bind_hybrid_source_to_agent_draft_selects_retrieval_profile(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    created = _create_hybrid_index_source(client)
+    store = _configuration_store(client)
+    source = store.get_knowledge_source(created["source_id"])
+    assert source is not None
+    store._write_knowledge_source(
+        source.model_copy(update={"published_snapshot_id": "publication_001"})
+    )
+
+    bound = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/knowledge-bindings",
+        json={
+            "source_id": source.source_id,
+            "retrieval_profile_revision_id": "profile_002",
+        },
+    )
+
+    assert bound.status_code == 200
+    parsed = yaml.safe_load(bound.json()["agent_yaml"])
+    hybrid_binding = next(
+        binding
+        for binding in parsed["knowledge_bindings"]
+        if binding["source_ref"]["source_id"] == source.source_id
+    )
+    assert hybrid_binding["retrieval_profile_revision_id"] == "profile_002"
 
 
 def test_update_model_contract_after_binding_shared_source_preserves_package_sources(
@@ -3395,3 +4026,418 @@ def test_rollback_switches_active_version(tmp_path: Path) -> None:
     assert rollback.json()["version_id"] == version_one
     assert rollback.json()["rollback_from_version_id"] == version_two
     assert client.get("/api/config/agents").json()["data"][0]["active_version_id"] == version_one
+
+
+def _seed_metadata_review(client: TestClient) -> dict[str, Any]:
+    document_id, revision_id = _persist_completed_hybrid_metadata_authority(client)
+    workbook = _metadata_workbook_for_revision(document_id, revision_id)
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json={
+            "filename": "metadata.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content_base64": base64.b64encode(workbook).decode(),
+            "document_id": document_id,
+            "revision_id": revision_id,
+        },
+    )
+    assert response.status_code == 200
+    return response.json()["reviews"][0]
+
+
+def test_metadata_workbook_import_route_persists_artifacts_and_creates_review(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+        },
+    )
+    _create_hybrid_index_source(client)
+    document_id, revision_id = _persist_completed_hybrid_metadata_authority(client)
+    workbook_bytes = _metadata_workbook_for_revision(document_id, revision_id)
+
+    request_payload = {
+        "filename": "metadata-workbook.xlsx",
+        "content_type": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+        "document_id": document_id,
+        "revision_id": revision_id,
+    }
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+
+    assert response.status_code == 200, response.text
+    assert (
+        "/api/config/knowledge-sources/{source_id}/metadata-workbooks/import"
+        in client.get("/api/openapi.json").json()["paths"]
+    )
+    payload = response.json()
+    assert payload["replayed"] is False
+    assert payload["meta"]["total"] == 1
+    assert payload["meta"]["next_cursor"] is None
+    assert payload["meta"]["summary"]["total"] == 1
+    assert payload["template_revision"] == "insurance-rule-metadata.v1"
+    assert payload["row_count"] == 1
+    assert payload["original_ref"]["artifact_uri"].startswith("file://")
+    assert payload["normalized_ref"]["artifact_uri"].startswith("file://")
+    assert payload["reviews"][0]["state"] == "review_required"
+    assert payload["reviews"][0]["conflicts"][0]["field"] == "authority"
+    assert "content_base64" not in json.dumps(payload)
+    assert "formula" not in json.dumps(payload).lower()
+    assert payload["reviews"][0]["import_id"] == payload["import_id"]
+    assert payload["reviews"][0]["workbook_row_number"] == 6
+    assert payload["reviews"][0]["workbook_draft_id"]
+    assert payload["reviews"][0]["original_ref"] == payload["original_ref"]
+    assert payload["reviews"][0]["normalized_ref"] == payload["normalized_ref"]
+    import_record = FilesystemInsuranceMetadataReviewRepository(
+        _configuration_store(client).root_dir
+    ).get_import_record(payload["import_id"])
+    assert import_record is not None
+    assert import_record.created_by == "test-operator"
+    assert import_record.created_at.tzinfo is not None
+    assert import_record.created_at.utcoffset() is not None
+    assert import_record.rows[0].metadata_draft_id == payload["reviews"][0]["workbook_draft_id"]
+    audit_payloads = [
+        json.loads(path.read_text())
+        for path in sorted(
+            (_configuration_store(client).root_dir / "configuration_audit").glob("*.json")
+        )
+    ]
+    import_audit = next(
+        item for item in audit_payloads if item["metadata"].get("import_id") == payload["import_id"]
+    )
+    assert import_audit["operation"] == "imported"
+    assert import_audit["actor"] == "test-operator"
+    assert set(import_audit["metadata"]) == {
+        "import_id",
+        "source_id",
+        "document_id",
+        "revision_id",
+        "original_ref_id",
+        "normalized_ref_id",
+    }
+    assert "content_base64" not in json.dumps(import_audit)
+    replayed = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert replayed.status_code == 200
+    assert replayed.json()["import_id"] == payload["import_id"]
+    assert replayed.json()["replayed"] is True
+    replayed_record = FilesystemInsuranceMetadataReviewRepository(
+        _configuration_store(client).root_dir
+    ).get_import_record(payload["import_id"])
+    assert replayed_record == import_record
+    replay_audits = [
+        json.loads(path.read_text())
+        for path in sorted(
+            (_configuration_store(client).root_dir / "configuration_audit").glob("*.json")
+        )
+        if json.loads(path.read_text())["metadata"].get("import_id") == payload["import_id"]
+    ]
+    assert len(replay_audits) == 1
+    listed = client.get("/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews")
+    assert listed.status_code == 200
+    assert listed.json()["data"] == payload["reviews"]
+    view_only_client = _client_with_operator_permissions(
+        tmp_path,
+        {OperatorPermission.KNOWLEDGE_SOURCE_VIEW},
+    )
+    denied = view_only_client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert denied.status_code == 403
+
+
+def test_metadata_workbook_replay_repairs_missing_audit_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    permissions = {
+        OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+        OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+    }
+    creator = _client_with_operator_permissions(tmp_path, permissions)
+    _create_hybrid_index_source(creator)
+    document_id, revision_id = _persist_completed_hybrid_metadata_authority(creator)
+    workbook_bytes = _metadata_workbook_for_revision(document_id, revision_id)
+    request_payload = {
+        "filename": "metadata-workbook.xlsx",
+        "content_type": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+        "document_id": document_id,
+        "revision_id": revision_id,
+    }
+    creator_store = _configuration_store(creator)
+
+    def fail_audit_once(_audit: object) -> None:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Simulated audit persistence failure.",
+            "Replay the exact import.",
+        )
+
+    monkeypatch.setattr(
+        creator_store,
+        "ensure_configuration_operation",
+        fail_audit_once,
+    )
+    failed = creator.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert failed.status_code == 400
+    import_paths = tuple((tmp_path / "config" / "insurance_metadata_imports").glob("*.json"))
+    assert len(import_paths) == 1
+    import_id = import_paths[0].stem
+    import_record = FilesystemInsuranceMetadataReviewRepository(
+        tmp_path / "config"
+    ).get_import_record(import_id)
+    assert import_record is not None
+    assert import_record.created_by == "test-operator"
+    assert tuple((tmp_path / "config" / "configuration_audit").glob("*metadata_import*.json")) == ()
+
+    replayer = _client_with_operator_permissions(
+        tmp_path,
+        permissions,
+        operator_id="replay-operator",
+    )
+    repaired = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    third = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+
+    assert repaired.status_code == 200
+    assert third.status_code == 200
+    assert repaired.json()["replayed"] is True
+    assert third.json()["replayed"] is True
+    audit_paths = tuple(
+        (tmp_path / "config" / "configuration_audit").glob("*metadata_import*.json")
+    )
+    assert len(audit_paths) == 1
+    audit_payload = json.loads(audit_paths[0].read_text())
+    assert audit_payload["actor"] == import_record.created_by
+    assert audit_payload["created_at"] == import_record.created_at.isoformat()
+
+    audit_payload["actor"] = "tampered-operator"
+    audit_paths[0].write_text(json.dumps(audit_payload))
+    mismatch = replayer.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+    assert mismatch.status_code == 400
+    assert json.loads(audit_paths[0].read_text())["actor"] == "tampered-operator"
+
+
+def test_metadata_workbook_import_uses_only_server_persisted_authority(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+        },
+    )
+    _create_hybrid_index_source(client)
+    fixture = Path("tests/fixtures/knowledge/hybrid/metadata-workbook.xlsx").read_bytes()
+    empty = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json={
+            "filename": "metadata.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content_base64": base64.b64encode(fixture).decode(),
+            "document_id": "doc_policy_terms",
+            "revision_id": "rev_2026_01",
+        },
+    )
+    assert empty.status_code == 503, empty.text
+
+    document_id, revision_id = _persist_completed_hybrid_metadata_authority(
+        client,
+        include_pdf_draft=False,
+    )
+    valid_workbook = _metadata_workbook_for_revision(document_id, revision_id)
+    request_payload = {
+        "filename": "metadata.xlsx",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content_base64": base64.b64encode(valid_workbook).decode(),
+        "document_id": document_id,
+        "revision_id": revision_id,
+    }
+    wrong_revision = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json={**request_payload, "revision_id": "rev_attacker"},
+    )
+    fake_anchor = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json={
+            **request_payload,
+            "content_base64": base64.b64encode(
+                _metadata_workbook_for_revision(
+                    document_id,
+                    revision_id,
+                    canonical_anchor="section:attacker",
+                )
+            ).decode(),
+        },
+    )
+    client_authority = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json={
+            **request_payload,
+            "canonical_anchors": ["section:eligibility"],
+            "pdf_drafts": [{"origin": "pdf", "authority": "attacker"}],
+        },
+    )
+    workbook_only = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-workbooks/import",
+        json=request_payload,
+    )
+
+    assert wrong_revision.status_code == 503
+    assert fake_anchor.status_code == 400
+    assert client_authority.status_code == 422
+    assert workbook_only.status_code == 200
+    review = workbook_only.json()["reviews"][0]
+    assert review["state"] == "review_required"
+    assert review["publication_blocked"] is True
+    assert review["pdf_draft"] is None
+
+
+def test_metadata_review_routes_enforce_exact_identity_and_conflict_resolution(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+            OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH,
+        },
+    )
+    _create_hybrid_index_source(client)
+    seeded = _seed_metadata_review(client)
+    path = f"/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/{seeded['review_id']}"
+
+    listed = client.get(path.rsplit("/", 1)[0])
+    filtered = client.get(path.rsplit("/", 1)[0], params={"limit": 1, "state": "review_required"})
+    invalid_cursor = client.get(path.rsplit("/", 1)[0], params={"cursor": "not-a-valid-cursor"})
+    invalid_state = client.get(path.rsplit("/", 1)[0], params={"state": "not-a-review-state"})
+    blocked = client.post(
+        f"{path}/approve",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Approve reviewed metadata.",
+        },
+    )
+    corrected = client.post(
+        f"{path}/correct",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Use the signed national authority classification.",
+            "corrections": {"authority": "national"},
+        },
+    )
+    stale = client.post(
+        f"{path}/reject",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Stale command must fail.",
+        },
+    )
+    approved = client.post(
+        f"{path}/approve",
+        json={
+            "expected_review_version": corrected.json()["review_version"],
+            "expected_review_identity": corrected.json()["review_identity"],
+            "reason": "Business review complete.",
+        },
+    )
+
+    assert listed.status_code == 200
+    assert filtered.status_code == 200
+    assert filtered.json()["meta"]["total"] == 1
+    assert filtered.json()["meta"]["summary"] == listed.json()["meta"]["summary"]
+    assert invalid_cursor.status_code == 400
+    assert invalid_state.status_code == 400
+    assert listed.json()["meta"] == {
+        "total": 1,
+        "unresolved": 1,
+        "next_cursor": None,
+        "summary": {
+            "total": 1,
+            "unresolved": 1,
+            "review_required": 1,
+            "ready_for_review": 0,
+            "approved": 0,
+            "corrected": 0,
+            "rejected": 0,
+            "all_approved": False,
+        },
+    }
+    assert "formula" not in json.dumps(listed.json()).lower()
+    assert blocked.status_code == 409
+    assert corrected.status_code == 200
+    assert corrected.json()["state"] == "corrected"
+    assert corrected.json()["conflicts"] == []
+    assert corrected.json()["publication_blocked"] is True
+    assert [item["action"] for item in corrected.json()["decision_history"]] == ["correct"]
+    assert (
+        corrected.json()["decision_history"][0]["prior_review_identity"]
+        == seeded["review_identity"]
+    )
+    assert stale.status_code == 409
+    assert approved.status_code == 200
+    assert approved.json()["state"] == "approved"
+    assert approved.json()["publication_blocked"] is False
+    assert [item["action"] for item in approved.json()["decision_history"]] == [
+        "correct",
+        "approve",
+    ]
+    decision_files = tuple(
+        (_configuration_store(client).root_dir / "insurance_metadata_review_decisions").rglob(
+            "*.json"
+        )
+    )
+    assert len(decision_files) == 2
+
+
+def test_metadata_review_approval_requires_knowledge_publish_permission(tmp_path: Path) -> None:
+    client = _client_with_operator_permissions(
+        tmp_path,
+        {
+            OperatorPermission.KNOWLEDGE_SOURCE_VIEW,
+            OperatorPermission.KNOWLEDGE_SOURCE_EDIT,
+        },
+    )
+    _create_hybrid_index_source(client)
+    seeded = _seed_metadata_review(client)
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid_index/metadata-reviews/"
+        f"{seeded['review_id']}/approve",
+        json={
+            "expected_review_version": seeded["review_version"],
+            "expected_review_identity": seeded["review_identity"],
+            "reason": "Unauthorized approval.",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Operator lacks required permission: knowledge_source.publish"
+    )

@@ -7,6 +7,7 @@ from typing import Any
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     PublishedAgentRuntimeFacts,
     ResolvedWorkflowStageRuntimeConfiguration,
     RunStartContextAssembly,
@@ -80,6 +81,7 @@ def build_workflow_template_execution_input(
     stage_runtime_configuration: ResolvedWorkflowStageRuntimeConfiguration,
     conversation_context: ContextAdmission | None,
     run_start_context: RunStartContextAssembly | None = None,
+    institution_authorization: InstitutionAuthorizationContext | None = None,
 ) -> WorkflowTemplateExecutionInput:
     """Build the typed, trace-safe execution input from resolved run-start facts."""
 
@@ -92,6 +94,9 @@ def build_workflow_template_execution_input(
             stage_runtime_configuration.effective_stage_configuration.template_descriptor_version
         ),
         question=question,
+        institution_authorization=(
+            institution_authorization or InstitutionAuthorizationContext()
+        ),
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         draft_id=draft_id,

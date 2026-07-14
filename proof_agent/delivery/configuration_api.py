@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import yaml  # type: ignore[import-untyped]
 
@@ -22,7 +22,10 @@ from proof_agent.bootstrap.skills import (
     SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS,
     load_business_flow_skill_pack_set,
 )
-from proof_agent.bootstrap.validation import validate_workflow_stage_prompt_config
+from proof_agent.bootstrap.validation import (
+    validate_hybrid_index_params,
+    validate_workflow_stage_prompt_config,
+)
 from proof_agent.bootstrap.knowledge_resolution import (
     ConfigurationStoreKnowledgeBindingResolver,
     PackageKnowledgeBindingResolver,
@@ -30,6 +33,30 @@ from proof_agent.bootstrap.knowledge_resolution import (
 from proof_agent.capabilities.tools.source_descriptors import (
     get_tool_source_descriptor,
     list_tool_source_descriptors,
+)
+from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
+from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import HybridArtifactBuildResult
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    DEFAULT_WORKBOOK_IMPORT_LIMITS,
+    FilesystemInsuranceMetadataReviewRepository,
+    InsuranceMetadataDraftInput,
+    InsuranceMetadataReview,
+    WorkbookKnownAnchor,
+    WorkbookImportRecord,
+    WorkbookImportRowIdentity,
+    WorkbookMetadataRow,
+    WorkbookReviewConflictError,
+    WorkbookValidationError,
+    WORKBOOK_MEDIA_TYPE,
+    create_workbook_only_review,
+    import_metadata_workbook,
+    reconcile_metadata_drafts,
+)
+from proof_agent.capabilities.knowledge.hybrid.publication import PublicationConflict
+from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
+from proof_agent.configuration.hybrid_knowledge_repository import (
+    FileSystemKnowledgeArtifactStore,
+    ImmutableArtifactError,
 )
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.importer import import_agent_package
@@ -40,6 +67,8 @@ from proof_agent.configuration.local_store import (
 )
 from proof_agent.contracts import (
     AgentValidationRecord,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
     ContractBundle,
     DraftAgent,
     EnvironmentModelCredentialReference,
@@ -83,6 +112,10 @@ from proof_agent.delivery.agent_package_execution import (
     execute_agent_package_run,
 )
 from proof_agent.delivery.http_errors import proof_agent_http_exception
+from proof_agent.delivery.knowledge_operations import (
+    KnowledgeOperationsHealthSources,
+    build_operations_projection,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -90,6 +123,7 @@ from proof_agent.observability.api.operator_identity import (
     OperatorPermission,
     require_operator_permission,
 )
+from proof_agent.observability.api.serializers import serialize_agent_version_rollback
 from proof_agent.observability.storage.run_store import RunStore
 
 
@@ -97,6 +131,7 @@ router = APIRouter(tags=["configuration"])
 
 SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
     "http_json",
+    "hybrid_index",
     "local_markdown",
     "local_index",
     "remote_search",
@@ -231,12 +266,21 @@ class DraftPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_run_id: str | None = None
+    knowledge_release_record_id: str | None = None
 
 
 class RollbackRequest(BaseModel):
     """Request body for switching the Active Agent Version pointer."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class KnowledgeSourceRollbackDraftRequest(BaseModel):
+    """Request a new Source Draft from one immutable historical publication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=2_000)
 
 
 class KnowledgeSourceCreateRequest(BaseModel):
@@ -468,6 +512,67 @@ class KnowledgeSourcePublicationRequest(BaseModel):
     change_note: str = Field(min_length=1)
 
 
+class HybridKnowledgePublicationApi(Protocol):
+    """Typed delivery seam for the separately composed Hybrid authority facade."""
+
+    def validate(self, *, source_id: str, smoke_query: str, actor: str) -> BaseModel: ...
+
+    def publish(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+        change_note: str,
+        actor: str,
+    ) -> BaseModel: ...
+
+    def list_validations(self, source_id: str) -> Sequence[BaseModel]: ...
+
+    def list_publications(self, source_id: str) -> Sequence[BaseModel]: ...
+
+    def create_rollback_draft(
+        self,
+        *,
+        source_id: str,
+        historical_publication_id: str,
+        reason: str,
+        actor: str,
+    ) -> BaseModel: ...
+
+
+def _hybrid_publication_api(app_request: Request) -> HybridKnowledgePublicationApi:
+    facade = getattr(app_request.app.state, "hybrid_knowledge_publication_api", None)
+    if facade is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Hybrid Knowledge publication authority is not configured.",
+        )
+    return cast(HybridKnowledgePublicationApi, facade)
+
+
+class KnowledgeMetadataReviewResolutionRequest(BaseModel):
+    """Exact optimistic command envelope for one metadata review decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_review_version: int = Field(gt=0)
+    expected_review_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2_000)
+    corrections: dict[str, str | int | None] = Field(default_factory=dict)
+
+
+class KnowledgeMetadataWorkbookImportRequest(BaseModel):
+    """Bounded exact-revision workbook import with parallel PDF proposals."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1)
+    document_id: str = Field(min_length=1, max_length=255)
+    revision_id: str = Field(min_length=1, max_length=255)
+
+
 class KnowledgeBindingAttachRequest(BaseModel):
     """Request body for binding a shared Knowledge Source into a Draft Agent."""
 
@@ -475,6 +580,7 @@ class KnowledgeBindingAttachRequest(BaseModel):
 
     source_id: str = Field(min_length=1)
     binding_id: str | None = None
+    retrieval_profile_revision_id: str | None = Field(default=None, min_length=1)
     alias: str | None = None
     failure_mode: str = "required"
     fusion_weight: float = 1.0
@@ -741,9 +847,7 @@ def list_tool_source_descriptor_payloads(
     """List built-in trusted Tool Source descriptors."""
 
     _require_operator(identity, OperatorPermission.TOOL_SOURCE_VIEW)
-    data = [
-        descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()
-    ]
+    data = [descriptor.model_dump(mode="json") for descriptor in list_tool_source_descriptors()]
     return {"data": data, "meta": {"total": len(data)}}
 
 
@@ -825,9 +929,7 @@ def update_tool_source(
             source_type=request.source_type,
             provider=request.provider,
             tool_contract_ids=(
-                tuple(request.tool_contract_ids)
-                if request.tool_contract_ids is not None
-                else None
+                tuple(request.tool_contract_ids) if request.tool_contract_ids is not None else None
             ),
             credential_env_ref=request.credential_env_ref,
             params=dict(request.params) if request.params is not None else None,
@@ -914,6 +1016,11 @@ def create_knowledge_source(
     source_id = _source_id(request.source_id or request.name)
     params = dict(request.params)
     try:
+        if request.provider == "hybrid_index":
+            validate_hybrid_index_params(
+                params,
+                field_prefix=f"knowledge_sources[{source_id}].params",
+            )
         source = store.create_knowledge_source(
             source_id=source_id,
             name=request.name,
@@ -940,6 +1047,36 @@ def get_knowledge_source(
     store = _get_configuration_store(app_request)
     source = _require_knowledge_source(store, source_id)
     return _knowledge_source_payload(store, source)
+
+
+@router.get("/config/knowledge-sources/{source_id}/operations")
+def get_knowledge_source_operations(
+    source_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return the read-only, trace-safe Hybrid Knowledge operations projection."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=400,
+            detail="Knowledge operations require a hybrid_index Source.",
+        )
+    provider = getattr(app_request.app.state, "knowledge_operations_provider", None)
+    if provider is None:
+        health = KnowledgeOperationsHealthSources(source_id=source_id)
+    else:
+        health = provider(source_id)
+        if not isinstance(health, KnowledgeOperationsHealthSources):
+            raise HTTPException(
+                status_code=503, detail="Knowledge operations telemetry is invalid."
+            )
+        if health.source_id != source_id:
+            raise HTTPException(status_code=503, detail="Knowledge operations Source mismatch.")
+    return build_operations_projection(health).model_dump(mode="json")
 
 
 @router.post("/config/knowledge-sources/{source_id}/archive")
@@ -1054,26 +1191,46 @@ def upload_knowledge_source_document(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Stage one upload for asynchronous validation and Local Index ingestion."""
+    """Stage one provider-specific upload for asynchronous validation."""
 
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
-    if source.provider != "local_index":
+    if source.provider not in {"local_index", "hybrid_index"}:
         raise HTTPException(
             status_code=400,
-            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
+            detail=(
+                "Dashboard document upload currently supports local_index or hybrid_index "
+                "Knowledge Sources."
+            ),
         )
-    content = _decode_upload_content(request.content_base64)
+    limits = _hybrid_source_upload_limits(source) if source.provider == "hybrid_index" else None
+    content = _decode_upload_content(
+        request.content_base64,
+        max_upload_bytes=limits.max_file_bytes if limits is not None else MAX_UPLOAD_BYTES,
+    )
+    if source.provider == "hybrid_index":
+        _validate_hybrid_upload_envelope(request.filename, request.content_type, content)
 
     try:
-        upload = store.stage_quarantined_knowledge_upload(
-            source_id=source.source_id,
-            filename=request.filename,
-            content_type=request.content_type,
-            content=content,
-            actor=actor,
-        )
+        if limits is None:
+            upload = store.stage_quarantined_knowledge_upload(
+                source_id=source.source_id,
+                filename=request.filename,
+                content_type=request.content_type,
+                content=content,
+                actor=actor,
+            )
+        else:
+            upload = store.stage_quarantined_knowledge_upload(
+                source_id=source.source_id,
+                filename=request.filename,
+                content_type=request.content_type,
+                content=content,
+                actor=actor,
+                max_batch_files=limits.max_batch_files,
+                max_source_documents=limits.max_source_documents,
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _quarantined_upload_payload(upload)
@@ -1116,31 +1273,54 @@ def upload_knowledge_source_document_batch(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Stage one upload batch for asynchronous validation and Local Index ingestion."""
+    """Stage one provider-specific upload batch for asynchronous validation."""
 
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
-    if source.provider != "local_index":
+    if source.provider not in {"local_index", "hybrid_index"}:
         raise HTTPException(
             status_code=400,
-            detail="Dashboard document upload currently supports local_index Knowledge Sources.",
+            detail=(
+                "Dashboard document upload currently supports local_index or hybrid_index "
+                "Knowledge Sources."
+            ),
         )
+    limits = _hybrid_source_upload_limits(source) if source.provider == "hybrid_index" else None
     staging_inputs = tuple(
         KnowledgeUploadStagingInput(
             filename=document.filename,
             content_type=document.content_type,
-            content=_decode_upload_content(document.content_base64),
+            content=_decode_upload_content(
+                document.content_base64,
+                max_upload_bytes=limits.max_file_bytes if limits is not None else MAX_UPLOAD_BYTES,
+            ),
         )
         for document in request.documents
     )
+    if source.provider == "hybrid_index":
+        for document, staging_input in zip(request.documents, staging_inputs, strict=True):
+            _validate_hybrid_upload_envelope(
+                document.filename,
+                document.content_type,
+                staging_input.content,
+            )
 
     try:
-        uploads = store.stage_quarantined_knowledge_upload_batch(
-            source_id=source.source_id,
-            uploads=staging_inputs,
-            actor=actor,
-        )
+        if limits is None:
+            uploads = store.stage_quarantined_knowledge_upload_batch(
+                source_id=source.source_id,
+                uploads=staging_inputs,
+                actor=actor,
+            )
+        else:
+            uploads = store.stage_quarantined_knowledge_upload_batch(
+                source_id=source.source_id,
+                uploads=staging_inputs,
+                actor=actor,
+                max_batch_files=limits.max_batch_files,
+                max_source_documents=limits.max_source_documents,
+            )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {
@@ -1253,6 +1433,340 @@ def retry_knowledge_ingestion_job(
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return _knowledge_ingestion_job_payload(job)
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-workbooks/import")
+def import_knowledge_metadata_workbook(
+    source_id: str,
+    request: KnowledgeMetadataWorkbookImportRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Persist one bounded workbook import and its exact-anchor review batch."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata workbooks require hybrid_index.")
+    if not request.filename.casefold().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Metadata workbook filename must end in .xlsx.")
+    if request.content_type != WORKBOOK_MEDIA_TYPE:
+        raise HTTPException(status_code=400, detail="Metadata workbook content type is invalid.")
+    content = _decode_upload_content(
+        request.content_base64,
+        max_upload_bytes=DEFAULT_WORKBOOK_IMPORT_LIMITS.max_file_bytes,
+    )
+    try:
+        build_result = store.get_completed_hybrid_artifact_build_result(
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        )
+        repository = _metadata_review_repository(store)
+        authority_records = repository.list_authority_records(
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        )
+        authority_records = tuple(
+            record
+            for record in authority_records
+            if record.structured_build_id == build_result.build_id
+            and record.original_ref == build_result.persisted_original_ref
+        )
+        if not authority_records:
+            raise WorkbookValidationError(
+                "persisted canonical Rule Unit lineage is required for workbook import"
+            )
+        authority_by_identity = {
+            (
+                record.source_id,
+                record.document_id,
+                record.revision_id,
+                record.canonical_anchor,
+            ): record
+            for record in authority_records
+        }
+        if len(authority_by_identity) != len(authority_records):
+            raise WorkbookValidationError("persisted canonical anchors are not unique")
+        pdf_records = tuple(
+            record
+            for record in repository.list_pdf_draft_records(
+                source_id=source_id,
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+            )
+            if record.structured_build_id == build_result.build_id
+            and record.original_ref == build_result.persisted_original_ref
+            and record.metadata_artifact_ref == build_result.insurance_metadata_ref
+        )
+        for record in pdf_records:
+            authority = authority_by_identity.get(
+                (
+                    record.source_id,
+                    record.document_id,
+                    record.revision_id,
+                    record.canonical_anchor,
+                )
+            )
+            if authority is None or authority.rule_unit_draft_id != record.rule_unit_draft_id:
+                raise WorkbookValidationError(
+                    "persisted PDF metadata draft does not match canonical Rule Unit lineage"
+                )
+        pdf_by_identity = {
+            (record.source_id, record.document_id, record.revision_id, record.canonical_anchor): (
+                record.pdf_draft
+            )
+            for record in pdf_records
+        }
+        if len(pdf_by_identity) != len(pdf_records):
+            raise WorkbookValidationError("persisted PDF metadata draft anchors are not unique")
+        known_anchors = tuple(
+            WorkbookKnownAnchor(
+                source_id=record.source_id,
+                document_id=record.document_id,
+                revision_id=record.revision_id,
+                canonical_anchor=record.canonical_anchor,
+            )
+            for record in authority_records
+        )
+        with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+            _verify_hybrid_result_artifacts(artifacts, build_result)
+            imported = import_metadata_workbook(
+                content,
+                known_anchors=known_anchors,
+                artifact_store=artifacts,
+            )
+        proposed_import_record = WorkbookImportRecord(
+            import_id=imported.import_id,
+            template_revision=imported.template_revision,
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+            created_by=actor,
+            created_at=datetime.now(UTC),
+            original_ref=imported.original_ref,
+            normalized_ref=imported.normalized_ref,
+            rows=tuple(
+                WorkbookImportRowIdentity(
+                    row_number=row.row_number,
+                    source_id=row.source_id,
+                    document_id=row.document_id,
+                    revision_id=row.revision_id,
+                    canonical_anchor=row.canonical_anchor,
+                    metadata_draft_id=row.metadata.metadata_draft_id,
+                )
+                for row in imported.rows
+            ),
+        )
+        existing_import_record = repository.get_import_record(imported.import_id)
+        if existing_import_record is None:
+            import_record = proposed_import_record
+        else:
+            expected_existing_record = proposed_import_record.model_copy(
+                update={
+                    "created_by": existing_import_record.created_by,
+                    "created_at": existing_import_record.created_at,
+                }
+            )
+            if existing_import_record != expected_existing_record:
+                raise WorkbookReviewConflictError("workbook import identity already exists")
+            import_record = existing_import_record
+        workbook_drafts = tuple(_workbook_row_draft(row) for row in imported.rows)
+        reviews: list[InsuranceMetadataReview] = []
+        for row, draft in zip(imported.rows, workbook_drafts, strict=True):
+            authority = authority_by_identity[
+                (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
+            ]
+            pdf_draft = pdf_by_identity.get(
+                (draft.source_id, draft.document_id, draft.revision_id, draft.canonical_anchor)
+            )
+            if pdf_draft is None:
+                review = create_workbook_only_review(
+                    draft,
+                    import_record=import_record,
+                    row=row,
+                    citation_uri=authority.citation_uri,
+                )
+            else:
+                review = reconcile_metadata_drafts(
+                    pdf_draft,
+                    draft,
+                    import_record=import_record,
+                    row=row,
+                )
+            reviews.append(review)
+        persisted = repository.put_import_with_reviews(import_record, reviews)
+        page = repository.list_page(
+            source_id,
+            limit=100,
+            import_id=persisted.record.import_id,
+        )
+        store.ensure_configuration_operation(
+            ConfigurationOperationAudit(
+                operation_id=f"op_metadata_import_{persisted.record.import_id}",
+                operation=ConfigurationOperation.IMPORTED,
+                actor=persisted.record.created_by,
+                created_at=persisted.record.created_at.isoformat(),
+                summary=f"Imported insurance metadata workbook {persisted.record.import_id}.",
+                metadata={
+                    "import_id": persisted.record.import_id,
+                    "source_id": persisted.record.source_id,
+                    "document_id": persisted.record.document_id,
+                    "revision_id": persisted.record.revision_id,
+                    "original_ref_id": persisted.record.original_ref.version_id,
+                    "normalized_ref_id": persisted.record.normalized_ref.version_id,
+                },
+            )
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    except (ImmutableArtifactError, WorkbookValidationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "import_id": imported.import_id,
+        "template_revision": imported.template_revision,
+        "row_count": len(imported.rows),
+        "replayed": not persisted.created,
+        "original_ref": imported.original_ref.model_dump(mode="json"),
+        "normalized_ref": imported.normalized_ref.model_dump(mode="json"),
+        "reviews": [_metadata_review_payload(review) for review in page.items],
+        "meta": {
+            "total": page.total,
+            "unresolved": page.summary.unresolved,
+            "next_cursor": page.next_cursor,
+            "summary": page.summary.model_dump(mode="json"),
+        },
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/metadata-reviews")
+def list_knowledge_metadata_reviews(
+    source_id: str,
+    app_request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=512),
+    state: str | None = Query(default=None),
+    import_id: str | None = Query(default=None),
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """List trace-safe metadata review projections for one Hybrid Source."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    try:
+        page = _metadata_review_repository(store).list_page(
+            source_id,
+            limit=limit,
+            cursor=cursor,
+            state=state,
+            import_id=import_id,
+        )
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "data": [_metadata_review_payload(review) for review in page.items],
+        "meta": {
+            "total": page.total,
+            "unresolved": page.summary.unresolved,
+            "next_cursor": page.next_cursor,
+            "summary": page.summary.model_dump(mode="json"),
+        },
+    }
+
+
+@router.get("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}")
+def get_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return one exact trace-safe metadata review projection."""
+
+    _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_VIEW)
+    store = _get_configuration_store(app_request)
+    source = _require_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    review = _metadata_review_repository(store).get(source_id, review_id)
+    if review is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Metadata Review not found: {source_id}/{review_id}",
+        )
+    return _metadata_review_payload(review)
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/approve")
+def approve_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Approve a conflict-free review using Knowledge publish permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="approve",
+        actor=actor,
+    )
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/correct")
+def correct_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Apply explicit governed field corrections using Knowledge edit permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_EDIT)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="correct",
+        actor=actor,
+    )
+
+
+@router.post("/config/knowledge-sources/{source_id}/metadata-reviews/{review_id}/reject")
+def reject_knowledge_metadata_review(
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Reject a review using Knowledge publish permission."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    return _resolve_metadata_review(
+        source_id=source_id,
+        review_id=review_id,
+        request=request,
+        app_request=app_request,
+        action="reject",
+        actor=actor,
+    )
 
 
 @router.get("/config/knowledge-sources/{source_id}/candidate-snapshot")
@@ -1386,6 +1900,7 @@ def validate_knowledge_source_publication(
     actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
     store = _get_configuration_store(app_request)
     source = _require_active_knowledge_source(store, source_id)
+    validation: BaseModel
     try:
         if source.provider == "local_index":
             validation = store.validate_local_index_source_publication(
@@ -1399,6 +1914,12 @@ def validate_knowledge_source_publication(
                 smoke_query=request.smoke_query,
                 actor=actor,
             )
+        elif source.provider == "hybrid_index":
+            validation = _hybrid_publication_api(app_request).validate(
+                source_id=source_id,
+                smoke_query=request.smoke_query,
+                actor=actor,
+            )
         else:
             raise ProofAgentError(
                 "PA_CONFIG_001",
@@ -1407,6 +1928,8 @@ def validate_knowledge_source_publication(
             )
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
     return validation.model_dump(mode="json")
 
 
@@ -1423,12 +1946,21 @@ def publish_knowledge_source(
     store = _get_configuration_store(app_request)
     _require_active_knowledge_source(store, source_id)
     try:
-        publication = store.publish_knowledge_source(
-            source_id=source_id,
-            validation_id=request.validation_id,
-            change_note=request.change_note,
-            actor=actor,
-        )
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            publication = _hybrid_publication_api(app_request).publish(
+                source_id=source_id,
+                validation_id=request.validation_id,
+                change_note=request.change_note,
+                actor=actor,
+            )
+        else:
+            publication = store.publish_knowledge_source(
+                source_id=source_id,
+                validation_id=request.validation_id,
+                change_note=request.change_note,
+                actor=actor,
+            )
     except KeyError as exc:
         raise HTTPException(
             status_code=404,
@@ -1439,6 +1971,8 @@ def publish_knowledge_source(
         ) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
     return publication.model_dump(mode="json")
 
 
@@ -1454,7 +1988,11 @@ def list_knowledge_source_publication_validations(
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
-        validations = store.list_knowledge_source_publication_validations(source_id)
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            validations = _hybrid_publication_api(app_request).list_validations(source_id)
+        else:
+            validations = store.list_knowledge_source_publication_validations(source_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {
@@ -1475,12 +2013,79 @@ def list_knowledge_source_publications(
     store = _get_configuration_store(app_request)
     _require_knowledge_source(store, source_id)
     try:
-        publications = store.list_knowledge_source_publications(source_id)
+        source = _require_knowledge_source(store, source_id)
+        if source.provider == "hybrid_index":
+            publications = _hybrid_publication_api(app_request).list_publications(source_id)
+        else:
+            publications = store.list_knowledge_source_publications(source_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
     return {
         "data": [publication.model_dump(mode="json") for publication in publications],
         "meta": {"total": len(publications)},
+    }
+
+
+@router.post("/config/knowledge-sources/{source_id}/publications/{publication_id}/rollback-drafts")
+def create_hybrid_knowledge_source_rollback_draft(
+    source_id: str,
+    publication_id: str,
+    request: KnowledgeSourceRollbackDraftRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Create a new Source Draft; never repoint or mutate an old publication."""
+
+    actor = _require_operator(identity, OperatorPermission.KNOWLEDGE_SOURCE_PUBLISH)
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=409,
+            detail="Source rollback drafts require a hybrid_index Knowledge Source.",
+        )
+    facade = _hybrid_publication_api(app_request)
+    publications = tuple(facade.list_publications(source_id))
+    selected = next(
+        (item for item in publications if getattr(item, "publication_id", None) == publication_id),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Hybrid Knowledge publication not found: {source_id}/{publication_id}",
+        )
+    latest_sequence = max(
+        (getattr(item, "source_publication_seq", 0) for item in publications),
+        default=0,
+    )
+    if getattr(selected, "source_publication_seq", 0) >= latest_sequence:
+        raise HTTPException(
+            status_code=409,
+            detail="Source rollback draft must select a historical publication.",
+        )
+    try:
+        draft = facade.create_rollback_draft(
+            source_id=source_id,
+            historical_publication_id=publication_id,
+            reason=request.reason,
+            actor=actor,
+        )
+    except PublicationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code}) from exc
+    return {
+        "rollback_kind": "source_content_republication",
+        "source_id": source_id,
+        "historical_publication_id": publication_id,
+        "source_rollback_draft": draft.model_dump(mode="json"),
+        "required_next_steps": [
+            "source_review",
+            "source_validation",
+            "new_monotonic_source_publication",
+            "explicit_agent_binding_upgrade",
+            "agent_validation",
+            "new_agent_publication",
+        ],
     }
 
 
@@ -1631,6 +2236,11 @@ def bind_knowledge_source_to_draft(
         raise HTTPException(status_code=400, detail="fusion_weight must be greater than 0.")
     if request.top_k is not None and request.top_k <= 0:
         raise HTTPException(status_code=400, detail="top_k must be greater than 0.")
+    if request.retrieval_profile_revision_id is not None and source.provider != "hybrid_index":
+        raise HTTPException(
+            status_code=400,
+            detail="retrieval_profile_revision_id requires a hybrid_index Source.",
+        )
 
     agent_yaml = _bind_source_in_agent_yaml(
         draft.contract_bundle.agent_yaml,
@@ -1958,9 +2568,7 @@ def preview_config_draft_workflow_stage(
         manifest = load_agent_manifest(package_dir / "agent.yaml")
         descriptor = resolve_workflow_template(manifest.workflow.template)
         stage_descriptor = descriptor.stage(stage_id)
-        prompt = WorkflowStagePromptConfig(
-            **_workflow_stage_prompt_request_payload(request.prompt)
-        )
+        prompt = WorkflowStagePromptConfig(**_workflow_stage_prompt_request_payload(request.prompt))
         validate_workflow_stage_prompt_config(
             stage_id=stage_id,
             prompt=prompt,
@@ -2148,8 +2756,7 @@ def _validation_model_connection_warnings(
                 "connection_id": connection_id,
                 "role": role,
                 "message": (
-                    "Publish is blocked while Shared Model Connection "
-                    f"{connection_id} is archived."
+                    f"Publish is blocked while Shared Model Connection {connection_id} is archived."
                 ),
             }
         )
@@ -2383,6 +2990,7 @@ def publish_config_draft(
             validation_run_id=validation_run_id,
             actor=actor,
             resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
+            knowledge_release_record_id=request.knowledge_release_record_id,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2432,7 +3040,10 @@ def rollback_config_version(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return active.model_dump(mode="json")
+    restored = store.get_version(agent_id, version_id)
+    if restored is None:  # guarded by rollback_active_version; preserves fail-closed typing.
+        raise HTTPException(status_code=409, detail="Restored Agent Version disappeared.")
+    return serialize_agent_version_rollback(active, restored)
 
 
 def _agent_summary_payload(
@@ -2648,14 +3259,10 @@ def _create_business_flow_skill_pack_bundle(
     business_flows = skills.get("business_flows") or []
     if not isinstance(business_flows, list):
         raise ValueError("agent_yaml capabilities.skills.business_flows must be a list.")
-    if any(
-        isinstance(item, Mapping) and item.get("id") == request.id
-        for item in business_flows
-    ):
+    if any(isinstance(item, Mapping) and item.get("id") == request.id for item in business_flows):
         raise ValueError(f"Business Flow Skill Pack already exists: {request.id}")
     if request.default and any(
-        isinstance(item, Mapping) and item.get("default") is True
-        for item in business_flows
+        isinstance(item, Mapping) and item.get("default") is True for item in business_flows
     ):
         raise ValueError("Only one Business Flow Skill Pack can be marked default.")
 
@@ -2827,9 +3434,7 @@ def _business_flow_bindings(raw: dict[str, Any]) -> list[Any]:
 
 def _has_other_default_business_flow(raw: dict[str, Any], pack_id: str) -> bool:
     return any(
-        isinstance(item, Mapping)
-        and item.get("id") != pack_id
-        and item.get("default") is True
+        isinstance(item, Mapping) and item.get("id") != pack_id and item.get("default") is True
         for item in _business_flow_bindings(raw)
     )
 
@@ -2855,12 +3460,8 @@ def _business_flow_skill_pack_payload(
         )
         for slot in slots
     ]
-    configured_stage_ids = [
-        item["stage_id"] for item in stage_addenda if item["configured"]
-    ]
-    missing_stage_ids = [
-        item["stage_id"] for item in stage_addenda if not item["configured"]
-    ]
+    configured_stage_ids = [item["stage_id"] for item in stage_addenda if item["configured"]]
+    missing_stage_ids = [item["stage_id"] for item in stage_addenda if not item["configured"]]
     return {
         "id": skill_pack.id,
         "label": skill_pack.label,
@@ -2974,6 +3575,11 @@ def _version_payload(version: Any) -> dict[str, Any]:
             if version.resolved_knowledge_bindings is not None
             else None
         ),
+        "knowledge_release_record": (
+            version.knowledge_release_record.model_dump(mode="json")
+            if version.knowledge_release_record is not None
+            else None
+        ),
         "effective_workflow_stage_configuration": (
             version.effective_workflow_stage_configuration.model_dump(mode="json")
             if version.effective_workflow_stage_configuration is not None
@@ -3028,6 +3634,108 @@ def _knowledge_ingestion_job_payload(job: KnowledgeIngestionJob) -> dict[str, An
     return job.model_dump(mode="json")
 
 
+def _metadata_review_payload(review: InsuranceMetadataReview) -> dict[str, Any]:
+    """Serialize only governed drafts, conflicts, anchors, and decision identity."""
+
+    return review.model_dump(mode="json")
+
+
+def _workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput:
+    applicability = row.metadata.applicability
+    precedence = row.metadata.precedence
+    if applicability is None or precedence is None or row.metadata.authority is None:
+        raise WorkbookValidationError("workbook row is missing governed metadata")
+    return InsuranceMetadataDraftInput(
+        metadata_draft_id=row.metadata.metadata_draft_id,
+        origin="workbook",
+        source_id=row.source_id,
+        document_id=row.document_id,
+        revision_id=row.revision_id,
+        canonical_anchor=row.canonical_anchor,
+        authority=row.metadata.authority,
+        effective_from=row.metadata.effective_from,
+        effective_to=row.metadata.effective_to,
+        taxonomy_id=applicability.taxonomy_id,
+        taxonomy_revision_id=applicability.taxonomy_revision_id,
+        precedence_policy_revision_id=precedence.policy_revision_id,
+        precedence_authority_tier=precedence.authority_tier,
+        precedence_order=precedence.order,
+    )
+
+
+def _verify_hybrid_result_artifacts(
+    artifact_store: FileSystemKnowledgeArtifactStore,
+    result: HybridArtifactBuildResult,
+) -> StructuredKnowledgeDocumentArtifact:
+    managed_refs = (
+        result.persisted_original_ref,
+        *(item.ref for item in result.vendor_refs),
+        result.canonical_ref,
+        result.preview_ref,
+        result.build_identity_ref,
+        result.insurance_metadata_ref,
+    )
+    payloads = {ref.artifact_uri: artifact_store.get_exact(ref) for ref in managed_refs}
+    try:
+        canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+            payloads[result.canonical_ref.artifact_uri]
+        )
+    except ValidationError as exc:
+        raise WorkbookValidationError("persisted canonical Hybrid artifact is invalid") from exc
+    if (
+        canonical.document_id != result.document_id
+        or canonical.revision_id != result.revision_id
+        or canonical.original_sha256 != result.original_ref.sha256
+        or canonical.build_identity != result.build_identity
+    ):
+        raise WorkbookValidationError(
+            "persisted canonical Hybrid artifact does not match its completed result"
+        )
+    return canonical
+
+
+def _metadata_review_repository(
+    store: LocalAgentConfigurationStore,
+) -> FilesystemInsuranceMetadataReviewRepository:
+    return FilesystemInsuranceMetadataReviewRepository(store.root_dir)
+
+
+def _resolve_metadata_review(
+    *,
+    source_id: str,
+    review_id: str,
+    request: KnowledgeMetadataReviewResolutionRequest,
+    app_request: Request,
+    action: Literal["approve", "correct", "reject"],
+    actor: str,
+) -> dict[str, Any]:
+    store = _get_configuration_store(app_request)
+    source = _require_active_knowledge_source(store, source_id)
+    if source.provider != "hybrid_index":
+        raise HTTPException(status_code=400, detail="Metadata reviews require hybrid_index.")
+    try:
+        review = _metadata_review_repository(store).resolve(
+            source_id=source_id,
+            review_id=review_id,
+            expected_review_version=request.expected_review_version,
+            expected_review_identity=request.expected_review_identity,
+            action=action,
+            actor=actor,
+            reason=request.reason,
+            corrections=request.corrections,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge Metadata Review not found: {source_id}/{review_id}",
+        ) from exc
+    except WorkbookReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _metadata_review_payload(review)
+
+
 def _bind_source_in_agent_yaml(
     agent_yaml: str,
     *,
@@ -3055,6 +3763,8 @@ def _bind_source_in_agent_yaml(
     }
     if request.alias:
         binding_entry["alias"] = request.alias
+    if request.retrieval_profile_revision_id is not None:
+        binding_entry["retrieval_profile_revision_id"] = request.retrieval_profile_revision_id
     if request.top_k is not None:
         binding_entry["top_k"] = request.top_k
     _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
@@ -3432,8 +4142,12 @@ def _missing_model_connection_env_vars(connection: SharedModelConnection) -> tup
     )
 
 
-def _decode_upload_content(content_base64: str) -> bytes:
-    maximum_encoded_chars = ((MAX_UPLOAD_BYTES + 2) // 3) * 4
+def _decode_upload_content(
+    content_base64: str,
+    *,
+    max_upload_bytes: int = MAX_UPLOAD_BYTES,
+) -> bytes:
+    maximum_encoded_chars = ((max_upload_bytes + 2) // 3) * 4
     if len(content_base64) > maximum_encoded_chars:
         raise HTTPException(
             status_code=400,
@@ -3445,12 +4159,36 @@ def _decode_upload_content(content_base64: str) -> bytes:
         raise HTTPException(status_code=400, detail="content_base64 is not valid base64") from exc
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded document is empty.")
-    if len(content) > MAX_UPLOAD_BYTES:
+    if len(content) > max_upload_bytes:
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded document exceeds {MAX_UPLOAD_BYTES} bytes.",
+            detail=f"Uploaded document exceeds {max_upload_bytes} bytes.",
         )
     return content
+
+
+def _hybrid_source_upload_limits(source: KnowledgeSource) -> HybridIntakeLimits:
+    return HybridIntakeLimits.model_validate(dict(source.params), strict=True)
+
+
+def _validate_hybrid_upload_envelope(
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> None:
+    if Path(filename).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Hybrid Index uploads require a .pdf filename.")
+    normalized_content_type = content_type.partition(";")[0].strip().lower()
+    if normalized_content_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail="Hybrid Index uploads require the application/pdf content type.",
+        )
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=400,
+            detail="Hybrid Index upload is missing a PDF content signature.",
+        )
 
 
 def _proof_agent_http_exception(exc: ProofAgentError) -> HTTPException:

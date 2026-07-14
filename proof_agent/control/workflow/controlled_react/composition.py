@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     EvidenceStatus,
     EnforcementPoint,
     IntentResolutionResult,
+    IntentResolution,
     ModelCallRole,
     ObservationRecord,
     PolicyDecision,
@@ -71,6 +72,11 @@ from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalRequest,
     KnowledgeRetrievalService,
+)
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
+from proof_agent.control.knowledge.answer_validator import (
+    render_insurance_answer,
+    validate_serialized_insurance_answer,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -301,6 +307,9 @@ class _InvocationPlannerAdapter:
             return intent_action
         if _has_tool_observation(state):
             return _final_answer_action("act_generate_after_tool")
+        governed_action = _governed_hybrid_terminal_action(self._invocation, state)
+        if governed_action is not None:
+            return governed_action
         planner = self._invocation.react_planner or self._fallback
         action = planner.plan(
             question=state.question,
@@ -428,6 +437,10 @@ class _InvocationKnowledgeObservationAdapter:
                     self._preferred_binding_ids_provider()
                     if self._preferred_binding_ids_provider is not None
                     else ()
+                ),
+                governed_hybrid_request=_governed_hybrid_request_from_controlled_state(
+                    self._invocation,
+                    state,
                 ),
             )
         )
@@ -784,7 +797,7 @@ class _ModelAnswerSynthesisAdapter:
                 message=message,
                 reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
             )
-        return FinalAnswerAttemptRunner(
+        result = FinalAnswerAttemptRunner(
             self._invocation,
             trace=self._trace,
             workflow_stage_context=self._stage_contexts.get("model_answer"),
@@ -793,6 +806,39 @@ class _ModelAnswerSynthesisAdapter:
             action,
             answer_context,
             evidence=evidence,
+        )
+        governed = _governed_hybrid_request_from_controlled_state(
+            self._invocation,
+            state,
+        )
+        if governed is None:
+            return result
+        decision = validate_serialized_insurance_answer(
+            result.final_output,
+            evidence=evidence,
+            requirements=governed.required_evidence_slots,
+        )
+        if not decision.admitted or decision.deliverable_answer is None:
+            message = "Unable to provide an insurance recommendation because the generated answer was not fully supported."
+            return AnswerSynthesisResult(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                final_output=message,
+                message=message,
+                reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+                evidence=evidence,
+                stage_llm_interactions=result.stage_llm_interactions,
+                stage_failure_diagnostics=result.stage_failure_diagnostics,
+            )
+        message = render_insurance_answer(decision.deliverable_answer)
+        return AnswerSynthesisResult(
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            final_output=message,
+            message=message,
+            reasoning_summary=result.reasoning_summary,
+            model_usage_summary=result.model_usage_summary,
+            evidence=evidence,
+            stage_llm_interactions=result.stage_llm_interactions,
+            stage_failure_diagnostics=result.stage_failure_diagnostics,
         )
 
 
@@ -1150,6 +1196,60 @@ def _final_answer_action(action_id: str) -> ReActActionProposal:
         parameters={},
         risk_level="low",
     )
+
+
+def _governed_hybrid_terminal_action(
+    invocation: HarnessInvocation,
+    state: ControlledReActRunState,
+) -> ReActActionProposal | None:
+    factory = invocation.governed_hybrid_request_factory
+    if factory is None or state.intent_resolution is None:
+        return None
+    intent = IntentResolution.model_validate(state.intent_resolution)
+    build = factory.build(intent, state.institution_authorization)
+    if build.request is not None:
+        return None
+    if build.clarification is not None:
+        action_type = ReActActionType.ASK_CLARIFICATION
+        parameters: Mapping[str, Any] = {
+            "missing_fields": build.clarification.missing_fields,
+            "reason": build.clarification.reason,
+        }
+        rationale = "Authority-bearing insurance conditions are missing."
+    else:
+        action_type = ReActActionType.REFUSE
+        parameters = {"reason": build.no_recommendation_reason}
+        rationale = "The governed Hybrid request failed deterministic admission."
+    return ReActActionProposal(
+        action_id=f"hybrid:{intent.resolution_id}:{action_type.value}",
+        action_type=action_type,
+        reasoning_summary=ReasoningSummary(
+            goal="Admit a governed insurance Knowledge request.",
+            observations=(rationale,),
+            candidate_actions=(
+                ReActActionType.ASK_CLARIFICATION,
+                ReActActionType.REFUSE,
+                ReActActionType.PLAN_RETRIEVAL,
+            ),
+            selected_action=action_type,
+            rationale_summary=rationale,
+            risk_flags=("insurance_authority",),
+            required_evidence=("trusted authority conditions",),
+        ),
+        parameters=parameters,
+        risk_level="high",
+    )
+
+
+def _governed_hybrid_request_from_controlled_state(
+    invocation: HarnessInvocation,
+    state: ControlledReActRunState,
+) -> GovernedHybridRetrievalRequest | None:
+    factory = invocation.governed_hybrid_request_factory
+    if factory is None or state.intent_resolution is None:
+        return None
+    intent = IntentResolution.model_validate(state.intent_resolution)
+    return factory.build(intent, state.institution_authorization).request
 
 
 def _tool_answer_from_answer_context(

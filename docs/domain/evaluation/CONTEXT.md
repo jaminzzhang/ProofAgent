@@ -104,6 +104,22 @@ _Avoid_: automatic blocker, subjective release failure, unreviewed safety gate, 
 The V1 publication bar for an Insurance QA Evaluation Target: complete deterministic safety and governance gate pass, sufficient artifacts, low run error rate, and high overall Governed Resolution Rate.
 _Avoid_: Accuracy-only launch bar, judge-only launch decision, unverifiable quality claim
 
+**Insurance Knowledge Gold Suite**:
+The human-confirmed evaluation cohort for the expanded insurance Knowledge path: 500 business-query cases split into 300 visible tuning cases and 200 access-controlled unseen acceptance cases, preserving the 30-percent clause-lookup, 50-percent conditional-guidance, and 20-percent comparison profile and labeling required evidence, authority, version, applicability, warning, clarification, conflict, and refusal expectations.
+_Avoid_: Raw consultation logs, parser-only benchmark, tune-on-test collection, one aggregate accuracy score
+
+**Sealed Knowledge Acceptance Evaluation**:
+The access-controlled evaluation authority that permits one acceptance execution per frozen production candidate, withholds case content and case-level feedback from model and retrieval tuners, returns aggregate and hard-gate release results, and moves any deliberately revealed case into tuning while replenishing the 200-case unseen cohort before a later acceptance decision.
+_Avoid_: Repeated holdout probing, item-level failure dashboard, static exposed test set, evaluator-owned runtime policy
+
+**Sealed Knowledge Acceptance Attestation**:
+[FRAME | HIGH] The canonical digest-bound evaluator result that binds evaluator identity, key identity, production candidate, exact sealed suite, Gate Profile, and aggregate facts before a separately configured verifier accepts its detached signature.
+_Avoid_: Aggregate in command input, self-verified evaluator response, unsigned result, case-level feedback, release decision override
+
+**Insurance Knowledge Hard Release Gate**:
+The non-compensating release gate that requires zero unauthorized candidate exposure, zero wrong-version, wrong-effective-period, or wrong-precedence use, zero unresolvable formal citations, zero advisory answers under unresolved authority, and zero high-severity unsupported business conclusions in the unseen Insurance Knowledge Gold Suite.
+_Avoid_: Weighted safety score, judge-only release decision, warning-based authority bypass, average-quality offset
+
 **Production Candidate Real-LLM Gate**:
 The must-pass live-model evaluation bound to an immutable production candidate and every in-scope Published Agent Evaluation Contract; an absent, skipped, stale, incomplete, or failed run blocks release.
 _Avoid_: Optional live-model diagnostic, deterministic-only release proof, unbound source-tree regression

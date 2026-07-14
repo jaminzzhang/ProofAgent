@@ -64,20 +64,17 @@ def _build_context(
         {"review_requested", "review_decision", "review_error", "review_overridden"},
     )
     clarification_events = _events_by_type(events, {"clarification_requested"})
-    business_flow_skill_pack_admission = _extract_business_flow_skill_pack_admission(
+    business_flow_skill_pack_admission = _extract_business_flow_skill_pack_admission(events)
+    business_flow_skill_pack_recommendation = _extract_business_flow_skill_pack_recommendation(
         events
     )
-    business_flow_skill_pack_recommendation = (
-        _extract_business_flow_skill_pack_recommendation(events)
-    )
-    business_flow_stage_context_applications = (
-        _extract_business_flow_stage_context_applications(events)
+    business_flow_stage_context_applications = _extract_business_flow_stage_context_applications(
+        events
     )
     model_usage = _extract_model_usage(events)
+    hybrid_retrieval_summaries = _extract_hybrid_retrieval_summaries(events)
     redacted_fields = [
-        field
-        for event in events
-        for field in event.get("redaction", {}).get("fields", [])
+        field for event in events for field in event.get("redaction", {}).get("fields", [])
     ]
 
     return {
@@ -98,18 +95,53 @@ def _build_context(
         "action_proposal_events": action_proposal_events,
         "review_events": review_events,
         "clarification_events": clarification_events,
-        "business_flow_skill_pack_recommendation": (
-            business_flow_skill_pack_recommendation
-        ),
+        "business_flow_skill_pack_recommendation": (business_flow_skill_pack_recommendation),
         "business_flow_skill_pack_admission": business_flow_skill_pack_admission,
-        "business_flow_stage_context_applications": (
-            business_flow_stage_context_applications
-        ),
+        "business_flow_stage_context_applications": (business_flow_stage_context_applications),
         "model_usage": model_usage,
+        "hybrid_retrieval_summaries": hybrid_retrieval_summaries,
         "trace_path": trace_path,
         "receipt_path": receipt_path,
         "redacted_fields": redacted_fields,
     }
+
+
+def _extract_hybrid_retrieval_summaries(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    summaries: list[dict[str, str]] = []
+    fields = (
+        "binding_id",
+        "source_id",
+        "source_publication_seq",
+        "generation_id",
+        "profile_revision_id",
+        "manifest_sha256",
+        "attestation_id",
+        "fused_candidate_count",
+        "reranked_candidate_count",
+        "excluded_count",
+        "authority_outcome",
+        "authority_passed_count",
+        "authority_rejected_count",
+        "evidence_slots_complete",
+        "satisfied_evidence_slot_count",
+        "missing_evidence_slot_count",
+        "citation_count",
+        "embedding_queue_time_ms",
+        "embedding_service_time_ms",
+        "reranker_queue_time_ms",
+        "reranker_service_time_ms",
+        "degradation_mode",
+    )
+    for event in events:
+        if event.get("event_type") != "hybrid_retrieval_summary":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        summaries.append({field: _audit_value(payload.get(field)) for field in fields})
+    return summaries
 
 
 def _extract_business_flow_skill_pack_recommendation(
@@ -190,12 +222,8 @@ def _extract_business_flow_stage_context_applications(
                 ),
                 "prompt_fields": _join_audit_values(payload.get("prompt_fields")),
                 "context_options": _join_audit_values(payload.get("context_options")),
-                "business_context_length": _audit_value(
-                    payload.get("business_context_length")
-                ),
-                "task_instruction_count": _audit_value(
-                    payload.get("task_instruction_count")
-                ),
+                "business_context_length": _audit_value(payload.get("business_context_length")),
+                "task_instruction_count": _audit_value(payload.get("task_instruction_count")),
                 "redaction_applied": _audit_value(payload.get("redaction_applied")),
             }
         )
@@ -256,16 +284,10 @@ def _extract_tool_result_summaries(
                 "tool_source_id": _audit_value(payload.get("tool_source_id")),
                 "mcp_tool_name": _audit_value(payload.get("mcp_tool_name")),
                 "classification": _audit_value(payload.get("result_classification")),
-                "schema_validation": _audit_value(
-                    payload.get("result_schema_validation")
-                ),
-                "contract_snapshot_digest": _audit_value(
-                    payload.get("contract_snapshot_digest")
-                ),
+                "schema_validation": _audit_value(payload.get("result_schema_validation")),
+                "contract_snapshot_digest": _audit_value(payload.get("contract_snapshot_digest")),
                 "side_effect_class": _audit_value(payload.get("side_effect_class")),
-                "idempotency_key_digest": _audit_value(
-                    payload.get("idempotency_key_digest")
-                ),
+                "idempotency_key_digest": _audit_value(payload.get("idempotency_key_digest")),
                 "summary": _format_tool_result_summary(
                     payload.get("summary"),
                     payload.get("summary_fields"),
@@ -279,11 +301,7 @@ def _format_tool_result_summary(summary: Any, summary_fields: Any) -> str:
     if not isinstance(summary, Mapping):
         return "n/a"
     fields = summary_fields if isinstance(summary_fields, list | tuple) else summary.keys()
-    items = [
-        f"{field}={_audit_value(summary.get(field))}"
-        for field in fields
-        if field in summary
-    ]
+    items = [f"{field}={_audit_value(summary.get(field))}" for field in fields if field in summary]
     return "; ".join(items) or "n/a"
 
 

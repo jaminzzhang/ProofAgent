@@ -23,6 +23,10 @@ import type {
   KnowledgeDocumentsResponse,
   KnowledgeIngestionJob,
   KnowledgeIngestionJobsResponse,
+  KnowledgeOperationsProjection,
+  InsuranceMetadataReview,
+  InsuranceMetadataReviewsResponse,
+  InsuranceMetadataWorkbookImportResponse,
   KnowledgeSource,
   KnowledgeSourceDeletionEligibility,
   KnowledgeSourceSnapshotManifest,
@@ -356,6 +360,14 @@ export function fetchKnowledgeSource(sourceId: string): Promise<KnowledgeSource>
   return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}`)
 }
 
+export function fetchKnowledgeOperations(
+  sourceId: string,
+): Promise<KnowledgeOperationsProjection> {
+  return fetchJson<KnowledgeOperationsProjection>(
+    `${BASE}/config/knowledge-sources/${sourceId}/operations`,
+  )
+}
+
 export function createKnowledgeSource(payload: {
   source_id?: string
   name: string
@@ -508,6 +520,60 @@ export function fetchKnowledgeSourcePublications(
 ): Promise<KnowledgeSourcePublicationsResponse> {
   return fetchJson<KnowledgeSourcePublicationsResponse>(
     `${BASE}/config/knowledge-sources/${sourceId}/publications`,
+  )
+}
+
+export function fetchInsuranceMetadataReviews(
+  sourceId: string,
+  options: { limit?: number; cursor?: string; state?: InsuranceMetadataReview['state'] } = {},
+): Promise<InsuranceMetadataReviewsResponse> {
+  const query = new URLSearchParams()
+  query.set('limit', String(options.limit ?? 50))
+  if (options.cursor) query.set('cursor', options.cursor)
+  if (options.state) query.set('state', options.state)
+  return fetchJson<InsuranceMetadataReviewsResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews?${query.toString()}`,
+  )
+}
+
+export function importInsuranceMetadataWorkbook(
+  sourceId: string,
+  payload: {
+    filename: string
+    content_type: string
+    content_base64: string
+    document_id: string
+    revision_id: string
+  },
+): Promise<InsuranceMetadataWorkbookImportResponse> {
+  return fetchJson<InsuranceMetadataWorkbookImportResponse>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-workbooks/import`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function resolveInsuranceMetadataReview(
+  sourceId: string,
+  review: InsuranceMetadataReview,
+  action: 'approve' | 'correct' | 'reject',
+  payload: { reason: string; corrections?: Record<string, string | number | null> },
+): Promise<InsuranceMetadataReview> {
+  return fetchJson<InsuranceMetadataReview>(
+    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews/${review.review_id}/${action}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_review_version: review.review_version,
+        expected_review_identity: review.review_identity,
+        reason: payload.reason,
+        corrections: payload.corrections ?? {},
+      }),
+    },
   )
 }
 

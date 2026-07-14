@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import re
 from typing import Any, Literal, cast
 
 from proof_agent.contracts import (
@@ -17,6 +18,7 @@ from proof_agent.contracts import (
     ControlledReActRunState,
     ControlledReActRunStateSnapshot,
     EffectiveToolProposalScope,
+    InstitutionAuthorizationContext,
     MemoryRecallWorkingPayload,
     ObservationRecord,
     ObservationTruthArtifact,
@@ -61,6 +63,7 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
     require_bound_observation_truth,
     verify_controlled_react_snapshot_binding,
 )
+from proof_agent.errors import ProofAgentError
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,9 @@ class ControlledReActStartRequest:
     template_name: str
     template_descriptor_version: str
     question: str
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
     conversation_context: ContextAdmission | None = None
     memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
     max_plan_rounds: int = 4
@@ -82,6 +88,10 @@ class ControlledReActResumeRequest:
     approved: bool
     actor: str
     max_plan_rounds: int = 4
+    expected_run_id: str | None = None
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 class ControlledReActOrchestrator:
@@ -106,6 +116,7 @@ class ControlledReActOrchestrator:
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
             question=request.question,
+            institution_authorization=request.institution_authorization,
             conversation_context=request.conversation_context,
             memory_recall_payloads=request.memory_recall_payloads,
             phase=ControlledReActRunPhase.PLANNING,
@@ -411,9 +422,37 @@ class ControlledReActOrchestrator:
         snapshot = self._ports.snapshot_store.load(request.snapshot_ref)
         verify_controlled_react_snapshot_binding(snapshot, request.snapshot_ref)
         state = snapshot.state
+        if request.expected_run_id is not None and state.run_id != request.expected_run_id:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume run identity does not match signed context",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
+        if state.institution_authorization != request.institution_authorization:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume institution authorization does not match snapshot",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
         if not state.action_history:
             raise ValueError("approval resume snapshot is missing pending action")
         action = state.action_history[-1]
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", action.action_id) is None:
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume action identity is invalid",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
+        expected_approval_id = f"appr_{action.action_id}"
+        if (
+            re.fullmatch(r"[A-Za-z0-9_-]{1,133}", request.approval_id) is None
+            or request.approval_id != expected_approval_id
+        ):
+            raise ProofAgentError(
+                "PA_RUNTIME_001",
+                "controlled ReAct resume approval identity does not match pending action",
+                "Discard the stale approval checkpoint and restart the run.",
+            )
         if not request.approved:
             planning_state = self._observe_tool_approval_denial(state, action, request)
             planning_state, next_action = self._plan_next_action(
@@ -426,6 +465,7 @@ class ControlledReActOrchestrator:
                     template_name=planning_state.template_name,
                     template_descriptor_version=planning_state.template_descriptor_version,
                     question=planning_state.question,
+                    institution_authorization=planning_state.institution_authorization,
                     max_plan_rounds=request.max_plan_rounds,
                 ),
                 state=planning_state,
@@ -460,6 +500,7 @@ class ControlledReActOrchestrator:
                 template_name=planning_state.template_name,
                 template_descriptor_version=planning_state.template_descriptor_version,
                 question=planning_state.question,
+                institution_authorization=planning_state.institution_authorization,
                 max_plan_rounds=request.max_plan_rounds,
             ),
             state=planning_state,
@@ -1124,6 +1165,8 @@ def _validate_answer_truth_context(
             raise ValueError("observation record truth_ref does not match truth artifact")
         if record.observation_id != truth.observation_id:
             raise ValueError("observation record id does not match truth artifact")
+        if record.action_id != truth.action_id:
+            raise ValueError("observation record action_id does not match truth artifact")
         if isinstance(truth, RetrievalObservationTruth):
             missing = tuple(ref for ref in record.citation_refs if ref not in truth.citation_refs)
             if missing:

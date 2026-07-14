@@ -23,7 +23,9 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
 from proof_agent.delivery.cli import _active_dev_seed_is_current
 from proof_agent.delivery.cli import _create_server_app_from_env
+from proof_agent.delivery.cli import create_knowledge_ingestion_worker
 from proof_agent.delivery.cli import _seed_default_dev_agent
+from proof_agent.delivery.cli import _knowledge_worker_outcome_message
 from proof_agent.delivery.cli import _verify_remote_process_is_safe_to_stop
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.compare.result import RagResult
@@ -56,6 +58,104 @@ def _copy_canonical_agent_variant(
         encoding="utf-8",
     )
     return manifest_path
+
+
+def test_knowledge_worker_factory_leaves_unconfigured_hybrid_queued_without_blocking_local(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="hybrid_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+
+    hybrid_upload = store.stage_quarantined_knowledge_upload(
+        source_id="hybrid_1",
+        filename="hybrid.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n",
+        actor="operator",
+    )
+    store.create_knowledge_source(
+        source_id="local_1",
+        name="Local",
+        provider="local_index",
+        params={},
+        actor="operator",
+    )
+    local_upload = store.stage_quarantined_knowledge_upload(
+        source_id="local_1",
+        filename="policy.md",
+        content_type="text/markdown",
+        content=b"# Policy\n",
+        actor="operator",
+    )
+
+    worker = create_knowledge_ingestion_worker(tmp_path)
+    result = worker.run_once()
+
+    assert result is not None and result.outcome is not None
+    assert result.outcome.task_id == local_upload.upload_id
+    persisted_hybrid = store.get_quarantined_knowledge_upload(
+        source_id="hybrid_1", upload_id=hybrid_upload.upload_id
+    )
+    assert persisted_hybrid is not None and persisted_hybrid.state == "queued"
+
+
+def test_knowledge_worker_factory_dispatches_claimed_hybrid_task_to_injected_handler(
+    tmp_path: Path,
+) -> None:
+    store = LocalAgentConfigurationStore(tmp_path)
+    store.create_knowledge_source(
+        source_id="hybrid_1",
+        name="Hybrid",
+        provider="hybrid_index",
+        params={},
+        actor="operator",
+    )
+    upload = store.stage_quarantined_knowledge_upload(
+        source_id="hybrid_1",
+        filename="policy.pdf",
+        content_type="application/pdf",
+        content=b"%PDF-1.7\n",
+        actor="operator",
+    )
+    calls: list[str] = []
+
+    def hybrid_handler(task) -> KnowledgeWorkerTaskOutcome:
+        calls.append(task.upload.upload_id)
+        return KnowledgeWorkerTaskOutcome(
+            kind="quarantine_validation",
+            task_id=upload.upload_id,
+            source_id="hybrid_1",
+            state="accepted",
+        )
+
+    worker = create_knowledge_ingestion_worker(
+        tmp_path,
+        hybrid_task_handler=hybrid_handler,
+    )
+    result = worker.run_once()
+
+    assert result is not None and result.outcome is not None
+    assert result.outcome.state == "accepted"
+    assert calls == [upload.upload_id]
+
+
+def test_cli_reports_hybrid_review_required_faithfully() -> None:
+    outcome = KnowledgeWorkerTaskOutcome(
+        kind="artifact_build",
+        task_id="job_1",
+        source_id="hybrid_1",
+        state="review_required",
+        error_code="PA_HYBRID_WORKER_REVIEW_REQUIRED",
+    )
+    assert _knowledge_worker_outcome_message(outcome) == (
+        "knowledge ingestion job review required: job_1 (PA_HYBRID_WORKER_REVIEW_REQUIRED)"
+    )
 
 
 def test_demo_command_exists() -> None:
@@ -1084,6 +1184,89 @@ def test_knowledge_worker_once_prints_no_task_text_when_empty(
 
     assert result.exit_code == 0
     assert "no queued knowledge tasks" in result.output
+
+
+def test_knowledge_worker_uses_and_closes_remote_hybrid_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from proof_agent.delivery import cli
+
+    calls: list[tuple[object, object, object]] = []
+
+    class Graph:
+        parser = object()
+        build_config = object()
+        ingestion_worker = object()
+
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Worker:
+        def run_once(self) -> None:
+            return None
+
+    graph = Graph()
+    monkeypatch.setattr(cli, "compose_hybrid_knowledge_from_env", lambda: graph)
+
+    def create_worker(config_path: Path, **kwargs: object) -> Worker:
+        assert config_path == tmp_path
+        calls.append(
+            (
+                kwargs["hybrid_pipeline"],
+                kwargs["hybrid_build_config"],
+                kwargs["hybrid_worker_factory"],
+            )
+        )
+        return Worker()
+
+    monkeypatch.setattr(cli, "create_knowledge_ingestion_worker", create_worker)
+
+    result = runner.invoke(
+        app,
+        ["knowledge-worker", "--config-dir", str(tmp_path), "--once"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(graph.parser, graph.build_config, graph.ingestion_worker)]
+    assert graph.close_count == 1
+
+
+def test_knowledge_worker_closes_remote_hybrid_composition_when_worker_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from proof_agent.delivery import cli
+
+    class Graph:
+        parser = object()
+        build_config = object()
+        ingestion_worker = object()
+
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Worker:
+        def run_once(self) -> None:
+            raise ProofAgentError("PA_TEST", "worker failed", "retry")
+
+    graph = Graph()
+    monkeypatch.setattr(cli, "compose_hybrid_knowledge_from_env", lambda: graph)
+    monkeypatch.setattr(cli, "create_knowledge_ingestion_worker", lambda *args, **kwargs: Worker())
+
+    result = runner.invoke(
+        app,
+        ["knowledge-worker", "--config-dir", str(tmp_path), "--once"],
+    )
+
+    assert result.exit_code == 1
+    assert graph.close_count == 1
 
 
 @pytest.mark.parametrize(

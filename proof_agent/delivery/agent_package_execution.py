@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 from uuid import uuid4
@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     ApprovalPause,
     ClarificationNeed,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     MemoryRecallAdmission,
     MemoryRecallWorkingPayload,
     PublishedAgentRuntimeFacts,
@@ -85,6 +86,9 @@ class AgentPackageRunRequest:
     controlled_react_snapshot_store: SnapshotStorePort | None = None
     controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -130,6 +134,7 @@ def _execute_controlled_react_v3_agent_package_run(
         trace,
         manifest=manifest,
         question=request.question,
+        institution_authorization=request.institution_authorization,
     )
     _emit_run_start_context_trace(trace, run_start_context)
     stage_runtime_configuration = resolve_workflow_stage_runtime_configuration(
@@ -148,6 +153,7 @@ def _execute_controlled_react_v3_agent_package_run(
         stage_runtime_configuration=stage_runtime_configuration,
         conversation_context=request.conversation_context,
         run_start_context=run_start_context,
+        institution_authorization=request.institution_authorization,
     )
     try:
         invocation = compose_harness_invocation(
@@ -157,6 +163,7 @@ def _execute_controlled_react_v3_agent_package_run(
             resolved_knowledge_bindings=request.resolved_knowledge_bindings,
             configuration_store=request.configuration_store,
             context_budget_calibration_store=request.context_budget_calibration_store,
+            institution_authorization=request.institution_authorization,
         )
     except ProofAgentError as exc:
         if exc.code.startswith("PA_MODEL_"):
@@ -210,6 +217,7 @@ def _execute_controlled_react_v3_agent_package_run(
                 manifest.workflow.template_descriptor_version or template.descriptor_version
             ),
             question=request.question,
+            institution_authorization=request.institution_authorization,
             conversation_context=request.conversation_context,
             memory_recall_payloads=_memory_recall_working_payloads(run_start_context),
             max_plan_rounds=manifest.react.max_plan_rounds,
@@ -334,6 +342,7 @@ def _emit_controlled_react_run_started(
     *,
     manifest: AgentManifest,
     question: str,
+    institution_authorization: InstitutionAuthorizationContext,
 ) -> None:
     trace.emit(
         "run_started",
@@ -343,6 +352,7 @@ def _emit_controlled_react_run_started(
             "question": question,
             "template_name": manifest.workflow.template,
             "runtime": "controlled_react_orchestrator",
+            "institution_authorization": institution_authorization.trace_safe_summary(),
         },
     )
 

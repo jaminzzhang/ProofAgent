@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,9 +12,11 @@ from fastapi.staticfiles import StaticFiles
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.configuration_api import router as configuration_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.contracts import KnowledgeOperationsHealthSources
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.configuration.knowledge_release import KnowledgeReleaseEvidenceAuthority
 from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.production_sample_store import ProductionSampleCurationStore
 from proof_agent.evaluation.store import EvaluationStore
@@ -45,6 +48,8 @@ def create_app(
     mem0_memory_store: Mem0MemoryStore | None = None,
     agent_configuration_store: LocalAgentConfigurationStore | None = None,
     agent_configuration_dir: Path = Path("runs/config"),
+    knowledge_operations_provider: Callable[[str], KnowledgeOperationsHealthSources] | None = None,
+    knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -109,8 +114,20 @@ def create_app(
         conversations_dir.with_name(f"{conversations_dir.name}_memory")
     )
     application.state.mem0_memory_store = mem0_memory_store
+    application.state.knowledge_operations_provider = knowledge_operations_provider
+    provider_close = getattr(knowledge_operations_provider, "close", None)
+    if callable(provider_close):
+        application.router.add_event_handler("shutdown", provider_close)
+    release_authority_close = getattr(knowledge_release_evidence_authority, "close", None)
+    release_authority_object: object | None = knowledge_release_evidence_authority
+    operations_provider_object: object | None = knowledge_operations_provider
+    if release_authority_object is not operations_provider_object and callable(
+        release_authority_close
+    ):
+        application.router.add_event_handler("shutdown", release_authority_close)
     configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
-        agent_configuration_dir
+        agent_configuration_dir,
+        knowledge_release_evidence_authority=knowledge_release_evidence_authority,
     )
     application.state.agent_configuration_store = configuration_store
     controlled_react_store_root = history_dir.parent / "controlled_react"

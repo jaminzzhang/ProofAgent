@@ -12,6 +12,10 @@ _Avoid_: Governance Detail Projection, raw Run Detail, internal audit response
 An operator-facing assisted-service response shape for Institution Insurance Specialist runs that starts with a concise conclusion or recommendation, then includes source basis, missing-information or boundary notes, and safe audit links according to Response Detail Policy; an External Wording Draft appears only when customer or agent wording is requested.
 _Avoid_: Customer-safe response, raw trace dump, direct external customer wording
 
+**Evidence-Bound Specialist Recommendation**:
+An internal advisory synthesis for an Institution Insurance Specialist that derives a recommendation from governed insurance sources, states its source basis, assumptions, conflicts, and missing information, and requires staff confirmation before communication or action.
+_Avoid_: Formal underwriting decision, sales authorization, clause-only quotation, autonomous customer reply
+
 **External Wording Draft**:
 An optional staff-reviewed wording suggestion that an Institution Insurance Specialist may adapt for a customer or agent, containing only externally appropriate business explanation and safe source references while hiding internal system names, Tool Contract identifiers, tool parameters, authorization details, policy rule names, review results, trace, and receipt details.
 _Avoid_: Autonomous customer reply, internal operator answer, legal commitment, tool transcript
@@ -120,6 +124,14 @@ _Avoid_: Write tool, transaction tool, generic web search, ungoverned system que
 The trace-safe institution staff permission summary admitted into an assisted-service Harness run as Structured Control Context, including institution, branch, role, business-line scope, and data-scope constraints used by PolicyEngine and Tool Gateway.
 _Avoid_: Raw staff credential, customer authorization context, prompt-only permission note
 
+**Authorized Insurance Knowledge Scope**:
+The subset of published insurance Knowledge Documents and Insurance Rule Units visible to one Institution Insurance Specialist under Institution Authorization Context, including institution, region, channel, role, and business-line restrictions where configured.
+_Avoid_: Insurance Rule Applicability, relevance routing, prompt-only restriction, post-answer redaction
+
+**Approved Insurance Knowledge Visibility Scope**:
+The publication-authoritative visibility metadata for one insurance Knowledge Document or Insurance Rule Unit Revision. It declares explicit `PUBLIC` or `RESTRICTED` visibility and, for restricted content, an `ALL` or `ALLOWLIST` mode for every institution, region, channel, role, and business-line dimension; missing, malformed, or unapproved visibility blocks publication.
+_Avoid_: Empty array means public, runtime identity claims, prompt ACL, post-retrieval redaction
+
 **Managed Agent Scope**:
 The default read boundary for an Institution Insurance Specialist's performance and activity lookups: the set of insurance agents the current staff member is authorized to manage, narrowed by request filters such as branch, team, agent, business line, report period, metric, or aggregation level without expanding beyond Institution Authorization Context.
 _Avoid_: User-entered permission scope, prompt-expanded agent list, unrestricted agent performance search
@@ -132,6 +144,22 @@ _Avoid_: Business-system lookup, personalized customer answer, scoped report que
 The baseline intent set for Institution Insurance Specialist planning: business consultation or rule basis, customer or agent question answering, policy wording interpretation, report or operating-metric lookup, policy lookup, claim lookup, and mixed multi-step questions that combine clarification, retrieval, and authorized read tools. It is a configuration and evaluation anchor, not a closed list of insurance-related user intents.
 _Avoid_: Free-form planner action space, product-line-specific topology, model-only routing
 
+**Insurance Clause Lookup Query**:
+An insurance Knowledge question whose primary goal is to locate and explain one identified clause, term, limit, definition, or source passage.
+_Avoid_: Conditional recommendation, cross-version comparison, filename search only
+
+**Insurance Conditional Guidance Query**:
+An insurance Knowledge question that combines user-supplied conditions such as product, age, occupation, institution, region, channel, or table criteria to request an Evidence-Bound Specialist Recommendation.
+_Avoid_: Formal eligibility decision, clause lookup, unscoped probable answer
+
+**Insurance Rule Comparison Query**:
+An insurance Knowledge question that compares products, versions, effective periods, headquarters and institution rules, or other approved rule scopes while preserving applicability, precedence, and citation for each comparison basis.
+_Avoid_: Semantic-difference summary without authority, latest-file comparison, unversioned product comparison
+
+**Comparison Required Evidence Slot**:
+The explicit evidence obligation created for each product, version, scope, or comparison dimension in an Insurance Rule Comparison Query; every required slot must be satisfied by applicable, authoritative, cited evidence before the comparison recommendation can complete.
+_Avoid_: One-sided comparison, optional retrieval hint, duplicated evidence count, model-assumed basis
+
 **Dynamic Insurance Business Subplan**:
 A trace-safe plan artifact produced by the LLM ReAct Planner for insurance-related Institution Insurance Specialist requests, describing inferred business intent, missing information, evidence needs, allowed knowledge retrieval, allowed read-tool proposals, source-authority expectations, and response-shaping needs while still executing through the fixed Controlled ReAct Workflow stages.
 _Avoid_: Workflow Template topology, executable policy, direct tool execution, raw chain-of-thought
@@ -143,6 +171,46 @@ _Avoid_: New executable action, automatic tool unlock, hidden topology change, p
 **Insurance Source Authority Order**:
 The business-source precedence used by an Institution Insurance Specialist Agent when sources could conflict: authorized business-system records answer current state, policy wording and operational documents answer rules and interpretation, report systems answer statistical or management metrics with their period and calculation basis, and unresolved conflicts produce an explicit source-conflict answer rather than an invented reconciliation.
 _Avoid_: Prompt-only preference, model arbitration, silent source merging, latest-looking answer
+
+**Insurance Rule Applicability**:
+The deterministic match between one versioned insurance rule and the bounded product, time, organization, region, channel, or other approved business scope in which that rule governs an Evidence-Bound Specialist Recommendation.
+_Avoid_: Semantic relevance, model-inferred scope, document recency alone, retrieval score
+
+**Insurance Rule Precedence Order**:
+The business-approved deterministic order used to resolve multiple applicable product terms, underwriting rules, sales rules, or scoped exceptions before advisory synthesis.
+_Avoid_: LLM arbitration, retrieval-rank priority, latest-file-wins, silent conflict resolution
+
+**Insurance Rule Metadata Draft**:
+A non-authoritative proposal of rule scope, effective period, authority, precedence, or supersession facts extracted from insurance documents or supporting spreadsheets for business review.
+_Avoid_: Published rule authority, model-approved metadata, retrieval metadata, automatic activation
+
+**Insurance Rule Metadata Workbook Import**:
+The audited template-bound XLSX or CSV curation input that maps rows to exact Knowledge Source, document revision, and optional reviewed section, clause, table-row, or row-group anchors, rejects executable macros and external links, stores original and normalized row artifacts, and creates Insurance Rule Metadata Draft values without becoming evidence or automatically overwriting approved metadata.
+_Avoid_: Knowledge Document intake, filename join, spreadsheet as rule evidence, formula execution, direct publication
+
+**Approved Insurance Rule Metadata**:
+The business-confirmed rule scope, effective period, authority, precedence, and supersession facts that may determine Insurance Rule Applicability and Insurance Rule Precedence Order for a published Knowledge version.
+_Avoid_: Machine extraction output, filename inference, routing hint, mutable unpublished guess
+
+**Insurance Rule Unit**:
+The smallest business-reviewable, source-cited unit that carries one coherent insurance rule and its Approved Insurance Rule Metadata; it may be a whole document, a section or clause, or a table row or row group when conditions differ inside a table.
+_Avoid_: Fixed-size chunk, isolated table cell, retrieval result, uncited model summary
+
+**Insurance Rule Unit Revision**:
+The immutable publication identity formed from one Insurance Rule Unit's canonical rule content and lineage, Approved Insurance Rule Metadata revision, and Approved Insurance Knowledge Visibility Scope revision. Changing content, applicability, authority, precedence, supersession, effective period, or visibility creates a new revision and new publication membership rather than mutating historical retrieval facts.
+_Avoid_: Mutable OpenSearch document authority, content-only identity, in-place ACL edit, logical rule family key
+
+**Inherited Insurance Rule Scope**:
+The rule-scope behavior where an Insurance Rule Unit uses its document-level Approved Insurance Rule Metadata unless a business-reviewed section, clause, or table-rule override narrows or replaces specific scope fields.
+_Avoid_: Metadata duplication on every chunk, implicit model inheritance, unreviewed fine-grained override
+
+**Insurance Rule Authority Gate**:
+The deterministic hard gate that requires authorized visibility, an identified published version, resolved Insurance Rule Applicability, resolved Insurance Rule Precedence Order, and valid source citation before an Evidence-Bound Specialist Recommendation may be produced.
+_Avoid_: Relevance threshold, confidence warning, LLM self-check, best-effort authority
+
+**Advisory Evidence Warning**:
+A staff-visible warning allowed only after Insurance Rule Authority Gate passes, indicating bounded uncertainty about evidence completeness or interpretation without weakening authorization, applicability, precedence, version, or citation requirements.
+_Avoid_: Authority warning, permission bypass, probable-rule answer, hidden low confidence
 
 **Assisted Service Mode**:
 An operating mode where the Agent produces governed answer suggestions for human staff rather than directly replying to end customers.

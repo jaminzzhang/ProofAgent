@@ -902,6 +902,45 @@ export interface KnowledgeSource {
   ready_document_count: number
 }
 
+export interface KnowledgeStageLatency {
+  stage: string
+  p95_ms: number
+}
+
+export interface KnowledgeOperationsProjection {
+  source_id: string
+  telemetry_complete: boolean
+  queue_age_seconds: number
+  retry_backlog: number
+  review_backlog: number
+  parser_escalation_count: number
+  ingestion_throughput_documents_per_hour: number
+  gpu_queue_depth: number
+  gpu_utilization_percent: number
+  embedding_backlog: number
+  index_lag_seconds: number
+  orphan_count: number
+  publication_age_seconds: number | null
+  rebuild_state: 'idle' | 'queued' | 'running' | 'failed' | 'unavailable'
+  scheduler_queue_p95_ms: number
+  retrieval_service_p95_ms: number
+  retrieval_p95_ms: number
+  stage_latencies: KnowledgeStageLatency[]
+  no_evidence_rate: number
+  clarification_rate: number
+  conflict_rate: number
+  refusal_rate: number
+  degradation_rate: number
+  citation_failure_count: number
+  complete_evidence_slot_coverage_rate: number
+  unauthorized_candidate_exposure: number
+  wrong_version_or_precedence: number
+  unresolvable_formal_citation: number
+  advice_under_authority_uncertainty: number
+  high_severity_unsupported_claim: number
+  release_blocker_count: number
+}
+
 export type KnowledgeSourceLifecycleState = 'ACTIVE' | 'ARCHIVED'
 
 export interface KnowledgeSourceReferenceSummary {
@@ -1106,6 +1145,106 @@ export interface KnowledgeSourcePublicationsResponse {
   meta: {
     total: number
   }
+}
+
+export interface InsuranceMetadataDraftInput {
+  metadata_draft_id: string
+  origin: 'pdf' | 'workbook'
+  source_id: string
+  document_id: string
+  revision_id: string
+  canonical_anchor: string | null
+  authority: string | null
+  effective_from: string | null
+  effective_to: string | null
+  taxonomy_id: string | null
+  taxonomy_revision_id: string | null
+  precedence_policy_revision_id: string | null
+  precedence_authority_tier: string | null
+  precedence_order: number | null
+}
+
+export interface InsuranceMetadataConflict {
+  field: string
+  label: string
+  pdf_value: string | number | null
+  workbook_value: string | number | null
+}
+
+export interface InsuranceMetadataReview {
+  schema_version: 'insurance-metadata-review.v1'
+  review_id: string
+  review_identity: string
+  review_version: number
+  import_id: string
+  workbook_row_number: number
+  workbook_draft_id: string
+  original_ref: InsuranceMetadataWorkbookArtifactRef
+  normalized_ref: InsuranceMetadataWorkbookArtifactRef
+  source_id: string
+  document_id: string
+  revision_id: string
+  canonical_anchor: string | null
+  citation_uri: string
+  state: 'review_required' | 'ready_for_review' | 'approved' | 'corrected' | 'rejected'
+  publication_blocked: boolean
+  pdf_draft: InsuranceMetadataDraftInput | null
+  workbook_draft: InsuranceMetadataDraftInput
+  conflicts: InsuranceMetadataConflict[]
+  resolved_values: Record<string, string | number | null>
+  resolution_reason: string | null
+  resolved_by: string | null
+  approved_metadata_revision_id: string | null
+  decision_history: Array<{
+    sequence: number
+    prior_review_identity: string
+    prior_state: InsuranceMetadataReview['state']
+    action: 'approve' | 'correct' | 'reject'
+    actor: string
+    reason: string
+    corrections: Record<string, string | number | null>
+    resulting_state: InsuranceMetadataReview['state']
+  }>
+}
+
+export interface InsuranceMetadataReviewsResponse {
+  data: InsuranceMetadataReview[]
+  meta: {
+    total: number
+    unresolved: number
+    next_cursor: string | null
+    summary: InsuranceMetadataReviewSummary
+  }
+}
+
+export interface InsuranceMetadataReviewSummary {
+  total: number
+  unresolved: number
+  review_required: number
+  ready_for_review: number
+  approved: number
+  corrected: number
+  rejected: number
+  all_approved: boolean
+}
+
+export interface InsuranceMetadataWorkbookArtifactRef {
+  artifact_uri: string
+  version_id: string
+  sha256: string
+  media_type: string
+  size_bytes: number
+}
+
+export interface InsuranceMetadataWorkbookImportResponse {
+  import_id: string
+  template_revision: 'insurance-rule-metadata.v1'
+  row_count: number
+  replayed: boolean
+  original_ref: InsuranceMetadataWorkbookArtifactRef
+  normalized_ref: InsuranceMetadataWorkbookArtifactRef
+  reviews: InsuranceMetadataReview[]
+  meta: InsuranceMetadataReviewsResponse['meta']
 }
 
 export interface DraftValidationResponse {

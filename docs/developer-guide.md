@@ -98,7 +98,25 @@ S0 uses local development stores. Do not describe them as production-safe. Produ
 
 S3-first finalization intentionally accepts losing uncommitted partial progress: write and verify S3 objects/manifest first, then make them visible in one PostgreSQL transaction.
 
-## 7. Release verification
+## 7. Hybrid Knowledge release evidence
+
+Hybrid Knowledge publication is fail closed. A Published Agent Version with a Hybrid binding must reference a registered `KnowledgeReleaseRecord` that binds the exact Contract Bundle and Resolved Hybrid Knowledge Bindings to four distinct immutable artifacts: live Shadow, Capacity, Sealed Acceptance and Recovery. Registration also requires an independently configured Release Evidence Authority.
+
+Production evaluation and operations adapters use the `private-http` entry point over an allowlisted HTTPS origin and pinned private-network resolution. Configure the driver selectors and verifier separately:
+
+```bash
+export PA_KNOWLEDGE_SHADOW_DRIVER=private-http
+export PA_KNOWLEDGE_CAPACITY_DRIVER=private-http
+export PA_KNOWLEDGE_RECOVERY_DRIVER=private-http
+export PA_KNOWLEDGE_ACCEPTANCE_DRIVER=private-http
+export PA_KNOWLEDGE_ACCEPTANCE_VERIFIER=hmac-sha256
+export PA_KNOWLEDGE_OPERATIONS_PROVIDER=private-http
+export PA_KNOWLEDGE_RELEASE_AUTHORITY=private-http
+```
+
+Do not place observations or active-pointer snapshots in Shadow suite files. The trusted driver executes both pinned bindings live. Sealed Acceptance accepts only independently attested aggregate facts bound to the exact candidate, suite and Gate Profile.
+
+## 8. Release verification
 
 Run the full local suite:
 
@@ -125,6 +143,6 @@ proof-agent release verify \
 
 Exit codes: 0 GO, 1 valid NO-GO, 2 invalid input. Never hand-edit a result to GO; regenerate evidence for the exact candidate.
 
-## 8. Documentation discipline
+## 9. Documentation discipline
 
 Update README, PRD, technical design, developer guide and progress when active behavior changes. Keep ADRs and dated specs historical. Label proposed production behavior as planned until executable tests prove it.

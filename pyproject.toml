@@ -23,13 +23,36 @@ dashboard = ["fastapi>=0.111.0", "uvicorn>=0.30.0"]
 openai = ["openai>=1.30.0"]
 tree = ["llama-index-core>=0.12.0"]
 ingestion = ["pypdf>=6.12.2,<7"]
-all = ["proof-agent[ingestion,openai,tree]"]
+hybrid = ["httpx>=0.27.0,<1", "openpyxl>=3.1.5,<4"]
+production = ["psycopg[binary,pool]>=3.2,<4", "boto3>=1.40,<2"]
+all = ["proof-agent[hybrid,ingestion,openai,production,tree]"]
 
 [project.scripts]
 proof-agent = "proof_agent.delivery.cli:main"
 
 [tool.hatch.build.targets.wheel.force-include]
 "examples/agent_management_insurance_specialist" = "examples/agent_management_insurance_specialist"
+
+[project.entry-points."proof_agent.knowledge_capacity_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_recovery_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_shadow_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_acceptance_drivers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_acceptance_verifiers"]
+hmac-sha256 = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_hmac_acceptance_verifier"
+
+[project.entry-points."proof_agent.knowledge_operations_providers"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
+
+[project.entry-points."proof_agent.knowledge_release_authorities"]
+private-http = "proof_agent.capabilities.knowledge.hybrid.evaluation_driver:create_private_evaluation_driver"
 
 [tool.ruff]
 line-length = 100
@@ -40,6 +63,8 @@ python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
+addopts = "-m 'not hybrid_integration'"
 markers = [
+  "hybrid_integration: opt-in tests against disposable local Hybrid Knowledge services",
   "llm_regression: opt-in tests that call a real LLM provider and are skipped unless explicitly enabled",
 ]

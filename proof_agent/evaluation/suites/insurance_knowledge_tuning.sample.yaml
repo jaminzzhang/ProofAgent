@@ -1,0 +1,148 @@
+suite_id: insurance_knowledge_tuning_sample
+version: "1"
+cases:
+  - case_id: clause-definition
+    question: 产品 A 的等待期定义是什么？
+    query_type: clause_lookup
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-clause-definition]
+    required_evidence_slots:
+      - {slot_id: requested-clause, requirement_kind: requested_clause, subject_id: waiting-period}
+    expected_resolution: answer_with_citations
+    document_slice: policy-wording
+    parser_slice: docling
+    acl_slice: public
+  - case_id: clause-limit
+    question: 产品 A 的保额上限条款在哪里？
+    query_type: clause_lookup
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-clause-limit]
+    required_evidence_slots:
+      - {slot_id: requested-clause, requirement_kind: requested_clause, subject_id: coverage-limit}
+    expected_resolution: answer_with_citations
+    document_slice: policy-wording
+    parser_slice: docling
+    acl_slice: public
+  - case_id: clause-no-evidence
+    question: 产品 A 是否包含未发布的海外责任？
+    query_type: clause_lookup
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_evidence_slots:
+      - {slot_id: requested-clause, requirement_kind: requested_clause, subject_id: overseas-liability}
+    expected_resolution: refuse_no_evidence
+    expected_knowledge_outcome: refuse_no_evidence
+    expected_authority_outcome: FAIL
+    document_slice: policy-wording
+    parser_slice: docling
+    acl_slice: public
+  - case_id: conditional-region
+    question: 上海代理渠道是否可以展业产品 A？
+    query_type: conditional_guidance
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-region, rule-channel]
+    required_evidence_slots:
+      - {slot_id: governing-rule, requirement_kind: governing_rule, subject_id: PRODUCT-A}
+      - {slot_id: applicable-condition, requirement_kind: applicable_condition, subject_id: PRODUCT-A}
+    normalized_conditions: {product: PRODUCT-A, region: SHANGHAI, channel: AGENCY}
+    expected_resolution: answer_with_citations
+    document_slice: sales-rule
+    parser_slice: docling
+    acl_slice: restricted-visible
+    acl_hard_negative_rule_unit_revision_ids: [rule-other-institution]
+  - case_id: conditional-occupation
+    question: 一类职业是否适用产品 B？
+    query_type: conditional_guidance
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-occupation-b]
+    required_evidence_slots:
+      - {slot_id: governing-rule, requirement_kind: governing_rule, subject_id: PRODUCT-B}
+    normalized_conditions: {product: PRODUCT-B, occupation_class: CLASS-1}
+    expected_resolution: answer_with_citations
+    document_slice: underwriting-table
+    parser_slice: paddle-fallback
+    acl_slice: restricted-visible
+  - case_id: conditional-missing-region
+    question: 代理渠道是否可以展业产品 A？
+    query_type: conditional_guidance
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_evidence_slots:
+      - {slot_id: applicable-condition, requirement_kind: applicable_condition, subject_id: PRODUCT-A}
+    expected_resolution: ask_clarification
+    expected_knowledge_outcome: ask_clarification
+    expected_authority_outcome: FAIL
+    expected_clarification_fields: [region]
+    normalized_conditions: {product: PRODUCT-A, channel: AGENCY}
+    document_slice: sales-rule
+    parser_slice: docling
+    acl_slice: restricted-visible
+  - case_id: conditional-conflict
+    question: 机构规则与总部规则冲突时产品 A 如何处理？
+    query_type: conditional_guidance
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-headquarters, rule-institution]
+    required_evidence_slots:
+      - {slot_id: precedence-source, requirement_kind: precedence_source, subject_id: PRODUCT-A}
+    expected_resolution: safe_handoff
+    expected_knowledge_outcome: conflict
+    expected_authority_outcome: CONFLICT
+    required_warning_codes: [RULE_CONFLICT]
+    document_slice: sales-rule
+    parser_slice: docling
+    acl_slice: restricted-visible
+  - case_id: conditional-acl-refusal
+    question: 其他机构的产品 A 特批规则是什么？
+    query_type: conditional_guidance
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_evidence_slots:
+      - {slot_id: governing-rule, requirement_kind: governing_rule, subject_id: PRODUCT-A}
+    expected_resolution: refuse_no_evidence
+    expected_knowledge_outcome: refuse_no_evidence
+    expected_authority_outcome: FAIL
+    acl_hard_negative_rule_unit_revision_ids: [rule-other-institution]
+    document_slice: underwriting-rule
+    parser_slice: docling
+    acl_slice: restricted-hidden
+  - case_id: comparison-products
+    question: 对比产品 A 与产品 B 的职业限制。
+    query_type: comparison
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-occupation-a, rule-occupation-b]
+    required_evidence_slots:
+      - {slot_id: comparison:PRODUCT-A, requirement_kind: comparison_basis, subject_id: PRODUCT-A}
+      - {slot_id: comparison:PRODUCT-B, requirement_kind: comparison_basis, subject_id: PRODUCT-B}
+    expected_resolution: answer_with_citations
+    document_slice: underwriting-table
+    parser_slice: paddle-fallback
+    acl_slice: restricted-visible
+  - case_id: comparison-versions
+    question: 对比产品 A 新旧版本的等待期。
+    query_type: comparison
+    source_id: ks_insurance
+    source_publication_id: publication-7
+    source_publication_seq: 7
+    required_rule_unit_revision_ids: [rule-waiting-old, rule-waiting-new]
+    required_evidence_slots:
+      - {slot_id: comparison:VERSION-OLD, requirement_kind: comparison_basis, subject_id: VERSION-OLD}
+      - {slot_id: comparison:VERSION-NEW, requirement_kind: comparison_basis, subject_id: VERSION-NEW}
+    expected_resolution: answer_with_citations
+    document_slice: policy-wording
+    parser_slice: docling
+    acl_slice: public

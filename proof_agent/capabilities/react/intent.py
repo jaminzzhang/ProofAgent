@@ -50,6 +50,7 @@ _INTENT_REQUIRED_FIELDS = (
     "confidence",
     "recommended_next_action",
     "retrieval_query_set",
+    "insurance_condition_proposal",
 )
 _INTENT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution"
 _INTENT_RESULT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution_result"
@@ -317,6 +318,9 @@ def _intent_required_output_contract(
             "retrieval_query_set": (
                 "array of RetrievalQueryItem objects with query, intent_angle, required, and reason"
             ),
+            "insurance_condition_proposal": (
+                "object containing values as proposed taxonomy key to scalar string mappings"
+            ),
         },
         "example": {
             "resolution_id": "intent_1",
@@ -336,6 +340,7 @@ def _intent_required_output_contract(
                     "reason": "The user asks for a knowledge-backed explanation.",
                 }
             ],
+            "insurance_condition_proposal": {"values": {}},
         },
     }
     if not include_business_flow_recommendation:
@@ -494,6 +499,23 @@ def _intent_resolution_parameters_schema() -> dict[str, Any]:
                         "required": {"type": "boolean"},
                         "reason": {"type": "string"},
                     },
+                },
+            },
+            "insurance_condition_proposal": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["values"],
+                "properties": {
+                    "values": {
+                        "type": "object",
+                        "maxProperties": 32,
+                        "propertyNames": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                        },
+                    }
                 },
             },
         },

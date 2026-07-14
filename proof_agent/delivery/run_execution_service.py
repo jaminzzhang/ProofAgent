@@ -10,6 +10,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     MemoryRecallAdmission,
     RunPurpose,
 )
@@ -52,6 +53,7 @@ def execute_published_agent_run(
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
+    institution_authorization: InstitutionAuthorizationContext | None = None,
 ) -> PublishedAgentRunExecution:
     """Execute one governed run for an already-resolved Published Agent."""
 
@@ -78,6 +80,9 @@ def execute_published_agent_run(
             published_agent_runtime_facts=published_agent.runtime_facts,
             controlled_react_orchestrator=dependencies.controlled_react_orchestrator,
             controlled_react_snapshot_store=dependencies.controlled_react_snapshot_store,
+            institution_authorization=(
+                institution_authorization or InstitutionAuthorizationContext()
+            ),
             controlled_react_observation_truth_store=(
                 dependencies.controlled_react_observation_truth_store
             ),

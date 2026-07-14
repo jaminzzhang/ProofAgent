@@ -14,6 +14,7 @@ from proof_agent.contracts import (
     EffectiveToolProposalScope,
     EvidenceChunk,
     EvidenceStatus,
+    InstitutionAuthorizationContext,
     EnforcementPoint,
     ObservationRecord,
     PolicyDecision,
@@ -217,6 +218,55 @@ def test_answer_synthesis_receives_answer_evidence_context() -> None:
     assert answer_synthesis.context.run_id == "run_answer_context"
     assert answer_synthesis.context.observation_truth
     assert answer_synthesis.context.citation_refs == ("claims-guide.md#documents",)
+
+
+def test_answer_truth_context_rejects_record_action_identity_mismatch() -> None:
+    unbound_truth = RetrievalObservationTruth(
+        truth_ref="observation://run_answer_context/obs_1/truth",
+        observation_id="obs_1",
+        action_id="act_other",
+    )
+    binding = bind_observation_truth(unbound_truth)
+    truth_ref = binding.reference
+    truth = binding.truth
+
+    class MismatchedActionTruthStore:
+        def save(self, artifact: object) -> str:
+            _ = artifact
+            raise AssertionError("answer validation must not save truth")
+
+        def load(self, requested_ref: str) -> RetrievalObservationTruth:
+            assert requested_ref == truth_ref
+            return truth
+
+    answer_synthesis = _ContextCapturingAnswerSynthesis()
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_TerminalAnswerPlanner(),
+            answer_synthesis=answer_synthesis,
+            observation_truth_store=MismatchedActionTruthStore(),
+        )
+    )
+    state = ControlledReActRunState(
+        run_id="run_answer_context",
+        template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="Question",
+        observation_records=(
+            ObservationRecord(
+                observation_id="obs_1",
+                action_id="act_expected",
+                action_type=ReActActionType.PLAN_RETRIEVAL,
+                round=1,
+                truth_ref=truth_ref,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="action_id does not match"):
+        orchestrator._answer_evidence_context(state)
+
+    assert answer_synthesis.context is None
 
 
 def test_start_carries_conversation_context_into_run_state() -> None:
@@ -846,6 +896,9 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
     )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("reviewer",)
+    )
     snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_run_004",
         run_id="run_004",
@@ -854,10 +907,11 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
             template_name="react_enterprise_qa_v3",
             template_descriptor_version="react_enterprise_qa.v3",
             question="Look up this customer's claim status.",
+            institution_authorization=authorization,
             action_history=(action,),
         ),
     )
-    orchestrator = ControlledReActOrchestrator(
+    orchestrator = _CapturingResumeStartOrchestrator(
         ports=ControlledReActPorts(
             planner=_ToolObservationThenAnswerPlanner(),
             snapshot_store=_ResumeSnapshotStore(snapshot),
@@ -872,6 +926,7 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
             approval_id="appr_act_tool",
             approved=True,
             actor="ops",
+            institution_authorization=authorization,
         )
     )
 
@@ -888,6 +943,141 @@ def test_resume_approved_tool_snapshot_observes_tool_and_answers() -> None:
         "model_answer",
         "response",
     ]
+    assert orchestrator.resume_start_requests[0].institution_authorization == authorization
+
+
+def test_resume_rejects_validly_signed_snapshot_when_authorization_context_differs(
+    tmp_path: Path,
+) -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    original_authorization = InstitutionAuthorizationContext(roles=("reviewer",))
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_scope_mismatch",
+        run_id="run_scope_mismatch",
+        state=ControlledReActRunState(
+            run_id="run_scope_mismatch",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Look up this customer's claim status.",
+            institution_authorization=original_authorization,
+            action_history=(action,),
+        ),
+    )
+    snapshot_store = FileControlledReActSnapshotStore(tmp_path)
+    snapshot_ref = snapshot_store.save(snapshot)
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=snapshot_store,
+            tool_observation=_ToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref=snapshot_ref,
+                approval_id="appr_act_tool",
+                approved=True,
+                actor="ops",
+                institution_authorization=InstitutionAuthorizationContext(
+                    roles=("administrator",)
+                ),
+            )
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert "does not match snapshot" in exc.value.message
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_resume_rejects_approval_action_mismatch_before_any_execution(
+    approved: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = _proposal("act_snapshot", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_action_binding",
+        run_id="run_action_binding",
+        state=ControlledReActRunState(
+            run_id="run_action_binding",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Question",
+            action_history=(action,),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+    planner_calls = 0
+
+    def fail_if_planner_runs(*args: object, **kwargs: object) -> object:
+        nonlocal planner_calls
+        planner_calls += 1
+        raise AssertionError("approval mismatch must not execute planner")
+
+    monkeypatch.setattr(orchestrator, "_plan_next_action", fail_if_planner_runs)
+
+    with pytest.raises(ProofAgentError) as exc:
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
+                approval_id="appr_act_other",
+                approved=approved,
+                actor="ops",
+            )
+        )
+
+    assert exc.value.code == "PA_RUNTIME_001"
+    assert "approval identity does not match" in exc.value.message
+    assert planner_calls == 0
+
+
+def test_resume_rejects_snapshot_from_different_signed_run_context() -> None:
+    action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
+        update={"target_tool_name": "customer_lookup"}
+    )
+    snapshot = ControlledReActRunStateSnapshot(
+        snapshot_id="snap_other_run",
+        run_id="run_other",
+        state=ControlledReActRunState(
+            run_id="run_other",
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            question="Question",
+            action_history=(action,),
+        ),
+    )
+    orchestrator = ControlledReActOrchestrator(
+        ports=ControlledReActPorts(
+            planner=_ToolObservationThenAnswerPlanner(),
+            snapshot_store=_ResumeSnapshotStore(snapshot),
+            tool_observation=_FailingToolObservation(),
+            answer_synthesis=_ObservationBackedAnswerSynthesis(),
+        )
+    )
+
+    with pytest.raises(ProofAgentError, match="run identity does not match"):
+        orchestrator.resume(
+            ControlledReActResumeRequest(
+                snapshot_ref=bind_controlled_react_snapshot(snapshot).reference,
+                approval_id="appr_act_tool",
+                approved=True,
+                actor="ops",
+                expected_run_id="run_expected",
+            )
+        )
 
 
 def test_resume_rejects_snapshot_payload_forged_behind_bound_ref() -> None:
@@ -1157,6 +1347,9 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     action = _proposal("act_tool", ReActActionType.PROPOSE_TOOL_CALL).model_copy(
         update={"target_tool_name": "customer_lookup"}
     )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-1",), roles=("reviewer",)
+    )
     snapshot = ControlledReActRunStateSnapshot(
         snapshot_id="snap_run_005",
         run_id="run_005",
@@ -1165,10 +1358,11 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
             template_name="react_enterprise_qa_v3",
             template_descriptor_version="react_enterprise_qa.v3",
             question="Look up this customer's claim status.",
+            institution_authorization=authorization,
             action_history=(action,),
         ),
     )
-    orchestrator = ControlledReActOrchestrator(
+    orchestrator = _CapturingResumeStartOrchestrator(
         ports=ControlledReActPorts(
             planner=_ToolObservationThenAnswerPlanner(),
             snapshot_store=_ResumeSnapshotStore(snapshot),
@@ -1183,6 +1377,7 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
             approval_id="appr_act_tool",
             approved=False,
             actor="ops",
+            institution_authorization=authorization,
         )
     )
 
@@ -1203,6 +1398,7 @@ def test_resume_denied_tool_snapshot_records_observation_and_replans() -> None:
     ]
     tool_stage = next(stage for stage in result.stage_results if stage.stage_id == "tool")
     assert tool_stage.summary["approval_state"] == "denied"
+    assert orchestrator.resume_start_requests[0].institution_authorization == authorization
 
 
 def test_resume_denied_tool_snapshot_can_replan_to_alternate_retrieval_answer() -> None:
@@ -2047,6 +2243,28 @@ class _ForgedAnswerTruthStore:
             update={
                 "accepted_evidence": (evidence.model_copy(update={"content": "Forged evidence."}),)
             }
+        )
+
+
+class _CapturingResumeStartOrchestrator(ControlledReActOrchestrator):
+    def __init__(self, *, ports: ControlledReActPorts) -> None:
+        super().__init__(ports=ports)
+        self.resume_start_requests: list[ControlledReActStartRequest] = []
+
+    def _run_loop(
+        self,
+        request: ControlledReActStartRequest,
+        *,
+        state: ControlledReActRunState,
+        action: ReActActionProposal,
+        max_plan_rounds: int,
+    ) -> WorkflowTemplateExecutionResult:
+        self.resume_start_requests.append(request)
+        return super()._run_loop(
+            request,
+            state=state,
+            action=action,
+            max_plan_rounds=max_plan_rounds,
         )
 
 

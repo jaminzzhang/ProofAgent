@@ -16,6 +16,7 @@ from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.contracts import (
     EvidenceChunk,
     EvidenceContribution,
+    EvidenceStatus,
     EnforcementPoint,
     ModelCallRole,
     ModelConfig,
@@ -28,6 +29,16 @@ from proof_agent.contracts import (
     ValidationResult,
 )
 from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
+from proof_agent.control.knowledge.insurance_authority import (
+    InsuranceAuthorityCandidate,
+    InsuranceAuthorityContext,
+    evaluate_insurance_authority,
+)
+from proof_agent.control.knowledge.evidence_slots import (
+    AdmittedInsuranceEvidence,
+    evaluate_required_slots,
+)
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.control.workflow.retrieval_planner import RetrievalPlanner
 from proof_agent.errors import ProofAgentError
@@ -70,6 +81,7 @@ class KnowledgeRetrievalRequest:
     query_timeout_seconds: float = 10.0
     preferred_binding_ids: tuple[str, ...] = ()
     force_empty: bool = False
+    governed_hybrid_request: GovernedHybridRetrievalRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +130,152 @@ class _ProviderStepExecutionError(Exception):
 
 class _RetrievalExecutionCancelled(Exception):
     """Internal cooperative cancellation signal for timed retrieval work."""
+
+
+@dataclass(frozen=True)
+class _HybridAdmissionAudit:
+    authority_outcome: str
+    authority_passed_count: int
+    authority_rejected_count: int
+    evidence_slots_complete: bool
+    satisfied_evidence_slot_count: int
+    missing_evidence_slot_count: int
+    citation_count: int
+
+
+def _admit_governed_hybrid_evidence(
+    evidence: tuple[EvidenceChunk, ...],
+    *,
+    governed: GovernedHybridRetrievalRequest,
+    index_uuid: str,
+) -> tuple[tuple[EvidenceChunk, ...], str | None, _HybridAdmissionAudit]:
+    """Apply authority then slot completeness before generic Evidence Admission."""
+
+    if not evidence:
+        return (
+            (),
+            "zero_hybrid_candidates",
+            _HybridAdmissionAudit("NO_CANDIDATES", 0, 0, False, 0, 0, 0),
+        )
+    raw_facts = tuple(chunk.metadata.get("runtime_authority_facts") for chunk in evidence)
+    if any(not isinstance(item, Mapping) for item in raw_facts):
+        return (
+            evidence,
+            "hybrid_authority_admission_pending",
+            _HybridAdmissionAudit("PENDING", 0, 0, False, 0, 0, 0),
+        )
+    context = InsuranceAuthorityContext(
+        source_id=governed.binding.source_id,
+        index_generation_id=governed.binding.index_generation_id,
+        index_uuid=index_uuid,
+        source_publication_seq=governed.binding.source_publication_seq,
+        as_of_date=governed.as_of_time.date(),
+        authorization=governed.authorization,
+        normalized_conditions=governed.normalized_conditions,
+    )
+    decisions = tuple(
+        evaluate_insurance_authority(
+            InsuranceAuthorityCandidate.model_validate(item),
+            context,
+        )
+        for item in raw_facts
+    )
+    authority_passed: list[tuple[EvidenceChunk, tuple[str, ...]]] = []
+    projected: list[EvidenceChunk] = []
+    for chunk, decision in zip(evidence, decisions, strict=True):
+        if not decision.admitted:
+            projected.append(
+                chunk.model_copy(
+                    update={
+                        "status": EvidenceStatus.REJECTED,
+                        "metadata": {
+                            **dict(chunk.metadata),
+                            "authority_outcome": decision.outcome,
+                        },
+                    }
+                )
+            )
+            continue
+        raw_slots = chunk.metadata.get("supported_evidence_slot_ids", ())
+        slots = tuple(item for item in raw_slots if isinstance(item, str))
+        authority_passed.append((chunk, slots))
+        projected.append(chunk)
+    if not authority_passed:
+        reason = (
+            "hybrid_authority_conflict"
+            if any(decision.outcome == "conflict" for decision in decisions)
+            else "hybrid_authority_rejected"
+        )
+        return (
+            tuple(projected),
+            reason,
+            _HybridAdmissionAudit(
+                "FAIL",
+                0,
+                len(decisions),
+                False,
+                0,
+                len(governed.required_evidence_slots),
+                0,
+            ),
+        )
+    slot_evidence = tuple(
+        AdmittedInsuranceEvidence(
+            evidence_id=chunk.evidence_id or chunk.source,
+            rule_unit_revision_id=chunk.chunk_id or chunk.evidence_id or chunk.source,
+            citation_uri=chunk.citation,
+            supported_slot_ids=slots,
+        )
+        for chunk, slots in authority_passed
+        if slots
+    )
+    slot_result = evaluate_required_slots(
+        governed.required_evidence_slots,
+        slot_evidence,
+    )
+    if not slot_result.complete:
+        return (
+            tuple(projected),
+            "required_evidence_slots_incomplete",
+            _HybridAdmissionAudit(
+                "PASS",
+                len(authority_passed),
+                len(decisions) - len(authority_passed),
+                False,
+                len(slot_result.satisfied_slot_ids),
+                len(slot_result.missing_slot_ids),
+                0,
+            ),
+        )
+    passed_ids = {chunk.evidence_id for chunk, _slots in authority_passed}
+    admitted = tuple(
+        chunk.model_copy(
+            update={
+                "status": EvidenceStatus.ACCEPTED,
+                "authority_admitted": True,
+                "authority_outcome": "PASS",
+                "supported_evidence_slot_ids": tuple(
+                    chunk.metadata.get("supported_evidence_slot_ids", ())
+                ),
+            }
+        )
+        if chunk.evidence_id in passed_ids
+        else chunk
+        for chunk in projected
+    )
+    return (
+        admitted,
+        None,
+        _HybridAdmissionAudit(
+            "PASS",
+            len(authority_passed),
+            len(decisions) - len(authority_passed),
+            True,
+            len(slot_result.satisfied_slot_ids),
+            0,
+            sum(1 for chunk in admitted if chunk.authority_admitted and chunk.citation is not None),
+        ),
+    )
 
 
 @dataclass
@@ -322,6 +480,8 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
+        if request.governed_hybrid_request is not None:
+            return self._run_governed_hybrid(request, reviewed=reviewed)
         if request.strategy == "single_step":
             return self._run_single_step(
                 request,
@@ -336,6 +496,93 @@ class KnowledgeRetrievalService:
             )
         _ensure_retrieval_strategy_is_executable(request.strategy)
         raise AssertionError("unreachable")
+
+    def _run_governed_hybrid(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        reviewed: bool,
+    ) -> KnowledgeRetrievalResult:
+        governed = request.governed_hybrid_request
+        if governed is None:
+            raise AssertionError("governed Hybrid branch requires an exact request")
+        if not reviewed:
+            decision = self._policy.evaluate(
+                EnforcementPoint.BEFORE_RETRIEVAL,
+                {
+                    "question": request.question,
+                    "strategy": "governed_hybrid",
+                    "binding_id": governed.binding.binding_id,
+                },
+            )
+            _emit_policy(self._trace, decision)
+            if not _allowed(decision):
+                return self._result_for_evidence(
+                    (),
+                    step_id="hybrid_retrieval",
+                    min_score=request.min_score,
+                )
+        retrieve_governed = getattr(
+            self._knowledge_provider,
+            "retrieve_governed_hybrid",
+            None,
+        )
+        if not callable(retrieve_governed):
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "The composed Knowledge provider cannot execute governed Hybrid requests.",
+                "Activate the Agent Version with its exact Hybrid provider graph.",
+            )
+        evidence, provider_result = retrieve_governed(governed)
+        evidence, authority_reason, admission_audit = _admit_governed_hybrid_evidence(
+            evidence,
+            governed=governed,
+            index_uuid=provider_result.index_uuid,
+        )
+        metrics = provider_result.metrics
+        self._trace.emit(
+            "hybrid_retrieval_summary",
+            status="ok",
+            payload={
+                "binding_id": governed.binding.binding_id,
+                "source_id": governed.binding.source_id,
+                "source_publication_seq": governed.binding.source_publication_seq,
+                "profile_revision_id": governed.retrieval_profile.profile_revision_id,
+                "generation_id": governed.binding.index_generation_id,
+                "manifest_sha256": governed.binding.manifest_ref.sha256,
+                "attestation_id": governed.binding.publication_attestation_id,
+                "searched_query_count": metrics.searched_query_count,
+                "fused_candidate_count": metrics.fused_candidate_count,
+                "reranked_candidate_count": metrics.reranked_candidate_count,
+                "embedding_queue_time_ms": metrics.embedding_queue_time_ms,
+                "embedding_service_time_ms": metrics.embedding_service_time_ms,
+                "reranker_queue_time_ms": metrics.reranker_queue_time_ms,
+                "reranker_service_time_ms": metrics.reranker_service_time_ms,
+                "degradation_mode": provider_result.degradation_mode,
+                "excluded_count": max(
+                    metrics.fused_candidate_count - metrics.reranked_candidate_count,
+                    0,
+                ),
+                "authority_outcome": admission_audit.authority_outcome,
+                "authority_passed_count": admission_audit.authority_passed_count,
+                "authority_rejected_count": admission_audit.authority_rejected_count,
+                "evidence_slots_complete": admission_audit.evidence_slots_complete,
+                "satisfied_evidence_slot_count": (admission_audit.satisfied_evidence_slot_count),
+                "missing_evidence_slot_count": admission_audit.missing_evidence_slot_count,
+                "citation_count": admission_audit.citation_count,
+            },
+        )
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=(
+                authority_reason or ("zero_hybrid_candidates" if not evidence else None)
+            ),
+        )
+        return KnowledgeRetrievalResult(
+            evidence=evidence,
+            evidence_result=evidence_result,
+        )
 
     def _run_single_step(
         self,
@@ -637,9 +884,7 @@ class KnowledgeRetrievalService:
         step_context["query_execution"] = "sequential"
         self._trace.emit("retrieval_step", status="ok", payload=step_context)
 
-        execution_context = _RetrievalExecutionContext.with_timeout(
-            request.query_timeout_seconds
-        )
+        execution_context = _RetrievalExecutionContext.with_timeout(request.query_timeout_seconds)
         executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="proof-retrieval-query",
@@ -757,14 +1002,14 @@ class KnowledgeRetrievalService:
         execution_mode: str | None,
     ) -> _ProviderStepResult:
         max_workers = min(request.query_concurrency, len(items))
-        execution_context = _RetrievalExecutionContext.with_timeout(
-            request.query_timeout_seconds
-        )
+        execution_context = _RetrievalExecutionContext.with_timeout(request.query_timeout_seconds)
         executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="proof-retrieval-query",
         )
-        future_entries: dict[Future[_ParallelProviderStepResult], tuple[int, RetrievalQueryItem]] = {}
+        future_entries: dict[
+            Future[_ParallelProviderStepResult], tuple[int, RetrievalQueryItem]
+        ] = {}
         try:
             for index, item in enumerate(items, start=1):
                 round_id = f"query_set_{index:02d}"
@@ -828,9 +1073,7 @@ class KnowledgeRetrievalService:
             except _ProviderStepExecutionError as exc:
                 payload = dict(exc.payload)
                 payload["no_evidence_reason_code"] = (
-                    "required_provider_failure"
-                    if item.required
-                    else "optional_provider_failure"
+                    "required_provider_failure" if item.required else "optional_provider_failure"
                 )
                 self._trace.emit(
                     "retrieval_result",
@@ -1047,7 +1290,9 @@ class KnowledgeRetrievalService:
                 raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
 
         fused_candidates = _fuse_bound_candidates(raw_candidates)
-        evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        evidence = (
+            fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        )
         if request.force_empty:
             evidence = ()
         step_payload: dict[str, Any] = {
@@ -1303,7 +1548,9 @@ class KnowledgeRetrievalService:
                 raw_candidates.append(_tag_bound_chunk(chunk, bound=bound, local_rank=local_rank))
 
         fused_candidates = _fuse_bound_candidates(raw_candidates)
-        evidence = fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        evidence = (
+            fused_candidates[: request.top_k] if request.top_k is not None else fused_candidates
+        )
         if request.force_empty:
             evidence = ()
         self._trace.emit(
@@ -1476,7 +1723,9 @@ def _query_set_provider_supports_parallel_retrieval(
 ) -> bool:
     bound_providers = _bound_providers(knowledge_provider)
     if bound_providers is not None:
-        return all(_provider_supports_parallel_retrieval(bound.provider) for bound in bound_providers)
+        return all(
+            _provider_supports_parallel_retrieval(bound.provider) for bound in bound_providers
+        )
     return _provider_supports_parallel_retrieval(knowledge_provider)
 
 
@@ -1597,11 +1846,7 @@ def _route_bound_providers(
             selection_reason="single_binding",
         )
 
-    matched = tuple(
-        bound
-        for bound in bound_providers
-        if _routing_metadata_matches(query, bound)
-    )
+    matched = tuple(bound for bound in bound_providers if _routing_metadata_matches(query, bound))
     if matched:
         selected = matched[:selection_budget]
         reason = (
@@ -1993,9 +2238,7 @@ def _routing_model_request_payload(
         "message_count": len(request.messages),
         "prompt_length": sum(len(message.content) for message in request.messages),
         "system_prompt_length": sum(
-            len(message.content)
-            for message in request.messages
-            if message.role == ModelRole.SYSTEM
+            len(message.content) for message in request.messages if message.role == ModelRole.SYSTEM
         ),
         "estimated_tokens": estimated_tokens,
         "stream": request.stream,

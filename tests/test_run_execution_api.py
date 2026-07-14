@@ -9,6 +9,7 @@ from pytest import MonkeyPatch
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts.dashboard import RunPurpose
+from proof_agent.contracts import InstitutionAuthorizationContext
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.errors import ProofAgentError
 import proof_agent.delivery.run_execution_service as run_execution_service
@@ -20,7 +21,10 @@ from proof_agent.observability.api.operator_identity import (
 from proof_agent.observability.storage.run_store import RunStore
 
 
-def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
+def _app_with_published_agent(
+    tmp_path: Path,
+    manifest_path: Path,
+):
     store = LocalAgentConfigurationStore(tmp_path / "config")
     draft = import_agent_package(manifest_path, store=store, actor="test-user")
     store.publish_version(
@@ -38,15 +42,86 @@ def _app_with_published_agent(tmp_path: Path, manifest_path: Path):
 
 
 class _StaticOperatorIdentityProvider:
-    def __init__(self, permissions: set[OperatorPermission]) -> None:
+    def __init__(
+        self,
+        permissions: set[OperatorPermission],
+        institution_authorization: InstitutionAuthorizationContext | None = None,
+    ) -> None:
         self._permissions = permissions
+        self._institution_authorization = (
+            institution_authorization or InstitutionAuthorizationContext()
+        )
 
     def current_identity(self) -> OperatorIdentityContext:
         return OperatorIdentityContext(
             operator_id="test-operator",
             display_name="Test Operator",
             permissions=frozenset(self._permissions),
+            institution_authorization=self._institution_authorization,
         )
+
+
+def test_run_request_bodies_reject_institution_authorization_and_knowledge_scope(
+    tmp_path: Path,
+) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+    )
+    client = TestClient(app)
+
+    chat_response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3",
+            "question": "Question",
+            "institution_authorization": {"roles": ["administrator"]},
+        },
+    )
+    conversation_response = client.post(
+        "/api/chat/conversations/not-used/runs",
+        json={"question": "Question", "knowledge_scope": {"regions": ["all"]}},
+    )
+
+    assert chat_response.status_code == 422
+    assert conversation_response.status_code == 422
+
+
+def test_chat_run_uses_only_server_side_institution_authorization(tmp_path: Path) -> None:
+    app = _app_with_published_agent(
+        tmp_path,
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+    )
+    authorization = InstitutionAuthorizationContext(
+        institutions=("branch-2", "branch-1"),
+        roles=("specialist",),
+    )
+    app.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        set(), authorization
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/runs",
+        json={
+            "agent_id": "react_enterprise_qa_v3",
+            "question": "What is the reimbursement rule for travel meals?",
+        },
+    )
+
+    assert response.status_code == 200
+    trace = client.get(f"/api/runs/{response.json()['run_id']}/trace").json()
+    run_started = next(
+        event for event in trace["events"] if event["event_type"] == "run_started"
+    )
+    summary = run_started["payload"]["institution_authorization"]
+    assert summary["public_only"] is False
+    assert summary["institutions"] == {
+        "values": ["branch-1", "branch-2"],
+        "count": 2,
+    }
+    assert "operator_id" not in json.dumps(summary)
+    assert "permissions" not in json.dumps(summary)
 
 
 def _write_artifacts(tmp_path: Path, run_id: str) -> tuple[Path, Path]:

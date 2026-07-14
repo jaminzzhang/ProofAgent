@@ -1,0 +1,774 @@
+from __future__ import annotations
+
+import hashlib
+import os
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any, cast
+from uuid import uuid4
+
+import pytest
+
+from proof_agent.capabilities.knowledge.hybrid.manifest import ManifestRuleUnitMembership
+from proof_agent.capabilities.knowledge.hybrid.model_clients import EmbeddingResult
+from proof_agent.capabilities.knowledge.hybrid.opensearch import (
+    HttpxOpenSearchTransport,
+    OpenSearchHybridIndex,
+    physical_index_name,
+    rrf_pipeline_name,
+    rule_unit_analyzer_sha256,
+    rule_unit_mapping_sha256,
+)
+from proof_agent.capabilities.knowledge.hybrid.publication import (
+    HybridPublicationRequest,
+    HybridPublicationService,
+    HybridPublicationValidationAuthority,
+    ProjectionSeed,
+    hybrid_candidate_material_fingerprint,
+)
+from proof_agent.capabilities.knowledge.hybrid.recovery import (
+    HybridRecoveryService,
+    OpenSearchRecoveryIndex,
+)
+from proof_agent.capabilities.knowledge.hybrid.s3_artifacts import S3ExactArtifactStore
+from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
+from proof_agent.capabilities.knowledge.hybrid.ports import SearchIndexIdentity
+from proof_agent.capabilities.knowledge.hybrid.ports import HybridSearchRequest
+from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
+from proof_agent.configuration.postgres_hybrid_knowledge_repository import (
+    PostgresHybridKnowledgeRepository,
+)
+from proof_agent.contracts.hybrid_documents import BoundingBox
+from proof_agent.contracts.insurance_rules import (
+    ApprovedInsuranceKnowledgeVisibilityScope,
+    ApprovedInsuranceRuleMetadataRevision,
+    InsuranceRuleApplicability,
+    InsuranceRulePageBoundingBox,
+    InsuranceRulePrecedence,
+    InsuranceRuleUnitLineage,
+    InsuranceRuleUnitRevision,
+)
+from proof_agent.contracts.knowledge_index import (
+    KnowledgeIndexGeneration,
+    KnowledgeRetrievalProfileRevision,
+    RuleUnitManifestEntry,
+)
+
+
+pytestmark = pytest.mark.hybrid_integration
+INSTRUCTION = "Represent the exact insurance rule for retrieval."
+
+
+def _required(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        pytest.skip(f"set {name} for disposable Hybrid integration")
+    return value
+
+
+class _Embedding:
+    def embed(self, **kwargs: Any) -> EmbeddingResult:
+        return EmbeddingResult(
+            model_revision=kwargs["model_revision"],
+            vectors=tuple((1.0, 0.0) for _ in kwargs["texts"]),
+            queue_time_ms=1.0,
+            service_time_ms=1.0,
+        )
+
+
+def _request(
+    source_id: str,
+    generation: KnowledgeIndexGeneration,
+    identity: SearchIndexIdentity,
+    *,
+    rule_suffix: str = "one",
+    publication_seq_from: int = 1,
+):
+    metadata = ApprovedInsuranceRuleMetadataRevision(
+        metadata_revision_id=f"metadata-{source_id}",
+        applicability=InsuranceRuleApplicability(
+            taxonomy_id="integration", taxonomy_revision_id="v1"
+        ),
+        effective_from=date(2026, 1, 1),
+        authority="integration",
+        precedence=InsuranceRulePrecedence(
+            policy_revision_id="v1", authority_tier="product", order=1
+        ),
+    )
+    visibility = ApprovedInsuranceKnowledgeVisibilityScope(
+        visibility="PUBLIC", revision_id=f"visibility-{source_id}"
+    )
+    content = f"Exact integration insurance rule {rule_suffix}."
+    document_id = f"document-{source_id}-{rule_suffix}"
+    revision_id = f"revision-{source_id}-{rule_suffix}"
+    citation = (
+        f"knowledge://source/{source_id}/document/{document_id}/revision/{revision_id}#page=1"
+    )
+    rule = InsuranceRuleUnitRevision(
+        rule_unit_revision_id=f"rule-{source_id}-{rule_suffix}",
+        logical_rule_key=f"logical-{source_id}-{rule_suffix}",
+        unit_kind="clause",
+        document_id=document_id,
+        revision_id=revision_id,
+        structured_build_id=f"build-{source_id}",
+        content=content,
+        citation_uri=citation,
+        metadata_revision_id=metadata.metadata_revision_id,
+        visibility_scope=visibility,
+        content_sha256=hashlib.sha256(content.encode()).hexdigest(),
+        authority_sha256=stable_digest(
+            {
+                "approved_metadata": metadata.model_dump(mode="json"),
+                "approved_visibility": visibility.model_dump(mode="json"),
+            }
+        ),
+        lineage=InsuranceRuleUnitLineage(
+            source_id=source_id,
+            original_sha256="e" * 64,
+            page_numbers=(1,),
+            page_bboxes=(
+                InsuranceRulePageBoundingBox(
+                    page_number=1,
+                    bbox=BoundingBox(x0=0, y0=0, x1=10, y1=10),
+                ),
+            ),
+            block_ids=("block-1",),
+        ),
+    )
+    entry = RuleUnitManifestEntry(
+        rule_unit_revision_id=rule.rule_unit_revision_id,
+        document_id=rule.document_id,
+        revision_id=rule.revision_id,
+        structured_build_id=rule.structured_build_id,
+        metadata_revision_id=rule.metadata_revision_id,
+        visibility_revision_id=visibility.revision_id,
+        content_sha256=rule.content_sha256,
+        authority_sha256=rule.authority_sha256,
+        citation_uri=rule.citation_uri,
+        publication_seq_from=publication_seq_from,
+    )
+    request = HybridPublicationRequest(
+        source_id=source_id,
+        source_draft_version_id=f"draft-{publication_seq_from}",
+        candidate_digest="0" * 64,
+        source_snapshot_id=f"snapshot-{publication_seq_from}",
+        generation=generation,
+        validation_id=f"validation-{source_id}-{publication_seq_from}",
+        published_by="integration",
+        memberships=(
+            ManifestRuleUnitMembership(
+                rule_unit=rule,
+                publication_seq_from=publication_seq_from,
+            ),
+        ),
+        projection_seeds=(
+            ProjectionSeed(
+                projection_id=f"projection-{source_id}-{rule_suffix}",
+                rule_unit=rule,
+                manifest_entry=entry,
+                approved_metadata=metadata,
+                projection_revision="rule-unit-search.v1",
+            ),
+        ),
+        identity=identity,
+        embedding_instruction=INSTRUCTION,
+        embedding_timeout_seconds=30.0,
+    )
+    return request.model_copy(
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
+    )
+
+
+def _many_rule_request(
+    source_id: str,
+    generation: KnowledgeIndexGeneration,
+    identity: SearchIndexIdentity,
+    *,
+    count: int,
+    rule_prefix: str,
+    publication_seq_from: int,
+) -> HybridPublicationRequest:
+    requests = tuple(
+        _request(
+            source_id,
+            generation,
+            identity,
+            rule_suffix=f"{rule_prefix}-{index:04d}",
+            publication_seq_from=publication_seq_from,
+        )
+        for index in range(count)
+    )
+    request = requests[0].model_copy(
+        update={
+            "candidate_digest": "0" * 64,
+            "source_draft_version_id": f"draft-{publication_seq_from}-{rule_prefix}",
+            "source_snapshot_id": f"snapshot-{publication_seq_from}-{rule_prefix}",
+            "validation_id": (f"validation-{source_id}-{publication_seq_from}-{rule_prefix}"),
+            "memberships": tuple(item.memberships[0] for item in requests),
+            "projection_seeds": tuple(item.projection_seeds[0] for item in requests),
+        }
+    )
+    return request.model_copy(
+        update={"candidate_digest": hybrid_candidate_material_fingerprint(request)}
+    )
+
+
+def _delete_prefix_versions(client: Any, bucket: str, prefix: str) -> None:
+    paginator = client.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        objects = [
+            {"Key": item["Key"], "VersionId": item["VersionId"]}
+            for field in ("Versions", "DeleteMarkers")
+            for item in page.get(field, [])
+        ]
+        if objects:
+            client.delete_objects(Bucket=bucket, Delete={"Objects": objects, "Quiet": True})
+
+
+def _environment():
+    import boto3
+    from botocore.config import Config
+    import psycopg
+
+    dsn = _required("HYBRID_TEST_POSTGRES_DSN")
+    endpoint = _required("HYBRID_TEST_S3_ENDPOINT")
+    bucket = _required("HYBRID_TEST_S3_BUCKET")
+    opensearch_url = _required("HYBRID_TEST_OPENSEARCH_URL")
+    run_id = uuid4().hex
+    prefix = f"test-runs/{run_id}/"
+    migration = Path("proof_agent/configuration/migrations/0001_hybrid_knowledge.sql").read_text(
+        encoding="utf-8"
+    )
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute(migration, prepare=False)
+        connection.execute(migration, prepare=False)
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=_required("HYBRID_TEST_S3_ACCESS_KEY"),
+        aws_secret_access_key=_required("HYBRID_TEST_S3_SECRET_KEY"),
+        region_name="us-east-1",
+        config=Config(proxies={}),
+    )
+    store = S3ExactArtifactStore(client=s3_client, bucket=bucket, key_prefix=prefix)
+    source_id = f"integration-{run_id}"
+    generation = KnowledgeIndexGeneration(
+        generation_id=f"generation-{run_id}",
+        source_id=source_id,
+        canonical_schema_version="structured-knowledge.v1",
+        search_projection_version="rule-unit-search.v1",
+        mapping_sha256=rule_unit_mapping_sha256(dimension=2),
+        analyzer_sha256=rule_unit_analyzer_sha256(),
+        embedding_model_revision="embedding@sha256:integration",
+        embedding_instruction_sha256=hashlib.sha256(INSTRUCTION.encode()).hexdigest(),
+        embedding_dimension=2,
+        normalized=True,
+    )
+    transport = HttpxOpenSearchTransport(
+        endpoint=opensearch_url,
+        allowed_hosts=("127.0.0.1", "localhost"),
+        allow_insecure_loopback=True,
+        timeout_seconds=30,
+    )
+    index = OpenSearchHybridIndex(transport=transport, number_of_replicas=0)
+    identity = index.create_index(
+        generation,
+        rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+        rrf_rank_constant=60,
+    )
+    repository = PostgresHybridKnowledgeRepository.from_dsn(dsn)
+    request = _request(source_id, generation, identity)
+    repository.register_source(
+        source_id=source_id,
+        source_draft_version_id="draft-1",
+        candidate_digest=request.candidate_digest,
+        generation=generation,
+    )
+    repository.register_validation(
+        HybridPublicationValidationAuthority(
+            validation_id=request.validation_id,
+            source_id=request.source_id,
+            source_draft_version_id=request.source_draft_version_id,
+            candidate_digest=request.candidate_digest,
+            generation_id=request.generation.generation_id,
+            validated_at=datetime.now(UTC),
+            validated_by="integration-validator",
+        )
+    )
+    service = HybridPublicationService(
+        repository=repository,
+        artifact_store=store,
+        index=index,
+        embedding=cast(Any, _Embedding()),
+    )
+    return {
+        "bucket": bucket,
+        "dsn": dsn,
+        "prefix": prefix,
+        "s3": s3_client,
+        "transport": transport,
+        "index": index,
+        "repository": repository,
+        "store": store,
+        "request": request,
+        "service": service,
+        "identity": identity,
+        "source_id": source_id,
+        "generation": generation,
+    }
+
+
+def _cleanup(env: dict[str, Any]) -> None:
+    identities = env.get("cleanup_identities", [env["identity"]])
+    for identity in identities:
+        locator = identity.projection_locator or physical_index_name(
+            identity.generation.source_id, identity.generation.generation_id
+        )
+        env["transport"].request(method="DELETE", path=f"/{locator}")
+    env["transport"].close()
+    env["repository"].close()
+    _delete_prefix_versions(env["s3"], env["bucket"], env["prefix"])
+
+
+def test_disposable_postgres_s3_fenced_publication_and_shared_orphan_repair() -> None:
+    env = _environment()
+    try:
+        publication = env["service"].publish(env["request"])
+        assert publication.source_publication_seq == 1
+        assert env["store"].get_exact(publication.manifest_ref)
+
+        class FailAfterProjectionValidation:
+            def materialize_authority(self, *args: Any, **kwargs: Any) -> Any:
+                return env["index"].materialize_authority(*args, **kwargs)
+
+            def bulk_upsert(self, request: Any) -> Any:
+                return env["index"].bulk_upsert(request)
+
+            def close_projection_memberships(self, **kwargs: Any) -> Any:
+                return env["index"].close_projection_memberships(**kwargs)
+
+            def validate_exact_projection(self, **_: Any) -> Any:
+                raise RuntimeError("integration failure after exact projection writes")
+
+        env["service"].index = FailAfterProjectionValidation()
+        second = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="orphan",
+            publication_seq_from=2,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=env["request"].source_draft_version_id,
+            expected_candidate_digest=env["request"].candidate_digest,
+            source_draft_version_id=second.source_draft_version_id,
+            candidate_digest=second.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=second.validation_id,
+                source_id=second.source_id,
+                source_draft_version_id=second.source_draft_version_id,
+                candidate_digest=second.candidate_digest,
+                generation_id=second.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        with pytest.raises(RuntimeError, match="after exact projection writes"):
+            env["service"].publish(second)
+        assert env["repository"].load_active_publication(env["source_id"]) == publication
+        recovery = HybridRecoveryService(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            index=OpenSearchRecoveryIndex(
+                index=env["index"],
+                embedding=cast(Any, _Embedding()),
+                embedding_instruction=INSTRUCTION,
+            ),
+        )
+        dry_run = recovery.reconcile_orphans(source_id=env["source_id"])
+        assert dry_run.candidates
+        applied = recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
+        assert applied.purged_attempt_ids == dry_run.candidates
+        assert applied.cleanup_scope == "OPERATION_PAYLOAD"
+        assert applied.physical_index_retained is True
+        assert env["index"].verify_identity(env["identity"]) == env["identity"]
+        prior_hits = env["index"].search(
+            HybridSearchRequest(
+                identity=env["identity"],
+                manifest_root_sha256=publication.manifest_ref.sha256,
+                query_text="Exact integration insurance rule one.",
+                query_embedding=(1.0, 0.0),
+                source_publication_seq=1,
+                authorization=InstitutionAuthorizationContext(),
+                as_of_date=date(2026, 7, 14),
+                lexical_budget=10,
+                dense_budget=10,
+                rrf_window=10,
+                rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+                rrf_rank_constant=60,
+                limit=10,
+            )
+        )
+        assert any(hit.rule_unit_revision_id.endswith("-one") for hit in prior_hits)
+        env["service"].index = env["index"]
+        third = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="next",
+            publication_seq_from=3,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=second.source_draft_version_id,
+            expected_candidate_digest=second.candidate_digest,
+            source_draft_version_id=third.source_draft_version_id,
+            candidate_digest=third.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=third.validation_id,
+                source_id=third.source_id,
+                source_draft_version_id=third.source_draft_version_id,
+                candidate_digest=third.candidate_digest,
+                generation_id=third.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        published_third = env["service"].publish(third)
+        assert published_third.source_publication_seq == 3
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_postgres_resolves_explicit_and_default_retrieval_profiles() -> None:
+    env = _environment()
+    try:
+        publication = env["service"].publish(env["request"])
+        default_profile = KnowledgeRetrievalProfileRevision(
+            profile_revision_id="profile-default",
+            lexical_budget=100,
+            dense_budget=100,
+            rrf_window=50,
+            reranker_revision="reranker-default",
+            rerank_budget=50,
+            final_budget=16,
+        )
+        explicit_profile = default_profile.model_copy(
+            update={
+                "profile_revision_id": "profile-explicit",
+                "reranker_revision": "reranker-explicit",
+            }
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"],
+            profile=default_profile,
+            make_default=True,
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"],
+            profile=explicit_profile,
+        )
+
+        inherited = env["repository"].resolve_binding_authority(
+            source_id=env["source_id"],
+            profile_revision_id=None,
+        )
+        selected = env["repository"].resolve_binding_authority(
+            source_id=env["source_id"],
+            profile_revision_id=explicit_profile.profile_revision_id,
+        )
+
+        assert inherited is not None
+        assert inherited.publication == publication
+        assert inherited.retrieval_profile == default_profile
+        assert selected is not None
+        assert selected.publication == publication
+        assert selected.retrieval_profile == explicit_profile
+        assert (
+            env["repository"].resolve_binding_authority(
+                source_id=env["source_id"],
+                profile_revision_id="profile-missing",
+            )
+            is None
+        )
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_restoration_retries_after_second_real_batch_fails() -> None:
+    env = _environment()
+    try:
+        initial = _many_rule_request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            count=1_001,
+            rule_prefix="retained",
+            publication_seq_from=1,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=env["request"].source_draft_version_id,
+            expected_candidate_digest=env["request"].candidate_digest,
+            source_draft_version_id=initial.source_draft_version_id,
+            candidate_digest=initial.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=initial.validation_id,
+                source_id=initial.source_id,
+                source_draft_version_id=initial.source_draft_version_id,
+                candidate_digest=initial.candidate_digest,
+                generation_id=initial.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        publication = env["service"].publish(initial)
+
+        class FailAfterProjectionValidation:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(env["index"], name)
+
+            def validate_exact_projection(self, **_: Any) -> Any:
+                raise RuntimeError("integration failure after multi-batch closure")
+
+        failed = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="failed-replacement",
+            publication_seq_from=2,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=initial.source_draft_version_id,
+            expected_candidate_digest=initial.candidate_digest,
+            source_draft_version_id=failed.source_draft_version_id,
+            candidate_digest=failed.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=failed.validation_id,
+                source_id=failed.source_id,
+                source_draft_version_id=failed.source_draft_version_id,
+                candidate_digest=failed.candidate_digest,
+                generation_id=failed.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        env["service"].index = FailAfterProjectionValidation()
+        with pytest.raises(RuntimeError, match="after multi-batch closure"):
+            env["service"].publish(failed)
+        assert env["repository"].load_active_publication(env["source_id"]) == publication
+
+        class FailOnSecondRestorationBatch:
+            def __init__(self) -> None:
+                self.restoration_calls = 0
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(env["index"], name)
+
+            def restore_projection_memberships(self, **kwargs: Any) -> Any:
+                self.restoration_calls += 1
+                if self.restoration_calls == 2:
+                    raise RuntimeError("integration failure in restoration batch 2")
+                return env["index"].restore_projection_memberships(**kwargs)
+
+        faulting_index = FailOnSecondRestorationBatch()
+        first_recovery = HybridRecoveryService(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            index=OpenSearchRecoveryIndex(
+                index=cast(Any, faulting_index),
+                embedding=cast(Any, _Embedding()),
+                embedding_instruction=INSTRUCTION,
+            ),
+        )
+        dry_run = first_recovery.reconcile_orphans(source_id=env["source_id"])
+        assert len(dry_run.candidates) == 1
+        failed_recovery = first_recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
+        assert faulting_index.restoration_calls == 2
+        assert failed_recovery.retry_attempt_ids == dry_run.candidates
+
+        retry_recovery = HybridRecoveryService(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            index=OpenSearchRecoveryIndex(
+                index=env["index"],
+                embedding=cast(Any, _Embedding()),
+                embedding_instruction=INSTRUCTION,
+            ),
+        )
+        retried = retry_recovery.reconcile_orphans(source_id=env["source_id"], apply=True)
+        assert retried.purged_attempt_ids == dry_run.candidates
+        assert retried.retry_attempt_ids == ()
+
+        env["service"].index = env["index"]
+        next_request = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="after-restoration-retry",
+            publication_seq_from=3,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=failed.source_draft_version_id,
+            expected_candidate_digest=failed.candidate_digest,
+            source_draft_version_id=next_request.source_draft_version_id,
+            candidate_digest=next_request.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=next_request.validation_id,
+                source_id=next_request.source_id,
+                source_draft_version_id=next_request.source_draft_version_id,
+                candidate_digest=next_request.candidate_digest,
+                generation_id=next_request.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        assert env["service"].publish(next_request).source_publication_seq == 3
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_postgres_upgrades_legacy_recovery_schema_in_place() -> None:
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    base_dsn = _required("HYBRID_TEST_POSTGRES_DSN")
+    connection_options = conninfo_to_dict(base_dsn)
+    admin_dsn = make_conninfo(**{**connection_options, "dbname": "postgres"})
+    legacy_database = f"proof_legacy_{uuid4().hex}"
+    legacy_dsn = make_conninfo(**{**connection_options, "dbname": legacy_database})
+    legacy_ddl = Path("tests/fixtures/hybrid_recovery_schema_legacy_2c70b7b.sql").read_text(
+        encoding="utf-8"
+    )
+    current_migration = Path(
+        "proof_agent/configuration/migrations/0001_hybrid_knowledge.sql"
+    ).read_text(encoding="utf-8")
+
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(legacy_database)))
+    try:
+        with psycopg.connect(legacy_dsn, autocommit=True) as connection:
+            connection.execute(legacy_ddl, prepare=False)
+            connection.execute(
+                """INSERT INTO hybrid_knowledge_source_authority
+                     (source_id, draft_version_id, candidate_digest, updated_at)
+                     VALUES ('legacy-source','legacy-draft',%s,now())""",
+                ("1" * 64,),
+            )
+            connection.execute(
+                """INSERT INTO hybrid_knowledge_generation
+                     (generation_id, source_id, identity_digest, mapping_sha256,
+                      generation_json, created_at)
+                     VALUES ('legacy-generation','legacy-source',%s,%s,'{}'::jsonb,now())""",
+                ("2" * 64, "3" * 64),
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, created_at, updated_at)
+                     VALUES ('legacy-rebuild','legacy-source','legacy-generation',
+                             'REBUILD','BUILDING',now(),now())"""
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_orphan_cleanup
+                     (attempt_id, source_id, generation_id, index_uuid,
+                      projection_locator, state, updated_at)
+                     VALUES ('legacy-rebuild','legacy-source','legacy-generation',
+                             'legacy-index-uuid',NULL,'DELETED',now())"""
+            )
+
+            connection.execute(current_migration, prepare=False)
+            connection.execute(current_migration, prepare=False)
+
+            legacy_operation = connection.execute(
+                """SELECT projection_locator, index_uuid
+                     FROM hybrid_projection_operation
+                     WHERE operation_id='legacy-rebuild'"""
+            ).fetchone()
+            assert legacy_operation == (None, None)
+            legacy_orphan = connection.execute(
+                """SELECT index_uuid, state
+                     FROM hybrid_projection_orphan_cleanup
+                     WHERE attempt_id='legacy-rebuild'"""
+            ).fetchone()
+            assert legacy_orphan == ("legacy-index-uuid", "DELETED")
+
+            index_uuid_nullable = connection.execute(
+                """SELECT is_nullable FROM information_schema.columns
+                     WHERE table_schema='public'
+                       AND table_name='hybrid_projection_orphan_cleanup'
+                       AND column_name='index_uuid'"""
+            ).fetchone()
+            assert index_uuid_nullable == ("YES",)
+            rebuild_validation_trigger = connection.execute(
+                """SELECT count(*)
+                     FROM pg_trigger trigger
+                     JOIN pg_class relation ON relation.oid=trigger.tgrelid
+                    WHERE relation.relname='hybrid_rebuild_validation'
+                      AND trigger.tgname='reject_update'
+                      AND NOT trigger.tgisinternal"""
+            ).fetchone()
+            assert rebuild_validation_trigger == (1,)
+
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    """INSERT INTO hybrid_projection_operation
+                         (operation_id, source_id, generation_id, operation_kind,
+                          state, created_at, updated_at)
+                         VALUES ('invalid-new-rebuild','legacy-source','legacy-generation',
+                                 'REBUILD','BUILDING',now(),now())"""
+                )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, projection_locator, created_at, updated_at)
+                     VALUES ('new-rebuild','legacy-source','legacy-generation',
+                             'REBUILD','BUILDING','pa-rebuild-aaaaaaaa',now(),now())"""
+            )
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    """INSERT INTO hybrid_projection_operation
+                         (operation_id, source_id, generation_id, operation_kind,
+                          state, projection_locator, created_at, updated_at)
+                         VALUES ('duplicate-locator','legacy-source','legacy-generation',
+                                 'REBUILD','BUILDING','pa-rebuild-aaaaaaaa',now(),now())"""
+                )
+            connection.execute(
+                """INSERT INTO hybrid_projection_operation
+                     (operation_id, source_id, generation_id, operation_kind,
+                      state, created_at, updated_at)
+                     VALUES ('new-publication','legacy-source','legacy-generation',
+                             'PUBLICATION','BUILDING',now(),now())"""
+            )
+            connection.execute(
+                """INSERT INTO hybrid_projection_orphan_cleanup
+                     (attempt_id, source_id, generation_id, index_uuid,
+                      projection_locator, state, updated_at)
+                     VALUES ('new-publication','legacy-source','legacy-generation',
+                             NULL,NULL,'PURGED',now())"""
+            )
+            upgraded_orphan = connection.execute(
+                """SELECT index_uuid, state
+                     FROM hybrid_projection_orphan_cleanup
+                     WHERE attempt_id='new-publication'"""
+            ).fetchone()
+            assert upgraded_orphan == (None, "PURGED")
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(legacy_database))
+            )

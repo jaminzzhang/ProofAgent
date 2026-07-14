@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-07-12
+Updated: 2026-07-14
 
 ## Current decision
 
@@ -18,6 +18,17 @@ S0 source-baseline implementation is complete on `codex/s0-v3-baseline`; formal 
 - disabled package-local executable tools in the canonical Agent;
 - removed the public quick-tunnel path from local verification;
 - migrated stage context and Business Flow Skill Pack routing to V3.
+
+## Integrated Hybrid Knowledge work
+
+- Live Shadow v2 executes legacy and candidate bindings through trusted drivers and rejects suite-carried observations or pointer snapshots.
+- Sealed Acceptance verifies independently produced aggregate attestations, evaluator and key identity, signature, and exact candidate/suite/Gate Profile binding.
+- `KnowledgeReleaseRecord` freezes the exact Contract Bundle, Resolved Hybrid Knowledge Bindings, and distinct Shadow, Capacity, Acceptance and Recovery artifact references into a Published Agent Version.
+- Release registration fails closed without an independent Release Evidence Authority; production evaluation and operations use pinned private-network adapters.
+- The external asset manifest enforces a 300-case tuning suite, 200-case tuner-hidden acceptance suite, 30/50/20 query mix and a separate 100-to-200-case parser benchmark.
+- The Hybrid track passed 2662 backend tests with 1 skipped and 8 opt-in tests deselected, plus Ruff and mypy over 257 source files before integration with `main`.
+
+This work does not change the formal production **NO-GO** decision: the S1-S6 platform and 13 candidate-bound release Gates remain required.
 
 ## Verification evidence
 

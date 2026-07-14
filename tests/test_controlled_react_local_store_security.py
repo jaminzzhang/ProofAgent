@@ -46,7 +46,7 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
 from proof_agent.errors import ProofAgentError
 
 
-SNAPSHOT_GOLDEN_DIGEST = "625fa772e34e2e51080d4702b8b5cf50d6190705dc9ca0ad9415bf367287063a"
+SNAPSHOT_GOLDEN_DIGEST = "8deca1c89c96b4730c749e8c85b1ed17054f660c13c9e4db81d6dc138b5cfec0"
 OBSERVATION_GOLDEN_DIGEST = "5ae2f9c9e131b252bdd9d1460f487dc7573f565a10dd5c33629a2b8c37dc46e3"
 
 

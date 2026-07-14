@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
+    InstitutionAuthorizationContext,
     ConversationRecord,
     ConversationTurn,
     MemoryRecallAdmission,
@@ -42,9 +45,26 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ObservationTruthStorePort,
     SnapshotStorePort,
 )
+from proof_agent.observability.api.dependencies import get_operator_identity
+from proof_agent.observability.api.operator_identity import OperatorIdentityContext
+from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
 
 
-router = APIRouter(tags=["execution"])
+@asynccontextmanager
+async def _hybrid_knowledge_lifespan(application: Any) -> AsyncIterator[None]:
+    """Own one process-wide Hybrid composition and one matching close hook."""
+
+    graph = compose_hybrid_knowledge_from_env()
+    if graph is not None:
+        application.state.hybrid_knowledge = graph
+    try:
+        yield
+    finally:
+        if graph is not None:
+            graph.close()
+
+
+router = APIRouter(tags=["execution"], lifespan=_hybrid_knowledge_lifespan)
 
 
 class ChatRunRequest(BaseModel):
@@ -94,7 +114,11 @@ def list_chat_agents(app_request: Request) -> dict[str, Any]:
 
 
 @router.post("/chat/runs")
-def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, Any]:
+def create_chat_run(
+    request: ChatRunRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
     """Start one governed Harness run for a Published Agent."""
 
     registry = _get_published_agents(app_request)
@@ -113,6 +137,7 @@ def create_chat_run(request: ChatRunRequest, app_request: Request) -> dict[str, 
         published_agent=published_agent,
         question=request.question,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
+        institution_authorization=identity.institution_authorization,
     )
 
     return _run_response(
@@ -192,6 +217,7 @@ def create_conversation_run(
     conversation_id: str,
     request: ConversationRunRequest,
     app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Start a governed Harness run with admitted conversation context."""
 
@@ -214,6 +240,7 @@ def create_conversation_run(
         question=request.question,
         conversation_context=context_admission,
         allow_untrusted_web_supplement=request.allow_untrusted_web_supplement,
+        institution_authorization=identity.institution_authorization,
     )
     governance_details = _governance_projection(
         detail,
@@ -264,6 +291,7 @@ def _execute_published_agent_run(
     memory_recall_admissions: tuple[MemoryRecallAdmission, ...] = (),
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
+    institution_authorization: InstitutionAuthorizationContext | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
     try:
         execution = execute_published_agent_run(
@@ -282,6 +310,7 @@ def _execute_published_agent_run(
             memory_recall_admissions=memory_recall_admissions,
             run_purpose=run_purpose,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
+            institution_authorization=institution_authorization,
         )
     except ProofAgentError as exc:
         raise proof_agent_http_exception(exc) from exc

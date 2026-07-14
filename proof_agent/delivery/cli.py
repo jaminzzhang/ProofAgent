@@ -23,10 +23,12 @@ from typer.core import TyperCommand
 from proof_agent import __version__
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.importer import build_agent_package_contract_bundle
+from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.analyzer import analyze_evaluation
+from proof_agent.evaluation.artifact_io import write_evaluation_artifact
 from proof_agent.evaluation.campaigns import run_evaluation_campaign
 from proof_agent.evaluation.demo.scenarios import (
     REACT_DEMO_SCENARIOS,
@@ -37,7 +39,42 @@ from proof_agent.evaluation.frozen_bundles import (
     freeze_evaluation_subject_bundle,
     verify_evaluation_subject_bundle,
 )
-from proof_agent.evaluation.suites import load_evaluation_suite
+from proof_agent.evaluation.gate_profiles import get_knowledge_gate_profile
+from proof_agent.evaluation.knowledge_capacity import (
+    KnowledgeCapacityEnvelope,
+    KnowledgeCapacitySuite,
+    execute_capacity_suite,
+    load_capacity_suite,
+)
+from proof_agent.evaluation.knowledge_shadow import (
+    KnowledgeShadowResult,
+    KnowledgeShadowSuite,
+    load_shadow_suite,
+    run_shadow_suite,
+)
+from proof_agent.evaluation.knowledge_recovery import (
+    KnowledgeRecoveryDrillArtifact,
+    execute_recovery_drill,
+)
+from proof_agent.evaluation.runtime_drivers import (
+    load_acceptance_driver,
+    load_acceptance_verifier,
+    load_capacity_driver,
+    load_operations_provider,
+    load_recovery_driver,
+    load_release_authority,
+    load_shadow_driver,
+)
+from proof_agent.evaluation.sealed_knowledge_acceptance import (
+    SealedKnowledgeAcceptanceEnvelope,
+    SealedKnowledgeAcceptanceResult,
+    SealedKnowledgeAcceptanceStore,
+    write_sealed_knowledge_acceptance_result,
+)
+from proof_agent.evaluation.suites import (
+    load_evaluation_suite,
+    load_sealed_knowledge_acceptance_envelope,
+)
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.release.contracts import ReleaseGateManifest
 from proof_agent.release.digests import reject_duplicate_json_keys
@@ -50,17 +87,26 @@ from proof_agent.release.verifier import (
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.worker import (
+        HybridClaimedTaskHandler,
+        KnowledgeIngestionWorker,
         KnowledgeWorkerResult,
         KnowledgeWorkerTaskOutcome,
+    )
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridKnowledgeWorkerFactory,
+        HybridParserPipeline,
+        HybridPrivateParserBuildConfig,
     )
 
 app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 campaign_app = typer.Typer(no_args_is_help=True)
 release_app = typer.Typer(no_args_is_help=True)
+knowledge_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
 app.add_typer(release_app, name="release")
+app.add_typer(knowledge_app, name="knowledge")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 REACT_DEMO_AGENT_PATH = DEMO_AGENT_PATH
@@ -201,6 +247,214 @@ def release_verify(
     typer.echo(decision.model_dump_json())
     if decision.decision == "NO-GO":
         raise typer.Exit(code=1)
+
+
+def _hybrid_recovery_service_from_environment() -> Any:
+    """Lazy production seam; tests and deployments bind the concrete recovery graph."""
+
+    from proof_agent.capabilities.knowledge.hybrid.recovery import (
+        recovery_service_from_environment,
+    )
+
+    return recovery_service_from_environment(os.environ)
+
+
+def execute_knowledge_recovery_from_environment(
+    source_id: str,
+    generation_id: str,
+) -> KnowledgeRecoveryDrillArtifact:
+    """Launch all guarded faults through the installed disposable deployment driver."""
+
+    driver = load_recovery_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return execute_recovery_drill(
+            source_id=source_id,
+            generation_id=generation_id,
+            driver=driver,
+        )
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge recovery driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def execute_knowledge_capacity_from_environment(
+    suite: KnowledgeCapacitySuite,
+) -> KnowledgeCapacityEnvelope:
+    """Launch the measured workload through the installed governed deployment driver."""
+
+    driver = load_capacity_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return execute_capacity_suite(suite=suite, driver=driver)
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge capacity driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def execute_knowledge_shadow_from_environment(
+    suite: KnowledgeShadowSuite,
+) -> KnowledgeShadowResult:
+    """Execute pinned legacy and Hybrid bindings through one trusted live driver."""
+
+    driver = load_shadow_driver(os.environ)
+    primary: Exception | None = None
+    try:
+        return run_shadow_suite(suite, driver)
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Knowledge shadow driver execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+
+
+def execute_knowledge_acceptance_from_environment(
+    envelope: SealedKnowledgeAcceptanceEnvelope,
+    *,
+    attempt_store: Path,
+) -> SealedKnowledgeAcceptanceResult:
+    """Run the private evaluator and verify its attestation through a separate trust adapter."""
+
+    profile = get_knowledge_gate_profile(envelope.gate_profile_id)
+    driver = load_acceptance_driver(os.environ)
+    verifier = load_acceptance_verifier(os.environ)
+    primary: Exception | None = None
+    try:
+        evaluator = SealedKnowledgeAcceptanceStore(
+            attestation_provider=lambda candidate, suite_ref, profile_id: driver.run_acceptance(
+                candidate_digest=candidate,
+                suite_ref=suite_ref,
+                gate_profile_id=profile_id,
+            ),
+            attestation_verifier=verifier.verify_attestation,
+            attempt_store=attempt_store,
+            gate_profile=profile,
+        )
+        return evaluator.run(
+            candidate_digest=envelope.candidate_digest,
+            sealed_suite_ref=envelope.suite_ref,
+        )
+    except EvaluationInputError as exc:
+        primary = exc
+        raise
+    except Exception as exc:
+        primary = EvaluationInputError("Sealed Knowledge evaluator execution failed")
+        raise primary from exc
+    finally:
+        _close_evaluation_driver(driver, primary)
+        if verifier is not driver:
+            _close_evaluation_driver(verifier, primary)
+
+
+def _close_evaluation_driver(driver: Any, primary: Exception | None) -> None:
+    close = getattr(driver, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as close_exc:
+        if primary is None:
+            raise EvaluationInputError("Knowledge evaluation driver close failed") from close_exc
+        primary.add_note(
+            f"Knowledge evaluation driver close also failed: {type(close_exc).__name__}"
+        )
+
+
+def _knowledge_operations_provider_from_environment() -> Any | None:
+    if not os.environ.get("PA_KNOWLEDGE_OPERATIONS_PROVIDER", "").strip():
+        return None
+    return load_operations_provider(os.environ)
+
+
+def _knowledge_release_authority_from_environment() -> Any | None:
+    if not os.environ.get("PA_KNOWLEDGE_RELEASE_AUTHORITY", "").strip():
+        return None
+    return load_release_authority(os.environ)
+
+
+@knowledge_app.command("reconcile-orphans")
+def reconcile_hybrid_orphans(
+    source_id: str = typer.Option(..., "--source-id"),
+    apply: bool = typer.Option(
+        False,
+        "--apply/--dry-run",
+        help="Apply proven-safe cleanup; defaults to dry-run.",
+    ),
+) -> None:
+    """Classify or remove failed Hybrid publication projections."""
+
+    service: Any | None = None
+    primary: Exception | None = None
+    try:
+        service = _hybrid_recovery_service_from_environment()
+        report = service.reconcile_orphans(
+            source_id=source_id,
+            apply=apply,
+        )
+    except Exception as exc:
+        primary = exc
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if service is not None:
+            try:
+                service.close()
+            except Exception as close_exc:
+                if primary is not None:
+                    primary.add_note(
+                        f"Hybrid recovery close also failed: {type(close_exc).__name__}"
+                    )
+                else:
+                    typer.echo("Hybrid recovery close failed.", err=True)
+                    raise typer.Exit(code=1) from close_exc
+    typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
+
+
+@knowledge_app.command("rebuild-generation")
+def rebuild_hybrid_generation(
+    source_id: str = typer.Option(..., "--source-id"),
+    generation_id: str = typer.Option(..., "--generation-id"),
+) -> None:
+    """Rebuild one generation from exact PostgreSQL/S3 authority."""
+
+    service: Any | None = None
+    primary: Exception | None = None
+    try:
+        service = _hybrid_recovery_service_from_environment()
+        attestation = service.rebuild_generation(
+            source_id=source_id,
+            generation_id=generation_id,
+        )
+    except Exception as exc:
+        primary = exc
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if service is not None:
+            try:
+                service.close()
+            except Exception as close_exc:
+                if primary is not None:
+                    primary.add_note(
+                        f"Hybrid recovery close also failed: {type(close_exc).__name__}"
+                    )
+                else:
+                    typer.echo("Hybrid recovery close failed.", err=True)
+                    raise typer.Exit(code=1) from close_exc
+    typer.echo(json.dumps(attestation.model_dump(mode="json"), sort_keys=True))
 
 
 @app.command()
@@ -464,6 +718,107 @@ def evaluate_analyze(
         raise typer.Exit(code=1)
 
 
+@evaluate_app.command("knowledge-acceptance")
+def evaluate_knowledge_acceptance(
+    suite: str = typer.Option(
+        ...,
+        "--suite",
+        help="Access-controlled aggregate acceptance envelope",
+    ),
+    output: str = typer.Option(
+        ...,
+        "--output",
+        help="Aggregate-only acceptance result JSON",
+    ),
+) -> None:
+    """Apply one-attempt sealed Knowledge acceptance release gates."""
+
+    output_path = Path(output)
+    try:
+        envelope = load_sealed_knowledge_acceptance_envelope(Path(suite))
+        result = execute_knowledge_acceptance_from_environment(
+            envelope,
+            attempt_store=output_path.parent / ".knowledge-acceptance-attempts",
+        )
+        write_sealed_knowledge_acceptance_result(output_path, result)
+    except EvaluationInputError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"Knowledge Acceptance: {result.status}")
+    typer.echo(f"Result: {output_path}")
+    typer.echo(f"Hard Gate Failures: {result.hard_gate_failures}")
+    if result.blocking_reasons:
+        typer.echo("Blocking Reasons: " + ", ".join(result.blocking_reasons))
+    if result.status == "blocked":
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("knowledge-capacity")
+def evaluate_knowledge_capacity(
+    suite: str = typer.Option(..., "--suite", help="Approved Knowledge capacity suite"),
+    output: str = typer.Option(..., "--output", help="Sealed capacity result JSON"),
+) -> None:
+    """Launch and seal the measured five-run workload envelope."""
+
+    output_path = Path(output)
+    try:
+        capacity_suite = load_capacity_suite(Path(suite))
+        envelope = execute_knowledge_capacity_from_environment(capacity_suite)
+        write_evaluation_artifact(output_path, envelope)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Knowledge Capacity: {'passed' if envelope.passed else 'blocked'}")
+    typer.echo(f"Result: {output_path}")
+    if envelope.blocking_reasons:
+        typer.echo("Blocking Reasons: " + ", ".join(envelope.blocking_reasons))
+    if not envelope.passed:
+        raise typer.Exit(code=1)
+
+
+@evaluate_app.command("knowledge-shadow")
+def evaluate_knowledge_shadow(
+    suite: str = typer.Option(..., "--suite", help="Approved safe shadow suite"),
+    output: str = typer.Option(..., "--output", help="Digest-bearing shadow result JSON"),
+) -> None:
+    """Compare pinned bindings while proving active pointers remain unchanged."""
+
+    output_path = Path(output)
+    try:
+        result = execute_knowledge_shadow_from_environment(load_shadow_suite(Path(suite)))
+        write_evaluation_artifact(output_path, result)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo("Knowledge Shadow: passed")
+    typer.echo(f"Result: {output_path}")
+
+
+@evaluate_app.command("knowledge-recovery")
+def evaluate_knowledge_recovery(
+    source_id: str = typer.Option(..., "--source-id"),
+    generation_id: str = typer.Option(..., "--generation-id"),
+    output: str = typer.Option(..., "--output", help="Digest-bearing recovery result JSON"),
+) -> None:
+    """Launch and seal the guarded disposable four-fault recovery drill."""
+
+    output_path = Path(output)
+    try:
+        artifact = execute_knowledge_recovery_from_environment(source_id, generation_id)
+        if artifact.source_id != source_id or artifact.generation_id != generation_id:
+            raise EvaluationInputError("recovery executor returned mismatched authority")
+        write_evaluation_artifact(output_path, artifact)
+    except (EvaluationInputError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Knowledge Recovery: {'passed' if artifact.passed else 'blocked'}")
+    typer.echo(f"Result: {output_path}")
+    if not artifact.passed:
+        typer.echo("Failed Faults: " + ", ".join(artifact.failed_faults))
+        raise typer.Exit(code=1)
+
+
 @evaluate_app.command("run-suite")
 def evaluate_run_suite(
     suite: str = typer.Option(..., "--suite", help="Evaluation Suite YAML path or builtin id"),
@@ -700,7 +1055,11 @@ def server(
     from proof_agent.observability.api.app import create_app
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
-    configuration_store = LocalAgentConfigurationStore(Path(config_dir))
+    release_authority = _knowledge_release_authority_from_environment()
+    configuration_store = LocalAgentConfigurationStore(
+        Path(config_dir),
+        knowledge_release_evidence_authority=release_authority,
+    )
     if seed_example_agent and _seed_default_dev_agent_or_exit(configuration_store):
         typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
 
@@ -727,6 +1086,8 @@ def server(
         history_dir=Path(history_dir),
         agent_configuration_store=configuration_store,
         agent_configuration_dir=Path(config_dir),
+        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+        knowledge_release_evidence_authority=release_authority,
     )
     uvicorn.run(app, host=host, port=port)
 
@@ -740,7 +1101,11 @@ def _create_server_app_from_env() -> Any:
     history_dir = Path(os.environ.get(SERVER_HISTORY_DIR_ENV, "runs/history"))
     config_dir = Path(os.environ.get(SERVER_CONFIG_DIR_ENV, "runs/config"))
     seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
-    configuration_store = LocalAgentConfigurationStore(config_dir)
+    release_authority = _knowledge_release_authority_from_environment()
+    configuration_store = LocalAgentConfigurationStore(
+        config_dir,
+        knowledge_release_evidence_authority=release_authority,
+    )
     if seed_example_agent:
         _seed_default_dev_agent_or_exit(configuration_store)
 
@@ -748,6 +1113,8 @@ def _create_server_app_from_env() -> Any:
         history_dir=history_dir,
         agent_configuration_store=configuration_store,
         agent_configuration_dir=config_dir,
+        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+        knowledge_release_evidence_authority=release_authority,
     )
 
 
@@ -764,19 +1131,17 @@ def knowledge_worker(
 ) -> None:
     """Process persisted Local Index knowledge ingestion tasks."""
 
+    hybrid_graph = None
     try:
-        from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
-            LocalIndexRevisionArtifactBuilder,
-        )
-        from proof_agent.capabilities.knowledge.ingestion.worker import (
-            KnowledgeIngestionWorker,
-        )
-        from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-
         config_path = Path(config_dir)
-        worker = KnowledgeIngestionWorker(
-            store=LocalAgentConfigurationStore(config_path),
-            artifact_builder=LocalIndexRevisionArtifactBuilder(config_path),
+        hybrid_graph = compose_hybrid_knowledge_from_env()
+        worker = create_knowledge_ingestion_worker(
+            config_path,
+            hybrid_pipeline=hybrid_graph.parser if hybrid_graph is not None else None,
+            hybrid_build_config=hybrid_graph.build_config if hybrid_graph is not None else None,
+            hybrid_worker_factory=(
+                hybrid_graph.ingestion_worker if hybrid_graph is not None else None
+            ),
         )
         if once:
             result = worker.run_once()
@@ -801,8 +1166,98 @@ def knowledge_worker(
     except ProofAgentError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    finally:
+        if hybrid_graph is not None:
+            hybrid_graph.close()
 
     _echo_knowledge_worker_result(result)
+
+
+def create_knowledge_ingestion_worker(
+    config_path: Path,
+    *,
+    hybrid_task_handler: HybridClaimedTaskHandler | None = None,
+    hybrid_pipeline: HybridParserPipeline | None = None,
+    hybrid_build_config: HybridPrivateParserBuildConfig | None = None,
+    hybrid_worker_factory: HybridKnowledgeWorkerFactory | None = None,
+) -> KnowledgeIngestionWorker:
+    """Compose provider handlers; fail before claims if Hybrid dependencies are absent."""
+
+    from proof_agent.capabilities.knowledge.ingestion.local_index_builder import (
+        LocalIndexRevisionArtifactBuilder,
+    )
+    from proof_agent.capabilities.knowledge.ingestion.worker import KnowledgeIngestionWorker
+    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+
+    store = LocalAgentConfigurationStore(config_path)
+    if (hybrid_pipeline is None) != (hybrid_build_config is None):
+        raise ProofAgentError(
+            "PA_HYBRID_WORKER_001",
+            "Hybrid worker parser pipeline and approved build identity must be configured together.",
+            "Provide both guarded private parser dependencies and exact approved revisions.",
+        )
+    if hybrid_worker_factory is not None and hybrid_pipeline is None:
+        raise ProofAgentError(
+            "PA_HYBRID_WORKER_001",
+            "Hybrid worker factory requires its composed parser pipeline.",
+            "Provide the complete guarded private parser composition.",
+        )
+    if hybrid_pipeline is not None and hybrid_build_config is not None:
+        if hybrid_task_handler is not None:
+            raise ProofAgentError(
+                "PA_HYBRID_WORKER_001",
+                "Hybrid worker composition is ambiguous.",
+                "Provide either a complete handler or guarded parser composition inputs.",
+            )
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridKnowledgeWorker,
+            LocalManagedOriginalStore,
+            LocalStoreHybridQuarantinePromoter,
+            LocalStoreHybridWorkerLifecycle,
+        )
+        from proof_agent.capabilities.knowledge.ingestion.worker import (
+            LocalStoreHybridTaskHandler,
+        )
+        from proof_agent.configuration.hybrid_knowledge_repository import (
+            FileSystemKnowledgeArtifactStore,
+        )
+
+        original_store = LocalManagedOriginalStore()
+        lifecycle = LocalStoreHybridWorkerLifecycle(
+            store=store,
+            original_store=original_store,
+        )
+        artifact_store = FileSystemKnowledgeArtifactStore(config_path / "hybrid_artifacts")
+        hybrid_worker = (
+            hybrid_worker_factory.create(
+                lifecycle=lifecycle,
+                original_store=original_store,
+                artifact_store=artifact_store,
+                pipeline=hybrid_pipeline,
+                worker_id="local-store-hybrid-worker",
+            )
+            if hybrid_worker_factory is not None
+            else HybridKnowledgeWorker(
+                lifecycle=lifecycle,
+                original_store=original_store,
+                artifact_store=artifact_store,
+                pipeline=hybrid_pipeline,
+                worker_id="local-store-hybrid-worker",
+            )
+        )
+        hybrid_task_handler = LocalStoreHybridTaskHandler(
+            lifecycle=lifecycle,
+            worker=hybrid_worker,
+            quarantine_promoter=LocalStoreHybridQuarantinePromoter(
+                store=store,
+                build_config=hybrid_build_config,
+            ),
+        )
+    return KnowledgeIngestionWorker(
+        store=store,
+        artifact_builder=LocalIndexRevisionArtifactBuilder(config_path),
+        hybrid_task_handler=hybrid_task_handler,
+    )
 
 
 def main() -> None:
@@ -1320,6 +1775,7 @@ def _knowledge_worker_outcome_message(outcome: KnowledgeWorkerTaskOutcome) -> st
         ("quarantine_validation", "rejected"): "knowledge upload rejected",
         ("artifact_build", "ready"): "knowledge ingestion job ready",
         ("artifact_build", "retry_scheduled"): "knowledge ingestion job retry scheduled",
+        ("artifact_build", "review_required"): "knowledge ingestion job review required",
         ("artifact_build", "deferred"): "knowledge ingestion job deferred",
         ("artifact_build", "failed"): "knowledge ingestion job failed",
     }

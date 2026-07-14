@@ -1,0 +1,5 @@
+# Initial Knowledge Model Serving Shares One GPU
+
+Accepted.
+
+[FRAME | HIGH] The initial Private Knowledge Model Serving Plane has one shared 24-to-48-GB GPU for OCR, layout analysis, embedding, and reranking. One Knowledge Model Work Scheduler owns model residency, queue admission, online priority, bounded offline work, pause or preemption, and queue-time metrics across separate services; individual model servers cannot independently claim priority. Online query embedding and reranking receive scheduling priority, while asynchronous document parsing is bounded, queued, rate-limited, and safely pausable so ingestion cannot starve governed Agent runs. Retrieval P95 includes scheduler queue time. Capacity signals and backpressure must remain explicit, and the Routine Knowledge Change Activation Objective is measured under this resource envelope rather than assuming independent GPU pools. We accept lower ingestion parallelism and operational scheduling complexity to fit the initial infrastructure budget without coupling model serving into Proof Agent workers.

@@ -1,0 +1,22 @@
+{
+  "document_id": "doc-simple",
+  "revision_id": "rev-simple",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "page": {
+    "page_number": 1,
+    "width": 612.0,
+    "height": 792.0,
+    "blocks": [
+      {
+        "id": "ocr-paragraph-1",
+        "label": "text",
+        "text": "selected paddle text",
+        "bbox": [40.0, 85.0, 572.0, 125.0],
+        "reading_order": 1,
+        "heading_path": ["Eligibility"]
+      }
+    ],
+    "tables": []
+  },
+  "warnings": []
+}

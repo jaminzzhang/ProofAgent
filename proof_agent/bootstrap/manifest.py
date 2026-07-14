@@ -150,6 +150,7 @@ def _knowledge_binding_config_from_mapping(raw: Any) -> KnowledgeBindingConfig:
             scope=source_ref["scope"],
             source_id=source_ref["source_id"],
         ),
+        retrieval_profile_revision_id=raw.get("retrieval_profile_revision_id"),
         alias=raw.get("alias"),
         failure_mode=raw.get("failure_mode", "required"),
         fusion_weight=raw.get("fusion_weight", 1.0),

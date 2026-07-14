@@ -18,7 +18,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 import yaml  # type: ignore[import-untyped]
 
-from proof_agent.bootstrap.validation import validate_secret_safe_params
+from proof_agent.bootstrap.validation import (
+    validate_hybrid_index_params,
+    validate_secret_safe_params,
+)
 from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
 from proof_agent.capabilities.knowledge.ingestion import (
     KnowledgeWorkerClaimSelection,
@@ -42,9 +45,11 @@ from proof_agent.contracts import (
     DraftAgent,
     FoundationKnowledgeSourceValidation,
     EnvironmentModelCredentialReference,
+    ExactArtifactRef,
     KnowledgeArtifactBuildSpec,
     KnowledgeDocument,
     KnowledgeIngestionJob,
+    KnowledgeReleaseRecord,
     KnowledgeSource,
     KnowledgeSourceDeletionEligibility,
     KnowledgeSourceLifecycleState,
@@ -57,6 +62,7 @@ from proof_agent.contracts import (
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
     QuarantinedKnowledgeUpload,
+    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
     ResolvedWorkflowStageRuntimeConfiguration,
     ModelConnectionSmokeTestRecord,
@@ -71,6 +77,10 @@ from proof_agent.contracts import (
     WorkflowStageAvailabilitySet,
 )
 from proof_agent.configuration.file_locking import locked, store_lock_path
+from proof_agent.configuration.knowledge_release import (
+    KnowledgeReleaseEvidenceAuthority,
+    require_knowledge_release_record,
+)
 from proof_agent.contracts.manifest import KnowledgeConfig
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
@@ -112,6 +122,12 @@ VALIDATION_CAPTURE_EXCLUSION_METADATA = {
 }
 
 if TYPE_CHECKING:
+    from proof_agent.configuration.hybrid_knowledge_repository import (
+        HybridKnowledgeBindingAuthority,
+    )
+    from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+        HybridArtifactBuildResult,
+    )
     from proof_agent.capabilities.tools.mcp_discovery import MCPDiscoveryTransport
 
 
@@ -127,13 +143,25 @@ class KnowledgeUploadStagingInput:
 class LocalAgentConfigurationStore:
     """File-backed Agent Configuration Store for local MVP workflows."""
 
-    def __init__(self, root_dir: Path) -> None:
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        hybrid_binding_authority: HybridKnowledgeBindingAuthority | None = None,
+        knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
+    ) -> None:
         self._root_dir = root_dir
+        self._hybrid_binding_authority = hybrid_binding_authority
+        self._knowledge_release_evidence_authority = knowledge_release_evidence_authority
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def root_dir(self) -> Path:
         return self._root_dir
+
+    @property
+    def hybrid_binding_authority(self) -> HybridKnowledgeBindingAuthority | None:
+        return self._hybrid_binding_authority
 
     def create_draft(
         self,
@@ -231,6 +259,7 @@ class LocalAgentConfigurationStore:
         validation_run_id: str,
         actor: str,
         resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
+        knowledge_release_record_id: str | None = None,
     ) -> PublishedAgentVersion:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             self._require_canonical_seed_authority_allows_agent_unlocked(agent_id)
@@ -240,6 +269,7 @@ class LocalAgentConfigurationStore:
                 validation_run_id=validation_run_id,
                 actor=actor,
                 resolved_knowledge_bindings=resolved_knowledge_bindings,
+                knowledge_release_record_id=knowledge_release_record_id,
             )
 
     def publish_canonical_seed_version_if_store_empty(
@@ -315,8 +345,32 @@ class LocalAgentConfigurationStore:
         validation_run_id: str,
         actor: str,
         resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None,
+        knowledge_release_record_id: str | None = None,
     ) -> PublishedAgentVersion:
         draft = self._require_draft(agent_id, draft_id)
+        knowledge_release_record: KnowledgeReleaseRecord | None = None
+        has_hybrid_binding = resolved_knowledge_bindings is not None and any(
+            isinstance(binding, ResolvedHybridKnowledgeBinding)
+            for binding in resolved_knowledge_bindings.bindings
+        )
+        if has_hybrid_binding:
+            assert resolved_knowledge_bindings is not None
+            if knowledge_release_record_id is None:
+                raise _knowledge_source_lifecycle_conflict(
+                    "Hybrid Published Agent Version requires a Knowledge Release Record."
+                )
+            knowledge_release_record = self.get_knowledge_release_record(
+                knowledge_release_record_id
+            )
+            if knowledge_release_record is None:
+                raise _knowledge_source_lifecycle_conflict(
+                    "Knowledge Release Record is not registered."
+                )
+            require_knowledge_release_record(
+                record=knowledge_release_record,
+                contract_bundle=draft.contract_bundle,
+                resolved_knowledge_bindings=resolved_knowledge_bindings,
+            )
         self._require_shared_model_connections_active_unlocked(draft.contract_bundle.agent_yaml)
         _require_no_unavailable_workflow_stage_configuration(draft.contract_bundle.agent_yaml)
         if resolved_knowledge_bindings is not None:
@@ -344,6 +398,7 @@ class LocalAgentConfigurationStore:
             published_at=_now(),
             published_by=actor,
             resolved_knowledge_bindings=resolved_knowledge_bindings,
+            knowledge_release_record=knowledge_release_record,
             workflow_stage_availability=_build_workflow_stage_availability(
                 draft.contract_bundle.agent_yaml
             ),
@@ -368,6 +423,58 @@ class LocalAgentConfigurationStore:
         )
         self._write_active_version(active)
         return version
+
+    def record_knowledge_release(
+        self,
+        *,
+        record: KnowledgeReleaseRecord,
+        contract_bundle: ContractBundle,
+        resolved_knowledge_bindings: ResolvedKnowledgeBindingSet,
+    ) -> KnowledgeReleaseRecord:
+        """Persist one validated immutable release authority record."""
+
+        require_knowledge_release_record(
+            record=record,
+            contract_bundle=contract_bundle,
+            resolved_knowledge_bindings=resolved_knowledge_bindings,
+        )
+        authority = self._knowledge_release_evidence_authority
+        if authority is None:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority is not configured."
+            )
+        try:
+            verified = authority.verify_release_record(record)
+        except Exception as exc:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority failed closed."
+            ) from exc
+        if not verified:
+            raise _knowledge_source_lifecycle_conflict(
+                "Knowledge Release Record evidence authority rejected the artifacts."
+            )
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            existing = self.get_knowledge_release_record(record.record_id)
+            if existing is not None:
+                if existing != record:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Knowledge Release Record id already names different evidence."
+                    )
+                return existing
+            _write_json_atomic(
+                self._knowledge_release_record_path(record.record_id),
+                record.model_dump(mode="json"),
+            )
+            return record
+
+    def get_knowledge_release_record(
+        self,
+        record_id: str,
+    ) -> KnowledgeReleaseRecord | None:
+        path = self._knowledge_release_record_path(record_id)
+        if not path.exists():
+            return None
+        return KnowledgeReleaseRecord.model_validate_json(path.read_bytes())
 
     def record_validation(
         self,
@@ -1197,6 +1304,11 @@ class LocalAgentConfigurationStore:
             params,
             field_prefix=f"knowledge_sources[{source_id}].params",
         )
+        if provider == "hybrid_index":
+            validate_hybrid_index_params(
+                params,
+                field_prefix=f"knowledge_sources[{source_id}].params",
+            )
         _knowledge_source_worker_concurrency(params)
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             if self.get_knowledge_source(source_id) is not None:
@@ -1286,6 +1398,25 @@ class LocalAgentConfigurationStore:
 
     def record_configuration_operation(self, audit: ConfigurationOperationAudit) -> None:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            self._record_configuration_operation_unlocked(audit)
+
+    def ensure_configuration_operation(self, audit: ConfigurationOperationAudit) -> None:
+        """Create one immutable audit record or verify its exact persisted replay."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            path = self._configuration_audit_path(audit.operation_id)
+            if path.exists():
+                try:
+                    current = ConfigurationOperationAudit.model_validate(_read_json(path))
+                except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                    raise _configuration_operation_conflict(
+                        "Configuration operation audit is malformed."
+                    ) from exc
+                if current != audit:
+                    raise _configuration_operation_conflict(
+                        "Configuration operation audit identity already exists with different facts."
+                    )
+                return
             self._record_configuration_operation_unlocked(audit)
 
     def archive_knowledge_source(
@@ -1955,6 +2086,8 @@ class LocalAgentConfigurationStore:
         content_type: str,
         content: bytes,
         actor: str,
+        max_batch_files: int | None = None,
+        max_source_documents: int | None = None,
         lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
     ) -> QuarantinedKnowledgeUpload:
         """Persist one operator upload for asynchronous validation."""
@@ -1969,6 +2102,8 @@ class LocalAgentConfigurationStore:
                 ),
             ),
             actor=actor,
+            max_batch_files=max_batch_files,
+            max_source_documents=max_source_documents,
             lock_timeout_seconds=lock_timeout_seconds,
         )
         return uploads[0]
@@ -1979,24 +2114,40 @@ class LocalAgentConfigurationStore:
         source_id: str,
         uploads: tuple[KnowledgeUploadStagingInput, ...],
         actor: str,
+        max_batch_files: int | None = None,
+        max_source_documents: int | None = None,
         lock_timeout_seconds: float = STORE_LOCK_TIMEOUT_SECONDS,
     ) -> list[QuarantinedKnowledgeUpload]:
         """Persist one operator upload batch for asynchronous validation."""
 
         if not uploads:
             raise _knowledge_upload_batch_invalid("Knowledge upload batch must include a file.")
-        if len(uploads) > MAX_QUARANTINED_UPLOAD_BATCH_FILES:
+        resolved_max_batch_files = (
+            MAX_QUARANTINED_UPLOAD_BATCH_FILES if max_batch_files is None else max_batch_files
+        )
+        resolved_max_source_documents = (
+            KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+            if max_source_documents is None
+            else max_source_documents
+        )
+        _require_positive_staging_limit(resolved_max_batch_files, "max_batch_files")
+        _require_positive_staging_limit(resolved_max_source_documents, "max_source_documents")
+        if len(uploads) > resolved_max_batch_files:
             raise _knowledge_upload_batch_invalid(
-                f"Knowledge upload batch exceeds {MAX_QUARANTINED_UPLOAD_BATCH_FILES} files."
+                f"Knowledge upload batch exceeds {resolved_max_batch_files} files.",
+                max_batch_files=resolved_max_batch_files,
             )
 
         with locked(self._store_lock_path(), timeout_seconds=lock_timeout_seconds):
             self._require_active_knowledge_source_unlocked(source_id)
             if (
                 self._count_reserved_knowledge_document_slots_unlocked(source_id) + len(uploads)
-                > KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY
+                > resolved_max_source_documents
             ):
-                raise _knowledge_document_capacity_exceeded(source_id)
+                raise _knowledge_document_capacity_exceeded(
+                    source_id,
+                    max_source_documents=resolved_max_source_documents,
+                )
 
             batch_started_at = datetime.now(UTC)
             staged_uploads = tuple(
@@ -2085,6 +2236,136 @@ class LocalAgentConfigurationStore:
             _write_bytes_atomic(self.knowledge_document_original_path(document), original_bytes)
             _write_text_atomic(revision_dir / "parsed-text.txt", parsed_document.text)
             _write_json_atomic(revision_dir / "parser-meta.json", asdict(parser_metadata))
+            self._write_knowledge_document(document)
+            self._write_knowledge_ingestion_job(job)
+            self._write_upload_promotion_marker(upload, document, job)
+            self._write_quarantined_knowledge_upload(
+                _accepted_upload_projection(upload, document=document, job=job)
+            )
+            self.quarantined_knowledge_upload_bytes_path(upload).unlink(missing_ok=True)
+            return document, job
+
+    def accept_hybrid_quarantined_knowledge_upload(
+        self,
+        *,
+        source_id: str,
+        upload_id: str,
+        claim_token: str,
+        source_sha256: str,
+        source_size_bytes: int,
+        page_count: int,
+        parser_revision: str,
+        model_digests: tuple[str, ...],
+        configuration_sha256: str,
+    ) -> tuple[KnowledgeDocument, KnowledgeIngestionJob]:
+        """Promote a preflighted Hybrid PDF without legacy flat-text parsing."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            upload = self._require_quarantined_knowledge_upload(source_id, upload_id)
+            _require_owned_processing_claim(upload, claim_token=claim_token)
+            source = self._require_active_knowledge_source_unlocked(source_id)
+            if source.provider != "hybrid_index":
+                raise _invalid_ingestion_transition(
+                    "Hybrid upload promotion requires a hybrid_index Source."
+                )
+            if self._upload_promotion_marker_path(source_id, upload_id).exists():
+                return self._repair_accepted_upload_projection_unlocked(upload)
+            if page_count <= 0 or not parser_revision.strip() or not model_digests:
+                raise _invalid_ingestion_transition("Hybrid build identity is incomplete.")
+            original_bytes = self.quarantined_knowledge_upload_bytes_path(upload).read_bytes()
+            if (
+                len(original_bytes) != source_size_bytes
+                or hashlib.sha256(original_bytes).hexdigest() != source_sha256
+            ):
+                raise _invalid_ingestion_transition(
+                    "Hybrid quarantine bytes changed after immutable preflight."
+                )
+            suffix = upload.upload_id.removeprefix("upload_")
+            document_id = f"doc_{suffix}"
+            revision_id = f"rev_{suffix}"
+            job_id = f"job_{suffix}"
+            now = _now()
+            content_hash = hashlib.sha256(original_bytes).hexdigest()
+            artifact_build_spec = KnowledgeArtifactBuildSpec(
+                provider="hybrid_index",
+                engine_name="private-structured-parser",
+                engine_version=parser_revision,
+                parser_fingerprint_identity=hashlib.sha256(
+                    json.dumps(
+                        list(model_digests), separators=(",", ":"), ensure_ascii=False
+                    ).encode("utf-8")
+                ).hexdigest(),
+                content_hash=content_hash,
+                parsed_text_sha256=hashlib.sha256(b"").hexdigest(),
+            )
+            storage_path = (
+                Path("knowledge_sources")
+                / source_id
+                / "documents"
+                / document_id
+                / "revisions"
+                / revision_id
+                / "original.bin"
+            )
+            document = KnowledgeDocument(
+                document_id=document_id,
+                source_id=source_id,
+                revision_id=revision_id,
+                filename=upload.filename,
+                content_type=upload.content_type,
+                content_hash=content_hash,
+                size_bytes=upload.size_bytes,
+                state="queued",
+                storage_path=storage_path.as_posix(),
+                ingestion_job_id=job_id,
+                created_at=now,
+                updated_at=now,
+            )
+            job = KnowledgeIngestionJob(
+                job_id=job_id,
+                source_id=source_id,
+                document_id=document_id,
+                revision_id=revision_id,
+                state="queued",
+                ingestion_config_fingerprint=configuration_sha256,
+                artifact_build_spec=artifact_build_spec,
+                created_at=now,
+                updated_at=now,
+            )
+            revision_dir = self.knowledge_document_original_path(document).parent
+            _write_bytes_atomic(self.knowledge_document_original_path(document), original_bytes)
+            from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+                HybridArtifactBuildRequest,
+                hybrid_build_request_sha256,
+            )
+
+            original_ref = ExactArtifactRef(
+                artifact_uri=self.knowledge_document_original_path(document).resolve().as_uri(),
+                version_id=f"sha256:{content_hash}",
+                sha256=content_hash,
+                size_bytes=len(original_bytes),
+                media_type="application/pdf",
+            )
+            frozen_request = HybridArtifactBuildRequest(
+                job_id=job_id,
+                request_identity=f"{source_id}:{document_id}:{revision_id}",
+                source_id=source_id,
+                document_id=document_id,
+                revision_id=revision_id,
+                original_ref=original_ref,
+                page_numbers=tuple(range(1, page_count + 1)),
+                parser_revision=parser_revision,
+                model_digests=model_digests,
+                configuration_sha256=configuration_sha256,
+                max_auto_retries=job.max_auto_retries,
+            )
+            frozen_request = frozen_request.model_copy(
+                update={"request_sha256": hybrid_build_request_sha256(frozen_request)}
+            )
+            _write_json_atomic(
+                revision_dir / "hybrid-build-request.json",
+                frozen_request.model_dump(mode="json"),
+            )
             self._write_knowledge_document(document)
             self._write_knowledge_ingestion_job(job)
             self._write_upload_promotion_marker(upload, document, job)
@@ -2291,6 +2572,296 @@ class LocalAgentConfigurationStore:
             self._advance_source_draft_version_unlocked(source_id, updated_at=now)
             return completed
 
+    def complete_hybrid_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        artifact_path: str,
+        artifact_result: Mapping[str, Any],
+    ) -> KnowledgeIngestionJob:
+        """Project exact Hybrid output, persist registries, and complete the fenced job."""
+
+        from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_units
+        from proof_agent.capabilities.knowledge.hybrid.workbook import (
+            InsuranceMetadataAuthorityRecord,
+            InsuranceMetadataPdfDraftRecord,
+            WorkbookReviewConflictError,
+            WorkbookValidationError,
+            _persist_completed_hybrid_metadata_projection,
+        )
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridArtifactBuildRequest,
+            HybridArtifactBuildResult,
+            HybridInsuranceMetadataArtifact,
+            validate_hybrid_artifact_build_result,
+        )
+        from proof_agent.configuration.hybrid_knowledge_repository import (
+            FileSystemKnowledgeArtifactStore,
+        )
+        from proof_agent.contracts.hybrid_documents import (
+            StructuredArtifactBuildIdentity,
+            StructuredKnowledgeDocumentArtifact,
+        )
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            self._require_active_knowledge_source_unlocked(source_id)
+            revision_dir = self.knowledge_document_original_path(document).parent
+            request_path = revision_dir / "hybrid-build-request.json"
+            try:
+                request = HybridArtifactBuildRequest.model_validate_json(request_path.read_bytes())
+                result = HybridArtifactBuildResult.model_validate_json(
+                    json.dumps(dict(artifact_result), ensure_ascii=False)
+                )
+                validate_hybrid_artifact_build_result(request, result)
+            except (OSError, ValidationError, ValueError) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid completion payload failed exact build validation."
+                ) from exc
+            if (
+                result.source_id != source_id
+                or result.job_id != job_id
+                or result.document_id != document.document_id
+                or result.revision_id != document.revision_id
+                or artifact_path != result.canonical_ref.artifact_uri
+            ):
+                raise _invalid_ingestion_transition(
+                    "Hybrid completion payload does not match the owned job."
+                )
+            try:
+                with FileSystemKnowledgeArtifactStore(
+                    self._root_dir / "hybrid_artifacts"
+                ) as artifact_store:
+                    artifact_store.get_exact(result.persisted_original_ref)
+                    canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+                        artifact_store.get_exact(result.canonical_ref)
+                    )
+                    metadata = HybridInsuranceMetadataArtifact.model_validate_json(
+                        artifact_store.get_exact(result.insurance_metadata_ref)
+                    )
+                    persisted_build_identity = StructuredArtifactBuildIdentity.model_validate_json(
+                        artifact_store.get_exact(result.build_identity_ref)
+                    )
+                if (
+                    canonical.document_id != result.document_id
+                    or canonical.revision_id != result.revision_id
+                    or canonical.original_sha256 != result.original_ref.sha256
+                    or canonical.build_identity != result.build_identity
+                    or persisted_build_identity != result.build_identity
+                    or metadata.source_id != result.source_id
+                    or metadata.document_id != result.document_id
+                    or metadata.revision_id != result.revision_id
+                    or metadata.structured_build_id != result.build_id
+                    or metadata.original_sha256 != result.original_ref.sha256
+                ):
+                    raise ValueError("Hybrid projection artifacts do not match the result")
+                rule_units = project_rule_units(
+                    canonical,
+                    document_defaults=metadata.document_defaults,
+                    source_id=result.source_id,
+                )
+                authority_records = tuple(
+                    InsuranceMetadataAuthorityRecord(
+                        source_id=unit.source_id,
+                        document_id=unit.document_id,
+                        revision_id=unit.revision_id,
+                        canonical_anchor=unit.canonical_anchor,
+                        structured_build_id=unit.structured_build_id,
+                        original_ref=result.persisted_original_ref,
+                        rule_unit_draft_id=unit.rule_unit_draft_id,
+                        citation_uri=unit.citation_uri,
+                    )
+                    for unit in rule_units
+                )
+                authority_by_anchor = {
+                    record.canonical_anchor: record for record in authority_records
+                }
+                pdf_draft_records = tuple(
+                    InsuranceMetadataPdfDraftRecord(
+                        source_id=draft.source_id,
+                        document_id=draft.document_id,
+                        revision_id=draft.revision_id,
+                        canonical_anchor=draft.canonical_anchor,
+                        structured_build_id=result.build_id,
+                        original_ref=result.persisted_original_ref,
+                        metadata_artifact_ref=result.insurance_metadata_ref,
+                        rule_unit_draft_id=authority_by_anchor[
+                            draft.canonical_anchor
+                        ].rule_unit_draft_id,
+                        pdf_draft=draft,
+                    )
+                    for draft in metadata.pdf_drafts
+                )
+            except (KeyError, OSError, ValidationError, ValueError) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid canonical metadata projection failed exact validation."
+                ) from exc
+            try:
+                _persist_completed_hybrid_metadata_projection(
+                    self._root_dir,
+                    authority_records=authority_records,
+                    pdf_draft_records=pdf_draft_records,
+                )
+            except (
+                OSError,
+                ValidationError,
+                WorkbookReviewConflictError,
+                WorkbookValidationError,
+            ) as exc:
+                raise _invalid_ingestion_transition(
+                    "Hybrid metadata registry projection failed exact validation."
+                ) from exc
+            now = _now()
+            result_path = self._knowledge_ingestion_job_path(source_id, job_id).with_name(
+                "hybrid-artifact-result.json"
+            )
+            if result_path.exists():
+                try:
+                    current_result = HybridArtifactBuildResult.model_validate_json(
+                        result_path.read_bytes()
+                    )
+                except (OSError, ValidationError, ValueError):
+                    quarantine_path = result_path.with_name(
+                        f"{result_path.name}.invalid-{uuid4().hex}"
+                    )
+                    try:
+                        os.replace(result_path, quarantine_path)
+                        _fsync_directory(result_path.parent)
+                    except OSError as quarantine_exc:
+                        raise _invalid_ingestion_transition(
+                            "Persisted Hybrid artifact result cannot be quarantined."
+                        ) from quarantine_exc
+                    _write_json_atomic(result_path, result.model_dump(mode="json"))
+                else:
+                    if current_result != result:
+                        raise _invalid_ingestion_transition(
+                            "Persisted Hybrid artifact result conflicts with this completion."
+                        )
+            else:
+                _write_json_atomic(result_path, result.model_dump(mode="json"))
+            completed = job.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "completed_at": now,
+                    "error_code": None,
+                    "error_message": None,
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "ready",
+                    "artifact_path": artifact_path,
+                    "error_code": None,
+                    "error_message": None,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(completed)
+            self._advance_source_draft_version_unlocked(source_id, updated_at=now)
+            return completed
+
+    def get_completed_hybrid_artifact_build_result(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> HybridArtifactBuildResult:
+        """Load and revalidate one completed exact Hybrid build from managed state."""
+
+        from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
+            HybridArtifactBuildRequest,
+            HybridArtifactBuildResult,
+            validate_hybrid_artifact_build_result,
+        )
+
+        source = self._require_knowledge_source(source_id)
+        if source.provider != "hybrid_index":
+            raise _invalid_ingestion_transition("Hybrid build lookup requires hybrid_index.")
+        document = self.get_knowledge_document(source_id=source_id, document_id=document_id)
+        if document is None or document.revision_id != revision_id:
+            raise _invalid_ingestion_transition("Exact Hybrid document revision was not found.")
+        if document.ingestion_job_id is None:
+            raise _invalid_ingestion_transition("Hybrid document has no persisted build job.")
+        job = self.get_knowledge_ingestion_job(
+            source_id=source_id,
+            job_id=document.ingestion_job_id,
+        )
+        if job is None or job.state != "ready":
+            raise _invalid_ingestion_transition("Hybrid artifact build is not completed.")
+        revision_dir = self.knowledge_document_original_path(document).parent
+        request_path = revision_dir / "hybrid-build-request.json"
+        result_path = self._knowledge_ingestion_job_path(source_id, job.job_id).with_name(
+            "hybrid-artifact-result.json"
+        )
+        try:
+            request = HybridArtifactBuildRequest.model_validate_json(request_path.read_bytes())
+            result = HybridArtifactBuildResult.model_validate_json(result_path.read_bytes())
+            validate_hybrid_artifact_build_result(request, result)
+        except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+            raise _invalid_ingestion_transition(
+                "Completed Hybrid artifact result is missing or invalid."
+            ) from exc
+        if job.artifact_path != result.canonical_ref.artifact_uri:
+            raise _invalid_ingestion_transition(
+                "Completed Hybrid job does not match its canonical artifact reference."
+            )
+        return result
+
+    def require_hybrid_knowledge_ingestion_review(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        safe_reason: str,
+    ) -> KnowledgeIngestionJob:
+        """Release one owned Hybrid lease into durable operator review."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            now = _now()
+            message = _operator_error_message(safe_reason)
+            reviewed = job.model_copy(
+                update={
+                    "state": "review_required",
+                    "error_code": "PA_HYBRID_WORKER_REVIEW_REQUIRED",
+                    "error_message": message,
+                    "last_error_code": "PA_HYBRID_WORKER_REVIEW_REQUIRED",
+                    "last_error_message": message,
+                    "last_failure_classification": "content_review",
+                    "next_attempt_at": None,
+                    **_cleared_claim_updates(),
+                    "updated_at": now,
+                }
+            )
+            projected_document = document.model_copy(
+                update={
+                    "state": "review_required",
+                    "error_code": reviewed.error_code,
+                    "error_message": message,
+                    "updated_at": now,
+                }
+            )
+            self._write_knowledge_document(projected_document)
+            self._write_knowledge_ingestion_job(reviewed)
+            return reviewed
+
     def defer_knowledge_ingestion_job(
         self,
         *,
@@ -2415,6 +2986,34 @@ class LocalAgentConfigurationStore:
                 completed_at=_now(),
             )
 
+    def fail_recoverable_exhausted_knowledge_ingestion_job(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        claim_token: str,
+        error_code: str,
+        error_message: str,
+    ) -> KnowledgeIngestionJob:
+        """Persist an exhausted recoverable failure without misclassifying integrity."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            job, document = self._owned_job_and_document_unlocked(
+                source_id=source_id,
+                job_id=job_id,
+                claim_token=claim_token,
+            )
+            self._require_active_knowledge_source_unlocked(source_id)
+            return self._fail_knowledge_ingestion_job_unlocked(
+                job=job,
+                document=document,
+                error_code=error_code,
+                error_message=_operator_error_message(error_message),
+                failure_classification="recoverable_exhausted",
+                auto_retry_count=job.auto_retry_count,
+                completed_at=_now(),
+            )
+
     def retry_failed_knowledge_ingestion_job(
         self,
         *,
@@ -2465,6 +3064,7 @@ class LocalAgentConfigurationStore:
         self,
         *,
         lease_seconds: int = 300,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         """Atomically claim the oldest eligible task across both ingestion queues."""
 
@@ -2472,6 +3072,7 @@ class LocalAgentConfigurationStore:
             task_kinds={"quarantine_validation", "artifact_build"},
             source_id=None,
             lease_seconds=lease_seconds,
+            providers=providers,
         )
 
     def add_knowledge_document(
@@ -2626,6 +3227,51 @@ class LocalAgentConfigurationStore:
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
                     "Revalidate the Draft Agent before publishing."
                 )
+            if isinstance(binding, ResolvedHybridKnowledgeBinding):
+                if binding.source_publication_id != published_resource_id:
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Published Agent Version requires resolved shared Knowledge Source bindings. "
+                        "Revalidate the Draft Agent before publishing."
+                    )
+                has_publication = any(
+                    publication.resource_kind == "hybrid_publication"
+                    and publication.resource_id == binding.source_publication_id
+                    for publication in self.list_knowledge_source_publications(source.source_id)
+                )
+                if not has_publication:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published Hybrid Knowledge Source publication is missing: {source.source_id}"
+                    )
+                authority = self._hybrid_binding_authority
+                if authority is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"Hybrid Knowledge binding authority is not configured: {source.source_id}"
+                    )
+                hybrid_snapshot = authority.resolve_binding_authority(
+                    source_id=source.source_id,
+                    profile_revision_id=binding.retrieval_profile_revision_id,
+                )
+                if hybrid_snapshot is None:
+                    raise _knowledge_source_lifecycle_conflict(
+                        f"published Hybrid Knowledge binding authority is missing: {source.source_id}"
+                    )
+                publication = hybrid_snapshot.publication
+                profile = hybrid_snapshot.retrieval_profile
+                if (
+                    publication.source_id != binding.source_id
+                    or publication.publication_id != binding.source_publication_id
+                    or publication.source_snapshot_id != binding.source_snapshot_id
+                    or publication.generation_id != binding.index_generation_id
+                    or publication.source_publication_seq != binding.source_publication_seq
+                    or publication.manifest_ref != binding.manifest_ref
+                    or publication.attestation.attestation_id != binding.publication_attestation_id
+                    or profile.profile_revision_id != binding.retrieval_profile_revision_id
+                ):
+                    raise _knowledge_source_lifecycle_conflict(
+                        "Published Agent Version requires exact Hybrid Knowledge authority. "
+                        "Revalidate the Draft Agent before publishing."
+                    )
+                continue
             if binding.source_version_id != published_resource_id:
                 raise _knowledge_source_lifecycle_conflict(
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
@@ -2685,12 +3331,14 @@ class LocalAgentConfigurationStore:
         task_kinds: set[str],
         source_id: str | None,
         lease_seconds: int,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
             return self._claim_next_knowledge_worker_task_unlocked(
                 task_kinds=task_kinds,
                 source_id=source_id,
                 lease_seconds=lease_seconds,
+                providers=providers,
             )
 
     def _owned_job_and_document_unlocked(
@@ -2756,11 +3404,14 @@ class LocalAgentConfigurationStore:
         task_kinds: set[str],
         source_id: str | None,
         lease_seconds: int,
+        providers: set[str] | None = None,
     ) -> KnowledgeWorkerClaimSelection:
         now = datetime.now(UTC)
         diagnostics: list[KnowledgeWorkerDiagnostic] = []
         source_limits: dict[str, int] = {}
         for source in self.list_knowledge_sources():
+            if providers is not None and source.provider not in providers:
+                continue
             if source_id is not None and source.source_id != source_id:
                 continue
             if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
@@ -3312,6 +3963,27 @@ class LocalAgentConfigurationStore:
 
     def _validation_captures_root(self) -> Path:
         return self._root_dir / "validation_captures"
+
+    def _knowledge_release_record_path(self, record_id: str) -> Path:
+        raw_record_id = record_id.strip()
+        record_path = Path(raw_record_id)
+        if (
+            not raw_record_id
+            or raw_record_id != record_id
+            or raw_record_id in {".", ".."}
+            or record_path.is_absolute()
+            or len(record_path.parts) != 1
+            or "/" in raw_record_id
+            or "\\" in raw_record_id
+        ):
+            raise ValueError(f"Invalid Knowledge Release Record id: {record_id}")
+        root = (self._root_dir / "knowledge_release_records").resolve()
+        path = (root / f"{raw_record_id}.json").resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Invalid Knowledge Release Record id: {record_id}") from exc
+        return path
 
     def _validation_capture_dir(self, capture_id: str) -> Path:
         raw_capture_id = capture_id.strip()
@@ -4200,20 +4872,42 @@ def _knowledge_source_worker_concurrency(params: Mapping[str, Any]) -> int:
     return value
 
 
-def _knowledge_document_capacity_exceeded(source_id: str) -> ProofAgentError:
+def _knowledge_document_capacity_exceeded(
+    source_id: str,
+    *,
+    max_source_documents: int = KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY,
+) -> ProofAgentError:
+    message = f"Knowledge Source {source_id} has reached its document capacity."
+    if max_source_documents != KNOWLEDGE_SOURCE_DOCUMENT_CAPACITY:
+        message = (
+            f"Knowledge Source {source_id} has reached its configured "
+            f"{max_source_documents}-document capacity."
+        )
     return ProofAgentError(
         "PA_INGESTION_004",
-        f"Knowledge Source {source_id} has reached its document capacity.",
+        message,
         "Archive an existing document or wait for a pending upload validation to finish.",
     )
 
 
-def _knowledge_upload_batch_invalid(message: str) -> ProofAgentError:
+def _knowledge_upload_batch_invalid(
+    message: str,
+    *,
+    max_batch_files: int = MAX_QUARANTINED_UPLOAD_BATCH_FILES,
+) -> ProofAgentError:
+    fix = "Upload one through 50 documents in a single batch."
+    if max_batch_files != MAX_QUARANTINED_UPLOAD_BATCH_FILES:
+        fix = f"Upload one through {max_batch_files} documents in a single batch."
     return ProofAgentError(
         "PA_INGESTION_002",
         message,
-        "Upload one through 50 documents in a single batch.",
+        fix,
     )
+
+
+def _require_positive_staging_limit(value: int, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
 
 
 def _invalid_routing_metadata(message: str) -> ProofAgentError:
@@ -4554,6 +5248,14 @@ def _invalid_configuration_operation_id(operation_id: str) -> ProofAgentError:
     )
 
 
+def _configuration_operation_conflict(message: str) -> ProofAgentError:
+    return ProofAgentError(
+        "PA_CONFIG_002",
+        message,
+        "Preserve the original immutable audit record and investigate the conflicting replay.",
+    )
+
+
 def _knowledge_publication_conflict(message: str) -> ProofAgentError:
     return ProofAgentError(
         "PA_CONFIG_002",
@@ -4649,6 +5351,14 @@ def _require_owned_processing_claim(
         raise _invalid_ingestion_transition(
             "Knowledge ingestion task is not owned by the current worker claim."
         )
+    if task.lease_expires_at is None:
+        raise _invalid_ingestion_transition("Knowledge ingestion task claim has no lease expiry.")
+    lease_expires_at = _parse_timestamp(task.lease_expires_at)
+    now = datetime.now(UTC)
+    if lease_expires_at.tzinfo is None or lease_expires_at.utcoffset() is None:
+        raise _invalid_ingestion_transition("Knowledge ingestion task lease is not timezone-aware.")
+    if lease_expires_at <= now:
+        raise _invalid_ingestion_transition("Knowledge ingestion task worker lease has expired.")
 
 
 def _is_ready_for_claim(
@@ -4720,10 +5430,21 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
     try:
         with os.fdopen(file_descriptor, "wb") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _jsonable(value: Any) -> Any:

@@ -177,9 +177,75 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
         "confidence",
         "recommended_next_action",
         "retrieval_query_set",
+        "insurance_condition_proposal",
     ]
     assert user_payload["retrieval_query_set_budget"]["max_queries"] == 3
     assert resolution.retrieval_query_set[0].query == ("inpatient reimbursement required documents")
+
+
+def test_llm_intent_resolver_accepts_only_bounded_insurance_condition_proposal() -> None:
+    provider = FakeIntentProvider(
+        """
+        {
+          "resolution_id": "intent_conditions_1",
+          "user_goal": "Check Product A applicability.",
+          "domain_intent": "insurance_conditional_guidance",
+          "known_facts": ["The channel is agency."],
+          "missing_fields": [],
+          "ambiguities": [],
+          "risk_flags": [],
+          "confidence": 0.91,
+          "recommended_next_action": "plan_retrieval",
+          "retrieval_query_set": [
+            {
+              "query": "Product A agency applicability",
+              "intent_angle": "applicability",
+              "required": true,
+              "reason": "The user asks for conditional guidance."
+            }
+          ],
+          "insurance_condition_proposal": {
+            "values": {"channel": "agency", "product": "product-a"}
+          }
+        }
+        """
+    )
+    resolver = LLMIntentResolver(
+        config=ReActPlannerConfig(provider="openai_compatible", name="intent-test"),
+        model_provider=provider,
+    )
+
+    result = resolver.resolve(
+        question="Does Product A apply through the agency channel?",
+        system_prompt="Resolve intent safely.",
+        context_summary="",
+    )
+
+    assert result.intent_resolution.insurance_condition_proposal.values == {
+        "channel": "agency",
+        "product": "product-a",
+    }
+    assert provider.last_request is not None
+    schema = provider.last_request.function_schema
+    assert schema is not None
+    proposal_schema = schema.parameters_schema["properties"]["insurance_condition_proposal"]
+    assert proposal_schema == {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["values"],
+        "properties": {
+            "values": {
+                "type": "object",
+                "maxProperties": 32,
+                "propertyNames": {"type": "string", "minLength": 1, "maxLength": 64},
+                "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                },
+            }
+        },
+    }
 
 
 def test_llm_intent_resolver_includes_admitted_conversation_context() -> None:

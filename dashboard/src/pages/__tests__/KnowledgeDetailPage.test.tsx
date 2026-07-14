@@ -7,10 +7,12 @@ import {
   archiveKnowledgeSource,
   fetchCandidateKnowledgeSourceSnapshot,
   fetchKnowledgeIngestionJobs,
+  fetchKnowledgeOperations,
   fetchKnowledgeDocuments,
   fetchKnowledgeSource,
   fetchKnowledgeSourceDeletionEligibility,
   fetchKnowledgeSourcePublications,
+  fetchInsuranceMetadataReviews,
   fetchQuarantinedKnowledgeUploads,
   freezeCandidateKnowledgeSourceSnapshot,
   permanentlyDeleteKnowledgeSource,
@@ -29,10 +31,13 @@ vi.mock('../../api/client', () => ({
   archiveKnowledgeSource: vi.fn(),
   fetchCandidateKnowledgeSourceSnapshot: vi.fn(),
   fetchKnowledgeIngestionJobs: vi.fn(),
+  fetchKnowledgeOperations: vi.fn(),
   fetchKnowledgeDocuments: vi.fn(),
   fetchKnowledgeSource: vi.fn(),
   fetchKnowledgeSourceDeletionEligibility: vi.fn(),
   fetchKnowledgeSourcePublications: vi.fn(),
+  fetchInsuranceMetadataReviews: vi.fn(),
+  resolveInsuranceMetadataReview: vi.fn(),
   fetchQuarantinedKnowledgeUploads: vi.fn(),
   freezeCandidateKnowledgeSourceSnapshot: vi.fn(),
   permanentlyDeleteKnowledgeSource: vi.fn(),
@@ -59,6 +64,9 @@ function renderPage() {
 describe('KnowledgeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchKnowledgeOperations).mockRejectedValue(
+      new Error('Operations telemetry unavailable in this page fixture.'),
+    )
     vi.mocked(fetchKnowledgeSource).mockResolvedValue({
       source_id: 'ks_local_index',
       name: 'Local Index Policies',
@@ -138,6 +146,13 @@ describe('KnowledgeDetailPage', () => {
       required_reingestion_count: 0,
     })
     vi.mocked(fetchKnowledgeSourcePublications).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+      data: [],
+      meta: {
+        total: 0, unresolved: 0, next_cursor: null,
+        summary: { total: 0, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 0, corrected: 0, rejected: 0, all_approved: false },
+      },
+    })
     vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
       source_id: 'ks_local_index',
       eligible: false,
@@ -351,6 +366,86 @@ describe('KnowledgeDetailPage', () => {
     expect(await screen.findByText('Published kspub_1.')).toBeInTheDocument()
     expect(fetchKnowledgeSourcePublications).toHaveBeenCalledWith('ks_local_index')
     expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
+  })
+
+  it('wires approved Hybrid metadata reviews to a real readiness confirmation', async () => {
+    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
+      source_id: 'ks_hybrid_index',
+      name: 'Insurance Rules Hybrid',
+      provider: 'hybrid_index',
+      lifecycle_state: 'ACTIVE',
+      params: {},
+      created_at: '2026-05-31T00:00:00Z',
+      updated_at: '2026-05-31T00:00:00Z',
+      source_draft_version_id: 'ksdraft_hybrid',
+      latest_snapshot_id: null,
+      published_snapshot_id: null,
+      publication_count: 0,
+      document_count: 1,
+      ready_document_count: 1,
+    })
+    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
+      data: [{
+        schema_version: 'insurance-metadata-review.v1',
+        review_id: 'metadata_review_approved',
+        review_identity: 'a'.repeat(64),
+        review_version: 2,
+        import_id: 'metadata_import_1',
+        workbook_row_number: 6,
+        workbook_draft_id: 'metadata_draft_1',
+        original_ref: {
+          artifact_uri: 'file:///managed/original.xlsx', version_id: `sha256:${'1'.repeat(64)}`,
+          sha256: '1'.repeat(64), size_bytes: 100,
+          media_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+        normalized_ref: {
+          artifact_uri: 'file:///managed/normalized.json', version_id: `sha256:${'2'.repeat(64)}`,
+          sha256: '2'.repeat(64), size_bytes: 100, media_type: 'application/json',
+        },
+        source_id: 'ks_hybrid_index',
+        document_id: 'doc_1',
+        revision_id: 'rev_1',
+        canonical_anchor: 'section:eligibility',
+        citation_uri: 'proofagent://knowledge/ks_hybrid_index/doc_1/rev_1#section:eligibility',
+        state: 'approved',
+        publication_blocked: false,
+        pdf_draft: {
+          metadata_draft_id: 'pdf_metadata_draft_1',
+          origin: 'pdf', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
+          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
+          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
+          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
+        },
+        workbook_draft: {
+          metadata_draft_id: 'workbook_metadata_draft_1',
+          origin: 'workbook', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
+          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
+          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
+          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
+        },
+        conflicts: [],
+        resolved_values: {},
+        resolution_reason: 'Approved against the signed source.',
+        resolved_by: 'reviewer',
+        approved_metadata_revision_id: 'approved_metadata_1',
+        decision_history: [],
+      }],
+      meta: {
+        total: 1, unresolved: 0, next_cursor: null,
+        summary: { total: 1, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 1, corrected: 0, rejected: 0, all_approved: true },
+      },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Insurance Rules Hybrid')).toBeInTheDocument()
+    const readiness = await screen.findByRole('button', { name: 'Confirm publication readiness' })
+    expect(readiness).toBeEnabled()
+    fireEvent.click(readiness)
+    expect(await screen.findByText(
+      'All insurance metadata reviews are approved. This Hybrid Source is ready for governed publication.',
+    )).toBeInTheDocument()
   })
 
   it('summarizes source-owned model connection configuration', async () => {

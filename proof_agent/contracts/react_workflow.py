@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.policy import EnforcementPoint, PolicyDecisionType
@@ -64,6 +64,57 @@ class RetrievalQueryItem(FrozenModel):
         return value
 
 
+class InsuranceConditionProposal(FrozenModel):
+    """Model-proposed insurance taxonomy values without authority semantics."""
+
+    values: Mapping[str, str] = Field(default_factory=FrozenDict)
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def validate_and_freeze_values(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            raise ValueError("insurance condition values must be a mapping")
+        if len(value) > 32:
+            raise ValueError("insurance condition values exceed the 32-field limit")
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_key, str) or not raw_key.strip() or len(raw_key.strip()) > 64:
+                raise ValueError("insurance condition keys must be 1 through 64 characters")
+            if (
+                not isinstance(raw_value, str)
+                or not raw_value.strip()
+                or len(raw_value.strip()) > 256
+            ):
+                raise ValueError("insurance condition values must be 1 through 256 characters")
+            key = raw_key.strip()
+            if key in normalized:
+                raise ValueError("insurance condition keys must be unique")
+            normalized[key] = raw_value.strip()
+        return freeze_value(normalized)
+
+    @field_serializer("values")
+    def serialize_values(self, value: Mapping[str, str]) -> dict[str, str]:
+        return dict(value)
+
+
+class InsuranceConditionAdmission(FrozenModel):
+    """Deterministic Control Plane decision for proposed insurance conditions."""
+
+    admitted: bool
+    normalized_values: Mapping[str, str] = Field(default_factory=FrozenDict)
+    missing_authority_fields: tuple[str, ...] = ()
+    reason: str
+
+    @field_validator("normalized_values", mode="after")
+    @classmethod
+    def freeze_normalized_values(cls, value: Any) -> Any:
+        return freeze_value(value)
+
+    @field_serializer("normalized_values")
+    def serialize_normalized_values(self, value: Mapping[str, str]) -> dict[str, str]:
+        return dict(value)
+
+
 class IntentResolution(FrozenModel):
     """Audit-safe user intent understanding before ReAct action planning."""
 
@@ -77,6 +128,9 @@ class IntentResolution(FrozenModel):
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     recommended_next_action: ReActActionType
     retrieval_query_set: tuple[RetrievalQueryItem, ...] = Field(default_factory=tuple)
+    insurance_condition_proposal: InsuranceConditionProposal = Field(
+        default_factory=InsuranceConditionProposal
+    )
 
     @field_validator("retrieval_query_set", mode="after")
     @classmethod
@@ -126,8 +180,7 @@ class BusinessFlowSkillPackRecommendation(FrozenModel):
     def validate_candidate_cardinality(self) -> BusinessFlowSkillPackRecommendation:
         candidate_count = len(self.candidate_packs)
         if (
-            self.recommendation_type
-            is BusinessFlowSkillPackRecommendationType.SINGLE_PACK
+            self.recommendation_type is BusinessFlowSkillPackRecommendationType.SINGLE_PACK
             and candidate_count != 1
         ):
             raise ValueError("single_pack recommendations require exactly one candidate")
@@ -142,8 +195,7 @@ class BusinessFlowSkillPackRecommendation(FrozenModel):
         ):
             raise ValueError("ambiguous recommendations require at least two candidates")
         if (
-            self.recommendation_type
-            is not BusinessFlowSkillPackRecommendationType.AMBIGUOUS
+            self.recommendation_type is not BusinessFlowSkillPackRecommendationType.AMBIGUOUS
             and self.requires_task_split
         ):
             raise ValueError("requires_task_split is only valid for ambiguous recommendations")

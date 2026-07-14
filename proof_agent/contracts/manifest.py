@@ -171,6 +171,7 @@ class PackageKnowledgeSourceConfig(FrozenModel):
 class KnowledgeBindingConfig(FrozenModel):
     binding_id: str
     source_ref: KnowledgeSourceReferenceConfig
+    retrieval_profile_revision_id: str | None = None
     alias: str | None = None
     failure_mode: str = "required"
     fusion_weight: float = 1.0

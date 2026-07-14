@@ -44,6 +44,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Office temporary lock files
+~$*
+
 # Environment / secrets
 .env
 .env.local

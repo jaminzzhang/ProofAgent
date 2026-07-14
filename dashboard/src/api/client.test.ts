@@ -31,6 +31,7 @@ import {
   fetchWorkflowTemplate,
   fetchWorkflowTemplates,
   importConfigAgent,
+  importInsuranceMetadataWorkbook,
   permanentlyDeleteKnowledgeSource,
   promoteEvaluationProductionSample,
   previewWorkflowStageContext,
@@ -54,6 +55,34 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+test('insurance metadata workbook import uses the protected Source route', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({
+      import_id: 'metadata_import_1',
+      template_revision: 'insurance-rule-metadata.v1',
+      row_count: 1,
+      reviews: [],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+  const payload = {
+    filename: 'metadata.xlsx',
+    content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    content_base64: 'UEsDBA==',
+    document_id: 'doc_1',
+    revision_id: 'rev_1',
+  }
+
+  await importInsuranceMetadataWorkbook('ks_hybrid', payload)
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/knowledge-sources/ks_hybrid/metadata-workbooks/import',
+    expect.objectContaining({ method: 'POST', body: JSON.stringify(payload) }),
+  )
 })
 
 test('evaluation campaign client methods use dashboard campaign endpoints', async () => {

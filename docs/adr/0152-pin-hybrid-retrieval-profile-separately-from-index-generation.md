@@ -1,0 +1,5 @@
+# Pin Hybrid Retrieval Profile Separately From Index Generation
+
+Accepted.
+
+[FRAME | HIGH] Knowledge Index Generation identifies only stored artifact and index compatibility: canonical schema, Rule Unit projection, OpenSearch mapping and analyzer, embedding revision, instruction, dimension, pooling, normalization, and related index-affecting configuration. Query-time behavior instead uses an immutable Knowledge Retrieval Profile Revision containing query expansion, lexical and dense candidate budgets, Source-local RRF parameters, private reranker revision and limits, Rule Unit Context Expansion policy, final budgets, and enabled Prevalidated Retrieval Degradations. A Resolved Hybrid Knowledge Binding pins both identities together with Source snapshot and Publication Sequence. Changing only retrieval profile behavior requires its applicable Gold Suite, degradation, performance, Agent Validation Run, and Agent Publication gates but does not rebuild vectors or create a new generation; changing any stored compatibility field does both. We accept one more explicit version reference to prevent expensive false reindexing and mutable runtime retrieval behavior.

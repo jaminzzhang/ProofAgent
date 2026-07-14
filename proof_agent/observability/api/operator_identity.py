@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from fastapi import HTTPException
+
+from proof_agent.contracts import InstitutionAuthorizationContext
 
 
 class OperatorPermission(StrEnum):
@@ -38,6 +40,9 @@ class OperatorIdentityContext:
     operator_id: str
     display_name: str
     permissions: frozenset[OperatorPermission]
+    institution_authorization: InstitutionAuthorizationContext = field(
+        default_factory=InstitutionAuthorizationContext
+    )
 
 
 class LocalOperatorIdentityProvider:
