@@ -2299,6 +2299,44 @@ class OpenSearchHybridIndex:
             rebuild=False,
         )
 
+    def ensure_index(
+        self,
+        generation: KnowledgeIndexGeneration,
+        *,
+        rrf_pipeline: str,
+        rrf_rank_constant: int,
+    ) -> SearchIndexIdentity:
+        """Create once or verify and reuse the exact deterministic physical generation."""
+
+        generation = KnowledgeIndexGeneration.model_validate(generation.model_dump(mode="python"))
+        self._validate_generation(generation)
+        self._ensure_pipeline(pipeline=rrf_pipeline, rank_constant=rrf_rank_constant)
+        index_name = physical_index_name(generation.source_id, generation.generation_id)
+        response = self._transport.request(method="GET", path=f"/{index_name}")
+        if response.status_code == 404:
+            return self.create_index(
+                generation,
+                rrf_pipeline=rrf_pipeline,
+                rrf_rank_constant=rrf_rank_constant,
+            )
+        if response.status_code != 200:
+            raise OpenSearchProjectionError("OpenSearch physical generation lookup failed")
+        details = _mapping(response.body.get(index_name), field_name="existing index identity")
+        settings = _mapping(details.get("settings"), field_name="existing index settings")
+        index_settings = _mapping(
+            settings.get("index"), field_name="existing index settings.index"
+        )
+        expected = SearchIndexIdentity(
+            generation=generation,
+            index_uuid=_exact_string(index_settings.get("uuid"), field_name="index UUID"),
+        )
+        return _response_index_identity(
+            response,
+            index_name=index_name,
+            expected=expected,
+            expected_number_of_replicas=self._number_of_replicas,
+        )
+
     def create_rebuild_index(
         self,
         generation: KnowledgeIndexGeneration,

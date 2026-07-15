@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
@@ -55,6 +55,10 @@ from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
 
+if TYPE_CHECKING:
+    from proof_agent.capabilities.knowledge.hybrid.provider import HybridIndexProvider
+    from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
+
 
 class ControlledReActOrchestratorDependency(Protocol):
     def start(
@@ -89,6 +93,8 @@ class AgentPackageRunRequest:
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
+    hybrid_providers: Mapping[str, "HybridIndexProvider"] | None = None
+    governed_hybrid_request_factory: "GovernedHybridRequestFactory" | None = None
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -164,6 +170,8 @@ def _execute_controlled_react_v3_agent_package_run(
             configuration_store=request.configuration_store,
             context_budget_calibration_store=request.context_budget_calibration_store,
             institution_authorization=request.institution_authorization,
+            hybrid_providers=request.hybrid_providers,
+            governed_hybrid_request_factory=request.governed_hybrid_request_factory,
         )
     except ProofAgentError as exc:
         if exc.code.startswith("PA_MODEL_"):

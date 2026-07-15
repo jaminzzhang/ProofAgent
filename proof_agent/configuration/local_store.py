@@ -128,6 +128,7 @@ if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
         HybridArtifactBuildResult,
     )
+    from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
     from proof_agent.capabilities.tools.mcp_discovery import MCPDiscoveryTransport
 
 
@@ -2580,6 +2581,7 @@ class LocalAgentConfigurationStore:
         claim_token: str,
         artifact_path: str,
         artifact_result: Mapping[str, Any],
+        artifact_store: KnowledgeArtifactStore | None = None,
     ) -> KnowledgeIngestionJob:
         """Project exact Hybrid output, persist registries, and complete the fenced job."""
 
@@ -2634,20 +2636,24 @@ class LocalAgentConfigurationStore:
                 raise _invalid_ingestion_transition(
                     "Hybrid completion payload does not match the owned job."
                 )
-            try:
-                with FileSystemKnowledgeArtifactStore(
+            local_artifact_store = None
+            resolved_artifact_store = artifact_store
+            if resolved_artifact_store is None:
+                local_artifact_store = FileSystemKnowledgeArtifactStore(
                     self._root_dir / "hybrid_artifacts"
-                ) as artifact_store:
-                    artifact_store.get_exact(result.persisted_original_ref)
-                    canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
-                        artifact_store.get_exact(result.canonical_ref)
-                    )
-                    metadata = HybridInsuranceMetadataArtifact.model_validate_json(
-                        artifact_store.get_exact(result.insurance_metadata_ref)
-                    )
-                    persisted_build_identity = StructuredArtifactBuildIdentity.model_validate_json(
-                        artifact_store.get_exact(result.build_identity_ref)
-                    )
+                )
+                resolved_artifact_store = local_artifact_store
+            try:
+                resolved_artifact_store.get_exact(result.persisted_original_ref)
+                canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+                    resolved_artifact_store.get_exact(result.canonical_ref)
+                )
+                metadata = HybridInsuranceMetadataArtifact.model_validate_json(
+                    resolved_artifact_store.get_exact(result.insurance_metadata_ref)
+                )
+                persisted_build_identity = StructuredArtifactBuildIdentity.model_validate_json(
+                    resolved_artifact_store.get_exact(result.build_identity_ref)
+                )
                 if (
                     canonical.document_id != result.document_id
                     or canonical.revision_id != result.revision_id
@@ -2702,6 +2708,9 @@ class LocalAgentConfigurationStore:
                 raise _invalid_ingestion_transition(
                     "Hybrid canonical metadata projection failed exact validation."
                 ) from exc
+            finally:
+                if local_artifact_store is not None:
+                    local_artifact_store.close()
             try:
                 _persist_completed_hybrid_metadata_projection(
                     self._root_dir,
@@ -3217,31 +3226,12 @@ class LocalAgentConfigurationStore:
                 raise _knowledge_source_lifecycle_conflict(
                     f"Knowledge Source {binding.source_id} is archived."
                 )
-            published_resource_id = source.published_snapshot_id
-            if published_resource_id is None:
-                raise _knowledge_source_lifecycle_conflict(
-                    f"Knowledge Source {binding.source_id} is not published."
-                )
             if binding.provider != source.provider:
                 raise _knowledge_source_lifecycle_conflict(
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "
                     "Revalidate the Draft Agent before publishing."
                 )
             if isinstance(binding, ResolvedHybridKnowledgeBinding):
-                if binding.source_publication_id != published_resource_id:
-                    raise _knowledge_source_lifecycle_conflict(
-                        "Published Agent Version requires resolved shared Knowledge Source bindings. "
-                        "Revalidate the Draft Agent before publishing."
-                    )
-                has_publication = any(
-                    publication.resource_kind == "hybrid_publication"
-                    and publication.resource_id == binding.source_publication_id
-                    for publication in self.list_knowledge_source_publications(source.source_id)
-                )
-                if not has_publication:
-                    raise _knowledge_source_lifecycle_conflict(
-                        f"published Hybrid Knowledge Source publication is missing: {source.source_id}"
-                    )
                 authority = self._hybrid_binding_authority
                 if authority is None:
                     raise _knowledge_source_lifecycle_conflict(
@@ -3272,6 +3262,11 @@ class LocalAgentConfigurationStore:
                         "Revalidate the Draft Agent before publishing."
                     )
                 continue
+            published_resource_id = source.published_snapshot_id
+            if published_resource_id is None:
+                raise _knowledge_source_lifecycle_conflict(
+                    f"Knowledge Source {binding.source_id} is not published."
+                )
             if binding.source_version_id != published_resource_id:
                 raise _knowledge_source_lifecycle_conflict(
                     "Published Agent Version requires resolved shared Knowledge Source bindings. "

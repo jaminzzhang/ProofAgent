@@ -569,6 +569,24 @@ def test_create_index_pins_generation_metadata_and_source_local_rrf_pipeline() -
     )
 
 
+def test_ensure_index_reuses_exact_existing_generation_without_recreation() -> None:
+    transport = RecordingTransport()
+    adapter = OpenSearchHybridIndex(transport=transport)
+
+    identity = adapter.ensure_index(
+        index_identity().generation,
+        rrf_pipeline=rrf_pipeline_name(rank_constant=60),
+        rrf_rank_constant=60,
+    )
+
+    assert identity == index_identity()
+    assert not any(
+        call["method"] == "PUT"
+        and call["path"] == f"/{physical_index_name('source-1', 'generation-1')}"
+        for call in transport.calls
+    )
+
+
 def test_mapping_uses_typed_authority_acl_applicability_and_one_vector() -> None:
     mapping = rule_unit_index_mapping(dimension=1024)
     properties = mapping["properties"]

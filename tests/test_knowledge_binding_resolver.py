@@ -469,9 +469,6 @@ def test_configuration_store_resolver_inherits_hybrid_source_default_profile(
         profile=profile,
         make_default=True,
     )
-    store._write_knowledge_source(
-        source.model_copy(update={"published_snapshot_id": publication.publication_id})
-    )
     manifest = load_agent_manifest(
         _write_agent_manifest(
             tmp_path,
@@ -487,6 +484,7 @@ def test_configuration_store_resolver_inherits_hybrid_source_default_profile(
 
     binding = resolved.bindings[0]
     assert isinstance(binding, ResolvedHybridKnowledgeBinding)
+    assert store.get_knowledge_source(source.source_id).published_snapshot_id is None
     assert binding.retrieval_profile_revision_id == "profile-default"
 
 

@@ -9,7 +9,8 @@ Read in this order:
 3. `technical-design.md` — active architecture and production target;
 4. `developer-guide.md` — authoring, local operation and verification;
 5. `development-progress.md` — implemented versus remaining work;
-6. `../CONTEXT-MAP.md` — domain vocabulary routing.
+6. `deployment/hybrid-knowledge-closed-loop.md` — Hybrid closed-loop deployment and Phase F;
+7. `../CONTEXT-MAP.md` — domain vocabulary routing.
 
 The sole example guide is `examples/agent-management-insurance-specialist.md`.
 

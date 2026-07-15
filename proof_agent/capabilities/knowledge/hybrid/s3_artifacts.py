@@ -11,7 +11,20 @@ from urllib.parse import quote, unquote, urlsplit
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 
 
-_KEY = re.compile(r"^hybrid-manifests/(?:roots|shards)/(?P<digest>[0-9a-f]{64})\.json$")
+_MANIFEST_KEY = re.compile(
+    r"^hybrid-manifests/(?:roots|shards)/(?P<digest>[0-9a-f]{64})\.json$"
+)
+_BUILD_KEY = re.compile(
+    r"^hybrid/[0-9a-f]{64}/[0-9a-f]{64}/(?:original\.pdf|vendor-[0-9]{4}\.json|"
+    r"canonical\.json|preview\.md|build-identity\.json|insurance-metadata\.json)$"
+)
+_WORKBOOK_KEY = re.compile(
+    r"^metadata-workbooks/[0-9a-f]{64}/(?:original\.xlsx|normalized\.json)$"
+)
+_RELEASE_EVIDENCE_KEY = re.compile(
+    r"^knowledge-release-evidence/(?:shadow|capacity|acceptance|recovery)/"
+    r"(?P<digest>[0-9a-f]{64})\.json$"
+)
 
 
 class S3ArtifactError(RuntimeError):
@@ -101,15 +114,25 @@ class S3ExactArtifactStore:
         content: bytes,
         media_type: str,
     ) -> ExactArtifactRef:
-        match = _KEY.fullmatch(key)
-        if match is None or any(char in key for char in ("..", "\\", "\x00", "\r", "\n")):
-            raise S3ArtifactError("artifact key is not a system-generated manifest key")
+        manifest_match = _MANIFEST_KEY.fullmatch(key)
+        release_evidence_match = _RELEASE_EVIDENCE_KEY.fullmatch(key)
+        if not _valid_system_key(key):
+            raise S3ArtifactError("artifact key is not a system-generated artifact key")
         if type(content) is not bytes or not content:
             raise S3ArtifactError("artifact content must be nonempty exact bytes")
         if not media_type or len(media_type) > 255:
             raise S3ArtifactError("artifact media type is invalid")
         digest = hashlib.sha256(content).hexdigest()
-        if match.group("digest") != digest:
+        addressed_digest = (
+            manifest_match.group("digest")
+            if manifest_match is not None
+            else (
+                release_evidence_match.group("digest")
+                if release_evidence_match is not None
+                else None
+            )
+        )
+        if addressed_digest is not None and addressed_digest != digest:
             raise S3ArtifactError("artifact key does not match exact content digest")
 
         physical_key = self._physical_key(key)
@@ -237,9 +260,22 @@ class S3ExactArtifactStore:
         if not physical_key.startswith(self._key_prefix):
             raise S3ArtifactError("artifact reference is outside the configured authority prefix")
         key = physical_key[len(self._key_prefix) :]
-        if parsed.scheme != "s3" or parsed.netloc != self._bucket or _KEY.fullmatch(key) is None:
+        if (
+            parsed.scheme != "s3"
+            or parsed.netloc != self._bucket
+            or not _valid_system_key(key)
+        ):
             raise S3ArtifactError("artifact reference is outside the configured authority bucket")
         return physical_key
 
     def _physical_key(self, logical_key: str) -> str:
         return self._key_prefix + logical_key
+
+
+def _valid_system_key(key: str) -> bool:
+    if any(char in key for char in ("..", "\\", "\x00", "\r", "\n")):
+        return False
+    return any(
+        pattern.fullmatch(key) is not None
+        for pattern in (_MANIFEST_KEY, _BUILD_KEY, _WORKBOOK_KEY, _RELEASE_EVIDENCE_KEY)
+    )

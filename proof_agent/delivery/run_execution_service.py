@@ -6,6 +6,10 @@ from typing import Any
 from uuid import uuid4
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.hybrid_execution import (
+    HybridRunDependencies as HybridRunDependencies,
+    HybridRunRuntime,
+)
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
@@ -26,7 +30,6 @@ from proof_agent.control.workflow.controlled_react.ports import (
     SnapshotStorePort,
 )
 
-
 @dataclass(frozen=True)
 class RunExecutionDependencies:
     store: RunStore
@@ -35,6 +38,7 @@ class RunExecutionDependencies:
     controlled_react_snapshot_store: SnapshotStorePort | None = None
     controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
+    hybrid_runtime: HybridRunRuntime | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,24 @@ def execute_published_agent_run(
     run_id = f"run_{uuid4().hex[:8]}"
     run_artifact_dir = dependencies.store.create_run_dir(run_id)
     manifest = load_agent_manifest(published_agent.manifest_path)
+    hybrid_dependencies = None
+    if published_agent.resolved_knowledge_bindings is not None:
+        has_hybrid = any(
+            getattr(binding, "binding_kind", None) == "hybrid"
+            for binding in published_agent.resolved_knowledge_bindings.bindings
+        )
+        if has_hybrid:
+            if dependencies.hybrid_runtime is None:
+                raise RuntimeError(
+                    "Published Hybrid Agent execution requires the production Hybrid runtime"
+                )
+            hybrid_dependencies = dependencies.hybrid_runtime.bind_for_run(
+                published_agent.resolved_knowledge_bindings
+            )
+        elif dependencies.hybrid_runtime is not None:
+            hybrid_dependencies = dependencies.hybrid_runtime.bind_for_run(
+                published_agent.resolved_knowledge_bindings
+            )
     result = execute_agent_package_run(
         AgentPackageRunRequest(
             agent_yaml=published_agent.manifest_path,
@@ -82,6 +104,16 @@ def execute_published_agent_run(
             controlled_react_snapshot_store=dependencies.controlled_react_snapshot_store,
             institution_authorization=(
                 institution_authorization or InstitutionAuthorizationContext()
+            ),
+            hybrid_providers=(
+                hybrid_dependencies.hybrid_providers
+                if hybrid_dependencies is not None
+                else None
+            ),
+            governed_hybrid_request_factory=(
+                hybrid_dependencies.governed_request_factory
+                if hybrid_dependencies is not None
+                else None
             ),
             controlled_react_observation_truth_store=(
                 dependencies.controlled_react_observation_truth_store

@@ -1583,6 +1583,41 @@ def test_s3_artifacts_require_content_address_and_verify_exact_version() -> None
         store.get_exact(ref)
 
 
+def test_s3_artifacts_accept_only_enumerated_worker_and_workbook_keys() -> None:
+    store = S3ExactArtifactStore(client=_S3(), bucket="test-bucket")
+    digest = "a" * 64
+    build = "b" * 64
+    allowed = (
+        (f"hybrid/{digest}/{build}/original.pdf", b"%PDF-1.7", "application/pdf"),
+        (f"hybrid/{digest}/{build}/canonical.json", b"{}", "application/json"),
+        (f"hybrid/{digest}/{build}/preview.md", b"# Preview", "text/markdown"),
+        (
+            f"metadata-workbooks/{digest}/original.xlsx",
+            b"xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        (
+            "knowledge-release-evidence/shadow/"
+            + hashlib.sha256(b'{"passed":true}').hexdigest()
+            + ".json",
+            b'{"passed":true}',
+            "application/json",
+        ),
+    )
+
+    for key, content, media_type in allowed:
+        ref = store.put_immutable(key=key, content=content, media_type=media_type)
+        assert store.get_exact(ref) == content
+
+    for key in (
+        f"hybrid/{digest}/{build}/operator-name.json",
+        f"metadata-workbooks/{digest}/macro.xlsm",
+        f"hybrid/{digest}/../secret",
+    ):
+        with pytest.raises(S3ArtifactError, match="system-generated"):
+            store.put_immutable(key=key, content=b"x", media_type="application/octet-stream")
+
+
 def test_s3_environment_custom_endpoint_does_not_inherit_ambient_proxy(
     monkeypatch: Any,
 ) -> None:

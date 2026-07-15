@@ -130,6 +130,112 @@ class PostgresHybridKnowledgeRepository:
                 ),
             )
 
+    def stage_source_candidate(
+        self,
+        *,
+        source_id: str,
+        source_draft_version_id: str,
+        candidate_digest: str,
+        generation: KnowledgeIndexGeneration,
+    ) -> None:
+        """Serialize one validated candidate before its publication attempt is registered."""
+
+        generation_json = _canonical_json(generation.model_dump(mode="json"))
+        generation_digest = stable_digest(generation.model_dump(mode="json"))
+        now = datetime.now(UTC)
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO hybrid_knowledge_generation
+                  (generation_id, source_id, identity_digest, mapping_sha256,
+                   generation_json, created_at)
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s)
+                ON CONFLICT (generation_id) DO NOTHING
+                """,
+                (
+                    generation.generation_id,
+                    source_id,
+                    generation_digest,
+                    generation.mapping_sha256,
+                    generation_json,
+                    now,
+                ),
+            )
+            stored_generation = connection.execute(
+                """SELECT source_id, identity_digest, generation_json
+                     FROM hybrid_knowledge_generation WHERE generation_id=%s""",
+                (generation.generation_id,),
+            ).fetchone()
+            if (
+                stored_generation is None
+                or stored_generation[0] != source_id
+                or stored_generation[1] != generation_digest
+                or _json_object(stored_generation[2]) != generation.model_dump(mode="json")
+            ):
+                raise PublicationConflict("GENERATION_CONFLICT")
+            current = connection.execute(
+                """SELECT live_attempt_id FROM hybrid_knowledge_source_authority
+                    WHERE source_id=%s FOR UPDATE""",
+                (source_id,),
+            ).fetchone()
+            if current is None:
+                connection.execute(
+                    """
+                    INSERT INTO hybrid_knowledge_source_authority
+                      (source_id, draft_version_id, candidate_digest, updated_at)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (source_id, source_draft_version_id, candidate_digest, now),
+                )
+                return
+            if current[0] is not None:
+                raise PublicationConflict("CONCURRENT_ATTEMPT")
+            connection.execute(
+                """UPDATE hybrid_knowledge_source_authority
+                      SET draft_version_id=%s, candidate_digest=%s, updated_at=%s
+                    WHERE source_id=%s""",
+                (source_draft_version_id, candidate_digest, now, source_id),
+            )
+
+    def list_publication_validations(
+        self,
+        source_id: str,
+    ) -> tuple[HybridPublicationValidationAuthority, ...]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT validation_id, source_id, source_draft_version_id,
+                          candidate_digest, generation_id, status, validated_at, validated_by,
+                          smoke_query
+                     FROM hybrid_knowledge_publication_validation
+                    WHERE source_id=%s ORDER BY validated_at, validation_id""",
+                (source_id,),
+            ).fetchall()
+        return tuple(
+            HybridPublicationValidationAuthority(
+                validation_id=row[0],
+                source_id=row[1],
+                source_draft_version_id=row[2],
+                candidate_digest=row[3],
+                generation_id=row[4],
+                status=row[5],
+                validated_at=row[6],
+                validated_by=row[7],
+                smoke_query=row[8],
+            )
+            for row in rows
+        )
+
+    def list_publications(self, source_id: str) -> tuple[HybridKnowledgePublicationRecord, ...]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT publication_json FROM hybrid_knowledge_publication
+                    WHERE source_id=%s ORDER BY source_publication_seq""",
+                (source_id,),
+            ).fetchall()
+        return tuple(
+            _hydrate_jsonb_model(HybridKnowledgePublicationRecord, row[0]) for row in rows
+        )
+
     def register_validation(self, validation: HybridPublicationValidationAuthority) -> None:
         """Persist a trusted passed validation before a publication can claim it."""
 
@@ -139,8 +245,9 @@ class PostgresHybridKnowledgeRepository:
                 """
                 INSERT INTO hybrid_knowledge_publication_validation
                   (validation_id, source_id, source_draft_version_id,
-                   candidate_digest, generation_id, status, validated_at, validated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                   candidate_digest, generation_id, status, validated_at, validated_by,
+                   smoke_query)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (validation_id) DO NOTHING
                 RETURNING validation_id
                 """,
@@ -153,6 +260,7 @@ class PostgresHybridKnowledgeRepository:
                     validation.status,
                     validation.validated_at,
                     validation.validated_by,
+                    validation.smoke_query,
                 ),
             ).fetchone()
             if inserted is not None:
@@ -161,7 +269,7 @@ class PostgresHybridKnowledgeRepository:
                 """
                 SELECT validation_id, source_id, source_draft_version_id,
                        candidate_digest, generation_id, status,
-                       validated_at, validated_by
+                       validated_at, validated_by, smoke_query
                   FROM hybrid_knowledge_publication_validation
                  WHERE validation_id = %s
                 """,
@@ -178,6 +286,7 @@ class PostgresHybridKnowledgeRepository:
                 status=existing[5],
                 validated_at=existing[6],
                 validated_by=existing[7],
+                smoke_query=existing[8],
             )
             if stored.model_dump(mode="python") != payload:
                 raise PublicationConflict("VALIDATION_CONFLICT")
@@ -784,6 +893,39 @@ class PostgresHybridKnowledgeRepository:
                  WHERE profile_revision_id=%s AND source_id=%s
                 """,
                 (selected[1], source_id),
+            ).fetchone()
+        if publication_row is None or profile_row is None:
+            return None
+        return HybridKnowledgeBindingAuthoritySnapshot(
+            publication=_hydrate_jsonb_model(
+                HybridKnowledgePublicationRecord,
+                publication_row[0],
+            ),
+            retrieval_profile=_hydrate_jsonb_model(
+                KnowledgeRetrievalProfileRevision,
+                profile_row[0],
+            ),
+        )
+
+    def resolve_frozen_binding_authority(
+        self,
+        *,
+        source_id: str,
+        publication_id: str,
+        profile_revision_id: str,
+    ) -> HybridKnowledgeBindingAuthoritySnapshot | None:
+        """Resolve one immutable Agent binding without following the active Source pointer."""
+
+        with self._connection() as connection:
+            publication_row = connection.execute(
+                """SELECT publication_json FROM hybrid_knowledge_publication
+                    WHERE publication_id=%s AND source_id=%s""",
+                (publication_id, source_id),
+            ).fetchone()
+            profile_row = connection.execute(
+                """SELECT profile_json FROM hybrid_knowledge_retrieval_profile
+                    WHERE profile_revision_id=%s AND source_id=%s""",
+                (profile_revision_id, source_id),
             ).fetchone()
         if publication_row is None or profile_row is None:
             return None

@@ -1048,9 +1048,11 @@ class LocalStoreHybridWorkerLifecycle:
         *,
         store: LocalAgentConfigurationStore,
         original_store: LocalManagedOriginalStore,
+        artifact_store: KnowledgeArtifactStore | None = None,
     ) -> None:
         self._store = store
         self._original_store = original_store
+        self._artifact_store = artifact_store
         self._owned: dict[str, tuple[str, HybridArtifactBuildRequest]] = {}
         self._lock = RLock()
 
@@ -1164,6 +1166,7 @@ class LocalStoreHybridWorkerLifecycle:
             claim_token=token,
             artifact_path=result.canonical_ref.artifact_uri,
             artifact_result=result.model_dump(mode="json"),
+            artifact_store=self._artifact_store,
         )
         self._release(claim.job_id)
         return completed

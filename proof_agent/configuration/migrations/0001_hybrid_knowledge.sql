@@ -148,10 +148,19 @@ CREATE TABLE IF NOT EXISTS hybrid_knowledge_publication_validation (
   status text NOT NULL CHECK (status = 'passed'),
   validated_at timestamptz NOT NULL,
   validated_by text NOT NULL,
+  smoke_query text NOT NULL,
   UNIQUE (source_id, generation_id, validation_id),
   FOREIGN KEY (source_id, generation_id)
     REFERENCES hybrid_knowledge_generation(source_id, generation_id)
 );
+
+ALTER TABLE hybrid_knowledge_publication_validation
+  ADD COLUMN IF NOT EXISTS smoke_query text;
+UPDATE hybrid_knowledge_publication_validation
+   SET smoke_query='legacy-publication-smoke'
+ WHERE smoke_query IS NULL;
+ALTER TABLE hybrid_knowledge_publication_validation
+  ALTER COLUMN smoke_query SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hybrid_knowledge_publication_attempt (
   attempt_id text PRIMARY KEY REFERENCES hybrid_projection_operation(operation_id),

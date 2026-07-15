@@ -86,6 +86,7 @@ class HybridPublicationRequest(FrozenModel):
     identity: SearchIndexIdentity
     embedding_instruction: NonBlankStr
     embedding_timeout_seconds: float = Field(strict=True, gt=0, le=300)
+    smoke_query: NonBlankStr | None = None
 
 
 class HybridPublicationValidationAuthority(FrozenModel):
@@ -101,6 +102,7 @@ class HybridPublicationValidationAuthority(FrozenModel):
     status: Literal["passed"] = "passed"
     validated_at: datetime
     validated_by: NonBlankStr
+    smoke_query: NonBlankStr = "legacy-publication-smoke"
 
 
 class PublicationAuthorityContext(FrozenModel):
@@ -285,7 +287,7 @@ class HybridPublicationService:
                 union_documents,
                 publication_sequence=attempt.reserved_publication_seq,
             )
-            smoke_query = projection_smoke_query_text(smoke_target)
+            smoke_query = request.smoke_query or projection_smoke_query_text(smoke_target)
             smoke_embedding = self.embedding.embed(
                 texts=(smoke_query,),
                 model_revision=request.generation.embedding_model_revision,
@@ -450,11 +452,12 @@ def hybrid_candidate_material_fingerprint(request: HybridPublicationRequest) -> 
 
     return stable_digest(
         {
-            "schema_version": "hybrid-publication-candidate-material.v1",
+            "schema_version": "hybrid-publication-candidate-material.v2",
             "source_id": request.source_id,
             "source_draft_version_id": request.source_draft_version_id,
             "source_snapshot_id": request.source_snapshot_id,
             "generation": request.generation.model_dump(mode="json"),
+            "identity": request.identity.model_dump(mode="json"),
             "memberships": [
                 item.model_dump(mode="json")
                 for item in sorted(
@@ -470,6 +473,7 @@ def hybrid_candidate_material_fingerprint(request: HybridPublicationRequest) -> 
                 )
             ],
             "embedding_instruction": request.embedding_instruction,
+            "smoke_query": request.smoke_query,
         }
     )
 

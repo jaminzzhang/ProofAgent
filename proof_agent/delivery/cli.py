@@ -24,6 +24,9 @@ from proof_agent import __version__
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.importer import build_agent_package_contract_bundle
 from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
+from proof_agent.bootstrap.production_hybrid_runtime import (
+    compose_production_hybrid_runtime_from_env,
+)
 from proof_agent.contracts import EvaluationReleaseDecisionStatus
 from proof_agent.delivery.remote_verify_gateway import VERIFY_REMOTE_CHAT_BASE
 from proof_agent.errors import ProofAgentError
@@ -656,6 +659,82 @@ def doctor() -> None:
         typer.echo(f"{label}: {value}")
 
 
+@app.command("hybrid-migrate")
+def hybrid_migrate(
+    dsn_env: str = typer.Option(
+        "HYBRID_POSTGRES_DSN",
+        "--dsn-env",
+        help="Environment variable containing the PostgreSQL DSN.",
+    ),
+) -> None:
+    """Install or verify the idempotent Hybrid Knowledge PostgreSQL schema."""
+
+    from proof_agent.configuration.hybrid_migrations import apply_hybrid_migrations
+
+    dsn = os.environ.get(dsn_env, "")
+    if not dsn.strip():
+        typer.echo(f"Hybrid PostgreSQL DSN environment variable is empty: {dsn_env}", err=True)
+        raise typer.Exit(code=2)
+    try:
+        result = apply_hybrid_migrations(dsn)
+    except Exception as exc:
+        typer.echo(f"Hybrid migration failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Hybrid migration: {result.migration_name}")
+    typer.echo(f"Schema SHA-256: {result.sha256}")
+
+
+@app.command("hybrid-seal-release-evidence")
+def hybrid_seal_release_evidence(
+    shadow: str = typer.Option(..., "--shadow"),
+    capacity: str = typer.Option(..., "--capacity"),
+    acceptance: str = typer.Option(..., "--acceptance"),
+    recovery: str = typer.Option(..., "--recovery"),
+    output: str = typer.Option(..., "--output"),
+) -> None:
+    """Upload four Phase F results and emit their exact versioned S3 references."""
+
+    from proof_agent.capabilities.knowledge.hybrid.s3_artifacts import S3ExactArtifactStore
+    from proof_agent.configuration.knowledge_release_evidence import (
+        upload_knowledge_release_evidence,
+    )
+
+    store = None
+    try:
+        bucket = os.environ.get("HYBRID_S3_BUCKET", "").strip()
+        if not bucket:
+            raise ValueError("HYBRID_S3_BUCKET is required")
+        store = S3ExactArtifactStore.from_environment(
+            bucket=bucket,
+            key_prefix=os.environ.get("HYBRID_S3_KEY_PREFIX", ""),
+            endpoint_url=os.environ.get("HYBRID_S3_ENDPOINT") or None,
+            region_name=os.environ.get("HYBRID_S3_REGION") or None,
+            allow_insecure_endpoint=(
+                os.environ.get("HYBRID_S3_ALLOW_INSECURE_ENDPOINT", "").strip() == "1"
+            ),
+        )
+        evidence = upload_knowledge_release_evidence(
+            artifact_store=store,
+            shadow=Path(shadow),
+            capacity=Path(capacity),
+            acceptance=Path(acceptance),
+            recovery=Path(recovery),
+        )
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(evidence.model_dump(mode="json"), sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        typer.echo(f"Knowledge release evidence sealing failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if store is not None:
+            store.close()
+    typer.echo(f"Knowledge release evidence: {output}")
+
+
 @app.command()
 def inspect(path: str) -> None:
     """Summarize a trace JSONL file or Governance Receipt markdown artifact."""
@@ -1056,12 +1135,21 @@ def server(
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
     release_authority = _knowledge_release_authority_from_environment()
+    hybrid_runtime = None if reload else compose_production_hybrid_runtime_from_env()
     configuration_store = LocalAgentConfigurationStore(
         Path(config_dir),
+        hybrid_binding_authority=(
+            hybrid_runtime.repository if hybrid_runtime is not None else None
+        ),
         knowledge_release_evidence_authority=release_authority,
     )
-    if seed_example_agent and _seed_default_dev_agent_or_exit(configuration_store):
-        typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
+    try:
+        if seed_example_agent and _seed_default_dev_agent_or_exit(configuration_store):
+            typer.echo("Seeded local configuration with agent_management_insurance_specialist.")
+    except BaseException:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
+        raise
 
     typer.echo(f"Starting Proof Agent API server at http://{host}:{port}")
     typer.echo("To start the frontends in development mode, run:")
@@ -1082,14 +1170,24 @@ def server(
         )
         return
 
-    app = create_app(
-        history_dir=Path(history_dir),
-        agent_configuration_store=configuration_store,
-        agent_configuration_dir=Path(config_dir),
-        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
-        knowledge_release_evidence_authority=release_authority,
-    )
-    uvicorn.run(app, host=host, port=port)
+    try:
+        app = create_app(
+            history_dir=Path(history_dir),
+            agent_configuration_store=configuration_store,
+            agent_configuration_dir=Path(config_dir),
+            knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+            knowledge_release_evidence_authority=release_authority,
+            hybrid_runtime=hybrid_runtime,
+        )
+    except BaseException:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
+        raise
+    try:
+        uvicorn.run(app, host=host, port=port)
+    finally:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
 
 
 def _create_server_app_from_env() -> Any:
@@ -1102,20 +1200,35 @@ def _create_server_app_from_env() -> Any:
     config_dir = Path(os.environ.get(SERVER_CONFIG_DIR_ENV, "runs/config"))
     seed_example_agent = os.environ.get(SERVER_SEED_EXAMPLE_AGENT_ENV, "1") != "0"
     release_authority = _knowledge_release_authority_from_environment()
+    hybrid_runtime = compose_production_hybrid_runtime_from_env()
     configuration_store = LocalAgentConfigurationStore(
         config_dir,
+        hybrid_binding_authority=(
+            hybrid_runtime.repository if hybrid_runtime is not None else None
+        ),
         knowledge_release_evidence_authority=release_authority,
     )
-    if seed_example_agent:
-        _seed_default_dev_agent_or_exit(configuration_store)
+    try:
+        if seed_example_agent:
+            _seed_default_dev_agent_or_exit(configuration_store)
+    except BaseException:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
+        raise
 
-    return create_app(
-        history_dir=history_dir,
-        agent_configuration_store=configuration_store,
-        agent_configuration_dir=config_dir,
-        knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
-        knowledge_release_evidence_authority=release_authority,
-    )
+    try:
+        return create_app(
+            history_dir=history_dir,
+            agent_configuration_store=configuration_store,
+            agent_configuration_dir=config_dir,
+            knowledge_operations_provider=_knowledge_operations_provider_from_environment(),
+            knowledge_release_evidence_authority=release_authority,
+            hybrid_runtime=hybrid_runtime,
+        )
+    except BaseException:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
+        raise
 
 
 @app.command("knowledge-worker")
@@ -1132,15 +1245,24 @@ def knowledge_worker(
     """Process persisted Local Index knowledge ingestion tasks."""
 
     hybrid_graph = None
+    hybrid_runtime = None
     try:
         config_path = Path(config_dir)
-        hybrid_graph = compose_hybrid_knowledge_from_env()
+        hybrid_runtime = compose_production_hybrid_runtime_from_env()
+        hybrid_graph = (
+            hybrid_runtime.model_graph
+            if hybrid_runtime is not None
+            else compose_hybrid_knowledge_from_env()
+        )
         worker = create_knowledge_ingestion_worker(
             config_path,
             hybrid_pipeline=hybrid_graph.parser if hybrid_graph is not None else None,
             hybrid_build_config=hybrid_graph.build_config if hybrid_graph is not None else None,
             hybrid_worker_factory=(
                 hybrid_graph.ingestion_worker if hybrid_graph is not None else None
+            ),
+            hybrid_artifact_store=(
+                hybrid_runtime.artifact_store if hybrid_runtime is not None else None
             ),
         )
         if once:
@@ -1167,7 +1289,9 @@ def knowledge_worker(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     finally:
-        if hybrid_graph is not None:
+        if hybrid_runtime is not None:
+            hybrid_runtime.close()
+        elif hybrid_graph is not None:
             hybrid_graph.close()
 
     _echo_knowledge_worker_result(result)
@@ -1180,6 +1304,7 @@ def create_knowledge_ingestion_worker(
     hybrid_pipeline: HybridParserPipeline | None = None,
     hybrid_build_config: HybridPrivateParserBuildConfig | None = None,
     hybrid_worker_factory: HybridKnowledgeWorkerFactory | None = None,
+    hybrid_artifact_store: Any | None = None,
 ) -> KnowledgeIngestionWorker:
     """Compose provider handlers; fail before claims if Hybrid dependencies are absent."""
 
@@ -1226,8 +1351,11 @@ def create_knowledge_ingestion_worker(
         lifecycle = LocalStoreHybridWorkerLifecycle(
             store=store,
             original_store=original_store,
+            artifact_store=hybrid_artifact_store,
         )
-        artifact_store = FileSystemKnowledgeArtifactStore(config_path / "hybrid_artifacts")
+        artifact_store = hybrid_artifact_store or FileSystemKnowledgeArtifactStore(
+            config_path / "hybrid_artifacts"
+        )
         hybrid_worker = (
             hybrid_worker_factory.create(
                 lifecycle=lifecycle,

@@ -9,6 +9,10 @@ from uuid import uuid4
 
 import pytest
 
+from proof_agent.bootstrap.production_hybrid_runtime import (
+    PostgresS3HybridBindingRuntimeAuthorityLoader,
+)
+
 from proof_agent.capabilities.knowledge.hybrid.manifest import ManifestRuleUnitMembership
 from proof_agent.capabilities.knowledge.hybrid.model_clients import EmbeddingResult
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
@@ -53,6 +57,7 @@ from proof_agent.contracts.knowledge_index import (
     KnowledgeRetrievalProfileRevision,
     RuleUnitManifestEntry,
 )
+from proof_agent.contracts import ResolvedHybridKnowledgeBinding
 
 
 pytestmark = pytest.mark.hybrid_integration
@@ -772,3 +777,120 @@ def test_disposable_postgres_upgrades_legacy_recovery_schema_in_place() -> None:
             admin.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(legacy_database))
             )
+
+
+def test_disposable_authority_loads_exact_online_hybrid_binding() -> None:
+    env = _environment()
+    try:
+        publication = env["service"].publish(env["request"])
+        profile = KnowledgeRetrievalProfileRevision(
+            profile_revision_id="profile-online-1",
+            lexical_budget=10,
+            dense_budget=10,
+            rrf_window=10,
+            reranker_revision="reranker@sha256:integration",
+            rerank_budget=5,
+            final_budget=2,
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"],
+            profile=profile,
+            make_default=True,
+        )
+        binding = ResolvedHybridKnowledgeBinding(
+            binding_id="binding-online-1",
+            source_id=publication.source_id,
+            source_publication_id=publication.publication_id,
+            source_snapshot_id=publication.source_snapshot_id,
+            index_generation_id=publication.generation_id,
+            source_publication_seq=publication.source_publication_seq,
+            retrieval_profile_revision_id=profile.profile_revision_id,
+            manifest_ref=publication.manifest_ref,
+            publication_attestation_id=publication.attestation.attestation_id,
+        )
+        loader = PostgresS3HybridBindingRuntimeAuthorityLoader(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            embedding_instruction=INSTRUCTION,
+        )
+
+        loaded = loader.load(binding)
+
+        assert loaded.binding == binding
+        assert loaded.retrieval_profile == profile
+        assert loaded.retrieval_authority.attestation == publication.attestation
+        assert loaded.retrieval_authority.generation.generation_id == publication.generation_id
+        assert set(
+            loaded.retrieval_authority.manifest_entry_core_sha256_by_rule_unit_revision_id
+        ) == {env["request"].projection_seeds[0].rule_unit.rule_unit_revision_id}
+    finally:
+        _cleanup(env)
+
+
+def test_disposable_online_loader_keeps_frozen_publication_after_source_advances() -> None:
+    env = _environment()
+    try:
+        first = env["service"].publish(env["request"])
+        profile = KnowledgeRetrievalProfileRevision(
+            profile_revision_id="profile-frozen-1",
+            lexical_budget=10,
+            dense_budget=10,
+            rrf_window=10,
+            reranker_revision="reranker@sha256:integration",
+            rerank_budget=5,
+            final_budget=2,
+        )
+        env["repository"].publish_retrieval_profile(
+            source_id=env["source_id"], profile=profile, make_default=True
+        )
+        frozen = ResolvedHybridKnowledgeBinding(
+            binding_id="binding-frozen-1",
+            source_id=first.source_id,
+            source_publication_id=first.publication_id,
+            source_snapshot_id=first.source_snapshot_id,
+            index_generation_id=first.generation_id,
+            source_publication_seq=first.source_publication_seq,
+            retrieval_profile_revision_id=profile.profile_revision_id,
+            manifest_ref=first.manifest_ref,
+            publication_attestation_id=first.attestation.attestation_id,
+        )
+        second_request = _request(
+            env["source_id"],
+            env["generation"],
+            env["identity"],
+            rule_suffix="two",
+            publication_seq_from=2,
+        )
+        env["repository"].advance_source_candidate(
+            source_id=env["source_id"],
+            expected_source_draft_version_id=env["request"].source_draft_version_id,
+            expected_candidate_digest=env["request"].candidate_digest,
+            source_draft_version_id=second_request.source_draft_version_id,
+            candidate_digest=second_request.candidate_digest,
+        )
+        env["repository"].register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=second_request.validation_id,
+                source_id=second_request.source_id,
+                source_draft_version_id=second_request.source_draft_version_id,
+                candidate_digest=second_request.candidate_digest,
+                generation_id=second_request.generation.generation_id,
+                validated_at=datetime.now(UTC),
+                validated_by="integration-validator",
+            )
+        )
+        env["service"].publish(second_request)
+
+        loaded = PostgresS3HybridBindingRuntimeAuthorityLoader(
+            repository=env["repository"],
+            artifact_store=env["store"],
+            embedding_instruction=INSTRUCTION,
+        ).load(frozen)
+
+        assert loaded.binding == frozen
+        assert loaded.retrieval_authority.attestation == first.attestation
+        assert set(
+            loaded.retrieval_authority.manifest_entry_core_sha256_by_rule_unit_revision_id
+        ) == {env["request"].projection_seeds[0].rule_unit.rule_unit_revision_id}
+    finally:
+        _cleanup(env)

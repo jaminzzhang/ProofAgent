@@ -1911,6 +1911,19 @@ def _approved_metadata_revision(
         ) from exc
 
 
+def approved_metadata_revision(
+    review: InsuranceMetadataReview,
+) -> ApprovedInsuranceRuleMetadataRevision:
+    """Reconstruct the exact approved authority from one terminal review decision."""
+
+    if review.state != "approved" or review.publication_blocked:
+        raise WorkbookReviewConflictError("metadata review is not approved for publication")
+    approved = _approved_metadata_revision(review)
+    if review.approved_metadata_revision_id != approved.metadata_revision_id:
+        raise WorkbookReviewConflictError("approved metadata revision identity diverged")
+    return approved
+
+
 def _safe_identifier(value: str, field: str) -> str:
     normalized = _require_nonblank(value, field)
     if not all(character.isalnum() or character in "_-" for character in normalized):

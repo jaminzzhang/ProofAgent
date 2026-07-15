@@ -376,6 +376,30 @@ def test_publication_requires_governed_smoke_before_attestation(tmp_path: Any) -
     assert repository.staged_commits == {}
 
 
+def test_publication_uses_the_exact_governed_smoke_query(tmp_path: Any) -> None:
+    repository = InMemoryHybridPublicationRepository()
+    request = _request().model_copy(update={"smoke_query": "What is covered?"})
+    request = _with_candidate(request)
+    repository.register_source(
+        source_id=request.source_id,
+        source_draft_version_id=request.source_draft_version_id,
+        candidate_digest=request.candidate_digest,
+        generation=request.generation,
+    )
+    _register_validation(repository, request)
+    index = _Index()
+    service = HybridPublicationService(
+        repository=repository,
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path),
+        index=index,
+        embedding=cast(Any, _Embedding()),
+    )
+
+    service.publish(request)
+
+    assert index.smokes[-1].query_text == "What is covered?"
+
+
 def test_concurrent_attempt_and_stale_candidate_are_stable_conflicts(tmp_path: Any) -> None:
     _, repository, _, _ = _service(tmp_path)
     request = _request()

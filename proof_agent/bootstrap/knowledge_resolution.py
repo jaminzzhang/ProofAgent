@@ -119,12 +119,6 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     f"shared Knowledge Source is archived: {ref.source_id}",
                     "Restore the Knowledge Source or unbind it from the Draft Agent.",
                 )
-            if shared_source.published_snapshot_id is None:
-                raise ProofAgentError(
-                    "PA_CONFIG_002",
-                    f"shared Knowledge Source is not published: {ref.source_id}",
-                    "Publish the Knowledge Source before binding it to an Agent.",
-                )
             if shared_source.provider == "hybrid_index":
                 resolved.append(
                     self._resolve_hybrid_binding(
@@ -133,6 +127,12 @@ class ConfigurationStoreKnowledgeBindingResolver:
                     )
                 )
                 continue
+            if shared_source.published_snapshot_id is None:
+                raise ProofAgentError(
+                    "PA_CONFIG_002",
+                    f"shared Knowledge Source is not published: {ref.source_id}",
+                    "Publish the Knowledge Source before binding it to an Agent.",
+                )
             if binding.retrieval_profile_revision_id is not None:
                 raise ProofAgentError(
                     "PA_CONFIG_002",
@@ -224,10 +224,7 @@ class ConfigurationStoreKnowledgeBindingResolver:
                 "Publish the Source and Retrieval Profile before validating this Agent.",
             )
         publication = snapshot.publication
-        if (
-            publication.source_id != source.source_id
-            or publication.publication_id != source.published_snapshot_id
-        ):
+        if publication.source_id != source.source_id:
             raise ProofAgentError(
                 "PA_CONFIG_002",
                 f"published Hybrid Knowledge Source publication is stale: {source.source_id}",

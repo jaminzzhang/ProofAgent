@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
 from proof_agent.configuration.knowledge_release import (
     require_knowledge_release_record,
@@ -8,12 +9,14 @@ from proof_agent.configuration.knowledge_release import (
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    AgentValidationRecord,
     ContractBundle,
     ExactArtifactRef,
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.observability.api.app import create_app
 
 
 def _artifact(kind: str) -> ExactArtifactRef:
@@ -154,3 +157,61 @@ def test_release_record_registration_requires_independent_evidence_authority(tmp
             contract_bundle=_bundle(),
             resolved_knowledge_bindings=_bindings(),
         )
+
+
+def test_release_registration_api_seals_the_exact_validation_candidate(tmp_path) -> None:
+    store = LocalAgentConfigurationStore(
+        tmp_path / "config",
+        knowledge_release_evidence_authority=type(
+            "Authority", (), {"verify_release_record": lambda self, record: True}
+        )(),
+    )
+    draft = store.create_draft(
+        agent_id="insurance-specialist",
+        display_name="Insurance Specialist",
+        purpose="Answer governed insurance questions.",
+        contract_bundle=_bundle(),
+        actor="author",
+    )
+    store.record_validation(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="validator",
+        record=AgentValidationRecord(
+            validation_id="validation-1",
+            draft_id=draft.draft_id,
+            run_id="run-validation-1",
+            status="passed",
+            created_at="2026-07-15T00:00:00Z",
+            resolved_knowledge_bindings=_bindings(),
+        ),
+    )
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            agent_configuration_store=store,
+            published_agents={},
+        )
+    )
+
+    response = client.post(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/knowledge-release-records",
+        json={
+            "record_id": "knowledge-release-api-1",
+            "validation_run_id": "run-validation-1",
+            "evidence": {
+                kind: _artifact(kind).model_dump(mode="json")
+                for kind in ("shadow", "capacity", "acceptance", "recovery")
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    registered = store.get_knowledge_release_record("knowledge-release-api-1")
+    assert registered is not None
+    assert response.json()["candidate_sha256"] == registered.candidate_sha256
+    require_knowledge_release_record(
+        record=registered,
+        contract_bundle=draft.contract_bundle,
+        resolved_knowledge_bindings=_bindings(),
+    )

@@ -53,12 +53,14 @@ from proof_agent.capabilities.knowledge.hybrid.workbook import (
     reconcile_metadata_drafts,
 )
 from proof_agent.capabilities.knowledge.hybrid.publication import PublicationConflict
+from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.configuration.hybrid_knowledge_repository import (
     FileSystemKnowledgeArtifactStore,
     ImmutableArtifactError,
 )
 from proof_agent.configuration.compiler import compile_draft_agent
+from proof_agent.configuration.knowledge_release import seal_knowledge_release_record
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import (
     KnowledgeUploadStagingInput,
@@ -99,6 +101,7 @@ from proof_agent.contracts import (
     WorkflowTemplateExecutionInput,
     WorkflowTemplateExecutionResult,
 )
+from proof_agent.contracts.knowledge_release import KnowledgeReleaseEvidenceSet
 from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
@@ -267,6 +270,16 @@ class DraftPublishRequest(BaseModel):
 
     validation_run_id: str | None = None
     knowledge_release_record_id: str | None = None
+
+
+class KnowledgeReleaseRegistrationRequest(BaseModel):
+    """Server-sealed release authority for one exact validated Hybrid candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1, max_length=255)
+    validation_run_id: str = Field(min_length=1, max_length=255)
+    evidence: KnowledgeReleaseEvidenceSet
 
 
 class RollbackRequest(BaseModel):
@@ -1531,13 +1544,23 @@ def import_knowledge_metadata_workbook(
             )
             for record in authority_records
         )
-        with FileSystemKnowledgeArtifactStore(store.root_dir / "hybrid_artifacts") as artifacts:
+        local_artifacts = None
+        artifacts = getattr(app_request.app.state, "hybrid_knowledge_artifact_store", None)
+        if artifacts is None:
+            local_artifacts = FileSystemKnowledgeArtifactStore(
+                store.root_dir / "hybrid_artifacts"
+            )
+            artifacts = local_artifacts
+        try:
             _verify_hybrid_result_artifacts(artifacts, build_result)
             imported = import_metadata_workbook(
                 content,
                 known_anchors=known_anchors,
                 artifact_store=artifacts,
             )
+        finally:
+            if local_artifacts is not None:
+                local_artifacts.close()
         proposed_import_record = WorkbookImportRecord(
             import_id=imported.import_id,
             template_revision=imported.template_revision,
@@ -2955,6 +2978,65 @@ def _validation_capture_failure_projection() -> dict[str, Any]:
     }
 
 
+@router.post(
+    "/config/agents/{agent_id}/drafts/{draft_id}/knowledge-release-records"
+)
+def register_knowledge_release_record(
+    agent_id: str,
+    draft_id: str,
+    request: KnowledgeReleaseRegistrationRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Seal and independently verify the four Phase F artifacts for one candidate."""
+
+    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
+    store = _get_configuration_store(app_request)
+    draft = _require_draft(store, agent_id, draft_id)
+    validation = next(
+        (
+            item
+            for item in draft.validation_records
+            if item.run_id == request.validation_run_id
+        ),
+        None,
+    )
+    if (
+        validation is None
+        or validation.status != "passed"
+        or validation.publish_blockers
+        or validation.resolved_knowledge_bindings is None
+        or not any(
+            binding.provider == "hybrid_index"
+            for binding in validation.resolved_knowledge_bindings.bindings
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A passed, publishable Hybrid validation run is required.",
+        )
+    record = seal_knowledge_release_record(
+        record_id=request.record_id,
+        contract_bundle=draft.contract_bundle,
+        resolved_knowledge_bindings=validation.resolved_knowledge_bindings,
+        shadow_artifact=request.evidence.shadow,
+        capacity_artifact=request.evidence.capacity,
+        acceptance_artifact=request.evidence.acceptance,
+        recovery_artifact=request.evidence.recovery,
+        created_at=datetime.now(UTC).isoformat(),
+        created_by=actor,
+    )
+    try:
+        persisted = store.record_knowledge_release(
+            record=record,
+            contract_bundle=draft.contract_bundle,
+            resolved_knowledge_bindings=validation.resolved_knowledge_bindings,
+        )
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    return persisted.model_dump(mode="json")
+
+
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/publish")
 def publish_config_draft(
     agent_id: str,
@@ -3664,7 +3746,7 @@ def _workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput
 
 
 def _verify_hybrid_result_artifacts(
-    artifact_store: FileSystemKnowledgeArtifactStore,
+    artifact_store: KnowledgeArtifactStore,
     result: HybridArtifactBuildResult,
 ) -> StructuredKnowledgeDocumentArtifact:
     managed_refs = (

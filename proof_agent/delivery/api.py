@@ -54,6 +54,9 @@ from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
 async def _hybrid_knowledge_lifespan(application: Any) -> AsyncIterator[None]:
     """Own one process-wide Hybrid composition and one matching close hook."""
 
+    if getattr(application.state, "hybrid_knowledge_runtime", None) is not None:
+        yield
+        return
     graph = compose_hybrid_knowledge_from_env()
     if graph is not None:
         application.state.hybrid_knowledge = graph
@@ -302,6 +305,11 @@ def _execute_published_agent_run(
                 controlled_react_snapshot_store=_get_controlled_react_snapshot_store(app_request),
                 controlled_react_observation_truth_store=(
                     _get_controlled_react_observation_truth_store(app_request)
+                ),
+                hybrid_runtime=getattr(
+                    app_request.app.state,
+                    "hybrid_knowledge_runtime",
+                    None,
                 ),
             ),
             published_agent=published_agent,

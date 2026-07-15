@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +35,9 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
     FileObservationTruthStore,
 )
 
+if TYPE_CHECKING:
+    from proof_agent.bootstrap.hybrid_execution import HybridRunRuntime
+
 
 def create_app(
     *,
@@ -50,6 +54,7 @@ def create_app(
     agent_configuration_dir: Path = Path("runs/config"),
     knowledge_operations_provider: Callable[[str], KnowledgeOperationsHealthSources] | None = None,
     knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
+    hybrid_runtime: "HybridRunRuntime" | None = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -115,6 +120,10 @@ def create_app(
     )
     application.state.mem0_memory_store = mem0_memory_store
     application.state.knowledge_operations_provider = knowledge_operations_provider
+    application.state.hybrid_knowledge_runtime = hybrid_runtime
+    hybrid_runtime_close = getattr(hybrid_runtime, "close", None)
+    if callable(hybrid_runtime_close):
+        application.router.add_event_handler("shutdown", hybrid_runtime_close)
     provider_close = getattr(knowledge_operations_provider, "close", None)
     if callable(provider_close):
         application.router.add_event_handler("shutdown", provider_close)
@@ -125,11 +134,23 @@ def create_app(
         release_authority_close
     ):
         application.router.add_event_handler("shutdown", release_authority_close)
+    runtime_hybrid_authority = (
+        getattr(hybrid_runtime, "repository", None) if hybrid_runtime is not None else None
+    )
     configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
         agent_configuration_dir,
+        hybrid_binding_authority=runtime_hybrid_authority,
         knowledge_release_evidence_authority=knowledge_release_evidence_authority,
     )
     application.state.agent_configuration_store = configuration_store
+    publication_api_factory = getattr(hybrid_runtime, "publication_api_for", None)
+    if callable(publication_api_factory):
+        application.state.hybrid_knowledge_publication_api = publication_api_factory(
+            configuration_store
+        )
+        application.state.hybrid_knowledge_artifact_store = getattr(
+            hybrid_runtime, "artifact_store"
+        )
     controlled_react_store_root = history_dir.parent / "controlled_react"
     application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(
         controlled_react_store_root
