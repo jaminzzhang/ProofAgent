@@ -9,10 +9,71 @@ from collections.abc import Mapping
 import pytest
 
 from proof_agent.capabilities.tools.brave_search import BraveSearchRequest
-from proof_agent.contracts import ApprovalStatus
-from proof_agent.capabilities.tools.gateway import ToolGateway
+from proof_agent.contracts import ApprovalStatus, ProductionToolEffect
+from proof_agent.capabilities.tools.gateway import ToolConfig, ToolGateway
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.errors import ProofAgentError
+
+
+@pytest.mark.parametrize(
+    "effect",
+    (
+        None,
+        ProductionToolEffect.CREATE,
+        ProductionToolEffect.UPDATE,
+        ProductionToolEffect.DELETE,
+        ProductionToolEffect.SEND,
+        ProductionToolEffect.SETTLE,
+        ProductionToolEffect.EXECUTE,
+    ),
+)
+def test_production_runtime_rejects_missing_or_non_read_effect(
+    effect: ProductionToolEffect | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
+    config = ToolConfig(
+        name="managed_tool",
+        built_in_handler=lambda parameters: {"value": parameters.get("value")},
+        tool_source_id="tool_source_1",
+        risk_level="low",
+        requires_approval=False,
+        read_only=True,
+        allowed_parameters=frozenset({"value"}),
+        denied_parameters=frozenset(),
+        effect=effect,
+    )
+
+    with pytest.raises(ProofAgentError, match="effect: read"):
+        ToolGateway({"managed_tool": config}).request_tool(
+            tool_name="managed_tool",
+            parameters={"value": "x"},
+            approved=False,
+        )
+
+
+def test_production_runtime_rejects_direct_local_callable_even_when_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
+    config = ToolConfig(
+        name="managed_read",
+        built_in_handler=lambda parameters: {"value": parameters["value"]},
+        tool_source_id="tool_source_1",
+        risk_level="low",
+        requires_approval=False,
+        read_only=True,
+        allowed_parameters=frozenset({"value"}),
+        denied_parameters=frozenset(),
+        effect=ProductionToolEffect.READ,
+    )
+
+    with pytest.raises(ProofAgentError, match="forbid local handlers"):
+        ToolGateway({"managed_read": config}).request_tool(
+            tool_name="managed_read",
+            parameters={"value": "safe"},
+            approved=False,
+        )
 
 
 def test_local_python_tool_handler_is_rejected(tmp_path: Path) -> None:

@@ -45,11 +45,18 @@ def import_agent_package(
     )
 
 
-def build_agent_package_contract_bundle(manifest_path: Path) -> ContractBundle:
+def build_agent_package_contract_bundle(
+    manifest_path: Path,
+    *,
+    require_writable_artifacts: bool = True,
+) -> ContractBundle:
     """Return the validated, canonical import bundle for one Agent Package."""
 
     resolved_manifest_path = manifest_path.resolve()
-    load_agent_manifest(resolved_manifest_path)
+    load_agent_manifest(
+        resolved_manifest_path,
+        require_writable_artifacts=require_writable_artifacts,
+    )
     return _build_agent_package_contract_bundle(resolved_manifest_path)
 
 

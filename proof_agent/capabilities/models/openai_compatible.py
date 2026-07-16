@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import os
 from typing import Any
 
 from proof_agent.contracts import ModelFunctionSchema, ModelRequest, ModelResponse, TokenUsage
+from proof_agent.contracts import ProductionSecretHandle, SecretPurpose
 from proof_agent.contracts.manifest import ModelConfig
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import (
+    SecretProvider,
+    SecretProviderResolutionError,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -13,6 +20,7 @@ _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 _DEEPSEEK_STANDARD_BASE_URL = "https://api.deepseek.com"
 _DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
 _DEEPSEEK_ENDPOINT_MODES = {"beta", "standard"}
+_OPENAI_STANDARD_BASE_URL = "https://api.openai.com/v1"
 _PROVIDER_DEFAULTS: dict[str, dict[str, str | None]] = {
     "openai_compatible": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
     "openai": {"api_key_env": _DEFAULT_API_KEY_ENV, "base_url": None},
@@ -21,6 +29,59 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str | None]] = {
         "base_url": _DEEPSEEK_STANDARD_BASE_URL,
     },
 }
+
+
+def _model_api_key(
+    *,
+    secret_handle_payload: object,
+    secret_provider: SecretProvider | None,
+    fallback_environment_name: str,
+) -> str:
+    if secret_handle_payload is None:
+        api_key = os.environ.get(fallback_environment_name)
+        if not api_key:
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                f"missing API key environment variable: {fallback_environment_name}",
+                f"Set {fallback_environment_name} or switch model.provider to deterministic.",
+            )
+        return api_key
+    try:
+        handle = ProductionSecretHandle.model_validate(secret_handle_payload)
+    except (TypeError, ValueError) as exc:
+        raise ProofAgentError(
+            "PA_MODEL_003",
+            "model credential Secret Handle is invalid.",
+            "Use an opaque model_credential handle from the configured Secret Provider.",
+        ) from exc
+    if handle.purpose is not SecretPurpose.MODEL_CREDENTIAL:
+        raise ProofAgentError(
+            "PA_MODEL_003",
+            "model credential Secret Handle has the wrong purpose.",
+            "Use purpose: model_credential.",
+        )
+    if secret_provider is None or handle.protocol_id != secret_provider.protocol_id:
+        raise ProofAgentError(
+            "PA_MODEL_003",
+            "model credential Secret Provider is unavailable or incompatible.",
+            "Inject the configured production Secret Provider.",
+        )
+    try:
+        value = secret_provider.resolve(handle).reveal_for_use()
+        api_key = value.decode("utf-8")
+    except (SecretProviderResolutionError, UnicodeDecodeError) as exc:
+        raise ProofAgentError(
+            "PA_MODEL_003",
+            "model credential Secret Handle could not be resolved.",
+            "Validate the handle and provider identity, then retry.",
+        ) from exc
+    if not api_key or len(value) > 16 * 1024 or "\r" in api_key or "\n" in api_key:
+        raise ProofAgentError(
+            "PA_MODEL_003",
+            "model credential Secret Handle returned invalid material.",
+            "Store one bounded provider API credential in the selected handle field.",
+        )
+    return api_key
 
 
 class OpenAICompatibleModelProvider:
@@ -36,6 +97,7 @@ class OpenAICompatibleModelProvider:
         timeout_seconds: float | None = None,
         default_temperature: float | None = None,
         default_max_output_tokens: int | None = None,
+        guarded_http_client: GuardedHttpClient | None = None,
     ) -> None:
         self._provider_name = provider_name
         self._model_name = model_name
@@ -46,9 +108,16 @@ class OpenAICompatibleModelProvider:
         self._timeout_seconds = timeout_seconds
         self._default_temperature = default_temperature
         self._default_max_output_tokens = default_max_output_tokens
+        self._guarded_http_client = guarded_http_client
 
     @classmethod
-    def from_config(cls, model_config: ModelConfig) -> OpenAICompatibleModelProvider:
+    def from_config(
+        cls,
+        model_config: ModelConfig,
+        *,
+        guarded_http_client: GuardedHttpClient | None = None,
+        secret_provider: SecretProvider | None = None,
+    ) -> OpenAICompatibleModelProvider:
         if model_config.provider is None or model_config.name is None:
             raise ProofAgentError(
                 "PA_MODEL_001",
@@ -58,6 +127,7 @@ class OpenAICompatibleModelProvider:
         params = dict(model_config.params)
         allowed = {
             "api_key_env",
+            "credential_secret_handle",
             "base_url",
             "base_url_env",
             "organization_env",
@@ -78,14 +148,44 @@ class OpenAICompatibleModelProvider:
             model_config.provider,
             _PROVIDER_DEFAULTS["openai_compatible"],
         )
-        api_key_env = str(params.get("api_key_env", provider_defaults["api_key_env"]))
-        api_key = os.environ.get(api_key_env)
-        if not api_key:
+        production_mode = (
+            os.environ.get("PROOF_AGENT_MODE", "development").strip().lower()
+            == "production"
+        )
+        if production_mode and guarded_http_client is None:
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "production model provider requires guarded HTTPS.",
+                "Inject the active Egress Policy guarded HTTP client.",
+            )
+        if production_mode and any(
+            key in params
+            for key in (
+                "api_key_env",
+                "base_url_env",
+                "organization_env",
+                "project_env",
+            )
+        ):
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "production model provider forbids every environment credential reference.",
+                "Use a model_credential Secret Handle and an explicit admitted base URL.",
+            )
+        secret_handle_payload = params.get("credential_secret_handle")
+        if production_mode and secret_handle_payload is None:
             raise ProofAgentError(
                 "PA_MODEL_003",
-                f"missing API key environment variable: {api_key_env}",
-                f"Set {api_key_env} or switch model.provider to deterministic.",
+                "production model provider requires a model_credential Secret Handle.",
+                "Bind an opaque Secret Handle validated by the configured provider.",
             )
+        api_key = _model_api_key(
+            secret_handle_payload=secret_handle_payload,
+            secret_provider=secret_provider,
+            fallback_environment_name=str(
+                params.get("api_key_env", provider_defaults["api_key_env"])
+            ),
+        )
         base_url = _base_url_from_params(params, provider_defaults["base_url"])
         deepseek_endpoint_mode = _deepseek_endpoint_mode(
             params.get("deepseek_endpoint_mode")
@@ -114,6 +214,7 @@ class OpenAICompatibleModelProvider:
             default_max_output_tokens=int(params["max_output_tokens"])
             if "max_output_tokens" in params
             else None,
+            guarded_http_client=guarded_http_client,
         )
 
     @property
@@ -129,29 +230,12 @@ class OpenAICompatibleModelProvider:
         return max(1, len(text) // 4)
 
     def generate(self, request: ModelRequest) -> ModelResponse:
-        try:
-            from openai import (
-                APIError,
-                APITimeoutError,
-                AuthenticationError,
-                OpenAI,
-            )
-        except ImportError as exc:
-            raise ProofAgentError(
-                "PA_MODEL_001",
-                "openai package is required for openai_compatible provider.",
-                'Install with: pip install "proof-agent[openai]".',
-            ) from exc
+        payload = self._request_payload(request)
+        if self._guarded_http_client is not None:
+            return self._generate_guarded(request, payload=payload)
+        return self._generate_with_sdk(request, payload=payload)
 
-        client = OpenAI(
-            api_key=self._api_key,
-            base_url=self._base_url,
-            timeout=request.timeout_seconds
-            if request.timeout_seconds is not None
-            else self._timeout_seconds,
-            organization=self._organization,
-            project=self._project,
-        )
+    def _request_payload(self, request: ModelRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [
@@ -179,6 +263,115 @@ class OpenAICompatibleModelProvider:
             max_tokens = self._default_max_output_tokens
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        return payload
+
+    def _generate_guarded(
+        self,
+        request: ModelRequest,
+        *,
+        payload: dict[str, Any],
+    ) -> ModelResponse:
+        client = self._guarded_http_client
+        if client is None:
+            raise AssertionError("guarded model path requires its HTTP client")
+        extra_body = payload.pop("extra_body", None)
+        if isinstance(extra_body, Mapping):
+            payload.update(extra_body)
+        base_url = (self._base_url or _OPENAI_STANDARD_BASE_URL).rstrip("/")
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        if self._organization:
+            headers["OpenAI-Organization"] = self._organization
+        if self._project:
+            headers["OpenAI-Project"] = self._project
+        try:
+            response = client.request(
+                "POST",
+                f"{base_url}/chat/completions",
+                headers=headers,
+                body=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                timeout_seconds=(
+                    request.timeout_seconds
+                    if request.timeout_seconds is not None
+                    else self._timeout_seconds or 60.0
+                ),
+            )
+        except TimeoutError as exc:
+            raise ProofAgentError(
+                "PA_MODEL_004",
+                "model provider request timed out.",
+                "Increase timeout_seconds or retry later.",
+            ) from exc
+        except Exception as exc:
+            raise ProofAgentError(
+                "PA_MODEL_002",
+                "model provider request failed at guarded HTTPS boundary.",
+                "Check the active Egress Policy and provider availability.",
+            ) from exc
+        if response.status_code in {401, 403}:
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                "model provider authentication failed.",
+                "Check the configured Secret Handle.",
+            )
+        if response.status_code >= 400:
+            raise ProofAgentError(
+                "PA_MODEL_002",
+                f"model provider API error (HTTP {response.status_code}).",
+                "Check provider availability and the typed request configuration.",
+            )
+        try:
+            raw_response = json.loads(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProofAgentError(
+                "PA_MODEL_002",
+                "model provider returned invalid JSON.",
+                "Check provider compatibility.",
+            ) from exc
+        if not isinstance(raw_response, Mapping):
+            raise ProofAgentError(
+                "PA_MODEL_002",
+                "model provider returned an invalid response object.",
+                "Check provider compatibility.",
+            )
+        return _model_response_from_mapping(
+            raw_response,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+    def _generate_with_sdk(
+        self,
+        request: ModelRequest,
+        *,
+        payload: dict[str, Any],
+    ) -> ModelResponse:
+        try:
+            from openai import (
+                APIError,
+                APITimeoutError,
+                AuthenticationError,
+                OpenAI,
+            )
+        except ImportError as exc:
+            raise ProofAgentError(
+                "PA_MODEL_001",
+                "openai package is required for openai_compatible provider.",
+                'Install with: pip install "proof-agent[openai]".',
+            ) from exc
+
+        client = OpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout=request.timeout_seconds
+            if request.timeout_seconds is not None
+            else self._timeout_seconds,
+            organization=self._organization,
+            project=self._project,
+        )
         try:
             response = client.chat.completions.create(**payload)
         except AuthenticationError as exc:
@@ -218,6 +411,40 @@ class OpenAICompatibleModelProvider:
             finish_reason=choice.finish_reason,
             raw_response_id=getattr(response, "id", None),
         )
+
+
+def _model_response_from_mapping(
+    response: Mapping[str, Any],
+    *,
+    provider_name: str,
+    model_name: str,
+) -> ModelResponse:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        raise ProofAgentError(
+            "PA_MODEL_002",
+            "model provider response did not contain a completion choice.",
+            "Check provider compatibility.",
+        )
+    choice = choices[0]
+    usage = response.get("usage")
+    token_usage = None
+    if isinstance(usage, Mapping):
+        token_usage = TokenUsage(
+            input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            output_tokens=int(usage.get("completion_tokens", 0) or 0),
+            total_tokens=(
+                int(usage["total_tokens"]) if usage.get("total_tokens") is not None else None
+            ),
+        )
+    return ModelResponse(
+        content=_extract_choice_content(choice),
+        provider_name=provider_name,
+        model_name=model_name,
+        token_usage=token_usage,
+        finish_reason=str(choice.get("finish_reason") or ""),
+        raw_response_id=(str(response["id"]) if response.get("id") is not None else None),
+    )
 
 
 def _function_tool_payload(

@@ -106,7 +106,7 @@ class PublishedAgentRegistry:
             source_draft_id=version.source_draft_id,
             validation_run_id=version.validation_run_id,
             resolved_knowledge_bindings=version.resolved_knowledge_bindings,
-            runtime_facts=_published_agent_runtime_facts(version),
+            runtime_facts=published_agent_runtime_facts(version),
             source="configuration_store",
         )
 
@@ -143,7 +143,7 @@ class PublishedAgentRegistry:
         )
 
 
-def _published_agent_runtime_facts(version: object) -> PublishedAgentRuntimeFacts | None:
+def published_agent_runtime_facts(version: object) -> PublishedAgentRuntimeFacts | None:
     workflow_stage_availability = getattr(version, "workflow_stage_availability", None)
     effective_stage_configuration = getattr(
         version,

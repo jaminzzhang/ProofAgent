@@ -191,6 +191,35 @@ export interface ChatRunResponse {
   context_admission?: ContextAdmission
 }
 
+export type RunLifecycleState =
+  | 'queued'
+  | 'running'
+  | 'finalizing'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancel_requested'
+  | 'cancelled'
+
+export interface QueuedRunResponse {
+  contract_version: 'proofagent.run-execution.v1'
+  run_id: string
+  state: RunLifecycleState
+  state_version: number
+  question: string
+  agent_id: string
+  agent_version_id: string
+  result_available: boolean
+  artifact_manifest_id: string | null
+  failure_code: string | null
+  outcome: ReceiptOutcome | null
+  progress_url: string
+  final_output?: { message?: string; outcome?: ReceiptOutcome }
+  evidence_chunks?: unknown[]
+  approval_state?: ApprovalState | null
+  governance_details?: GovernanceDetails
+}
+
 export type CustomerRunProgressState =
   | 'authenticating'
   | 'retrieving_evidence'

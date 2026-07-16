@@ -10,6 +10,7 @@ from urllib import error, parse, request
 from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.contracts.manifest import KnowledgeConfig
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.errors import ProofAgentError
 
 REMOTE_RETRIEVAL_PROTOCOL_VERSION = "proof-agent.remote-retrieval.v1"
@@ -59,6 +60,7 @@ class HttpJsonProvider:
         request_mapping: Mapping[str, Any] | None = None,
         response_mapping: Mapping[str, Any] | None = None,
         transport: HttpJsonTransport | None = None,
+        guarded_http_client: GuardedHttpClient | None = None,
     ) -> None:
         self.endpoint = _normalize_endpoint(endpoint)
         self._method = _normalize_method(method)
@@ -68,10 +70,24 @@ class HttpJsonProvider:
         self._static_headers = static_headers
         self._request_mapping = dict(request_mapping) if request_mapping is not None else None
         self._response_mapping = dict(response_mapping) if response_mapping is not None else None
-        self._transport = transport or _send_http_json_request
+        if transport is not None:
+            self._transport = transport
+        elif guarded_http_client is not None:
+            self._transport = _guarded_http_json_transport(guarded_http_client)
+        elif _production_mode():
+            raise _invalid_http_json_config(
+                "production http_json Knowledge requires guarded HTTPS."
+            )
+        else:
+            self._transport = _send_http_json_request
 
     @classmethod
-    def from_config(cls, knowledge_config: KnowledgeConfig) -> Self:
+    def from_config(
+        cls,
+        knowledge_config: KnowledgeConfig,
+        *,
+        guarded_http_client: GuardedHttpClient | None = None,
+    ) -> Self:
         params = knowledge_config.params
         return cls(
             endpoint=_required_string_param(params, "endpoint"),
@@ -89,6 +105,7 @@ class HttpJsonProvider:
                 params.get("response_mapping"),
                 "response_mapping",
             ),
+            guarded_http_client=guarded_http_client,
         )
 
     @property
@@ -295,6 +312,55 @@ def _send_http_json_request(http_request: HttpJsonRequest) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise _invalid_http_json_response("http_json endpoint response must be a JSON object.")
     return payload
+
+
+def _guarded_http_json_transport(client: GuardedHttpClient) -> HttpJsonTransport:
+    def send(http_request: HttpJsonRequest) -> Mapping[str, Any]:
+        url = _with_query_params(http_request.endpoint, http_request.query_params)
+        body = (
+            None
+            if http_request.json_body is None
+            else json.dumps(http_request.json_body, separators=(",", ":")).encode("utf-8")
+        )
+        try:
+            response = client.request(
+                http_request.method,
+                url,
+                headers=http_request.headers,
+                body=body,
+                timeout_seconds=http_request.timeout_seconds,
+            )
+        except Exception as exc:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_002",
+                "http_json request failed at guarded HTTPS boundary.",
+                "Check the active Egress Policy and remote Knowledge Source.",
+            ) from exc
+        if response.status_code >= 400:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_002",
+                f"http_json endpoint returned HTTP {response.status_code}",
+                "Check the remote Knowledge Source endpoint and credentials.",
+            )
+        try:
+            payload = json.loads(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_002",
+                "http_json endpoint did not return valid JSON.",
+                "Check the remote Knowledge Source response contract.",
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise _invalid_http_json_response(
+                "http_json endpoint response must be a JSON object."
+            )
+        return payload
+
+    return send
+
+
+def _production_mode() -> bool:
+    return os.environ.get("PROOF_AGENT_MODE", "development").strip().lower() == "production"
 
 
 def _with_query_params(endpoint: str, query_params: Mapping[str, str]) -> str:

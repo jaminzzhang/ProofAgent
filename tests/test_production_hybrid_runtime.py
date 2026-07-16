@@ -5,6 +5,8 @@ from hashlib import sha256
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from proof_agent.bootstrap.production_hybrid_runtime import (
     EnvironmentOpenSearchSecretProvider,
     LoadedHybridBindingRuntime,
@@ -211,6 +213,13 @@ def test_deployment_settings_build_candidate_bound_generation_and_profile() -> N
 
 def test_production_runtime_requires_explicit_activation() -> None:
     assert compose_production_hybrid_runtime_from_env({}) is None
+
+
+def test_enabled_production_runtime_requires_active_egress_client() -> None:
+    with pytest.raises(ValueError, match="active Egress Policy client"):
+        compose_production_hybrid_runtime_from_env(
+            {"PA_HYBRID_PRODUCTION_RUNTIME_ENABLED": "1"}
+        )
 
 
 def test_opensearch_secret_provider_uses_indirect_environment_names() -> None:

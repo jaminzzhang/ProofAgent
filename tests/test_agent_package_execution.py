@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 
 import yaml
+import pytest
 
 from proof_agent.contracts import (
     ContextAdmission,
@@ -37,6 +38,34 @@ from proof_agent.delivery.agent_package_execution import (
     execute_agent_package_run,
 )
 from proof_agent.observability.storage.run_store import RunStore
+
+
+def test_execute_agent_package_run_checks_cancellation_at_model_stage_boundary(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def cancellation_check() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise RuntimeError("cancelled-at-model-boundary")
+
+    with pytest.raises(RuntimeError, match="cancelled-at-model-boundary"):
+        execute_agent_package_run(
+            AgentPackageRunRequest(
+                agent_yaml=Path(
+                    "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+                ),
+                question="What is the reimbursement rule for travel meals?",
+                runs_dir=tmp_path / "run",
+                cancellation_check=cancellation_check,
+            )
+        )
+
+    assert calls == 4
+    trace = (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"final_output"' not in trace
 
 
 def test_execute_agent_package_run_executes_v3_with_controlled_react(

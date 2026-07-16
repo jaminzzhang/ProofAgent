@@ -1149,7 +1149,7 @@ def test_hybrid_lifecycle_adapters_reject_the_same_non_exact_result(
 
 @pytest.mark.parametrize(
     "tamper",
-    ["build_configuration", "vendor_media", "version_id", "duplicate_required_ref"],
+    ["build_configuration", "vendor_media", "duplicate_required_ref"],
 )
 def test_exact_result_validator_rejects_build_and_artifact_ref_tampering(
     tamper: str,
@@ -1175,14 +1175,6 @@ def test_exact_result_validator_rejects_build_and_artifact_ref_tampering(
                 )
             }
         )
-    elif tamper == "version_id":
-        result = result.model_copy(
-            update={
-                "canonical_ref": result.canonical_ref.model_copy(
-                    update={"version_id": "sha256:" + "0" * 64}
-                )
-            }
-        )
     else:
         result = result.model_copy(
             update={
@@ -1194,6 +1186,51 @@ def test_exact_result_validator_rejects_build_and_artifact_ref_tampering(
 
     with pytest.raises(ValueError):
         hybrid_worker_module.validate_hybrid_artifact_build_result(request, result)
+
+
+def test_exact_result_validator_accepts_opaque_s3_version_ids() -> None:
+    request = _build_request()
+    request = request.model_copy(
+        update={
+            "original_ref": request.original_ref.model_copy(
+                update={"version_id": "3LgVphZExopaqueS3Version"}
+            )
+        }
+    )
+    request = request.model_copy(
+        update={"request_sha256": hybrid_worker_module.hybrid_build_request_sha256(request)}
+    )
+    result = _build_result(request)
+    opaque_refs = {
+        "persisted_original_ref": result.persisted_original_ref.model_copy(
+            update={"version_id": "opaque-original"}
+        ),
+        "canonical_ref": result.canonical_ref.model_copy(
+            update={"version_id": "opaque-canonical"}
+        ),
+        "preview_ref": result.preview_ref.model_copy(
+            update={"version_id": "opaque-preview"}
+        ),
+        "build_identity_ref": result.build_identity_ref.model_copy(
+            update={"version_id": "opaque-identity"}
+        ),
+        "insurance_metadata_ref": result.insurance_metadata_ref.model_copy(
+            update={"version_id": "opaque-metadata"}
+        ),
+        "vendor_refs": tuple(
+            vendor.model_copy(
+                update={
+                    "ref": vendor.ref.model_copy(update={"version_id": "opaque-vendor"})
+                }
+            )
+            for vendor in result.vendor_refs
+        ),
+    }
+
+    hybrid_worker_module.validate_hybrid_artifact_build_result(
+        request,
+        result.model_copy(update=opaque_refs),
+    )
 
 
 def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -> None:

@@ -5,13 +5,11 @@ import {
   Badge,
   Card,
   CopyButton,
-  OutcomeBadge,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
   cn,
-  type ReceiptOutcome,
 } from '@proofagent/ui'
 import { useRunDetail } from '../hooks/useRunDetail'
 import { useLocale } from '../i18n/locale'
@@ -22,6 +20,7 @@ import { ReceiptTab } from './tabs/ReceiptTab'
 import { WorkflowTab } from './tabs/WorkflowTab'
 import type { GovernanceDetails } from '../api/types'
 import { ValidationCapturePanel } from '../components/agent/ValidationCapturePanel'
+import { RunStatusBadge } from '../components/RunStatusBadge'
 
 type Tab =
   | 'workflow'
@@ -131,7 +130,7 @@ export function RunDetailContent({
               <CopyButton value={detail.run_id} label={t('common.copy')} />
             </h1>
           </div>
-          <OutcomeBadge outcome={detail.outcome as ReceiptOutcome} t={t} />
+          <RunStatusBadge outcome={detail.outcome} state={detail.state} />
         </div>
 
         <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] p-4">

@@ -38,6 +38,8 @@ from proof_agent.capabilities.knowledge.ingestion.artifacts import (
 from proof_agent.contracts import (
     ActiveAgentVersion,
     AgentValidationRecord,
+    AgentDraftRecord,
+    AgentPublicationRecord,
     CandidateKnowledgeSourceSnapshot,
     ConfigurationOperation,
     ConfigurationOperationAudit,
@@ -61,6 +63,9 @@ from proof_agent.contracts import (
     MCPToolSourcePublicationValidation,
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
+    PersistenceConflictError,
+    PersistenceInvariantError,
+    PersistencePointerConflictError,
     QuarantinedKnowledgeUpload,
     ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
@@ -91,6 +96,10 @@ from proof_agent.contracts.workflow_stage_configuration import (
 )
 from proof_agent.control.knowledge.source_publication import (
     validate_local_index_publication_smoke,
+)
+from proof_agent.control.security.production_tools import (
+    require_production_mcp_source,
+    require_production_tool_contracts,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -150,10 +159,12 @@ class LocalAgentConfigurationStore:
         *,
         hybrid_binding_authority: HybridKnowledgeBindingAuthority | None = None,
         knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
+        production_mode: bool = False,
     ) -> None:
         self._root_dir = root_dir
         self._hybrid_binding_authority = hybrid_binding_authority
         self._knowledge_release_evidence_authority = knowledge_release_evidence_authority
+        self._production_mode = production_mode
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -201,6 +212,39 @@ class LocalAgentConfigurationStore:
         if not path.exists():
             return None
         return DraftAgent.model_validate(_read_json(path))
+
+    def get_draft_record(self, agent_id: str, draft_id: str) -> AgentDraftRecord | None:
+        """Read a Draft Agent with its durable local optimistic revision."""
+
+        draft = self.get_draft(agent_id, draft_id)
+        if draft is None:
+            return None
+        return AgentDraftRecord(
+            draft=draft,
+            revision=self._read_draft_revision(draft),
+        )
+
+    def save_draft_record(
+        self,
+        draft: DraftAgent,
+        *,
+        expected_revision: int,
+    ) -> AgentDraftRecord:
+        """Conditionally persist a complete Draft Agent behind the focused port."""
+
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            current = self.get_draft(draft.agent_id, draft.draft_id)
+            actual_revision = 0 if current is None else self._read_draft_revision(current)
+            if actual_revision != expected_revision:
+                raise PersistenceConflictError(
+                    resource_type="agent_draft",
+                    resource_id=draft.draft_id,
+                    expected_revision=expected_revision,
+                    actual_revision=actual_revision,
+                )
+            next_revision = actual_revision + 1
+            self._write_draft(draft, revision=next_revision)
+            return AgentDraftRecord(draft=draft, revision=next_revision)
 
     def list_drafts(self, agent_id: str | None = None) -> list[DraftAgent]:
         drafts_root = self._root_dir / "agents"
@@ -272,6 +316,69 @@ class LocalAgentConfigurationStore:
                 resolved_knowledge_bindings=resolved_knowledge_bindings,
                 knowledge_release_record_id=knowledge_release_record_id,
             )
+
+    def publish_version_record(
+        self,
+        publication: AgentPublicationRecord,
+        *,
+        expected_draft_revision: int,
+    ) -> AgentPublicationRecord:
+        """Persist a policy-prepared version and activation as one local operation."""
+
+        version = publication.version
+        with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
+            expectation = publication.active_pointer_expectation
+            if expectation is not None:
+                current_active = self.get_active_version(version.agent_id)
+                actual_active_version_id = (
+                    None if current_active is None else current_active.version_id
+                )
+                if actual_active_version_id != expectation.version_id:
+                    raise PersistencePointerConflictError(
+                        resource_type="active_agent_version",
+                        resource_id=version.agent_id,
+                        expected_pointer=expectation.version_id,
+                        actual_pointer=actual_active_version_id,
+                    )
+            draft = self.get_draft(version.agent_id, version.source_draft_id)
+            actual_revision = None if draft is None else self._read_draft_revision(draft)
+            if actual_revision != expected_draft_revision:
+                raise PersistenceConflictError(
+                    resource_type="agent_draft",
+                    resource_id=version.source_draft_id,
+                    expected_revision=expected_draft_revision,
+                    actual_revision=actual_revision,
+                )
+            if publication.draft_revision != expected_draft_revision:
+                raise PersistenceInvariantError(
+                    "publication draft_revision must match the conditional write revision"
+                )
+            assert draft is not None
+            if version.contract_bundle != draft.contract_bundle:
+                raise PersistenceInvariantError(
+                    "published Agent contract must match the revisioned Draft Agent"
+                )
+            version_dir = self._version_path(version.agent_id, version.version_id)
+            if version_dir.exists():
+                raise PersistenceConflictError(
+                    resource_type="agent_version",
+                    resource_id=version.version_id,
+                    expected_revision=0,
+                    actual_revision=1,
+                )
+            active_path = self._active_version_path(version.agent_id)
+            prior_active = active_path.read_bytes() if active_path.exists() else None
+            try:
+                self._write_version(version)
+                self._write_active_version(publication.activation)
+            except Exception:
+                shutil.rmtree(version_dir, ignore_errors=True)
+                if prior_active is None:
+                    active_path.unlink(missing_ok=True)
+                else:
+                    _write_bytes_atomic(active_path, prior_active)
+                raise
+            return publication
 
     def publish_canonical_seed_version_if_store_empty(
         self,
@@ -3947,6 +4054,9 @@ class LocalAgentConfigurationStore:
     def _draft_path(self, agent_id: str, draft_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "drafts" / draft_id / "draft.json"
 
+    def _draft_revision_path(self, agent_id: str, draft_id: str) -> Path:
+        return self._draft_path(agent_id, draft_id).with_name("revision.json")
+
     def _version_path(self, agent_id: str, version_id: str) -> Path:
         return self._root_dir / "agents" / agent_id / "versions" / version_id
 
@@ -4168,8 +4278,11 @@ class LocalAgentConfigurationStore:
         return source
 
     def _require_mcp_tool_sources_publishable_unlocked(self, tools_yaml: str) -> None:
+        if self._production_mode:
+            require_production_tool_contracts(tools_yaml)
         for tool in _mcp_tool_contracts(tools_yaml):
-            _require_mcp_action_tool_governance(tool)
+            if not self._production_mode:
+                _require_mcp_action_tool_governance(tool)
             tool_name = tool.get("name")
             tool_contract_id = tool_name if isinstance(tool_name, str) else ""
             tool_source_id = tool.get("tool_source_id")
@@ -4187,6 +4300,8 @@ class LocalAgentConfigurationStore:
                 )
             if source.lifecycle_state is ToolSourceLifecycleState.ARCHIVED:
                 raise _tool_source_lifecycle_conflict(f"Tool Source {source_id} is archived.")
+            if self._production_mode:
+                require_production_mcp_source(source)
             if tool_contract_id not in source.tool_contract_ids:
                 raise _tool_source_lifecycle_conflict(
                     f"Tool Source {source_id} has not imported Tool Contract {tool_contract_id}."
@@ -4357,8 +4472,36 @@ class LocalAgentConfigurationStore:
     def _knowledge_document_path(self, source_id: str, document_id: str) -> Path:
         return self._knowledge_source_root(source_id) / "documents" / document_id / "document.json"
 
-    def _write_draft(self, draft: DraftAgent) -> None:
-        _write_json(self._draft_path(draft.agent_id, draft.draft_id), draft.model_dump(mode="json"))
+    def _read_draft_revision(self, draft: DraftAgent) -> int:
+        path = self._draft_revision_path(draft.agent_id, draft.draft_id)
+        if not path.exists():
+            return max(1, len(draft.operation_audit))
+        payload = _read_json(path)
+        revision = payload.get("revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise PersistenceConflictError(
+                resource_type="agent_draft_revision",
+                resource_id=draft.draft_id,
+                expected_revision=1,
+                actual_revision=None,
+            )
+        return revision
+
+    def _write_draft(self, draft: DraftAgent, *, revision: int | None = None) -> None:
+        resolved_revision = revision
+        if resolved_revision is None:
+            current = self.get_draft(draft.agent_id, draft.draft_id)
+            resolved_revision = (
+                1 if current is None else self._read_draft_revision(current) + 1
+            )
+        _write_json_atomic(
+            self._draft_path(draft.agent_id, draft.draft_id),
+            draft.model_dump(mode="json"),
+        )
+        _write_json_atomic(
+            self._draft_revision_path(draft.agent_id, draft.draft_id),
+            {"revision": resolved_revision},
+        )
 
     def _write_version(self, version: PublishedAgentVersion) -> None:
         version_dir = self._version_path(version.agent_id, version.version_id)

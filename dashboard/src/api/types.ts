@@ -13,6 +13,62 @@ export type RunPurpose = 'production' | 'validation'
 export type RunPurposeFilter = RunPurpose | 'all'
 export type WorkflowStageStatus = 'completed' | 'blocked' | 'waiting' | 'skipped'
 
+export interface OperatorSession {
+  session_id: string
+  principal: {
+    subject: string
+    display_name: string
+  }
+  absolute_expires_at: string
+  idle_expires_at: string
+  claims_refresh_due_at: string
+  csrf_token: string
+  effective_permissions: string[]
+}
+
+export interface PermissionMappingVersion {
+  version_id: string
+  revision: number
+  rules: Array<{ claim_path: string; claim_value: string; permissions: string[] }>
+  created_at: string
+  created_by: string
+}
+
+export interface PermissionMappingsResponse {
+  active: PermissionMappingVersion | null
+  versions: PermissionMappingVersion[]
+  recovery_mapping: {
+    claim_path: string
+    group_name: string
+    permissions: string[]
+  }
+  permission_epoch: number
+}
+
+export interface EgressPolicyVersion {
+  version_id: string
+  revision: number
+  rules: Array<{
+    origin: { host: string; port: number }
+    allowed_ip_networks: string[]
+  }>
+  created_at: string
+  created_by: string
+}
+
+export interface EgressPoliciesResponse {
+  active: EgressPolicyVersion | null
+  versions: EgressPolicyVersion[]
+}
+
+export interface SecretHandleValidation {
+  handle: { protocol_id: string; handle_id: string; purpose: string; version_id?: string | null }
+  resolvable: boolean
+  provider_version_id?: string | null
+  checked_at: string
+  reason_code?: string | null
+}
+
 export interface GovernanceDetails {
   intent_resolution?: Record<string, unknown> | null
   reasoning_summary?: Record<string, unknown> | null
@@ -22,13 +78,24 @@ export interface GovernanceDetails {
 
 export type ApprovalStatus = 'requested' | 'granted' | 'denied' | 'timed_out'
 
+export type RunLifecycleState =
+  | 'queued'
+  | 'running'
+  | 'finalizing'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancel_requested'
+  | 'cancelled'
+
 /** Approval Queue view filter (queue scoping), not the approval lifecycle. */
 export type ApprovalStatusFilter = 'all' | 'pending' | 'expired'
 
 export interface RunSummary {
   run_id: string
   question: string
-  outcome: ReceiptOutcome
+  outcome: ReceiptOutcome | null
+  state?: RunLifecycleState
   run_purpose: RunPurpose
   agent_id: string | null
   agent_version_id: string | null
@@ -43,7 +110,8 @@ export interface RunSummary {
 export interface RunDetail {
   run_id: string
   question: string
-  outcome: ReceiptOutcome
+  outcome: ReceiptOutcome | null
+  state?: RunLifecycleState
   run_purpose: RunPurpose
   agent_id: string | null
   agent_version_id: string | null

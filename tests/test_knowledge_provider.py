@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +19,33 @@ from proof_agent.contracts import (
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
+
+
+class RecordingGuardedKnowledgeClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, bytes | None]] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> GuardedHttpResponse:
+        del headers, timeout_seconds
+        self.calls.append((method, url, body))
+        return GuardedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=(
+                b'{"protocol_version":"proof-agent.remote-retrieval.v1",'
+                b'"results":[{"content":"Guarded evidence","score":0.9,'
+                b'"citation":"policy://guarded#1"}]}'
+            ),
+        )
 
 
 def test_retrieval_returns_source_chunks() -> None:
@@ -206,6 +234,27 @@ def test_resolves_http_json_provider() -> None:
     )
 
     assert provider.provider_name == "http_json"
+
+
+def test_production_http_json_requires_and_uses_guarded_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
+    with pytest.raises(ProofAgentError, match="guarded HTTPS"):
+        HttpJsonProvider(endpoint="https://knowledge.example/retrieve")
+
+    guarded = RecordingGuardedKnowledgeClient()
+    provider = HttpJsonProvider(
+        endpoint="https://knowledge.example/retrieve",
+        guarded_http_client=guarded,
+    )
+    chunks = provider.retrieve("renewal rules", top_k=1)
+
+    assert chunks[0].content == "Guarded evidence"
+    assert guarded.calls[0][0:2] == (
+        "POST",
+        "https://knowledge.example/retrieve",
+    )
 
 
 def test_legacy_pageindex_and_local_vector_providers_are_not_registered() -> None:

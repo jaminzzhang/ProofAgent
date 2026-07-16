@@ -272,6 +272,21 @@ class RunStore:
 
         trace_events = self._load_trace_events(run_dir / "trace.jsonl")
         receipt_markdown = self._load_text(run_dir / "governance_receipt.md")
+        return self.project_run_detail(
+            meta=meta,
+            trace_events=trace_events,
+            receipt_markdown=receipt_markdown,
+        )
+
+    def project_run_detail(
+        self,
+        *,
+        meta: RunIndex,
+        trace_events: list[dict[str, Any]],
+        receipt_markdown: str,
+    ) -> RunDetail:
+        """Project already-verified trace/receipt bytes without filesystem authority."""
+
         evidence_chunks = self._extract_evidence(trace_events)
         citation_refs = self._extract_citation_refs(evidence_chunks)
         policy_decisions = self._extract_policy_decisions(trace_events)

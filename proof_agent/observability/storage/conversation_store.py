@@ -13,6 +13,8 @@ from typing import Any
 from uuid import uuid4
 
 from proof_agent.contracts import ConversationRecord, ConversationTurn
+from proof_agent.contracts import PersistenceConflictError, PersistenceNotFoundError
+from proof_agent.configuration.file_locking import locked, store_lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +40,26 @@ class ConversationStore:
     def create_conversation(self, *, agent_id: str) -> ConversationRecord:
         now = _now()
         record = ConversationRecord(
-            conversation_id=f"conv_{uuid4().hex[:8]}",
+            conversation_id=str(uuid4()),
             agent_id=agent_id,
             created_at=now,
             updated_at=now,
         )
-        self._write(record)
+        self.create_record(record)
         return record
+
+    def create_record(self, record: ConversationRecord) -> None:
+        """Persist one caller-assigned conversation identity exactly once."""
+
+        with locked(store_lock_path(self._conversations_dir), timeout_seconds=5.0):
+            if self.get_conversation(record.conversation_id) is not None:
+                raise PersistenceConflictError(
+                    resource_type="conversation",
+                    resource_id=record.conversation_id,
+                    expected_revision=0,
+                    actual_revision=0,
+                )
+            self._write(record)
 
     def get_conversation(self, conversation_id: str) -> ConversationRecord | None:
         path = self._conversation_path(conversation_id)
@@ -61,11 +76,48 @@ class ConversationStore:
         record = self.get_conversation(conversation_id)
         if record is None:
             return None
-        updated = record.model_copy(
-            update={"updated_at": _now(), "turns": (*record.turns, turn)}
+        return self.append_turn_expected(
+            conversation_id,
+            turn,
+            expected_turn_count=len(record.turns),
         )
-        self._write(updated)
-        return updated
+
+    def append_turn_expected(
+        self,
+        conversation_id: str,
+        turn: ConversationTurn,
+        *,
+        expected_turn_count: int,
+    ) -> ConversationRecord:
+        """Append one unique turn using optimistic conversation ordering."""
+
+        with locked(store_lock_path(self._conversations_dir), timeout_seconds=5.0):
+            record = self.get_conversation(conversation_id)
+            if record is None:
+                raise PersistenceNotFoundError(
+                    resource_type="conversation",
+                    resource_id=conversation_id,
+                )
+            actual_turn_count = len(record.turns)
+            if actual_turn_count != expected_turn_count:
+                raise PersistenceConflictError(
+                    resource_type="conversation",
+                    resource_id=conversation_id,
+                    expected_revision=expected_turn_count,
+                    actual_revision=actual_turn_count,
+                )
+            if any(existing.turn_id == turn.turn_id for existing in record.turns):
+                raise PersistenceConflictError(
+                    resource_type="conversation_turn",
+                    resource_id=turn.turn_id,
+                    expected_revision=0,
+                    actual_revision=1,
+                )
+            updated = record.model_copy(
+                update={"updated_at": turn.created_at, "turns": (*record.turns, turn)}
+            )
+            self._write(updated)
+            return updated
 
     def update_conversation(
         self,

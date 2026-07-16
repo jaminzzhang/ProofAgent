@@ -14,22 +14,32 @@ docker compose -f docker-compose.hybrid-test.yml up -d --wait
 本地类生产数据面变量：
 
 ```bash
+export PROOF_AGENT_MODE='production'
+export PROOF_AGENT_POSTGRES_DSN='postgresql+psycopg://proof:proof-test-only@127.0.0.1:55432/proof'
 export HYBRID_POSTGRES_DSN='postgresql://proof:proof-test-only@127.0.0.1:55432/proof'
+
 export HYBRID_S3_BUCKET='proof-agent-test'
-export HYBRID_S3_KEY_PREFIX='local-production/'
+export HYBRID_S3_KEY_PREFIX='local-production/knowledge/'
 export HYBRID_S3_ENDPOINT='http://127.0.0.1:59000'
 export HYBRID_S3_REGION='us-east-1'
 export HYBRID_S3_ALLOW_INSECURE_ENDPOINT='1'
+export PROOF_AGENT_ARTIFACT_S3_BUCKET='proof-agent-test'
+export PROOF_AGENT_ARTIFACT_S3_KEY_PREFIX='local-production/runs/'
+export PROOF_AGENT_ARTIFACT_S3_ENDPOINT='http://127.0.0.1:59000'
+export PROOF_AGENT_ARTIFACT_S3_REGION='us-east-1'
 export AWS_ACCESS_KEY_ID='proof'
 export AWS_SECRET_ACCESS_KEY='proof-test-secret'
+
 export HYBRID_OPENSEARCH_ENDPOINT='http://127.0.0.1:19200'
 export HYBRID_OPENSEARCH_ALLOWED_HOSTS='127.0.0.1'
 export HYBRID_OPENSEARCH_NUMBER_OF_REPLICAS='0'
 
+uv run proof-agent database upgrade
 uv run proof-agent hybrid-migrate
+uv run proof-agent database check
 ```
 
-[KNOWN | HIGH] `hybrid-migrate` 在 PostgreSQL transaction-scoped advisory lock 内执行幂等 DDL，并输出实际 schema 文件 SHA-256；应用进程不会静默改库。
+[KNOWN | HIGH] `database upgrade` 安装应用 Alembic schema；`hybrid-migrate` 在同一 PostgreSQL authority 上安装幂等 Hybrid DDL，并输出 schema SHA-256。API/worker 启动只检查 schema，不会静默改库。两个 DSN 必须指向同一个数据库。
 
 ## 2. 配置真实私有模型与发布身份
 
@@ -38,6 +48,7 @@ uv run proof-agent hybrid-migrate
 ```bash
 export PA_HYBRID_KNOWLEDGE_MODELS_ENABLED=1
 export PA_HYBRID_PRODUCTION_RUNTIME_ENABLED=1
+export PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS=1
 export PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT='https://scheduler.knowledge.internal'
 export PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE='proof-agent-local-prod'
 export PA_KNOWLEDGE_DOCLING_ENDPOINT='https://docling.knowledge.internal'
@@ -54,40 +65,57 @@ export HYBRID_EMBEDDING_INSTRUCTION='Represent the insurance rule query for retr
 export HYBRID_EMBEDDING_MODEL_REVISION='embedding@sha256:<digest>'
 export HYBRID_EMBEDDING_DIMENSION='1024'
 export HYBRID_RERANKER_REVISION='reranker@sha256:<digest>'
-export HYBRID_RETRIEVAL_PROFILE_REVISION='insurance-profile-2026-07-15'
+export HYBRID_RETRIEVAL_PROFILE_REVISION='insurance-profile-v1'
 export HYBRID_CONDITION_TAXONOMY_JSON='{"taxonomy_id":"insurance","taxonomy_revision_id":"insurance-2026-07","allowed_values":{"region":["SHANGHAI"]}}'
 export HYBRID_APPROVED_VISIBILITY_JSON='{"visibility":"INTERNAL","revision_id":"visibility-internal-2026-07"}'
+export PROOF_AGENT_OPENSEARCH_SECRET_HANDLE='knowledge/opensearch/proof-agent'
 ```
 
 [KNOWN | HIGH] 可见性没有隐式 `PUBLIC` 默认值；`HYBRID_APPROVED_VISIBILITY_JSON` 必须是业务已批准的精确 scope。Embedding instruction、模型修订、维度、mapping 和 analyzer 共同生成内容寻址的 Index Generation。
 
-[KNOWN | HIGH] OpenSearch 认证使用间接变量名。例如先设置 `OPENSEARCH_AUTHORIZATION`，再设置 `HYBRID_OPENSEARCH_AUTHORIZATION_ENV=OPENSEARCH_AUTHORIZATION`；不要把 token 放进 endpoint 或普通配置 JSON。mTLS/CA 对应变量见 `.env.example`。
+[KNOWN | HIGH] 生产 OpenSearch 认证必须通过 `PROOF_AGENT_OPENSEARCH_SECRET_HANDLE` 解析；Secret 内容是仅含 `authorization` 的 JSON。不要把 token 放进 endpoint、普通配置 JSON 或浏览器。环境变量认证选择器仅供非生产测试组合。
+
+生产进程还必须完成 OIDC、Vault、active Egress Policy、Session key 和部署身份配置；变量模板见 `.env.example`。尤其需要：
+
+```bash
+export PROOF_AGENT_STABLE_ORIGIN='https://proof-agent.internal.example'
+export PROOF_AGENT_SECRET_PROVIDER_COMPATIBILITY_INPUT='deploy/production/compatibility-input.json'
+export PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON='<opaque-handle-to-vault-locator-json>'
+export PROOF_AGENT_VAULT_AGENT_TOKEN_FILE='/run/secrets/vault-agent-token'
+export PROOF_AGENT_PUBLISHED_AGENT_CACHE_DIR="$PWD/var/production-agent-cache"
+export PROOF_AGENT_EXECUTOR_WORK_DIR="$PWD/var/executor"
+export PROOF_AGENT_RELEASE_WORK_DIR="$PWD/var/release-validation"
+```
+
+[KNOWN | HIGH] API 组合会先从 PostgreSQL 读取 active Egress Policy，再访问 Vault/OIDC/模型服务；因此部署迁移 Job 必须在 API 启动前原子安装并激活初始 Permission Mapping 与 Egress Policy。当前仓库尚未提供 S6 的通用生产 bootstrap/Blue-Green Job，类生产验证可沿用测试中的 PostgreSQL security repository 初始化方式；该缺口会阻止正式 Deployment Gate，但不允许改成 allow-all 或绕过 guarded egress。
 
 ## 3. 启动 API 与 worker
 
-两个进程必须共享同一个 `--config-dir`：
+生产 API、Knowledge Worker 和 Run Executor 共享 PostgreSQL/S3 authority，不使用共享本地 `--config-dir`：
 
 ```bash
 uv run proof-agent server \
   --host 127.0.0.1 --port 8000 \
-  --history-dir runs/local-prod/history \
-  --config-dir runs/local-prod/config \
   --no-seed-example-agent
 ```
 
 ```bash
-uv run proof-agent knowledge-worker \
-  --config-dir runs/local-prod/config \
-  --poll-interval 1
+export PROOF_AGENT_KNOWLEDGE_WORKER_ID='knowledge-worker-local-1'
+uv run proof-agent knowledge-worker --poll-interval 1
+
+export PROOF_AGENT_RELEASE_ID='local-candidate-1'
+export PROOF_AGENT_IMAGE_DIGEST='sha256:<candidate-image-digest>'
+export PROOF_AGENT_EXECUTOR_ID='executor-local-1'
+uv run proof-agent run-executor --slot 1 --concurrency 5
 ```
 
-[KNOWN | HIGH] API 与 worker 会各自组合真实私有模型客户端；worker 把原 PDF、vendor 输出、canonical JSON、preview、build identity 和保险元数据写入同一个版本化 S3。API 使用同一个 S3 authority 导入工作簿并发布 manifest；PG 是 Source publication 和 retrieval profile 的唯一在线指针。
+[KNOWN | HIGH] 三个角色没有 production→local fallback。worker 把原 PDF、vendor 输出、canonical JSON、preview、build identity 和保险元数据写入版本化 S3；API 导入工作簿并发布 manifest；PG 是 Source publication、Agent、队列和 Retrieval Profile 的在线 authority；Executor 只执行冻结快照。
 
 ## 4. PDF 到 Source publication
 
-1. 创建 `hybrid_index` Source，`params` 可使用 `{}` 或显式 intake 上限。
+1. 创建 `source_id=insurance-rules`、`provider=hybrid_index` 的 Source，`params` 可使用 `{}` 或显式 intake 上限。该 ID 必须与生产候选包一致。
 2. 调用 `POST /api/config/knowledge-sources/{source_id}/documents`，JSON 包含 `filename`、`content_type: application/pdf` 和 `content_base64`。
-3. 轮询 quarantined upload、document 和 ingestion-job API，直到 document/job 都为 `ready`。`review_required`、`failed` 或未完成文档会阻止候选发布。
+3. 轮询 document 和 ingestion-job API，直到 document/job 都为 `ready`。上传响应本身就是受控 admission projection；`review_required`、`failed` 或未完成文档会阻止候选发布。
 4. 按 `insurance-rule-metadata.v1` 工作簿格式导入业务元数据；逐条读取 metadata review 的 `review_version` 与 `review_identity`，再 approve/correct。未批准、冲突或多重不同 authority 会失败关闭。
 5. 调用 Source publication validate，取得 `validation_id`；随后 publish。
 
@@ -105,10 +133,10 @@ POST /api/config/knowledge-sources/{source_id}/publication/publish
 
 ## 5. Agent 在线检索与引用回答
 
-1. 在 Draft Agent 的 `knowledge_bindings` 中引用该 shared Source，并固定/继承 Retrieval Profile。
-2. 执行 Draft validation；其 `resolved_knowledge_bindings` 应包含 `source_publication_id`、snapshot、generation、publication sequence、profile、manifest exact ref 和 attestation id。
-3. Phase F 通过后注册 Knowledge Release Record，再发布 Agent Version。
-4. 调用 `/api/agents/{agent_id}/runs` 或 Operator Chat。
+1. 使用 `deploy/production/agent_management_insurance_specialist/agent.yaml` 作为生产候选，而不是 `examples/` 下的 deterministic 开发示例。
+2. 候选固定 `source_id=insurance-rules` 和 `retrieval_profile_revision_id=insurance-profile-v1`；部署前必须把模型 URL、模型名和 Vault Handle 调整为候选的真实值并纳入同一次候选绑定。
+3. Phase F 四门通过后，使用 `production-publish-agent`。服务端解析当前 PG Hybrid publication，冻结 publication/snapshot/generation/sequence/profile/manifest/attestation，并执行一次真实在线引用回答。
+4. 发布成功后调用 `POST /api/agents/{agent_id}/runs` 或 Operator Chat；Run Request 的机构授权只从服务端 OIDC claim mapping 注入，客户端不能自报 ACL。
 
 [KNOWN | HIGH] 在线运行不会重新跟随 Source 的 latest pointer；它按 Published Agent Version 冻结的历史 publication 读取 PG/S3 authority，验证 OpenSearch UUID/attestation，先做授权和适用性过滤，再运行 BM25+dense+RRF+真实 reranker。最终回答的可见引用必须绑定到已准入 evidence citation；无合格证据时失败关闭。
 
@@ -145,25 +173,23 @@ uv run proof-agent hybrid-seal-release-evidence \
   --output var/knowledge-eval/evidence-refs.json
 ```
 
-把 `evidence-refs.json` 内容作为 `evidence` 调用：
+配置独立 Release Authority、服务端验收 ACL 和审计身份后，原子发布 Agent：
 
-```text
-POST /api/config/agents/{agent_id}/drafts/{draft_id}/knowledge-release-records
-{
-  "record_id":"knowledge-release-<candidate>",
-  "validation_run_id":"<passed-run-id>",
-  "evidence": { ...evidence-refs.json... }
-}
+```bash
+export PA_KNOWLEDGE_EVALUATION_ENDPOINT='https://knowledge-evaluator.internal'
+export PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE='evaluation/proof-agent/release'
+export PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON='{"institutions":["branch-shanghai"],"regions":["SHANGHAI"],"public_only":false}'
+export PROOF_AGENT_RELEASE_ACTOR_SUBJECT='release-operator'
+export PROOF_AGENT_RELEASE_ACTOR_IDENTITY_PROVIDER='deployment-identity'
+export PROOF_AGENT_RELEASE_ACTOR_SESSION_ID='release-session-local-1'
+
+uv run proof-agent production-publish-agent \
+  --agent deploy/production/agent_management_insurance_specialist/agent.yaml \
+  --release-evidence var/knowledge-eval/evidence-refs.json \
+  --smoke-question '该产品等待期如何解释？'
 ```
 
-最后调用 Draft publish，并传回上一步 `record_id`：
-
-```text
-POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish
-{"validation_run_id":"<passed-run-id>","knowledge_release_record_id":"knowledge-release-<candidate>"}
-```
-
-[KNOWN | HIGH] 服务端从 validation record 重新计算 candidate digest，并由独立 Release Evidence Authority 验证四个不同的 exact artifact ref；客户端不能用自报 aggregate、CI 标签或可变 latest URL 自我授权。
+[KNOWN | HIGH] 发布器先让独立 Release Authority 验证四个不同的 exact artifact ref，再暂存 PG Draft，执行真实 Hybrid 检索/回答并把 trace 与 receipt 回写版本化 S3。只有 `ANSWERED_WITH_CITATIONS` 且至少一个引用被接纳时，才以 active-pointer CAS 原子写入不可变 Agent Version；并发候选、证据漂移、模型/Secret 不可用都会失败关闭。
 
 ## 7. 验证与故障定位
 
@@ -172,7 +198,9 @@ POST /api/config/agents/{agent_id}/drafts/{draft_id}/publish
 ```bash
 uv run ruff check .
 uv run mypy proof_agent
-uv run pytest -q
+uv run pytest -q tests -m 'not postgres_integration and not hybrid_integration'
+npm run build
+npm test
 ```
 
 真实 disposable 数据面门：
@@ -185,6 +213,18 @@ export HYBRID_TEST_S3_ACCESS_KEY='proof'
 export HYBRID_TEST_S3_SECRET_KEY='proof-test-secret'
 export HYBRID_TEST_OPENSEARCH_URL='http://127.0.0.1:19200'
 uv run pytest -m hybrid_integration tests/integration -q
+```
+
+应用 PostgreSQL/S3 回归：
+
+```bash
+export PROOF_AGENT_TEST_POSTGRES_DSN='postgresql+psycopg://proof:proof-test-only@127.0.0.1:55432/proof'
+export PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1
+export PROOF_AGENT_TEST_S3_ENDPOINT='http://127.0.0.1:59000'
+export PROOF_AGENT_TEST_S3_BUCKET='proof-agent-test'
+export AWS_ACCESS_KEY_ID='proof'
+export AWS_SECRET_ACCESS_KEY='proof-test-secret'
+uv run pytest -m postgres_integration tests -q
 ```
 
 [INFERRED | HIGH] 如果真实闭环失败，优先按边界定位：job 未 ready 看 parser/scheduler；S3 exact-ref 错误看 versioning、key prefix 和 digest；publish 409 看 stale validation/fence/review；在线无结果看冻结 binding、ACL/applicability、manifest 与 attestation；有 evidence 但无答案看 citation/adequacy gate 和回答模型输出。

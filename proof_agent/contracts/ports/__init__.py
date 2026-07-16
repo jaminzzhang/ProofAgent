@@ -1,0 +1,46 @@
+"""Use-case-shaped persistence ports exposed to Control and Delivery layers."""
+
+from proof_agent.contracts.ports.agent_lifecycle import AgentLifecycleRepository
+from proof_agent.contracts.ports.artifacts import ArtifactStore
+from proof_agent.contracts.ports.artifact_references import ArtifactReferenceRepository
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.audit import AuditRepository
+from proof_agent.contracts.ports.case_memory import CaseMemoryRepository
+from proof_agent.contracts.ports.conversations import ConversationRepository
+from proof_agent.contracts.ports.shared_assets import (
+    KnowledgeAssetRepository,
+    ModelConnectionReader,
+    ModelAssetRepository,
+    ToolSourceReader,
+    ToolAssetRepository,
+    resolve_shared_asset_versions,
+)
+from proof_agent.contracts.ports.run_metadata import RunMetadataRepository
+from proof_agent.contracts.ports.run_queue import RunQueueRepository
+from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionRepository
+from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
+from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.unit_of_work import ConfigurationUnitOfWork
+
+__all__ = [
+    "AgentLifecycleRepository",
+    "ArtifactStore",
+    "ArtifactReferenceRepository",
+    "AuditRepository",
+    "CaseMemoryRepository",
+    "ConversationRepository",
+    "ConfigurationUnitOfWork",
+    "GuardedHttpClient",
+    "KnowledgeAssetRepository",
+    "ModelAssetRepository",
+    "ModelConnectionReader",
+    "OidcClient",
+    "OperatorSessionRepository",
+    "RunMetadataRepository",
+    "RunQueueRepository",
+    "SecurityConfigurationRepository",
+    "SecretProvider",
+    "ToolAssetRepository",
+    "ToolSourceReader",
+    "resolve_shared_asset_versions",
+]

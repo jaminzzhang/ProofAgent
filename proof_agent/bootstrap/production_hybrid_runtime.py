@@ -10,7 +10,6 @@ import json
 import os
 from threading import RLock
 from typing import Any, Mapping, Protocol, cast
-from urllib.parse import urlsplit
 
 from proof_agent.bootstrap.hybrid_execution import HybridRunDependencies
 from proof_agent.capabilities.knowledge.hybrid.provider import (
@@ -22,9 +21,11 @@ from proof_agent.capabilities.knowledge.hybrid.manifest import (
     decode_manifest_shard_artifact,
 )
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
+    OpenSearchSecretProvider,
     rule_unit_analyzer_sha256,
     rule_unit_mapping_sha256,
 )
+from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridProjectionPublicationPort,
     KnowledgeArtifactStore,
@@ -527,10 +528,6 @@ class ProductionHybridKnowledgeRuntime:
     def publication_api_for(self, configuration_store: object) -> object:
         """Compose the application publication facade from the same owned resources."""
 
-        from proof_agent.bootstrap.production_hybrid_publication import (
-            ProductionHybridKnowledgePublicationFacade,
-            ProductionHybridPublicationCandidateAssembler,
-        )
         from proof_agent.capabilities.knowledge.hybrid.workbook import (
             FilesystemInsuranceMetadataReviewRepository,
         )
@@ -538,9 +535,27 @@ class ProductionHybridKnowledgeRuntime:
         root_dir = getattr(configuration_store, "root_dir", None)
         if root_dir is None:
             raise TypeError("Hybrid publication requires a rooted configuration store")
+        return self.publication_api(
+            configuration_store=configuration_store,
+            review_repository=FilesystemInsuranceMetadataReviewRepository(root_dir),
+        )
+
+    def publication_api(
+        self,
+        *,
+        configuration_store: object,
+        review_repository: object,
+    ) -> object:
+        """Compose publication from explicit durable configuration and review ports."""
+
+        from proof_agent.bootstrap.production_hybrid_publication import (
+            ProductionHybridKnowledgePublicationFacade,
+            ProductionHybridPublicationCandidateAssembler,
+        )
+
         assembler = ProductionHybridPublicationCandidateAssembler(
             configuration_store=cast(Any, configuration_store),
-            review_repository=FilesystemInsuranceMetadataReviewRepository(root_dir),
+            review_repository=cast(Any, review_repository),
             repository=cast(Any, self.repository),
             artifact_store=cast(Any, self.artifact_store),
             search_index=cast(Any, self.search_index),
@@ -586,6 +601,10 @@ def _allowed_scope_values(scope: Any | None) -> tuple[str, ...]:
 
 def compose_production_hybrid_runtime_from_env(
     environ: Mapping[str, str] | None = None,
+    *,
+    guarded_http_client: GuardedHttpsClient | None = None,
+    opensearch_secret_handle: str | None = None,
+    opensearch_secret_provider: OpenSearchSecretProvider | None = None,
 ) -> ProductionHybridKnowledgeRuntime | None:
     """Compose the complete private-model and real-storage retrieval graph once."""
 
@@ -595,14 +614,21 @@ def compose_production_hybrid_runtime_from_env(
         return None
     if enabled not in {"1", "true", "yes"}:
         raise ValueError("PA_HYBRID_PRODUCTION_RUNTIME_ENABLED must be a boolean flag")
+    if guarded_http_client is None:
+        raise ValueError(
+            "production Hybrid runtime requires the active Egress Policy client"
+        )
+    metadata_required = source.get(
+        "PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS", ""
+    ).strip().lower()
+    if metadata_required not in {"1", "true", "yes"}:
+        raise ValueError(
+            "production Hybrid runtime requires strict insurance metadata model proposals"
+        )
 
     from proof_agent.bootstrap.composition import compose_hybrid_knowledge_from_env
-    from proof_agent.capabilities.knowledge.hybrid.model_clients import (
-        BoundedSocketPrivateAddressResolver,
-        PrivateNetworkPolicy,
-    )
     from proof_agent.capabilities.knowledge.hybrid.opensearch import (
-        HttpxOpenSearchTransport,
+        GuardedOpenSearchTransport,
         OpenSearchHybridIndex,
     )
     from proof_agent.capabilities.knowledge.hybrid.s3_artifacts import S3ExactArtifactStore
@@ -611,7 +637,10 @@ def compose_production_hybrid_runtime_from_env(
     )
 
     settings = ProductionHybridDeploymentSettings.from_environment(source)
-    graph = compose_hybrid_knowledge_from_env(source)
+    graph = compose_hybrid_knowledge_from_env(
+        source,
+        guarded_http_client=guarded_http_client,
+    )
     if graph is None:
         raise ValueError(
             "PA_HYBRID_KNOWLEDGE_MODELS_ENABLED=1 is required for the production runtime"
@@ -633,46 +662,15 @@ def compose_production_hybrid_runtime_from_env(
         )
         owned.insert(1, artifact_store)
         endpoint = _required_environment(source, "HYBRID_OPENSEARCH_ENDPOINT")
-        host = urlsplit(endpoint).hostname
-        if host is None:
-            raise ValueError("HYBRID_OPENSEARCH_ENDPOINT is invalid")
-        loopback = host in {"127.0.0.1", "localhost", "::1"}
-        allowed_hosts = tuple(
-            item.strip()
-            for item in source.get("HYBRID_OPENSEARCH_ALLOWED_HOSTS", host).split(",")
-            if item.strip()
-        )
-        resolver = None
-        network_policy = None
-        if not loopback:
-            cidrs = tuple(
-                item.strip()
-                for item in source.get("HYBRID_OPENSEARCH_ALLOWED_CIDRS", "").split(",")
-                if item.strip()
-            )
-            if not cidrs:
-                raise ValueError("HYBRID_OPENSEARCH_ALLOWED_CIDRS is required")
-            network_policy = PrivateNetworkPolicy.from_entries(cidrs)
-            resolver = BoundedSocketPrivateAddressResolver()
-            owned.append(resolver)
-        secret_selector_keys = (
-            "HYBRID_OPENSEARCH_AUTHORIZATION_ENV",
-            "HYBRID_OPENSEARCH_CLIENT_CERT_PATH_ENV",
-            "HYBRID_OPENSEARCH_CLIENT_KEY_PATH_ENV",
-            "HYBRID_OPENSEARCH_CA_BUNDLE_PATH_ENV",
-        )
-        has_secret_material = any(source.get(key, "").strip() for key in secret_selector_keys)
-        secret_provider = EnvironmentOpenSearchSecretProvider(source)
-        transport = HttpxOpenSearchTransport(
+        transport = GuardedOpenSearchTransport(
             endpoint=endpoint,
-            allowed_hosts=allowed_hosts,
-            allow_insecure_loopback=loopback,
-            network_policy=network_policy,
-            resolver=resolver,
-            secret_handle=(
-                _OPENSEARCH_ENVIRONMENT_SECRET_HANDLE if has_secret_material else None
+            guarded_http_client=guarded_http_client.restricted(
+                max_redirects=0,
+                max_attempts_per_hop=1,
+                max_response_bytes=32 * 1024 * 1024,
             ),
-            secret_provider=secret_provider if has_secret_material else None,
+            secret_handle=opensearch_secret_handle,
+            secret_provider=opensearch_secret_provider,
         )
         owned.append(transport)
         search_index = OpenSearchHybridIndex(

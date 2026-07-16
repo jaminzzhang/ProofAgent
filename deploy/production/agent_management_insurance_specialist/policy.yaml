@@ -1,0 +1,39 @@
+rules:
+  - rule_id: answering.require_evidence
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "Insurance specialist answers require accepted Knowledge evidence."
+
+  - rule_id: response.no_coverage_or_payment_guarantee
+    enforcement_point: before_answer
+    condition:
+      require_retrieval: true
+      min_evidence_count: 1
+      require_citations: true
+    decision:
+      on_pass: allow
+      on_fail: deny
+    reason_template: "The Agent may explain supported facts but must not make final coverage, payment, underwriting, claim, or commission decisions."
+
+  - rule_id: memory.deny_all
+    enforcement_point: before_memory_write
+    condition:
+      deny_fields:
+        - customer_identity_fact
+        - agent_identity_fact
+        - policy_status
+        - claim_status
+        - report_value
+        - raw_tool_payload
+        - raw_evidence
+        - raw_transcript
+    decision:
+      on_match: deny
+      on_pass: deny
+    reason_template: "The initial production Hybrid Agent does not write memory."

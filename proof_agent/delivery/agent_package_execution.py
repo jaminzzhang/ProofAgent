@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -9,7 +9,7 @@ from uuid import uuid4
 from proof_agent.bootstrap.composition import compose_harness_invocation
 from proof_agent.bootstrap.knowledge_resolution import KnowledgeBindingResolver
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 from proof_agent.contracts import (
     AgentManifest,
     AgentContextConfiguration,
@@ -58,6 +58,8 @@ from proof_agent.observability.storage.run_store import RunStore
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.hybrid.provider import HybridIndexProvider
     from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
+    from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+    from proof_agent.contracts.ports.secret_provider import SecretProvider
 
 
 class ControlledReActOrchestratorDependency(Protocol):
@@ -79,7 +81,7 @@ class AgentPackageRunRequest:
     manifest: AgentManifest | None = None
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
-    configuration_store: LocalAgentConfigurationStore | None = None
+    configuration_store: RuntimeSharedAssetReader | None = None
     run_purpose: RunPurpose = RunPurpose.PRODUCTION
     agent_id: str | None = None
     agent_version_id: str | None = None
@@ -95,6 +97,9 @@ class AgentPackageRunRequest:
     )
     hybrid_providers: Mapping[str, "HybridIndexProvider"] | None = None
     governed_hybrid_request_factory: "GovernedHybridRequestFactory" | None = None
+    cancellation_check: Callable[[], None] | None = None
+    guarded_http_client: "GuardedHttpClient" | None = None
+    secret_provider: "SecretProvider" | None = None
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -110,13 +115,18 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
         context_config=manifest.context,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
-    return _execute_controlled_react_v3_agent_package_run(
+    if request.cancellation_check is not None:
+        request.cancellation_check()
+    result = _execute_controlled_react_v3_agent_package_run(
         request,
         manifest=manifest,
         template=template,
         run_id=run_id,
         run_start_context=run_start_context,
     )
+    if request.cancellation_check is not None:
+        request.cancellation_check()
+    return result
 
 
 def _execute_controlled_react_v3_agent_package_run(
@@ -172,6 +182,9 @@ def _execute_controlled_react_v3_agent_package_run(
             institution_authorization=request.institution_authorization,
             hybrid_providers=request.hybrid_providers,
             governed_hybrid_request_factory=request.governed_hybrid_request_factory,
+            guarded_http_client=request.guarded_http_client,
+            secret_provider=request.secret_provider,
+            cancellation_check=request.cancellation_check,
         )
     except ProofAgentError as exc:
         if exc.code.startswith("PA_MODEL_"):
@@ -217,6 +230,8 @@ def _execute_controlled_react_v3_agent_package_run(
             stage_contexts=stage_contexts,
             business_flow_admission_callback=apply_business_flow_stage_contexts,
         )
+    if request.cancellation_check is not None:
+        request.cancellation_check()
     execution_result = orchestrator.start(
         ControlledReActStartRequest(
             run_id=run_id,
@@ -232,6 +247,8 @@ def _execute_controlled_react_v3_agent_package_run(
             retrieval_max_queries=manifest.retrieval.max_queries,
         )
     )
+    if request.cancellation_check is not None:
+        request.cancellation_check()
     visited_stage_ids = {stage.stage_id for stage in execution_result.stage_results}
     stage_context_applications = tuple(
         application

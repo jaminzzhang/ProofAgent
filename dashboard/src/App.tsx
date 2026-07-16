@@ -7,16 +7,19 @@ import { TopNav } from './components/TopNav'
 import { Sidebar } from './components/Sidebar'
 import { ThemeProvider } from './components/ThemeProvider'
 import { LocaleProvider } from './i18n/locale'
+import { SessionExpiredBanner, SessionProvider } from './auth/session'
 
 export default function App() {
   return (
     <ThemeProvider>
       <LocaleProvider>
-        <ToasterProvider>
-          <BrowserRouter>
-            <AppFrame />
-          </BrowserRouter>
-        </ToasterProvider>
+        <SessionProvider>
+          <ToasterProvider>
+            <BrowserRouter>
+              <AppFrame />
+            </BrowserRouter>
+          </ToasterProvider>
+        </SessionProvider>
       </LocaleProvider>
     </ThemeProvider>
   )
@@ -42,6 +45,7 @@ function AppFrame() {
 
   return (
     <div className="h-screen bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200 flex flex-col overflow-hidden">
+      <SessionExpiredBanner />
       <TopNav
         leading={
           <button

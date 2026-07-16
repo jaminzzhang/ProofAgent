@@ -106,10 +106,16 @@ evaluate_app = typer.Typer(no_args_is_help=True)
 campaign_app = typer.Typer(no_args_is_help=True)
 release_app = typer.Typer(no_args_is_help=True)
 knowledge_app = typer.Typer(no_args_is_help=True)
+database_app = typer.Typer(no_args_is_help=True)
+artifacts_app = typer.Typer(no_args_is_help=True)
+recovery_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
 app.add_typer(release_app, name="release")
 app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(database_app, name="database")
+app.add_typer(artifacts_app, name="artifacts")
+app.add_typer(recovery_app, name="recovery")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 REACT_DEMO_AGENT_PATH = DEMO_AGENT_PATH
@@ -136,6 +142,198 @@ VERIFY_REMOTE_STOP_MARKERS = (
 _STRICT_RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
 )
+
+
+@database_app.command("current")
+def database_current(
+    dsn: str = typer.Option(
+        ...,
+        "--dsn",
+        envvar="PROOF_AGENT_POSTGRES_DSN",
+        help="PostgreSQL DSN; may also be supplied through PROOF_AGENT_POSTGRES_DSN.",
+    ),
+) -> None:
+    """Print the installed Alembic revision without changing the database."""
+
+    from proof_agent.capabilities.persistence.postgres.database import (
+        create_postgres_engine,
+        current_revision,
+    )
+
+    engine = create_postgres_engine(dsn)
+    try:
+        revision = current_revision(engine)
+    except Exception as exc:
+        typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+    typer.echo(json.dumps({"revision": revision}, sort_keys=True))
+
+
+@database_app.command("check")
+def database_check(
+    dsn: str = typer.Option(
+        ...,
+        "--dsn",
+        envvar="PROOF_AGENT_POSTGRES_DSN",
+        help="PostgreSQL DSN; may also be supplied through PROOF_AGENT_POSTGRES_DSN.",
+    ),
+) -> None:
+    """Fail unless the database is exactly compatible with this application build."""
+
+    from proof_agent.capabilities.persistence.postgres.database import check_database
+
+    try:
+        result = check_database(dsn)
+    except Exception as exc:
+        typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "current_revision": result.current_revision,
+                "head_revision": result.head_revision,
+                "status": "compatible",
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@database_app.command("upgrade")
+def database_upgrade(
+    dsn: str = typer.Option(
+        ...,
+        "--dsn",
+        envvar="PROOF_AGENT_POSTGRES_DSN",
+        help="PostgreSQL DSN; may also be supplied through PROOF_AGENT_POSTGRES_DSN.",
+    ),
+    lock_timeout_seconds: float = typer.Option(
+        30.0,
+        "--lock-timeout-seconds",
+        min=0.001,
+        help="Maximum wait for the global PostgreSQL migration lock.",
+    ),
+) -> None:
+    """Run the explicit locked expand-only migration path."""
+
+    from proof_agent.capabilities.persistence.postgres.database import upgrade_database
+
+    try:
+        revision = upgrade_database(dsn, lock_timeout_seconds=lock_timeout_seconds)
+    except Exception as exc:
+        typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({"revision": revision, "status": "upgraded"}, sort_keys=True))
+
+
+@artifacts_app.command("expire")
+def artifacts_expire(
+    dsn: str = typer.Option(..., "--dsn", envvar="PROOF_AGENT_POSTGRES_DSN"),
+    at: str | None = typer.Option(None, "--at"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Preview or apply logical artifact expiry; ordinary visibility ends immediately."""
+
+    from datetime import UTC
+
+    from proof_agent.capabilities.persistence.postgres.bundle import (
+        PostgresPersistenceBundle,
+    )
+
+    checked_at = datetime.now(UTC) if at is None else _parse_release_checked_at(at)
+    bundle = PostgresPersistenceBundle.create(dsn)
+    try:
+        bound = bundle.artifacts.list_bound_manifests()
+        due = sum(
+            1
+            for item in bound
+            if any(
+                ref.expires_at is not None and ref.expires_at <= checked_at
+                for ref in (
+                    item.binding.manifest,
+                    *(member.artifact for member in item.manifest.members),
+                )
+            )
+            and item.binding.result_available
+        )
+        expired = bundle.artifacts.expire_due(now=checked_at) if apply else 0
+    finally:
+        bundle.close()
+    typer.echo(
+        json.dumps(
+            {
+                "apply": apply,
+                "checked_at": checked_at.isoformat(),
+                "expired": expired,
+                "would_expire": due,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@artifacts_app.command("gc")
+def artifacts_gc(
+    dsn: str = typer.Option(..., "--dsn", envvar="PROOF_AGENT_POSTGRES_DSN"),
+    at: str | None = typer.Option(None, "--at"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Preview or collect unreferenced exact versions older than the 24-hour grace."""
+
+    from datetime import UTC
+
+    from proof_agent.observability.artifact_gc import ArtifactGarbageCollector
+
+    checked_at = datetime.now(UTC) if at is None else _parse_release_checked_at(at)
+    bundle, store = _production_artifact_authority(dsn)
+    try:
+        report = ArtifactGarbageCollector(
+            store=store,
+            repository=bundle.artifacts,
+        ).collect(now=checked_at, dry_run=not apply)
+    finally:
+        store.close()
+        bundle.close()
+    typer.echo(
+        json.dumps(
+            {
+                "deleted": report.deleted,
+                "dry_run": report.dry_run,
+                "failed": report.failed,
+                "oldest_orphan_age_seconds": report.oldest_orphan_age_seconds,
+                "referenced": report.referenced,
+                "release_healthy": report.release_healthy,
+                "scanned": report.scanned,
+            },
+            sort_keys=True,
+        )
+    )
+    if not report.release_healthy:
+        raise typer.Exit(code=1)
+
+
+@artifacts_app.command("verify-references")
+def artifacts_verify_references(
+    dsn: str = typer.Option(..., "--dsn", envvar="PROOF_AGENT_POSTGRES_DSN"),
+    at: str = typer.Option(..., "--at"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Verify every PostgreSQL-bound exact S3 version and SHA-256."""
+
+    _run_artifact_recovery_verify(dsn=dsn, at=at, apply=apply)
+
+
+@recovery_app.command("verify")
+def recovery_verify(
+    dsn: str = typer.Option(..., "--dsn", envvar="PROOF_AGENT_POSTGRES_DSN"),
+    at: str = typer.Option(..., "--at"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Reapply retention when requested and verify combined PostgreSQL/S3 authority."""
+
+    _run_artifact_recovery_verify(dsn=dsn, at=at, apply=apply)
 
 
 class ReleaseVerifyCommand(TyperCommand):
@@ -735,6 +933,74 @@ def hybrid_seal_release_evidence(
     typer.echo(f"Knowledge release evidence: {output}")
 
 
+@app.command("production-publish-agent")
+def production_publish_agent(
+    agent: str = typer.Option(..., "--agent", help="Production Agent package YAML path"),
+    release_evidence: str = typer.Option(
+        ...,
+        "--release-evidence",
+        help="Exact four-reference Phase F evidence JSON",
+    ),
+    smoke_question: str = typer.Option(
+        ...,
+        "--smoke-question",
+        help="Bounded online Hybrid retrieval and cited-answer smoke question",
+    ),
+) -> None:
+    """Verify Phase F, run the exact online path, then atomically activate in PostgreSQL."""
+
+    from proof_agent.bootstrap.production_roles import (
+        compose_production_agent_publisher,
+    )
+    from proof_agent.contracts import AuditActorFacts, KnowledgeReleaseEvidenceSet
+
+    evidence_path = Path(release_evidence)
+    composition = None
+    try:
+        if evidence_path.is_symlink() or not evidence_path.is_file():
+            raise ValueError("release evidence must be a regular file")
+        content = evidence_path.read_bytes()
+        if not 1 <= len(content) <= 1024 * 1024:
+            raise ValueError("release evidence is outside its size envelope")
+        evidence = KnowledgeReleaseEvidenceSet.model_validate_json(content)
+        actor = AuditActorFacts(
+            subject=_required_cli_environment("PROOF_AGENT_RELEASE_ACTOR_SUBJECT"),
+            identity_provider=_required_cli_environment(
+                "PROOF_AGENT_RELEASE_ACTOR_IDENTITY_PROVIDER"
+            ),
+            session_id=_required_cli_environment("PROOF_AGENT_RELEASE_ACTOR_SESSION_ID"),
+        )
+        composition = compose_production_agent_publisher()
+        publication = composition.publisher.publish(
+            agent_manifest_path=Path(agent),
+            evidence=evidence,
+            smoke_question=smoke_question,
+            actor=actor,
+        )
+    except Exception as exc:
+        typer.echo(f"Production Agent publication failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if composition is not None:
+            composition.close()
+    typer.echo(
+        json.dumps(
+            {
+                "agent_id": publication.version.agent_id,
+                "agent_version_id": publication.version.version_id,
+                "knowledge_release_record_id": (
+                    publication.version.knowledge_release_record.record_id
+                    if publication.version.knowledge_release_record is not None
+                    else None
+                ),
+                "validation_run_id": publication.version.validation_run_id,
+                "status": "published",
+            },
+            sort_keys=True,
+        )
+    )
+
+
 @app.command()
 def inspect(path: str) -> None:
     """Summarize a trace JSONL file or Governance Receipt markdown artifact."""
@@ -1131,6 +1397,19 @@ def server(
         )
         raise typer.Exit(code=1) from None
 
+    if os.environ.get("PROOF_AGENT_MODE", "development").strip() == "production":
+        if reload:
+            typer.echo("production API forbids source reload", err=True)
+            raise typer.Exit(code=2)
+        from proof_agent.bootstrap.production_roles import (
+            create_production_api_application,
+        )
+
+        production_app = create_production_api_application()
+        typer.echo(f"Starting production Proof Agent API at http://{host}:{port}")
+        uvicorn.run(production_app, host=host, port=port)
+        return
+
     from proof_agent.observability.api.app import create_app
     from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
@@ -1231,6 +1510,64 @@ def _create_server_app_from_env() -> Any:
         raise
 
 
+@app.command("run-executor")
+def run_executor(
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Process the bounded queue until idle, then exit.",
+    ),
+    slot: int = typer.Option(1, "--slot", min=1, max=2),
+    concurrency: int = typer.Option(5, "--concurrency", min=1, max=5),
+    poll_interval_seconds: float = typer.Option(
+        0.2,
+        "--poll-interval",
+        min=0.05,
+        max=5.0,
+    ),
+) -> None:
+    """Run the same-image PostgreSQL-queued production Executor role."""
+
+    from proof_agent.bootstrap.production_roles import compose_production_run_executor
+
+    composition = compose_production_run_executor(
+        slot=slot,
+        concurrency=concurrency,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    executor = composition.executor
+    previous_handlers: dict[int, Any] = {}
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        executor.stop()
+
+    try:
+        if once:
+            completed = executor.run_until_idle()
+            typer.echo(json.dumps({"completed_runs": completed}, sort_keys=True))
+            return
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_stop)
+        activation = executor.activate()
+        typer.echo(
+            json.dumps(
+                {
+                    "executor_id": activation.executor_id,
+                    "slot": activation.slot,
+                    "activation_epoch": activation.activation_epoch,
+                    "status": "active",
+                },
+                sort_keys=True,
+            )
+        )
+        executor.serve()
+    finally:
+        for restore_signum, previous in previous_handlers.items():
+            signal.signal(restore_signum, previous)
+        composition.close()
+
+
 @app.command("knowledge-worker")
 def knowledge_worker(
     config_dir: str = typer.Option("runs/config", "--config-dir"),
@@ -1242,7 +1579,14 @@ def knowledge_worker(
         help="Seconds to wait after an idle continuous worker poll.",
     ),
 ) -> None:
-    """Process persisted Local Index knowledge ingestion tasks."""
+    """Process persisted Knowledge jobs; production uses the PG/S3 Hybrid role."""
+
+    if os.environ.get("PROOF_AGENT_MODE", "development").strip() == "production":
+        _run_production_knowledge_worker(
+            once=once,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        return
 
     hybrid_graph = None
     hybrid_runtime = None
@@ -1295,6 +1639,51 @@ def knowledge_worker(
             hybrid_graph.close()
 
     _echo_knowledge_worker_result(result)
+
+
+def _run_production_knowledge_worker(
+    *,
+    once: bool,
+    poll_interval_seconds: float,
+) -> None:
+    from proof_agent.bootstrap.production_roles import (
+        compose_production_knowledge_worker,
+    )
+
+    composition = compose_production_knowledge_worker()
+    worker = composition.worker
+    stop_requested = False
+    previous_handlers: dict[int, Any] = {}
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+
+    try:
+        if once:
+            outcome = worker.run_once()
+            typer.echo(
+                json.dumps(
+                    None if outcome is None else outcome.model_dump(mode="json"),
+                    sort_keys=True,
+                )
+            )
+            return
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_stop)
+        typer.echo("production Hybrid knowledge worker started")
+        while not stop_requested:
+            outcome = worker.run_once()
+            if outcome is None:
+                time.sleep(min(poll_interval_seconds, 60.0))
+            else:
+                typer.echo(json.dumps(outcome.model_dump(mode="json"), sort_keys=True))
+        typer.echo("production Hybrid knowledge worker stopped")
+    finally:
+        for restore_signum, previous in previous_handlers.items():
+            signal.signal(restore_signum, previous)
+        composition.close()
 
 
 def create_knowledge_ingestion_worker(
@@ -1400,6 +1789,65 @@ def _parse_release_checked_at(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("--at must be timezone-aware")
     return parsed
+
+
+def _production_artifact_authority(dsn: str) -> tuple[Any, Any]:
+    from proof_agent.capabilities.artifacts.s3 import S3ArtifactStore
+    from proof_agent.capabilities.persistence.postgres.bundle import (
+        PostgresPersistenceBundle,
+    )
+
+    bucket = os.environ.get("PROOF_AGENT_ARTIFACT_S3_BUCKET", "").strip()
+    if not bucket:
+        raise ValueError("PROOF_AGENT_ARTIFACT_S3_BUCKET is required")
+    bundle = PostgresPersistenceBundle.create(dsn)
+    try:
+        store = S3ArtifactStore.from_environment(
+            bucket=bucket,
+            key_prefix=os.environ.get("PROOF_AGENT_ARTIFACT_S3_KEY_PREFIX", "").strip(),
+            endpoint_url=(
+                os.environ.get("PROOF_AGENT_ARTIFACT_S3_ENDPOINT", "").strip() or None
+            ),
+            region_name=(
+                os.environ.get("PROOF_AGENT_ARTIFACT_S3_REGION", "").strip() or None
+            ),
+        )
+    except BaseException:
+        bundle.close()
+        raise
+    return bundle, store
+
+
+def _run_artifact_recovery_verify(*, dsn: str, at: str, apply: bool) -> None:
+    from proof_agent.observability.recovery import ArtifactRecoveryVerifier
+
+    checked_at = _parse_release_checked_at(at)
+    bundle, store = _production_artifact_authority(dsn)
+    try:
+        report = ArtifactRecoveryVerifier(
+            store=store,
+            repository=bundle.artifacts,
+        ).verify(now=checked_at, apply=apply)
+    finally:
+        store.close()
+        bundle.close()
+    typer.echo(
+        json.dumps(
+            {
+                "apply": apply,
+                "checked_at": report.checked_at.isoformat(),
+                "corrupt_owner_ids": report.corrupt_owner_ids,
+                "expired_owner_count": report.expired_owner_count,
+                "owner_count": report.owner_count,
+                "reference_count": report.reference_count,
+                "valid": report.valid,
+                "verified_reference_count": report.verified_reference_count,
+            },
+            sort_keys=True,
+        )
+    )
+    if not report.valid:
+        raise typer.Exit(code=1)
 
 
 def _raise_release_cli_error(error: str, cause: Exception) -> NoReturn:
@@ -1880,6 +2328,13 @@ def _optional_env_status(names: Iterable[str]) -> str:
     if present:
         return ", ".join(present)
     return "not configured (optional for deterministic demo)"
+
+
+def _required_cli_environment(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ValueError(f"{name} is required")
+    return value
 
 
 def _echo_knowledge_worker_result(result: KnowledgeWorkerResult | None) -> None:

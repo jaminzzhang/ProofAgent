@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
+from proof_agent.delivery.run_queue_api import router as run_queue_router
+from proof_agent.delivery.production_knowledge_api import router as production_knowledge_router
 from proof_agent.delivery.configuration_api import router as configuration_router
+from proof_agent.delivery.auth_api import router as auth_router
+from proof_agent.delivery.security_configuration_api import router as security_router
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.contracts import KnowledgeOperationsHealthSources
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
@@ -28,6 +34,9 @@ from proof_agent.observability.api.routers import (
     stats,
 )
 from proof_agent.observability.api.operator_identity import LocalOperatorIdentityProvider
+from proof_agent.observability.api.security_middleware import (
+    ProductionSessionSecurityMiddleware,
+)
 from proof_agent.observability.storage.conversation_store import ConversationStore
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.control.workflow.controlled_react.local_stores import (
@@ -37,6 +46,16 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
 
 if TYPE_CHECKING:
     from proof_agent.bootstrap.hybrid_execution import HybridRunRuntime
+    from proof_agent.control.security.sessions import OperatorSessionService
+    from proof_agent.contracts.ports.secret_provider import SecretProvider
+    from proof_agent.contracts.ports.security_configuration import (
+        SecurityConfigurationRepository,
+    )
+    from proof_agent.contracts.security import RecoveryOidcGroupMapping
+    from proof_agent.contracts.ports.run_queue import RunQueueRepository
+    from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+    from proof_agent.contracts.ports.conversations import ConversationRepository
+    from proof_agent.delivery.run_artifact_results import RunArtifactResultReader
 
 
 def create_app(
@@ -55,6 +74,25 @@ def create_app(
     knowledge_operations_provider: Callable[[str], KnowledgeOperationsHealthSources] | None = None,
     knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
     hybrid_runtime: "HybridRunRuntime" | None = None,
+    mode: str | None = None,
+    operator_session_service: "OperatorSessionService" | None = None,
+    stable_origin: str | None = None,
+    security_configuration_repository: "SecurityConfigurationRepository" | None = None,
+    secret_provider: "SecretProvider" | None = None,
+    recovery_oidc_group_mapping: "RecoveryOidcGroupMapping" | None = None,
+    run_queue_repository: "RunQueueRepository" | None = None,
+    run_artifact_result_reader: "RunArtifactResultReader" | None = None,
+    conversation_repository: "ConversationRepository" | None = None,
+    guarded_http_client: "GuardedHttpClient" | None = None,
+    published_agent_registry: object | None = None,
+    production_readiness_probe: Callable[[], object] | None = None,
+    production_hybrid_intake_service: object | None = None,
+    production_knowledge_repository: object | None = None,
+    production_hybrid_ingestion_repository: object | None = None,
+    production_metadata_review_repository: object | None = None,
+    production_hybrid_publication_api: object | None = None,
+    production_hybrid_artifact_store: object | None = None,
+    production_configuration_uow_factory: object | None = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -87,6 +125,44 @@ def create_app(
     agent_configuration_dir:
         Local root used when ``agent_configuration_store`` is not injected.
     """
+    selected_mode = (mode or os.environ.get("PROOF_AGENT_MODE", "development")).strip()
+    if selected_mode not in {"development", "production"}:
+        raise ValueError("Proof Agent API mode must be development or production")
+    if selected_mode == "production":
+        missing = tuple(
+            name
+            for name, value in (
+                ("OIDC session", operator_session_service),
+                ("stable origin", stable_origin),
+                ("security repository", security_configuration_repository),
+                ("Secret Provider", secret_provider),
+                ("Recovery OIDC Group", recovery_oidc_group_mapping),
+                ("PostgreSQL Run Queue", run_queue_repository),
+                ("S3 Run result reader", run_artifact_result_reader),
+                ("PostgreSQL Conversation repository", conversation_repository),
+                ("PostgreSQL Published Agent authority", published_agent_registry),
+                ("active Egress Policy client", guarded_http_client),
+                ("production readiness probe", production_readiness_probe),
+                ("Hybrid PDF intake service", production_hybrid_intake_service),
+                ("PostgreSQL Knowledge repository", production_knowledge_repository),
+                (
+                    "PostgreSQL Hybrid ingestion repository",
+                    production_hybrid_ingestion_repository,
+                ),
+                (
+                    "PostgreSQL metadata review repository",
+                    production_metadata_review_repository,
+                ),
+                ("Hybrid publication API", production_hybrid_publication_api),
+                ("Hybrid exact artifact store", production_hybrid_artifact_store),
+                ("PostgreSQL configuration unit of work", production_configuration_uow_factory),
+            )
+            if value is None
+        )
+        if missing:
+            raise ValueError(
+                "production API requires exact production composition: " + ", ".join(missing)
+            )
     application = FastAPI(
         title="Proof Agent Dashboard API",
         version="0.1.0",
@@ -94,31 +170,70 @@ def create_app(
         openapi_url="/api/openapi.json",
     )
 
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    application.state.proof_agent_mode = selected_mode
+    application.state.run_queue_repository = run_queue_repository
+    application.state.run_artifact_result_reader = run_artifact_result_reader
+    application.state.conversation_repository = conversation_repository
+    application.state.guarded_http_client = guarded_http_client
+    application.state.production_readiness_probe = production_readiness_probe
+    application.state.production_hybrid_intake_service = production_hybrid_intake_service
+    application.state.production_knowledge_repository = production_knowledge_repository
+    application.state.production_hybrid_ingestion_repository = (
+        production_hybrid_ingestion_repository
+    )
+    application.state.production_metadata_review_repository = (
+        production_metadata_review_repository
+    )
+    application.state.production_hybrid_publication_api = production_hybrid_publication_api
+    application.state.production_hybrid_artifact_store = production_hybrid_artifact_store
+    application.state.production_configuration_uow_factory = (
+        production_configuration_uow_factory
     )
 
-    store = RunStore(history_dir)
-    application.state.store = store
-    application.state.evaluation_store = EvaluationStore(
-        evaluations_dir or history_dir.parent / "evaluations"
-    )
-    application.state.evaluation_campaign_store = EvaluationCampaignStore(
-        evaluation_campaigns_dir or history_dir.parent / "evaluation_campaigns"
-    )
-    application.state.production_sample_curation_store = ProductionSampleCurationStore(
-        evaluation_curation_dir or history_dir.parent / "evaluation_curation"
-    )
+    @application.get("/livez", include_in_schema=False)
+    def livez() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @application.get("/readyz", include_in_schema=False)
+    def readyz() -> JSONResponse:
+        if selected_mode != "production":
+            return JSONResponse(status_code=200, content={"status": "ready"})
+        assert production_readiness_probe is not None
+        readiness = production_readiness_probe()
+        payload_method = getattr(readiness, "public_payload", None)
+        if not callable(payload_method):
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "components": {}},
+            )
+        payload = payload_method()
+        ready = getattr(readiness, "ready", False) is True
+        return JSONResponse(status_code=200 if ready else 503, content=payload)
+    if selected_mode == "production":
+        assert operator_session_service is not None
+        assert stable_origin is not None
+        application.state.operator_session_service = operator_session_service
+        application.state.stable_origin = stable_origin
+        application.state.security_configuration_repository = (
+            security_configuration_repository
+        )
+        application.state.secret_provider = secret_provider
+        application.state.recovery_oidc_group_mapping = recovery_oidc_group_mapping
+        application.add_middleware(
+            ProductionSessionSecurityMiddleware,
+            session_service=operator_session_service,
+            stable_origin=stable_origin,
+        )
+    else:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
     application.state.runs_dir = runs_dir
-    application.state.conversation_store = ConversationStore(conversations_dir)
-    application.state.memory_store = LocalMemoryStore(
-        conversations_dir.with_name(f"{conversations_dir.name}_memory")
-    )
-    application.state.mem0_memory_store = mem0_memory_store
     application.state.knowledge_operations_provider = knowledge_operations_provider
     application.state.hybrid_knowledge_runtime = hybrid_runtime
     hybrid_runtime_close = getattr(hybrid_runtime, "close", None)
@@ -134,42 +249,68 @@ def create_app(
         release_authority_close
     ):
         application.router.add_event_handler("shutdown", release_authority_close)
-    runtime_hybrid_authority = (
-        getattr(hybrid_runtime, "repository", None) if hybrid_runtime is not None else None
-    )
-    configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
-        agent_configuration_dir,
-        hybrid_binding_authority=runtime_hybrid_authority,
-        knowledge_release_evidence_authority=knowledge_release_evidence_authority,
-    )
-    application.state.agent_configuration_store = configuration_store
-    publication_api_factory = getattr(hybrid_runtime, "publication_api_for", None)
-    if callable(publication_api_factory):
-        application.state.hybrid_knowledge_publication_api = publication_api_factory(
-            configuration_store
+    if selected_mode == "development":
+        store = RunStore(history_dir)
+        application.state.store = store
+        application.state.evaluation_store = EvaluationStore(
+            evaluations_dir or history_dir.parent / "evaluations"
         )
-        application.state.hybrid_knowledge_artifact_store = getattr(
-            hybrid_runtime, "artifact_store"
+        application.state.evaluation_campaign_store = EvaluationCampaignStore(
+            evaluation_campaigns_dir or history_dir.parent / "evaluation_campaigns"
         )
-    controlled_react_store_root = history_dir.parent / "controlled_react"
-    application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(
-        controlled_react_store_root
-    )
-    application.state.controlled_react_observation_truth_store = FileObservationTruthStore(
-        controlled_react_store_root
-    )
-    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
-    application.state.published_agents = PublishedAgentRegistry(
-        published_agents,
-        configuration_store=configuration_store,
-    )
+        application.state.production_sample_curation_store = ProductionSampleCurationStore(
+            evaluation_curation_dir or history_dir.parent / "evaluation_curation"
+        )
+        application.state.conversation_store = ConversationStore(conversations_dir)
+        application.state.memory_store = LocalMemoryStore(
+            conversations_dir.with_name(f"{conversations_dir.name}_memory")
+        )
+        application.state.mem0_memory_store = mem0_memory_store
+        runtime_hybrid_authority = (
+            getattr(hybrid_runtime, "repository", None) if hybrid_runtime is not None else None
+        )
+        configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
+            agent_configuration_dir,
+            hybrid_binding_authority=runtime_hybrid_authority,
+            knowledge_release_evidence_authority=knowledge_release_evidence_authority,
+        )
+        application.state.agent_configuration_store = configuration_store
+        publication_api_factory = getattr(hybrid_runtime, "publication_api_for", None)
+        if callable(publication_api_factory):
+            application.state.hybrid_knowledge_publication_api = publication_api_factory(
+                configuration_store
+            )
+            application.state.hybrid_knowledge_artifact_store = getattr(
+                hybrid_runtime, "artifact_store"
+            )
+        controlled_react_store_root = history_dir.parent / "controlled_react"
+        application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(
+            controlled_react_store_root
+        )
+        application.state.controlled_react_observation_truth_store = FileObservationTruthStore(
+            controlled_react_store_root
+        )
+        application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+        application.state.published_agents = published_agent_registry or PublishedAgentRegistry(
+            published_agents,
+            configuration_store=configuration_store,
+        )
+    else:
+        application.state.published_agents = published_agent_registry
 
+    if run_queue_repository is not None:
+        application.include_router(run_queue_router, prefix="/api")
     application.include_router(execution_router, prefix="/api")
-    application.include_router(configuration_router, prefix="/api")
-    application.include_router(runs.router, prefix="/api")
-    application.include_router(evaluation.router, prefix="/api")
-    application.include_router(stats.router, prefix="/api")
-    application.include_router(health.router, prefix="/api")
+    application.include_router(auth_router, prefix="/api")
+    application.include_router(security_router, prefix="/api")
+    if selected_mode == "development":
+        application.include_router(configuration_router, prefix="/api")
+        application.include_router(runs.router, prefix="/api")
+        application.include_router(evaluation.router, prefix="/api")
+        application.include_router(stats.router, prefix="/api")
+        application.include_router(health.router, prefix="/api")
+    else:
+        application.include_router(production_knowledge_router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.
     resolved_static = (

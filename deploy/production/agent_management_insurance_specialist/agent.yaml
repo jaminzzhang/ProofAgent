@@ -1,0 +1,81 @@
+name: agent_management_insurance_specialist
+purpose: "为保险公司内勤专员提供基于已发布条款与业务规则的受控咨询、解释和答复建议。"
+
+workflow:
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+
+package_knowledge_sources: []
+
+knowledge_bindings:
+  - binding_id: insurance_hybrid
+    source_ref:
+      scope: shared
+      source_id: insurance-rules
+    retrieval_profile_revision_id: insurance-profile-v1
+    failure_mode: required
+    fusion_weight: 1.0
+
+retrieval:
+  strategy: single_step
+  top_k: 10
+  min_score: 0.25
+  max_queries: 3
+  query_timeout_seconds: 30.0
+
+react:
+  max_plan_rounds: 4
+  max_tool_calls: 0
+  record_reasoning_summary: true
+  planner:
+    provider: openai_compatible
+    name: insurance-planner-v1
+    params:
+      base_url: https://models.internal.example/v1
+      credential_secret_handle: &insurance_model_credential
+        protocol_id: hashicorp-vault-2.0-kv-v2
+        handle_id: models/proof-agent/insurance-primary
+        purpose: model_credential
+      timeout_seconds: 30
+      max_output_tokens: 1200
+
+review:
+  mode: auto
+  low_risk_fast_path: false
+  subagent:
+    provider: openai_compatible
+    name: insurance-reviewer-v1
+    fail_closed: true
+    params:
+      base_url: https://models.internal.example/v1
+      credential_secret_handle: *insurance_model_credential
+      timeout_seconds: 30
+      max_output_tokens: 1200
+
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+
+model:
+  provider: openai_compatible
+  name: insurance-answer-v1
+  params:
+    base_url: https://models.internal.example/v1
+    credential_secret_handle: *insurance_model_credential
+    timeout_seconds: 60
+    max_output_tokens: 2000
+
+policy:
+  file: ./policy.yaml
+
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: false
+  skills:
+    enabled: false
+
+audit:
+  trace_path: ./trace.jsonl
+  receipt_path: ./governance_receipt.md

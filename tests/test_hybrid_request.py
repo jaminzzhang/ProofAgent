@@ -163,6 +163,7 @@ def test_controlled_react_clarifies_missing_authority_before_knowledge_search() 
     invocation = SimpleNamespace(
         governed_hybrid_request_factory=factory,
         react_planner=None,
+        cancellation_check=lambda: None,
     )
     search = _FailIfSearched()
     orchestrator = ControlledReActOrchestrator(

@@ -57,6 +57,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+const sameOriginRequest = (expected: RequestInit = {}) => expect.objectContaining({
+  ...expected,
+  credentials: 'same-origin',
+  headers: expect.any(Headers),
+})
+
 test('insurance metadata workbook import uses the protected Source route', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({
@@ -137,21 +143,21 @@ test('evaluation campaign client methods use dashboard campaign endpoints', asyn
   await fetchEvaluationCampaignCases('active_agent_probe')
   await fetchEvaluationCampaignTrends('active_agent_probe')
 
-  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/evaluation/campaigns', undefined)
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/evaluation/campaigns', sameOriginRequest())
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     '/api/evaluation/campaigns/active_agent_probe',
-    undefined,
+    sameOriginRequest(),
   )
   expect(fetchMock).toHaveBeenNthCalledWith(
     3,
     '/api/evaluation/campaigns/active_agent_probe/cases',
-    undefined,
+    sameOriginRequest(),
   )
   expect(fetchMock).toHaveBeenNthCalledWith(
     4,
     '/api/evaluation/campaigns/active_agent_probe/trends',
-    undefined,
+    sameOriginRequest(),
   )
 })
 
@@ -198,12 +204,12 @@ test('evaluation production sample client methods use curation endpoints', async
   expect(fetchMock).toHaveBeenNthCalledWith(
     1,
     '/api/evaluation/production-samples/candidates',
-    undefined,
+    sameOriginRequest(),
   )
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     '/api/evaluation/production-samples/promotions',
-    undefined,
+    sameOriginRequest(),
   )
   expect(candidates.data[0].sample_id).toBe('prod_supported')
   expect(promotions.data[0].status).toBe('promoted')
@@ -250,11 +256,10 @@ test('promoteEvaluationProductionSample posts reviewer-gated promotion payload',
 
   const response = await promoteEvaluationProductionSample(promotionRequest)
 
-  expect(fetchMock).toHaveBeenCalledWith('/api/evaluation/production-samples/promotions', {
+  expect(fetchMock).toHaveBeenCalledWith('/api/evaluation/production-samples/promotions', sameOriginRequest({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(promotionRequest),
-  })
+  }))
   expect(response.status).toBe('promoted')
 })
 
@@ -324,7 +329,7 @@ test('fetchConfigAgents requests Agent Configuration list', async () => {
 
   await fetchConfigAgents()
 
-  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents', undefined)
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents', sameOriginRequest())
 })
 
 test('workflow template client methods use descriptor endpoints', async () => {
@@ -351,11 +356,15 @@ test('workflow template client methods use descriptor endpoints', async () => {
   await fetchWorkflowTemplates()
   await fetchWorkflowTemplate('react_enterprise_qa')
 
-  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/workflow-templates', undefined)
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    '/api/config/workflow-templates',
+    sameOriginRequest(),
+  )
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     '/api/config/workflow-templates/react_enterprise_qa',
-    undefined,
+    sameOriginRequest(),
   )
 })
 
@@ -402,26 +411,24 @@ test('workflow stage update and preview use Agent Configuration endpoints', asyn
   expect(fetchMock).toHaveBeenNthCalledWith(
     1,
     '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-stages',
-    {
+    sameOriginRequest({
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         template_descriptor_version: 'react_enterprise_qa.v1',
         stages: [stage],
       }),
-    },
+    }),
   )
   expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     '/api/config/agents/enterprise_qa/drafts/draft_1/workflow-stages/plan/preview',
-    {
+    sameOriginRequest({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: stage.prompt,
         context: stage.context,
       }),
-    },
+    }),
   )
 })
 
@@ -631,32 +638,29 @@ test('knowledge source lifecycle methods use archive restore eligibility and del
     reason: 'Empty archived test fixture',
   })
 
-  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/knowledge-sources/ks_local_index/archive', {
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/knowledge-sources/ks_local_index/archive', sameOriginRequest({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Retire stale index',
     }),
-  })
-  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/config/knowledge-sources/ks_local_index/restore', {
+  }))
+  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/config/knowledge-sources/ks_local_index/restore', sameOriginRequest({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Reopened',
     }),
-  })
+  }))
   expect(fetchMock).toHaveBeenNthCalledWith(
     3,
     '/api/config/knowledge-sources/ks_local_index/deletion-eligibility',
-    undefined,
+    sameOriginRequest(),
   )
-  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/config/knowledge-sources/ks_local_index', {
+  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/config/knowledge-sources/ks_local_index', sameOriginRequest({
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       reason: 'Empty archived test fixture',
     }),
-  })
+  }))
 })
 
 test('model connection client methods use shared model endpoints', async () => {
@@ -856,9 +860,8 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/knowledge-bindings',
-    {
+    sameOriginRequest({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source_id: 'ks_local_index',
         alias: 'policies',
@@ -866,7 +869,7 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
         fusion_weight: 0.75,
         top_k: 3,
       }),
-    },
+    }),
   )
 })
 
@@ -882,13 +885,12 @@ test('importConfigAgent posts manifest path', async () => {
     manifest_path: 'examples/insurance_customer_service/agent.yaml',
   })
 
-  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/import', {
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/import', sameOriginRequest({
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       manifest_path: 'examples/insurance_customer_service/agent.yaml',
     }),
-  })
+  }))
 })
 
 test('validate publish and rollback use configuration lifecycle endpoints', async () => {
@@ -1047,7 +1049,10 @@ test('fetchValidationCapture reads the validation capture projection for a run',
 
   const response = await fetchValidationCapture('run_1')
 
-  expect(fetchMock).toHaveBeenCalledWith('/api/runs/run_1/validation-capture', undefined)
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/runs/run_1/validation-capture',
+    sameOriginRequest(),
+  )
   expect(response.payload.capture_contract_version).toBe('validation_capture.v2')
   expect(response.payload.stage_prompt_values[0].stage_id).toBe('plan')
   expect(response.payload.llm_interactions?.[0].response_json).toEqual({
@@ -1069,13 +1074,12 @@ test('updateConfigDraftContract patches Contract View files', async () => {
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/contract',
-    {
+    sameOriginRequest({
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agent_yaml: 'name: enterprise_qa',
       }),
-    },
+    }),
   )
 })
 
@@ -1091,7 +1095,7 @@ test('fetchConfigDraftSkills requests structured Skill Pack projection', async (
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/skills',
-    undefined,
+    sameOriginRequest(),
   )
   expect(response.enabled).toBe(true)
 })
@@ -1113,16 +1117,15 @@ test('createConfigDraftSkillPack posts draft-local Skill Pack creation request',
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows',
-    {
+    sameOriginRequest({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: 'claims_qa',
         label: 'Claims QA',
         description: 'Claim handling guidance.',
         intent_patterns: ['claim status'],
       }),
-    },
+    }),
   )
   expect(response.packs[0].id).toBe('claims_qa')
 })
@@ -1148,9 +1151,8 @@ test('updateConfigDraftSkillPack patches a draft-local Skill Pack', async () => 
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa',
-    {
+    sameOriginRequest({
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         label: 'Claims QA Updated',
         stage_prompt_addenda: {
@@ -1161,7 +1163,7 @@ test('updateConfigDraftSkillPack patches a draft-local Skill Pack', async () => 
           },
         },
       }),
-    },
+    }),
   )
 })
 
@@ -1177,9 +1179,9 @@ test('deleteConfigDraftSkillPack deletes a draft-local Skill Pack', async () => 
 
   expect(fetchMock).toHaveBeenCalledWith(
     '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa',
-    {
+    sameOriginRequest({
       method: 'DELETE',
-    },
+    }),
   )
   expect(response.packs).toEqual([])
 })

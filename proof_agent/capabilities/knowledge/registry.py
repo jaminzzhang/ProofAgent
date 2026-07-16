@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider
 from proof_agent.capabilities.knowledge.local_provider import LocalMarkdownProvider
 from proof_agent.capabilities.knowledge.provider import KnowledgeProvider
 from proof_agent.capabilities.knowledge.remote_search import RemoteSearchProvider
 from proof_agent.contracts.manifest import KnowledgeConfig
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.errors import ProofAgentError
-
-if TYPE_CHECKING:
-    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-
 
 PROVIDER_MAP: dict[str, type[KnowledgeProvider]] = {
     "http_json": HttpJsonProvider,
@@ -23,7 +18,7 @@ PROVIDER_MAP: dict[str, type[KnowledgeProvider]] = {
 def resolve_knowledge_provider(
     knowledge_config: KnowledgeConfig,
     *,
-    configuration_store: LocalAgentConfigurationStore | None = None,
+    configuration_store: ModelConnectionReader | None = None,
 ) -> KnowledgeProvider:
     if knowledge_config.provider == "hybrid_index":
         raise ProofAgentError(

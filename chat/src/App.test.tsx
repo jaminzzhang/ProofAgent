@@ -27,12 +27,12 @@ afterEach(() => {
 
 test('operator route fetches operator conversations for the sidebar', async () => {
   window.history.pushState({}, '', '/operator')
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
     new Response(JSON.stringify([]), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
-    }),
-  )
+    })
+  ))
 
   render(<App />)
 

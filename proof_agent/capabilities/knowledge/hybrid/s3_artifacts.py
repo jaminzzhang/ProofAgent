@@ -206,6 +206,17 @@ class S3ExactArtifactStore:
             raise S3ArtifactError("exact artifact bytes are corrupt")
         return body
 
+    def check_ready(self) -> bool:
+        """Verify the bucket remains reachable and exact-version capable."""
+
+        try:
+            status = self._client.get_bucket_versioning(Bucket=self._bucket)
+        except Exception as exc:
+            raise S3ArtifactError("S3 bucket readiness could not be verified") from exc
+        if status.get("Status") != "Enabled":
+            raise S3ArtifactError("S3 bucket versioning is not enabled")
+        return True
+
     def close(self) -> None:
         close = getattr(self._client, "close", None)
         if close is not None:

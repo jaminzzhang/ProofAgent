@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
+import os
 from typing import Any, cast
 
 import anyio
@@ -12,6 +13,7 @@ from proof_agent.capabilities.tools.mcp_discovery import (
     build_mcp_tool_source_connection,
 )
 from proof_agent.contracts import ToolSource
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.errors import ProofAgentError
 
 
@@ -34,6 +36,7 @@ def call_mcp_tool(
     arguments: Mapping[str, Any],
     env: Mapping[str, str] | None = None,
     transport: MCPToolCallTransport | None = None,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> Mapping[str, Any]:
     """Call one MCP tool through a short-lived MCP session."""
 
@@ -42,15 +45,27 @@ def call_mcp_tool(
         mcp_tool_name=mcp_tool_name,
         arguments=dict(arguments),
     )
-    selected_transport = transport or _default_mcp_tool_call_transport
+    selected_transport = transport or (
+        lambda selected: _default_mcp_tool_call_transport(
+            selected,
+            guarded_http_client=guarded_http_client,
+        )
+    )
     return selected_transport(request)
 
 
 def _default_mcp_tool_call_transport(
     request: MCPToolCallRequest,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> Mapping[str, Any]:
     try:
-        return anyio.run(_call_tool_with_sdk, request)
+        return anyio.run(
+            lambda: _call_tool_with_sdk(
+                request,
+                guarded_http_client=guarded_http_client,
+            )
+        )
     except ProofAgentError:
         raise
     except Exception as exc:
@@ -60,11 +75,23 @@ def _default_mcp_tool_call_transport(
         ) from exc
 
 
-async def _call_tool_with_sdk(request: MCPToolCallRequest) -> Mapping[str, Any]:
+async def _call_tool_with_sdk(
+    request: MCPToolCallRequest,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
+) -> Mapping[str, Any]:
     if request.connection.transport == "stdio":
         return await _call_stdio_tool(request)
     if request.connection.transport == "http":
-        return await _call_http_tool(request)
+        if _production_mode() and guarded_http_client is None:
+            raise _mcp_execution_error(
+                "production HTTP MCP execution requires guarded HTTPS.",
+                "Inject the active Egress Policy guarded HTTP client.",
+            )
+        return await _call_http_tool(
+            request,
+            guarded_http_client=guarded_http_client,
+        )
     raise _mcp_execution_error(
         f"MCP {request.connection.transport} runtime transport is not configured.",
         "Use params.transport=stdio or params.transport=http.",
@@ -100,12 +127,17 @@ async def _call_stdio_tool(request: MCPToolCallRequest) -> Mapping[str, Any]:
     return _result_to_mapping(result)
 
 
-async def _call_http_tool(request: MCPToolCallRequest) -> Mapping[str, Any]:
+async def _call_http_tool(
+    request: MCPToolCallRequest,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
+) -> Mapping[str, Any]:
     from datetime import timedelta
 
     import httpx
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
+    from proof_agent.capabilities.egress.httpx_adapter import GuardedAsyncHttpxTransport
 
     if request.connection.endpoint is None or not request.connection.endpoint.strip():
         raise _mcp_execution_error(
@@ -116,6 +148,11 @@ async def _call_http_tool(request: MCPToolCallRequest) -> Mapping[str, Any]:
         headers=dict(request.connection.http_headers),
         timeout=request.connection.timeout_seconds,
         trust_env=False,
+        transport=(
+            GuardedAsyncHttpxTransport(guarded_http_client)
+            if guarded_http_client is not None
+            else None
+        ),
     ) as http_client:
         async with streamable_http_client(
             request.connection.endpoint,
@@ -132,6 +169,10 @@ async def _call_http_tool(request: MCPToolCallRequest) -> Mapping[str, Any]:
                     arguments=dict(request.arguments),
                 )
     return _result_to_mapping(result)
+
+
+def _production_mode() -> bool:
+    return os.environ.get("PROOF_AGENT_MODE", "development").strip().lower() == "production"
 
 
 def _result_to_mapping(result: Any) -> Mapping[str, Any]:

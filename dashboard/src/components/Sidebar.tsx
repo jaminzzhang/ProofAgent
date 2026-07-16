@@ -31,6 +31,7 @@ const CONFIGURATION_ITEMS: NavEntry[] = [
   { to: '/knowledge', labelKey: 'nav.knowledge', icon: BookOpen },
   { to: '/models', labelKey: 'nav.models', icon: Cpu },
   { to: '/tools', labelKey: 'nav.tools', icon: Wrench },
+  { to: '/security', labelKey: 'nav.security', icon: Settings },
 ]
 
 interface SidebarProps {

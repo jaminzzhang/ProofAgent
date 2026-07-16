@@ -3,7 +3,6 @@ import { Activity, Clock, FileText } from 'lucide-react'
 import {
   Card,
   EmptyState,
-  OutcomeBadge,
   OUTCOME_STYLES,
   outcomeCategory,
   Skeleton,
@@ -21,6 +20,7 @@ import { StatCard } from '../components/StatCard'
 import { SectionHeader } from '../components/SectionHeader'
 import type { StatsResponse } from '../api/types'
 import { useLocale } from '../i18n/locale'
+import { RunStatusBadge } from '../components/RunStatusBadge'
 
 /**
  * Fixed display order: success → warning → neutral → danger (failures sink to
@@ -217,10 +217,7 @@ export function OverviewPage() {
                       {run.question}
                     </TableCell>
                     <TableCell>
-                      <OutcomeBadge
-                        outcome={run.outcome as ReceiptOutcome}
-                        t={t}
-                      />
+                      <RunStatusBadge outcome={run.outcome} state={run.state} />
                     </TableCell>
                     <TableCell className="font-mono text-xs text-[var(--text-muted)]">
                       <span className="inline-flex items-center gap-1">

@@ -25,6 +25,7 @@ from proof_agent.contracts.conversation import (
     context_admission_payload,
     conversation_record_payload,
 )
+from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.control.conversation import admit_conversation_context
 from proof_agent.delivery.published_agents import (
     PublishedAgent,
@@ -124,6 +125,8 @@ def create_chat_run(
 ) -> dict[str, Any]:
     """Start one governed Harness run for a Published Agent."""
 
+    _reject_synchronous_production_run(app_request)
+
     registry = _get_published_agents(app_request)
     published_agent = registry.resolve(request.agent_id)
     if published_agent is None:
@@ -164,14 +167,32 @@ def create_conversation(request: ConversationCreateRequest, app_request: Request
                 "available_agent_ids": registry.list_agent_ids(),
             },
         )
-    record = _get_conversation_store(app_request).create_conversation(agent_id=request.agent_id)
+    repository = _get_conversation_repository(app_request)
+    if repository is None:
+        record = _get_conversation_store(app_request).create_conversation(
+            agent_id=request.agent_id
+        )
+    else:
+        now = _now()
+        record = ConversationRecord(
+            conversation_id=str(uuid4()),
+            agent_id=request.agent_id,
+            created_at=now,
+            updated_at=now,
+        )
+        repository.create(record)
     return conversation_record_payload(record)
 
 
 @router.get("/chat/conversations")
 def list_conversations(app_request: Request) -> list[dict[str, Any]]:
     """Return a list of all assisted chat conversations."""
-    records = _get_conversation_store(app_request).list_conversations()
+    repository = _get_conversation_repository(app_request)
+    records = (
+        _get_conversation_store(app_request).list_conversations()
+        if repository is None
+        else repository.list()
+    )
     return [conversation_record_payload(r) for r in records]
 
 
@@ -191,16 +212,43 @@ def update_conversation(
 ) -> dict[str, Any]:
     """Update conversation title and/or pin state."""
 
+    repository = _get_conversation_repository(app_request)
     store = _get_conversation_store(app_request)
     if not request.model_fields_set:
-        updated = store.get_conversation(conversation_id)
+        updated = (
+            store.get_conversation(conversation_id)
+            if repository is None
+            else repository.get(conversation_id)
+        )
     else:
         update_fields: dict[str, Any] = {}
         if "title" in request.model_fields_set:
             update_fields["title"] = request.title
         if "pinned" in request.model_fields_set:
             update_fields["pinned"] = request.pinned
-        updated = store.update_conversation(conversation_id, **update_fields)
+        if repository is None:
+            updated = store.update_conversation(conversation_id, **update_fields)
+        else:
+            current = repository.get(conversation_id)
+            if current is None:
+                updated = None
+            else:
+                updated = current.model_copy(
+                    update={
+                        "title": (
+                            current.title
+                            if "title" not in update_fields
+                            else update_fields["title"] or None
+                        ),
+                        "pinned": (
+                            current.pinned
+                            if "pinned" not in update_fields
+                            else bool(update_fields["pinned"])
+                        ),
+                        "updated_at": _now(),
+                    }
+                )
+                repository.update(updated)
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
     return conversation_record_payload(updated)
@@ -210,8 +258,13 @@ def update_conversation(
 def delete_conversation(conversation_id: str, app_request: Request) -> None:
     """Delete a conversation and all its data."""
 
-    store = _get_conversation_store(app_request)
-    if not store.delete_conversation(conversation_id):
+    repository = _get_conversation_repository(app_request)
+    deleted = (
+        _get_conversation_store(app_request).delete_conversation(conversation_id)
+        if repository is None
+        else repository.delete(conversation_id)
+    )
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
 
 
@@ -223,6 +276,8 @@ def create_conversation_run(
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
     """Start a governed Harness run with admitted conversation context."""
+
+    _reject_synchronous_production_run(app_request)
 
     conversation = _require_conversation(app_request, conversation_id)
     registry = _get_published_agents(app_request)
@@ -266,12 +321,22 @@ def create_conversation_run(
         approval_state=detail.approval_state,
         governance_details=governance_details,
     )
-    updated = _get_conversation_store(app_request).append_turn(
-        conversation_id=conversation.conversation_id,
-        turn=turn,
-    )
-    if updated is None:
-        raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+    repository = _get_conversation_repository(app_request)
+    if repository is None:
+        updated = _get_conversation_store(app_request).append_turn(
+            conversation_id=conversation.conversation_id,
+            turn=turn,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=404, detail=f"Conversation not found: {conversation_id}"
+            )
+    else:
+        repository.append_turn(
+            conversation.conversation_id,
+            turn,
+            expected_turn_count=len(conversation.turns),
+        )
 
     return _run_response(
         agent_id=conversation.agent_id,
@@ -309,6 +374,16 @@ def _execute_published_agent_run(
                 hybrid_runtime=getattr(
                     app_request.app.state,
                     "hybrid_knowledge_runtime",
+                    None,
+                ),
+                guarded_http_client=getattr(
+                    app_request.app.state,
+                    "guarded_http_client",
+                    None,
+                ),
+                secret_provider=getattr(
+                    app_request.app.state,
+                    "secret_provider",
                     None,
                 ),
             ),
@@ -418,6 +493,11 @@ def _get_conversation_store(request: Request) -> ConversationStore:
     return cast(ConversationStore, request.app.state.conversation_store)
 
 
+def _get_conversation_repository(request: Request) -> ConversationRepository | None:
+    repository = getattr(request.app.state, "conversation_repository", None)
+    return None if repository is None else cast(ConversationRepository, repository)
+
+
 def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
     return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
 
@@ -436,7 +516,12 @@ def _get_controlled_react_observation_truth_store(
 
 
 def _require_conversation(request: Request, conversation_id: str) -> ConversationRecord:
-    conversation = _get_conversation_store(request).get_conversation(conversation_id)
+    repository = _get_conversation_repository(request)
+    conversation = (
+        _get_conversation_store(request).get_conversation(conversation_id)
+        if repository is None
+        else repository.get(conversation_id)
+    )
     if conversation is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
     return conversation
@@ -444,3 +529,8 @@ def _require_conversation(request: Request, conversation_id: str) -> Conversatio
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _reject_synchronous_production_run(request: Request) -> None:
+    if getattr(request.app.state, "proof_agent_mode", "development") == "production":
+        raise HTTPException(status_code=409, detail="async_run_submission_required")

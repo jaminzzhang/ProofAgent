@@ -35,6 +35,7 @@ from proof_agent.capabilities.knowledge.hybrid.pipeline import (
 )
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
+    ReviewRequiredError,
     hybrid_build_request_sha256,
 )
 from proof_agent.capabilities.knowledge.hybrid.quality import (
@@ -229,6 +230,79 @@ def test_private_pipeline_builds_passing_docling_artifact_through_shared_schedul
     assert result.artifact.build_identity.parser_adapter == "docling"
     assert tuple(vendor.adapter for vendor in result.vendor_artifacts) == ("docling",)
     assert calls == [("docling", "offline")]
+
+
+def test_private_pipeline_requires_exact_model_metadata_coverage_in_production() -> None:
+    scheduler = ImmediateKnowledgeModelWorkScheduler()
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    payload["insurance_metadata_drafts"] = [
+        {
+            "canonical_anchor": anchor,
+            "authority": "national",
+            "effective_from": "2026-01-01",
+            "effective_to": None,
+            "taxonomy_id": "insurance-product",
+            "taxonomy_revision_id": "taxonomy-v1",
+            "precedence_policy_revision_id": "precedence-v1",
+            "precedence_authority_tier": "terms",
+            "precedence_order": 10,
+        }
+        for anchor in ("heading-1", "paragraph-1")
+    ]
+    response = with_vendor_payload(response, payload)
+
+    class Client:
+        def __init__(self, value: ParserServiceResponse) -> None:
+            self.scheduler = scheduler
+            self.value = value
+
+        def parse(self, *args, **kwargs):
+            del args, kwargs
+            return self.value
+
+    pipeline = PrivateHybridParserPipeline(
+        docling=Client(response),  # type: ignore[arg-type]
+        paddle=Client(response),  # type: ignore[arg-type]
+        require_insurance_metadata_drafts=True,
+    )
+
+    result = pipeline.build(
+        hybrid_build_request(),
+        cancellation=KnowledgeModelCancellation(),
+    )
+
+    assert len(result.insurance_metadata.pdf_drafts) == 2
+    proposal = result.insurance_metadata.pdf_drafts[0]
+    assert proposal.origin == "pdf"
+    assert proposal.canonical_anchor == "heading-1"
+    assert proposal.authority == "national"
+    assert proposal.source_id == "source-1"
+
+
+def test_private_pipeline_blocks_when_required_model_metadata_is_missing() -> None:
+    scheduler = ImmediateKnowledgeModelWorkScheduler()
+    response = parser_response("docling-simple.json")
+
+    class Client:
+        def __init__(self) -> None:
+            self.scheduler = scheduler
+
+        def parse(self, *args, **kwargs):
+            del args, kwargs
+            return response
+
+    pipeline = PrivateHybridParserPipeline(
+        docling=Client(),  # type: ignore[arg-type]
+        paddle=Client(),  # type: ignore[arg-type]
+        require_insurance_metadata_drafts=True,
+    )
+
+    with pytest.raises(ReviewRequiredError, match="omitted"):
+        pipeline.build(
+            hybrid_build_request(),
+            cancellation=KnowledgeModelCancellation(),
+        )
 
 
 def test_private_pipeline_never_auto_replaces_an_escalated_whole_page() -> None:

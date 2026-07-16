@@ -5,7 +5,6 @@ import {
   Card,
   EmptyState,
   Input,
-  OutcomeBadge,
   Select,
   SelectContent,
   SelectItem,
@@ -26,6 +25,7 @@ import type { RunPurposeFilter } from '../api/types'
 import { useLocale } from '../i18n/locale'
 import { PageHeader } from '../components/PageHeader'
 import { TableSkeleton } from '../components/TableSkeleton'
+import { RunStatusBadge } from '../components/RunStatusBadge'
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100]
 
@@ -183,7 +183,7 @@ export function RunsListPage() {
                     {run.question}
                   </TableCell>
                   <TableCell>
-                    <OutcomeBadge outcome={run.outcome as ReceiptOutcome} t={t} />
+                    <RunStatusBadge outcome={run.outcome} state={run.state} />
                   </TableCell>
                   <TableCell className="text-xs font-medium capitalize text-[var(--text-secondary)]">
                     {run.run_purpose}

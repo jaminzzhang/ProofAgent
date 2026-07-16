@@ -7,6 +7,7 @@ import { OutcomeBadge } from '../OutcomeBadge'
 import { EmptyState } from '../EmptyState'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 import { useLocale } from '../../i18n/locale'
+import { RunStatusBadge } from '../RunStatusBadge'
 
 interface AgentMonitorProps {
   agentId: string
@@ -98,7 +99,9 @@ export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
                     </RunDetailEntry>
                   </td>
                   <td className="px-5 py-3 align-middle">
-                    <span className="inline-flex"><OutcomeBadge outcome={run.outcome} /></span>
+                    <span className="inline-flex">
+                      <RunStatusBadge outcome={run.outcome} state={run.state} />
+                    </span>
                   </td>
                   <td className="max-w-0 truncate px-5 py-3 text-xs text-[var(--text-muted)]" title={run.run_purpose}>
                     {run.run_purpose}
@@ -193,7 +196,7 @@ export function AgentMonitorSummary({ agentId, onOpenRunDetail }: AgentMonitorPr
                   </div>
                 </div>
                 <div className="flex items-center">
-                  <OutcomeBadge outcome={run.outcome} />
+                  <RunStatusBadge outcome={run.outcome} state={run.state} />
                 </div>
               </RunDetailEntry>
             ))}
@@ -236,7 +239,9 @@ function summarizeAgentRuns(runs: RunSummary[], agentId: string) {
   const outcomeCounts: Record<string, number> = {}
 
   for (const run of productionRuns) {
-    outcomeCounts[run.outcome] = (outcomeCounts[run.outcome] || 0) + 1
+    if (run.outcome) {
+      outcomeCounts[run.outcome] = (outcomeCounts[run.outcome] || 0) + 1
+    }
   }
 
   const answered = outcomeCounts.ANSWERED_WITH_CITATIONS || 0

@@ -3,34 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
-
 from fastapi import HTTPException
 
-from proof_agent.contracts import InstitutionAuthorizationContext
+from proof_agent.contracts import InstitutionAuthorizationContext, Permission
 
 
-class OperatorPermission(StrEnum):
-    """Named permissions for internal operator-facing command surfaces."""
-
-    APPROVAL_RESOLVE = "approval.resolve"
-    RUN_VIEW = "run.view"
-    AGENT_VIEW = "agent.view"
-    AGENT_EDIT = "agent.edit"
-    AGENT_VALIDATE = "agent.validate"
-    AGENT_PUBLISH = "agent.publish"
-    KNOWLEDGE_SOURCE_VIEW = "knowledge_source.view"
-    KNOWLEDGE_SOURCE_EDIT = "knowledge_source.edit"
-    KNOWLEDGE_SOURCE_PUBLISH = "knowledge_source.publish"
-    KNOWLEDGE_SOURCE_ARCHIVE = "knowledge_source.archive"
-    MODEL_CONNECTION_VIEW = "model_connection.view"
-    MODEL_CONNECTION_EDIT = "model_connection.edit"
-    MODEL_CONNECTION_VALIDATE = "model_connection.validate"
-    MODEL_CONNECTION_ARCHIVE = "model_connection.archive"
-    TOOL_SOURCE_VIEW = "tool_source.view"
-    TOOL_SOURCE_EDIT = "tool_source.edit"
-    TOOL_SOURCE_ARCHIVE = "tool_source.archive"
-    EVALUATION_CURATION_REVIEW = "evaluation_curation.review"
+OperatorPermission = Permission
 
 
 @dataclass(frozen=True)
@@ -43,6 +21,8 @@ class OperatorIdentityContext:
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
+    permission_mapping_version_id: str | None = None
+    permission_epoch: int = 0
 
 
 class LocalOperatorIdentityProvider:
@@ -53,6 +33,8 @@ class LocalOperatorIdentityProvider:
             operator_id="local-user",
             display_name="Local Operator",
             permissions=frozenset(OperatorPermission),
+            permission_mapping_version_id="00000000-0000-4000-8000-000000000001",
+            permission_epoch=1,
         )
 
 

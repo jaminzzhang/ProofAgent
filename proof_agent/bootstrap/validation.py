@@ -380,7 +380,12 @@ def _require_model_source_shape(
             )
 
 
-def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
+def validate_manifest(
+    manifest: AgentManifest,
+    *,
+    manifest_path: Path,
+    require_writable_artifacts: bool = True,
+) -> None:
     """Validate the supported v1 runtime envelope and local file dependencies."""
 
     if manifest.workflow.template not in SUPPORTED_WORKFLOW_TEMPLATES:
@@ -415,8 +420,9 @@ def validate_manifest(manifest: AgentManifest, *, manifest_path: Path) -> None:
     require_path(manifest.policy.file, "policy.file", manifest_path)
     if manifest.customer is not None and manifest.customer.adapter is not None:
         require_path(manifest.customer.adapter, "customer.adapter", manifest_path)
-    require_writable_parent(manifest.audit.trace_path, "audit.trace_path", manifest_path)
-    require_writable_parent(manifest.audit.receipt_path, "audit.receipt_path", manifest_path)
+    if require_writable_artifacts:
+        require_writable_parent(manifest.audit.trace_path, "audit.trace_path", manifest_path)
+        require_writable_parent(manifest.audit.receipt_path, "audit.receipt_path", manifest_path)
 
 
 def require_path(path: Path, field_name: str, manifest_path: Path) -> None:
@@ -1007,7 +1013,8 @@ def _reject_secret_model_role_params(
         raise ProofAgentError(
             "PA_SECRET_001",
             f"{field_prefix}.params contains secret-bearing field(s): {', '.join(forbidden)}",
-            "Store secrets in environment variables and reference only *_env names in agent.yaml.",
+            "Reference only environment variable names in development or an opaque "
+            "credential_secret_handle in production; never store resolved secret material.",
             artifact_path=manifest_path,
         )
 
@@ -1052,6 +1059,8 @@ def _validate_optional_positive_int_param(
 
 def _is_forbidden_model_param(key: str) -> bool:
     normalized = key.lower()
+    if normalized == "credential_secret_handle":
+        return False
     if normalized.endswith("_env"):
         return False
     return any(part in normalized for part in FORBIDDEN_MODEL_PARAM_PARTS)

@@ -303,7 +303,8 @@ def validate_hybrid_artifact_build_result(
     if len({ref.artifact_uri for ref in persisted_refs}) != len(persisted_refs):
         raise ValueError("Hybrid required artifact kinds must have distinct immutable references")
     for ref in (result.original_ref, *persisted_refs):
-        if ref.version_id != f"sha256:{ref.sha256}" or ref.size_bytes <= 0:
+        # S3 VersionId is intentionally opaque; sha256 is a separate verified binding.
+        if not ref.version_id or ref.size_bytes <= 0:
             raise ValueError("Hybrid result contains an invalid exact artifact reference")
 
 
@@ -808,8 +809,10 @@ class HybridKnowledgeWorker:
 def _verify_exact_bytes(ref: ExactArtifactRef, content: bytes) -> None:
     if len(content) != ref.size_bytes or hashlib.sha256(content).hexdigest() != ref.sha256:
         raise ValueError("artifact bytes failed exact digest or length verification")
-    if ref.version_id != f"sha256:{ref.sha256}":
-        raise ValueError("artifact version identity does not match its digest")
+    # S3 VersionId is an opaque storage identity. Exactness is established by the
+    # storage adapter's versioned read plus this independent digest/length check.
+    if not ref.version_id:
+        raise ValueError("artifact version identity is missing")
 
 
 def _validated_canonical_vendor_json(content: bytes) -> bytes:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -30,12 +31,18 @@ from proof_agent.capabilities.knowledge.hybrid.quality import (
     assess_document_quality,
     assess_page_quality,
 )
+from proof_agent.capabilities.knowledge.hybrid.rule_units import (
+    RuleUnitProjectionReviewRequired,
+    project_rule_units,
+)
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridInsuranceMetadataArtifact,
     HybridParserBuildOutput,
     HybridVendorArtifact,
+    ReviewRequiredError,
 )
+from proof_agent.capabilities.knowledge.hybrid.workbook import InsuranceMetadataDraftInput
 from proof_agent.contracts._base import FrozenModel
 from proof_agent.contracts.hybrid_documents import (
     BoundingBox,
@@ -54,12 +61,29 @@ NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_
 Sha256 = Annotated[StrictStr, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
+class PrivateInsuranceMetadataProposal(FrozenModel):
+    """Strict model-produced business metadata bound later to server-owned lineage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    canonical_anchor: NonBlankStr | None = None
+    authority: NonBlankStr
+    effective_from: str | None = None
+    effective_to: str | None = None
+    taxonomy_id: NonBlankStr
+    taxonomy_revision_id: NonBlankStr
+    precedence_policy_revision_id: NonBlankStr
+    precedence_authority_tier: NonBlankStr
+    precedence_order: int = Field(ge=0, strict=True)
+
+
 @dataclass(frozen=True)
 class PrivateHybridParserPipeline:
     """Scheduled private parser calls used by Hybrid build orchestration."""
 
     docling: PrivateDoclingClient
     paddle: PrivatePaddleClient
+    require_insurance_metadata_drafts: bool = False
 
     def __post_init__(self) -> None:
         if self.docling.scheduler is not self.paddle.scheduler:
@@ -220,6 +244,12 @@ class PrivateHybridParserPipeline:
         metadata_id = hashlib.sha256(
             f"{request.source_id}:{request.revision_id}:{final_build.build_id}".encode()
         ).hexdigest()
+        pdf_drafts = _insurance_metadata_drafts(
+            request=request,
+            artifact=artifact,
+            vendor_payload=docling_response.vendor_json,
+            required=self.require_insurance_metadata_drafts,
+        )
         cancellation.raise_if_cancelled()
         return HybridParserBuildOutput(
             artifact=artifact,
@@ -235,9 +265,77 @@ class PrivateHybridParserPipeline:
                     document_id=request.document_id,
                     revision_id=request.revision_id,
                 ),
-                pdf_drafts=(),
+                pdf_drafts=pdf_drafts,
             ),
         )
+
+
+def _insurance_metadata_drafts(
+    *,
+    request: HybridArtifactBuildRequest,
+    artifact: StructuredKnowledgeDocumentArtifact,
+    vendor_payload: Mapping[str, object],
+    required: bool,
+) -> tuple[InsuranceMetadataDraftInput, ...]:
+    raw = vendor_payload.get("insurance_metadata_drafts")
+    if raw is None:
+        if required:
+            raise ReviewRequiredError(
+                "private parser omitted required insurance metadata proposals"
+            )
+        return ()
+    if not isinstance(raw, list) or not raw or len(raw) > 100_000:
+        raise ReviewRequiredError("private parser insurance metadata proposals are invalid")
+    try:
+        proposals = tuple(PrivateInsuranceMetadataProposal.model_validate(item) for item in raw)
+    except ValueError as exc:
+        raise ReviewRequiredError(
+            "private parser insurance metadata proposals failed strict validation"
+        ) from exc
+    try:
+        rule_units = project_rule_units(
+            artifact,
+            document_defaults=InsuranceRuleMetadataDraft(
+                metadata_draft_id="metadata-projection-validation",
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+            ),
+            source_id=request.source_id,
+        )
+    except RuleUnitProjectionReviewRequired as exc:
+        raise ReviewRequiredError("insurance metadata Rule Unit projection requires review") from exc
+    expected_anchors = {unit.canonical_anchor for unit in rule_units}
+    actual_anchors = [proposal.canonical_anchor for proposal in proposals]
+    if len(actual_anchors) != len(set(actual_anchors)) or set(actual_anchors) != expected_anchors:
+        raise ReviewRequiredError(
+            "private parser insurance metadata must cover every canonical Rule Unit exactly once"
+        )
+    drafts: list[InsuranceMetadataDraftInput] = []
+    for proposal in proposals:
+        material = {
+            "source_id": request.source_id,
+            "document_id": request.document_id,
+            "revision_id": request.revision_id,
+            "build_id": artifact.build_identity.build_id,
+            "proposal": proposal.model_dump(mode="json"),
+        }
+        metadata_draft_id = f"pdf-metadata-{_sha256_json(material)[:24]}"
+        try:
+            drafts.append(
+                InsuranceMetadataDraftInput(
+                    metadata_draft_id=metadata_draft_id,
+                    origin="pdf",
+                    source_id=request.source_id,
+                    document_id=request.document_id,
+                    revision_id=request.revision_id,
+                    **proposal.model_dump(mode="python"),
+                )
+            )
+        except ValueError as exc:
+            raise ReviewRequiredError(
+                "private parser insurance metadata contains invalid governed values"
+            ) from exc
+    return tuple(drafts)
 
 
 def _service_build_identity(

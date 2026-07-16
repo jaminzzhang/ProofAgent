@@ -11,6 +11,32 @@ from proof_agent.capabilities.tools.brave_search import (
 )
 from proof_agent.contracts import ToolSource, ToolSourceLifecycleState
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
+
+
+class RecordingGuardedBraveClient:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> GuardedHttpResponse:
+        del method, headers, body, timeout_seconds
+        self.urls.append(url)
+        return GuardedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=(
+                b'{"web":{"results":[{"title":"Result","url":'
+                b'"https://example.com/1","description":"Snippet"}]}}'
+            ),
+        )
 
 
 def _source(
@@ -115,3 +141,27 @@ def test_brave_search_handler_rejects_archived_tool_source() -> None:
 
     with pytest.raises(ProofAgentError, match="archived"):
         handler({"query": "public renewal discount", "max_results": 1})
+
+
+def test_production_brave_requires_and_uses_guarded_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
+    with pytest.raises(ProofAgentError, match="guarded HTTPS"):
+        create_brave_untrusted_web_search_handler(
+            _source(),
+            env={"BRAVE_SEARCH_API_KEY": "secret-token"},
+        )
+
+    guarded = RecordingGuardedBraveClient()
+    handler = create_brave_untrusted_web_search_handler(
+        _source(),
+        env={"BRAVE_SEARCH_API_KEY": "secret-token"},
+        guarded_http_client=guarded,
+    )
+    result = handler({"query": "renewal discount", "max_results": 1})
+
+    assert result["result_count"] == 1
+    assert guarded.urls == [
+        "https://api.search.brave.com/res/v1/web/search?q=renewal+discount&count=1"
+    ]

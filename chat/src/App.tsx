@@ -13,7 +13,13 @@ import { TopNav } from './components/TopNav'
 import { ThemeProvider } from './components/ThemeProvider'
 import { HistorySidebar } from './components/HistorySidebar'
 import { useState, useEffect } from 'react'
-import { fetchConversations, updateConversation, deleteConversation } from './api/client'
+import {
+  deleteConversation,
+  fetchConversations,
+  initializeOperatorSession,
+  onSessionExpired,
+  updateConversation,
+} from './api/client'
 import type { ConversationRecord } from './api/types'
 import { LocaleProvider, useLocale } from './i18n/locale'
 
@@ -21,12 +27,19 @@ function Layout() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [sessionExpired, setSessionExpired] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { t } = useLocale()
   const isOperatorRoute = location.pathname.startsWith('/operator')
   const operatorMatch = matchPath('/operator/c/:conversationId', location.pathname)
   const conversationId = operatorMatch?.params.conversationId
+
+  useEffect(() => {
+    const unsubscribe = onSessionExpired(() => setSessionExpired(true))
+    void initializeOperatorSession().catch(() => undefined)
+    return unsubscribe
+  }, [])
 
   const loadConversations = async () => {
     setLoading(true)
@@ -99,6 +112,12 @@ function Layout() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200">
+      {sessionExpired && (
+        <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-center text-sm">
+          Your operator session expired or requires refreshed claims.{' '}
+          <a className="font-medium underline" href="/api/auth/login">Sign in again</a>
+        </div>
+      )}
       <TopNav
         leading={isOperatorRoute ? (
           <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>

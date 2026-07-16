@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
+import os
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -11,6 +12,7 @@ from urllib.request import Request, urlopen
 from pydantic import HttpUrl, TypeAdapter
 
 from proof_agent.contracts import ToolSource, ToolSourceLifecycleState, UntrustedWebResult
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.errors import ProofAgentError
 
 BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
@@ -37,6 +39,7 @@ def create_brave_untrusted_web_search_handler(
     *,
     env: Mapping[str, str],
     transport: BraveSearchTransport | None = None,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> ToolHandler:
     """Create a ToolGateway handler for a Dashboard-managed Brave Search Tool Source."""
 
@@ -51,7 +54,17 @@ def create_brave_untrusted_web_search_handler(
             "Update the Tool Source descriptor or Agent Tool Binding.",
         )
 
-    selected_transport = transport or _default_brave_search_transport
+    if transport is not None:
+        selected_transport = transport
+    elif guarded_http_client is not None:
+        selected_transport = _guarded_brave_search_transport(guarded_http_client)
+    elif _production_mode():
+        raise _tool_source_error(
+            "production Brave Search requires guarded HTTPS.",
+            "Inject the active Egress Policy guarded HTTP client.",
+        )
+    else:
+        selected_transport = _default_brave_search_transport
 
     def handler(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
         if source.lifecycle_state is ToolSourceLifecycleState.ARCHIVED:
@@ -124,6 +137,51 @@ def _default_brave_search_transport(request: BraveSearchRequest) -> Mapping[str,
             "Validate provider response shape before using the Tool Source.",
         )
     return cast(Mapping[str, Any], payload)
+
+
+def _guarded_brave_search_transport(client: GuardedHttpClient) -> BraveSearchTransport:
+    def send(request: BraveSearchRequest) -> Mapping[str, Any]:
+        query = urlencode({"q": request.query, "count": request.count})
+        try:
+            response = client.request(
+                "GET",
+                f"{BRAVE_WEB_SEARCH_URL}?{query}",
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": request.api_key,
+                },
+                timeout_seconds=request.timeout_seconds,
+            )
+        except Exception as exc:
+            raise _tool_source_error(
+                "Brave Search failed at guarded HTTPS boundary.",
+                "Check the active Egress Policy and provider availability.",
+            ) from exc
+        if response.status_code >= 400:
+            raise _tool_source_error(
+                f"Brave Search request failed with HTTP {response.status_code}.",
+                "Validate the Tool Source credential and provider availability.",
+            )
+        try:
+            payload = json.loads(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _tool_source_error(
+                "Brave Search response was not valid JSON.",
+                "Validate provider response shape before using the Tool Source.",
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise _tool_source_error(
+                "Brave Search response was not a JSON object.",
+                "Validate provider response shape before using the Tool Source.",
+            )
+        return payload
+
+    return send
+
+
+def _production_mode() -> bool:
+    return os.environ.get("PROOF_AGENT_MODE", "development").strip().lower() == "production"
 
 
 def _normalize_brave_results(

@@ -12,7 +12,11 @@ from proof_agent.contracts import AgentManifest
 from proof_agent.errors import ProofAgentError
 
 
-def load_agent_manifest(path: Path | str) -> AgentManifest:
+def load_agent_manifest(
+    path: Path | str,
+    *,
+    require_writable_artifacts: bool = True,
+) -> AgentManifest:
     """Load, shape-check, type-check, and validate an agent manifest."""
 
     manifest_path = Path(path).resolve()
@@ -36,7 +40,11 @@ def load_agent_manifest(path: Path | str) -> AgentManifest:
             "Fix agent.yaml to match the Proof Agent contract.",
             artifact_path=manifest_path,
         ) from exc
-    validate_manifest(manifest, manifest_path=manifest_path)
+    validate_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        require_writable_artifacts=require_writable_artifacts,
+    )
     return manifest
 
 

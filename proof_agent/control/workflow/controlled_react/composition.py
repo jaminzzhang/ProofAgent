@@ -188,6 +188,7 @@ class _InvocationIntentResolutionAdapter:
         self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
     def resolve(self, state: ControlledReActRunState) -> IntentResolutionResult:
+        _check_cancellation(self._invocation)
         resolver = self._invocation.intent_resolver or self._fallback
         result = resolver.resolve(
             question=state.question,
@@ -198,6 +199,7 @@ class _InvocationIntentResolutionAdapter:
             memory_recall_payloads=state.memory_recall_payloads,
             business_flow_skill_packs=self._invocation.business_flow_skill_packs,
         )
+        _check_cancellation(self._invocation)
         self.stage_llm_interactions = stage_llm_interactions(resolver)
         return self._admit_business_flow(result)
 
@@ -301,6 +303,7 @@ class _InvocationPlannerAdapter:
         self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
     def plan(self, state: ControlledReActRunState) -> ReActActionProposal:
+        _check_cancellation(self._invocation)
         self.stage_llm_interactions = ()
         intent_action = _intent_terminal_action(state)
         if intent_action is not None:
@@ -327,6 +330,7 @@ class _InvocationPlannerAdapter:
             ),
             effective_tool_proposal_scope=state.effective_tool_proposal_scope,
         )
+        _check_cancellation(self._invocation)
         self.stage_llm_interactions = drain_stage_llm_interactions(
             planner,
             stage_id="plan",
@@ -411,6 +415,7 @@ class _InvocationKnowledgeObservationAdapter:
         action: ReActActionProposal,
         identity: ObservationIdentity,
     ) -> ObservationEffect:
+        _check_cancellation(self._invocation)
         query = _string_value(action.parameters.get("query")) or state.question
         retrieval = self._invocation.manifest.retrieval
         trace = _StageScopedTrace(self._trace, stage_id="retrieval")
@@ -418,6 +423,7 @@ class _InvocationKnowledgeObservationAdapter:
             trace=trace,
             policy=self._invocation.policy,
             knowledge_provider=self._invocation.knowledge_provider,
+            model_resolver=self._invocation.model_resolver,
         )
         retrieval_result = service.retrieve(
             KnowledgeRetrievalRequest(
@@ -444,6 +450,7 @@ class _InvocationKnowledgeObservationAdapter:
                 ),
             )
         )
+        _check_cancellation(self._invocation)
         evidence, accepted_evidence, evaluation_metadata = _admit_evidence(
             retrieval_result.evidence,
             min_score=retrieval.min_score,
@@ -545,6 +552,7 @@ class _InvocationToolObservationAdapter:
         action: ReActActionProposal,
         identity: ObservationIdentity,
     ) -> ObservationEffect:
+        _check_cancellation(self._invocation)
         tool_name = action.target_tool_name or "unknown_tool"
         result = self._invocation.tool_gateway.request_tool(
             tool_name=tool_name,
@@ -552,6 +560,7 @@ class _InvocationToolObservationAdapter:
             approved=True,
             run_id=state.run_id,
         )
+        _check_cancellation(self._invocation)
         tool_result = dict(result.result or {})
         truth = ToolObservationTruth(
             truth_ref=identity.truth_ref,
@@ -722,6 +731,7 @@ class _InvocationReviewAdapter:
         state: ControlledReActRunState,
         action: ReActActionProposal,
     ) -> ReviewDecision:
+        _check_cancellation(self._invocation)
         point = EnforcementPoint.BEFORE_RETRIEVAL_PLAN
         context = {
             "run_id": state.run_id,
@@ -747,6 +757,7 @@ class _InvocationReviewAdapter:
             low_risk_fast_path_enabled=low_risk_fast_path_enabled,
             trace_event_id=f"{state.run_id}:{action.action_id}:retrieval_review",
         )
+        _check_cancellation(self._invocation)
         return ReviewDecision(
             review_id=f"review.{action.action_id}.{point.value}",
             enforcement_point=point,
@@ -780,6 +791,7 @@ class _ModelAnswerSynthesisAdapter:
         action: ReActActionProposal,
         answer_context: AnswerEvidenceContext,
     ) -> AnswerSynthesisResult:
+        _check_cancellation(self._invocation)
         evidence = _evidence_from_answer_context(answer_context)
         if not evidence:
             tool_answer = _tool_answer_from_answer_context(answer_context)
@@ -807,6 +819,7 @@ class _ModelAnswerSynthesisAdapter:
             answer_context,
             evidence=evidence,
         )
+        _check_cancellation(self._invocation)
         governed = _governed_hybrid_request_from_controlled_state(
             self._invocation,
             state,
@@ -840,6 +853,10 @@ class _ModelAnswerSynthesisAdapter:
             stage_llm_interactions=result.stage_llm_interactions,
             stage_failure_diagnostics=result.stage_failure_diagnostics,
         )
+
+
+def _check_cancellation(invocation: HarnessInvocation) -> None:
+    invocation.cancellation_check()
 
 
 class _EvidenceAnswerSynthesisAdapter:

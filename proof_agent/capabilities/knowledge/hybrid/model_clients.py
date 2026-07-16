@@ -9,10 +9,10 @@ from functools import partial
 import ipaddress
 import json
 import math
-from queue import Empty, Full, Queue
+from queue import Empty, Queue
 import socket
 import ssl
-from threading import Condition, Event, Lock, Thread, current_thread
+from threading import BoundedSemaphore, Condition, Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
@@ -89,7 +89,8 @@ class _BoundedDaemonExecutor:
     def __init__(self, *, name: str, max_workers: int, max_pending: int) -> None:
         if max_workers <= 0 or max_pending <= 0:
             raise ValueError("bounded executor limits must be positive")
-        self._queue: Queue[_ExecutionTask] = Queue(maxsize=max_pending)
+        self._queue: Queue[_ExecutionTask] = Queue()
+        self._admission = BoundedSemaphore(max_workers + max_pending)
         self._lock = Lock()
         self._closed = False
         self._drain_on_close = False
@@ -111,10 +112,9 @@ class _BoundedDaemonExecutor:
         with self._lock:
             if self._closed:
                 raise RuntimeError("bounded private-model executor is closed")
-            try:
-                self._queue.put_nowait(task)
-            except Full as exc:
-                raise RuntimeError("bounded private-model executor is saturated") from exc
+            if not self._admission.acquire(blocking=False):
+                raise RuntimeError("bounded private-model executor is saturated")
+            self._queue.put_nowait(task)
         return future
 
     def close(self, *, cancel_pending: bool = True) -> None:
@@ -130,6 +130,7 @@ class _BoundedDaemonExecutor:
                 except Empty:
                     break
                 pending.future.cancel()
+                self._admission.release()
         deadline = monotonic() + 0.25
         for thread in self._threads:
             thread.join(timeout=max(deadline - monotonic(), 0.0))
@@ -150,6 +151,7 @@ class _BoundedDaemonExecutor:
             except Empty:
                 continue
             if not task.future.set_running_or_notify_cancel():
+                self._admission.release()
                 continue
             try:
                 value = task.operation(*task.args, **task.kwargs)
@@ -157,6 +159,8 @@ class _BoundedDaemonExecutor:
                 task.future.set_exception(exc)
             else:
                 task.future.set_result(value)
+            finally:
+                self._admission.release()
 
 
 class _LeaseAdmission:

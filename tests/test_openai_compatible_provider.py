@@ -1,5 +1,6 @@
 import sys
 from types import SimpleNamespace
+from collections.abc import Mapping
 
 import pytest
 
@@ -16,8 +17,136 @@ from proof_agent.contracts import (
     ToolProposalInterface,
     ToolProposalParameter,
     ToolProposalParameterSource,
+    ProductionSecretHandle,
+    SecretHandleValidation,
+    SecretPurpose,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
+from proof_agent.contracts.ports.secret_provider import ResolvedSecretMaterial
+
+
+class RecordingGuardedModelClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> GuardedHttpResponse:
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": dict(headers or {}),
+                "body": body,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return GuardedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=(
+                b'{"id":"chatcmpl-guarded","choices":[{"message":{"content":'
+                b'"guarded answer"},"finish_reason":"stop"}],"usage":'
+                b'{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}'
+            ),
+        )
+
+
+class ModelSecretProvider:
+    protocol_id = "hashicorp-vault-2.0-kv-v2"
+
+    def __init__(self, value: bytes = b"test-key") -> None:
+        self.value = value
+        self.resolved: list[ProductionSecretHandle] = []
+
+    def resolve(self, handle: ProductionSecretHandle) -> ResolvedSecretMaterial:
+        self.resolved.append(handle)
+        return ResolvedSecretMaterial(value=self.value, provider_version_id="7")
+
+    def validate(
+        self,
+        handle: ProductionSecretHandle,
+        *,
+        checked_at: str,
+    ) -> SecretHandleValidation:
+        return SecretHandleValidation(
+            handle=handle,
+            resolvable=True,
+            provider_version_id="7",
+            checked_at=checked_at,
+        )
+
+
+def test_production_openai_compatible_provider_requires_and_uses_guarded_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
+    monkeypatch.setenv("PROOF_AGENT_OPENAI_KEY", "test-key")
+    environment_config = ModelConfig(
+        provider="openai_compatible",
+        name="gpt-test",
+        params={
+            "api_key_env": "PROOF_AGENT_OPENAI_KEY",
+            "base_url": "https://models.example.test/v1",
+        },
+    )
+    with pytest.raises(ProofAgentError, match="environment credential"):
+        OpenAICompatibleModelProvider.from_config(
+            environment_config,
+            guarded_http_client=RecordingGuardedModelClient(),
+        )
+
+    secret_handle = {
+        "protocol_id": "hashicorp-vault-2.0-kv-v2",
+        "handle_id": "models/answer",
+        "purpose": "model_credential",
+    }
+    config = ModelConfig(
+        provider="openai_compatible",
+        name="gpt-test",
+        params={
+            "credential_secret_handle": secret_handle,
+            "base_url": "https://models.example.test/v1",
+        },
+    )
+    secrets = ModelSecretProvider()
+    with pytest.raises(ProofAgentError, match="guarded HTTPS"):
+        OpenAICompatibleModelProvider.from_config(config, secret_provider=secrets)
+
+    guarded = RecordingGuardedModelClient()
+    provider = OpenAICompatibleModelProvider.from_config(
+        config,
+        guarded_http_client=guarded,
+        secret_provider=secrets,
+    )
+    result = provider.generate(
+        ModelRequest(
+            provider="openai_compatible",
+            model="gpt-test",
+            messages=(ModelMessage(role=ModelRole.USER, content="hello"),),
+        )
+    )
+
+    assert result.content == "guarded answer"
+    assert result.token_usage is not None and result.token_usage.total_tokens == 6
+    assert guarded.calls[0]["url"] == (
+        "https://models.example.test/v1/chat/completions"
+    )
+    assert guarded.calls[0]["headers"]["Authorization"] == "Bearer test-key"
+    assert secrets.resolved == [
+        ProductionSecretHandle(
+            protocol_id="hashicorp-vault-2.0-kv-v2",
+            handle_id="models/answer",
+            purpose=SecretPurpose.MODEL_CREDENTIAL,
+        )
+    ]
 
 
 def test_openai_compatible_provider_maps_request_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:

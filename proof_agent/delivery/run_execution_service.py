@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -10,7 +11,6 @@ from proof_agent.bootstrap.hybrid_execution import (
     HybridRunDependencies as HybridRunDependencies,
     HybridRunRuntime,
 )
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     AgentManifest,
     ContextAdmission,
@@ -29,16 +29,21 @@ from proof_agent.control.workflow.controlled_react.ports import (
     ObservationTruthStorePort,
     SnapshotStorePort,
 )
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 
 @dataclass(frozen=True)
 class RunExecutionDependencies:
     store: RunStore
     runs_dir: Path
-    configuration_store: LocalAgentConfigurationStore
+    configuration_store: RuntimeSharedAssetReader
     controlled_react_snapshot_store: SnapshotStorePort | None = None
     controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
     hybrid_runtime: HybridRunRuntime | None = None
+    guarded_http_client: GuardedHttpClient | None = None
+    secret_provider: SecretProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -58,12 +63,17 @@ def execute_published_agent_run(
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
     institution_authorization: InstitutionAuthorizationContext | None = None,
+    run_id: str | None = None,
+    cancellation_check: Callable[[], None] | None = None,
 ) -> PublishedAgentRunExecution:
     """Execute one governed run for an already-resolved Published Agent."""
 
-    run_id = f"run_{uuid4().hex[:8]}"
+    run_id = run_id or f"run_{uuid4().hex[:8]}"
     run_artifact_dir = dependencies.store.create_run_dir(run_id)
-    manifest = load_agent_manifest(published_agent.manifest_path)
+    manifest = load_agent_manifest(
+        published_agent.manifest_path,
+        require_writable_artifacts=False,
+    )
     hybrid_dependencies = None
     if published_agent.resolved_knowledge_bindings is not None:
         has_hybrid = any(
@@ -118,6 +128,9 @@ def execute_published_agent_run(
             controlled_react_observation_truth_store=(
                 dependencies.controlled_react_observation_truth_store
             ),
+            cancellation_check=cancellation_check,
+            guarded_http_client=dependencies.guarded_http_client,
+            secret_provider=dependencies.secret_provider,
         )
     )
 

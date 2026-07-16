@@ -9,12 +9,14 @@ from typing import Any
 from uuid import uuid4
 
 from proof_agent.contracts import (
+    CaseMemoryAdmission,
     MemoryCandidate,
     MemoryQuery,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
 )
+from proof_agent.configuration.file_locking import locked, store_lock_path
 
 
 class LocalMemoryStore:
@@ -25,7 +27,24 @@ class LocalMemoryStore:
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     def append(self, candidate: MemoryCandidate) -> MemoryRecord:
-        now = _now()
+        with locked(store_lock_path(self._memory_dir), timeout_seconds=5.0):
+            return self._append_unlocked(candidate, created_at=_now())
+
+    def admit_case_memory(self, admission: CaseMemoryAdmission) -> MemoryRecord:
+        """Persist a validated initial-production Case Memory admission."""
+
+        with locked(store_lock_path(self._memory_dir), timeout_seconds=5.0):
+            return self._append_unlocked(
+                admission.candidate,
+                created_at=admission.admitted_at,
+            )
+
+    def _append_unlocked(
+        self,
+        candidate: MemoryCandidate,
+        *,
+        created_at: str,
+    ) -> MemoryRecord:
         record = MemoryRecord(
             memory_id=f"mem_{uuid4().hex[:8]}",
             scope=candidate.scope,
@@ -36,24 +55,20 @@ class LocalMemoryStore:
             facts=candidate.facts,
             source_run_id=candidate.source_run_id,
             source_turn_id=candidate.source_turn_id,
-            created_at=now,
+            created_at=created_at,
             expires_at=candidate.expires_at,
             sensitivity=candidate.sensitivity,
             status=MemoryStatus.ACTIVE,
         )
-        path = self._record_path(record)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                _jsonable(record.model_dump(mode="python", warnings=False)),
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
+        self._write_record(record)
         return record
 
     def read(self, query: MemoryQuery) -> tuple[MemoryRecord, ...]:
+        return self.read_at(query, as_of=_now())
+
+    def read_at(self, query: MemoryQuery, *, as_of: str) -> tuple[MemoryRecord, ...]:
+        """Read active memory using an explicit lifecycle clock."""
+
         if query.scope == MemoryScope.CASE:
             memory_dir = self._case_dir(query.agent_id, query.case_id)
         elif query.scope == MemoryScope.USER:
@@ -62,7 +77,6 @@ class LocalMemoryStore:
             return ()
         if not memory_dir.exists():
             return ()
-        now = _now()
         records: list[MemoryRecord] = []
         for path in memory_dir.glob("*.json"):
             try:
@@ -71,11 +85,32 @@ class LocalMemoryStore:
                 continue
             if record.status != MemoryStatus.ACTIVE:
                 continue
-            if record.expires_at <= now:
+            if record.expires_at <= as_of:
                 continue
             records.append(record)
         records.sort(key=lambda item: item.created_at, reverse=True)
         return tuple(records[: query.max_records])
+
+    def expire_due(self, *, as_of: str) -> int:
+        """Make expired Case Memory immediately unavailable to ordinary reads."""
+
+        expired = 0
+        case_root = self._memory_dir / "case"
+        if not case_root.exists():
+            return 0
+        with locked(store_lock_path(self._memory_dir), timeout_seconds=5.0):
+            for path in case_root.glob("*/*/*.json"):
+                try:
+                    record = MemoryRecord.model_validate(
+                        json.loads(path.read_text(encoding="utf-8"))
+                    )
+                except (OSError, json.JSONDecodeError, ValueError):
+                    continue
+                if record.status is not MemoryStatus.ACTIVE or record.expires_at > as_of:
+                    continue
+                self._write_record(record.model_copy(update={"status": MemoryStatus.DELETED}))
+                expired += 1
+        return expired
 
     def soft_delete_case(self, *, agent_id: str, case_id: str) -> int:
         deleted = 0
@@ -153,6 +188,18 @@ class LocalMemoryStore:
         if record.scope == MemoryScope.USER:
             return self._subject_dir(record.agent_id, record.subject_ref) / f"{record.memory_id}.json"
         return self._case_dir(record.agent_id, record.case_id) / f"{record.memory_id}.json"
+
+    def _write_record(self, record: MemoryRecord) -> None:
+        path = self._record_path(record)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                _jsonable(record.model_dump(mode="python", warnings=False)),
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
 
     def _case_dir(self, agent_id: str, case_id: str) -> Path:
         return self._memory_dir / "case" / _safe_path_part(agent_id) / _safe_path_part(case_id)

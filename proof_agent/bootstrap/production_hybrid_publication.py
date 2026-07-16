@@ -35,7 +35,10 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildResult,
     HybridInsuranceMetadataArtifact,
 )
-from proof_agent.contracts.agent_configuration import KnowledgeSourceLifecycleState
+from proof_agent.contracts.agent_configuration import (
+    KnowledgeDocument,
+    KnowledgeSourceLifecycleState,
+)
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.contracts.knowledge_index import (
     HybridKnowledgePublicationRecord,
@@ -190,6 +193,43 @@ class HybridPublicationConfigurationStore(Protocol):
         document_id: str,
         revision_id: str,
     ) -> HybridArtifactBuildResult: ...
+
+
+class PostgresHybridPublicationConfigurationStore:
+    """Read-only publication projection over PG Source and completed ingestion authority."""
+
+    def __init__(self, *, knowledge: Any, ingestion: Any) -> None:
+        self._knowledge = knowledge
+        self._ingestion = ingestion
+
+    def get_knowledge_source(self, source_id: str) -> Any:
+        return self._knowledge.get_knowledge_source(source_id)
+
+    def list_knowledge_documents(self, source_id: str) -> Sequence[KnowledgeDocument]:
+        return tuple(
+            _knowledge_document_from_ingestion_record(record)
+            for record in self._ingestion.list_records_for_source(source_id)
+        )
+
+    def get_completed_hybrid_artifact_build_result(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> HybridArtifactBuildResult:
+        matches = tuple(
+            record
+            for record in self._ingestion.list_records_for_source(source_id)
+            if record.build_request.document_id == document_id
+            and record.build_request.revision_id == revision_id
+        )
+        if len(matches) != 1 or matches[0].job.state != "COMPLETED":
+            raise KeyError((source_id, document_id, revision_id))
+        result = self._ingestion.get_result(matches[0].build_request.job_id)
+        if result is None:
+            raise KeyError((source_id, document_id, revision_id))
+        return HybridArtifactBuildResult.model_validate(result)
 
 
 class HybridMetadataReviewReader(Protocol):
@@ -445,7 +485,41 @@ def _require_nonblank(value: str, field_name: str) -> str:
     return value.strip()
 
 
+def _knowledge_document_from_ingestion_record(record: Any) -> KnowledgeDocument:
+    request = record.build_request
+    state = {
+        "READY": "queued",
+        "CLAIMED": "processing",
+        "RETRY_SCHEDULED": "retry_scheduled",
+        "REVIEW_REQUIRED": "review_required",
+        "COMPLETED": "ready",
+        "FAILED": "failed",
+    }[record.job.state]
+    return KnowledgeDocument(
+        document_id=request.document_id,
+        source_id=request.source_id,
+        revision_id=request.revision_id,
+        filename=record.filename,
+        content_type="application/pdf",
+        content_hash=request.original_ref.sha256,
+        size_bytes=request.original_ref.size_bytes,
+        state=state,
+        storage_path=f"managed://hybrid/{request.document_id}/revisions/{request.revision_id}",
+        ingestion_job_id=request.job_id,
+        artifact_path=(
+            f"managed://hybrid/{request.document_id}/artifacts"
+            if record.job.state == "COMPLETED"
+            else None
+        ),
+        error_code=record.job.failure_code,
+        error_message=record.job.safe_reason,
+        created_at=record.job.created_at.isoformat(),
+        updated_at=record.job.updated_at.isoformat(),
+    )
+
+
 __all__ = [
     "ProductionHybridKnowledgePublicationFacade",
     "ProductionHybridPublicationCandidateAssembler",
+    "PostgresHybridPublicationConfigurationStore",
 ]

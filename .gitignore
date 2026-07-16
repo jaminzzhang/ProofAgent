@@ -82,3 +82,4 @@ dist/
 /playwright/.auth/
 e2e/
 .gstack/
+deploy/production/compatibility-input.json

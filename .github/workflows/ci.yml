@@ -19,23 +19,64 @@ jobs:
         run: |
           uv sync --frozen \
             --extra dev --extra dashboard \
-            --extra ingestion --extra tree --extra openai
+            --extra ingestion --extra tree --extra openai --extra postgres
       - name: Lint
         run: uv run ruff check proof_agent tests
       - name: Type check
         run: uv run mypy proof_agent
       - name: Test
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/ -m "not postgres_integration and not hybrid_integration" -v
       - name: CLI smoke (deterministic demo)
         run: |
           uv run proof-agent demo > demo.out
           # All three documented outcomes must appear in the demo output.
           grep -q "ANSWERED_WITH_CITATIONS" demo.out
           grep -q "REFUSED_NO_EVIDENCE" demo.out
-          grep -q "WAITING_FOR_APPROVAL" demo.out
+          grep -q "WAITING_FOR_USER_CLARIFICATION" demo.out
           # The final run must also leave a trace and receipt on disk.
           test -f runs/latest/trace.jsonl
           test -f runs/latest/governance_receipt.md
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.9-alpine
+        env:
+          POSTGRES_USER: proofagent
+          POSTGRES_PASSWORD: proofagent
+          POSTGRES_DB: proofagent_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U proofagent -d proofagent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PROOF_AGENT_TEST_POSTGRES_DSN: postgresql+psycopg://proofagent:proofagent@127.0.0.1:55432/proofagent_test
+      PROOF_AGENT_REQUIRE_POSTGRES_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Sync PostgreSQL test dependencies (locked)
+        run: uv sync --frozen --extra dev --extra postgres
+      - name: Real PostgreSQL migration and repository tests
+        run: >-
+          uv run pytest
+          tests/test_postgres_migrations.py
+          tests/test_postgres_agent_repository.py
+          tests/test_postgres_shared_asset_repositories.py
+          tests/test_postgres_configuration_uow.py
+          tests/test_postgres_run_repository.py
+          tests/test_postgres_conversation_repository.py
+          tests/test_postgres_case_memory_repository.py
+          tests/test_postgres_audit_repository.py
+          tests/test_application_composition.py
+          -m postgres_integration -v
 
   frontend:
     runs-on: ubuntu-latest

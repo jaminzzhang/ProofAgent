@@ -434,6 +434,109 @@ class InsuranceMetadataReviewRepository(Protocol):
     ) -> InsuranceMetadataReview: ...
 
 
+def resolve_insurance_metadata_review(
+    current: InsuranceMetadataReview,
+    *,
+    expected_review_version: int,
+    expected_review_identity: str,
+    action: Literal["approve", "correct", "reject"],
+    actor: str,
+    reason: str,
+    corrections: Mapping[str, str | int | None] | None = None,
+) -> tuple[InsuranceMetadataReview, InsuranceMetadataReviewDecision]:
+    """Apply one adapter-neutral optimistic review decision."""
+
+    if (
+        current.review_version != expected_review_version
+        or current.review_identity != expected_review_identity
+    ):
+        raise WorkbookReviewConflictError("metadata review changed; reload exact identity")
+    normalized_reason = _require_nonblank(reason, "reason")
+    normalized_actor = _require_nonblank(actor, "actor")
+    if current.state in {"approved", "rejected"}:
+        raise WorkbookReviewConflictError(
+            "terminal metadata reviews cannot be changed without explicit revocation"
+        )
+    decision_corrections: Mapping[str, str | int | date | None] = {}
+    next_state: Literal[
+        "review_required", "ready_for_review", "approved", "corrected", "rejected"
+    ] = current.state
+    updates: dict[str, object] = {
+        "review_version": current.review_version + 1,
+        "review_identity": "0" * 64,
+        "resolution_reason": normalized_reason,
+        "resolved_by": normalized_actor,
+    }
+    if action == "approve":
+        if current.pdf_draft is None:
+            raise WorkbookReviewConflictError(
+                "persisted PDF metadata draft is required before approval"
+            )
+        if current.conflicts:
+            raise WorkbookReviewConflictError(
+                "unresolved metadata conflicts block approval and publication"
+            )
+        if current.state not in {"ready_for_review", "corrected"}:
+            raise WorkbookReviewConflictError(
+                "only a ready or corrected metadata review can be approved"
+            )
+        approved_metadata = _approved_metadata_revision(current)
+        next_state = "approved"
+        updates.update(
+            state=next_state,
+            publication_blocked=False,
+            approved_metadata_revision_id=approved_metadata.metadata_revision_id,
+        )
+    elif action == "reject":
+        next_state = "rejected"
+        updates.update(state=next_state, publication_blocked=True)
+    else:
+        if current.pdf_draft is None:
+            raise WorkbookReviewConflictError(
+                "persisted PDF metadata draft is required before correction"
+            )
+        resolved = _validated_corrections(current, corrections or {})
+        if not resolved:
+            raise WorkbookValidationError("correction requires at least one governed field")
+        unresolved = tuple(
+            conflict for conflict in current.conflicts if conflict.field not in resolved
+        )
+        next_state = "corrected" if not unresolved else "review_required"
+        decision_corrections = resolved
+        updates.update(
+            state=next_state,
+            publication_blocked=True,
+            conflicts=unresolved,
+            resolved_values={**dict(current.resolved_values), **resolved},
+        )
+    decision = InsuranceMetadataReviewDecision(
+        sequence=len(current.decision_history) + 1,
+        prior_review_identity=current.review_identity,
+        prior_state=current.state,
+        action=action,
+        actor=normalized_actor,
+        reason=normalized_reason,
+        corrections=decision_corrections,
+        resulting_state=next_state,
+    )
+    updates["decision_history"] = (*current.decision_history, decision)
+    updated = InsuranceMetadataReview.model_validate({**current.model_dump(), **updates})
+    updated = InsuranceMetadataReview.model_validate(
+        {**updated.model_dump(), "review_identity": _review_identity(updated)}
+    )
+    return updated, decision
+
+
+def validate_insurance_metadata_review_identity(
+    review: InsuranceMetadataReview,
+) -> None:
+    """Verify a review's content-addressed optimistic command identity."""
+
+    expected = _review_identity(review.model_copy(update={"review_identity": "0" * 64}))
+    if review.review_identity != expected:
+        raise WorkbookValidationError("metadata review identity does not match its content")
+
+
 def import_metadata_workbook(
     source: bytes | bytearray | Path | str,
     *,
@@ -935,83 +1038,14 @@ class FilesystemInsuranceMetadataReviewRepository:
             current = self._get_unlocked(source_id, review_id)
             if current is None:
                 raise KeyError(review_id)
-            if (
-                current.review_version != expected_review_version
-                or current.review_identity != expected_review_identity
-            ):
-                raise WorkbookReviewConflictError("metadata review changed; reload exact identity")
-            normalized_reason = _require_nonblank(reason, "reason")
-            normalized_actor = _require_nonblank(actor, "actor")
-            if current.state in {"approved", "rejected"}:
-                raise WorkbookReviewConflictError(
-                    "terminal metadata reviews cannot be changed without explicit revocation"
-                )
-            decision_corrections: Mapping[str, str | int | date | None] = {}
-            next_state: Literal[
-                "review_required", "ready_for_review", "approved", "corrected", "rejected"
-            ] = current.state
-            updates: dict[str, object] = {
-                "review_version": current.review_version + 1,
-                "review_identity": "0" * 64,
-                "resolution_reason": normalized_reason,
-                "resolved_by": normalized_actor,
-            }
-            if action == "approve":
-                if current.pdf_draft is None:
-                    raise WorkbookReviewConflictError(
-                        "persisted PDF metadata draft is required before approval"
-                    )
-                if current.conflicts:
-                    raise WorkbookReviewConflictError(
-                        "unresolved metadata conflicts block approval and publication"
-                    )
-                if current.state not in {"ready_for_review", "corrected"}:
-                    raise WorkbookReviewConflictError(
-                        "only a ready or corrected metadata review can be approved"
-                    )
-                approved_metadata = _approved_metadata_revision(current)
-                next_state = "approved"
-                updates.update(
-                    state=next_state,
-                    publication_blocked=False,
-                    approved_metadata_revision_id=approved_metadata.metadata_revision_id,
-                )
-            elif action == "reject":
-                next_state = "rejected"
-                updates.update(state=next_state, publication_blocked=True)
-            else:
-                if current.pdf_draft is None:
-                    raise WorkbookReviewConflictError(
-                        "persisted PDF metadata draft is required before correction"
-                    )
-                resolved = _validated_corrections(current, corrections or {})
-                if not resolved:
-                    raise WorkbookValidationError("correction requires at least one governed field")
-                unresolved = tuple(
-                    conflict for conflict in current.conflicts if conflict.field not in resolved
-                )
-                next_state = "corrected" if not unresolved else "review_required"
-                decision_corrections = resolved
-                updates.update(
-                    state=next_state,
-                    publication_blocked=True,
-                    conflicts=unresolved,
-                    resolved_values={**dict(current.resolved_values), **resolved},
-                )
-            decision = InsuranceMetadataReviewDecision(
-                sequence=len(current.decision_history) + 1,
-                prior_review_identity=current.review_identity,
-                prior_state=current.state,
+            updated, decision = resolve_insurance_metadata_review(
+                current,
+                expected_review_version=expected_review_version,
+                expected_review_identity=expected_review_identity,
                 action=action,
-                actor=normalized_actor,
-                reason=normalized_reason,
-                corrections=decision_corrections,
-                resulting_state=next_state,
-            )
-            updates["decision_history"] = (*current.decision_history, decision)
-            updated = InsuranceMetadataReview.model_validate({**current.model_dump(), **updates})
-            updated = InsuranceMetadataReview.model_validate(
-                {**updated.model_dump(), "review_identity": _review_identity(updated)}
+                actor=actor,
+                reason=reason,
+                corrections=corrections,
             )
             self._commit_review_transaction_unlocked(
                 source_id,

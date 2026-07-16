@@ -18,10 +18,10 @@ from proof_agent.contracts.knowledge_resolution import (
     ResolvedKnowledgeBindingSet,
 )
 from proof_agent.contracts.manifest import KnowledgeConfig
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.errors import ProofAgentError
 
 if TYPE_CHECKING:
-    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
     from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 
 
@@ -138,7 +138,7 @@ def _provider_supports_parallel_retrieval(provider: KnowledgeProvider) -> bool:
 def resolve_blended_knowledge_provider(
     resolved_bindings: ResolvedKnowledgeBindingSet,
     *,
-    configuration_store: LocalAgentConfigurationStore | None = None,
+    configuration_store: ModelConnectionReader | None = None,
     hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
 ) -> BlendedKnowledgeProvider:
     missing_hybrid_provider = any(

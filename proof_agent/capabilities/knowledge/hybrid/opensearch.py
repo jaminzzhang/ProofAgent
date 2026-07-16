@@ -11,7 +11,7 @@ import math
 import re
 import ssl
 from typing import Any, Iterator, Protocol, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -45,6 +45,7 @@ from proof_agent.capabilities.knowledge.hybrid.versioning import (
     stable_digest,
 )
 from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.insurance_rules import (
     ApprovedInsuranceKnowledgeVisibilityScope,
     ApprovedInsuranceRuleMetadataRevision,
@@ -388,6 +389,158 @@ class HttpxOpenSearchTransport:
         self._client.close()
 
     def __enter__(self) -> HttpxOpenSearchTransport:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
+class GuardedOpenSearchTransport:
+    """Production OpenSearch boundary over the tenant's active Egress Policy."""
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        guarded_http_client: GuardedHttpClient,
+        timeout_seconds: float = 10.0,
+        max_response_bytes: int = 32 * 1024 * 1024,
+        secret_handle: str | None = None,
+        secret_provider: OpenSearchSecretProvider | None = None,
+    ) -> None:
+        if type(endpoint) is not str or not endpoint.strip():
+            raise ValueError("OpenSearch endpoint must be a nonblank string")
+        try:
+            parsed = urlsplit(endpoint)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("OpenSearch endpoint is malformed") from exc
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("OpenSearch endpoint cannot contain credentials")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("OpenSearch endpoint cannot contain path, query, or fragment")
+        if parsed.scheme != "https":
+            raise ValueError("production OpenSearch requires HTTPS")
+        hostname = parsed.hostname
+        if hostname is None or hostname.endswith(".") or "*" in hostname:
+            raise ValueError("OpenSearch endpoint requires one canonical hostname")
+        try:
+            canonical_host = hostname.encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise ValueError("OpenSearch endpoint hostname is invalid") from exc
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("OpenSearch endpoint port is invalid")
+        if (
+            type(timeout_seconds) not in {int, float}
+            or not math.isfinite(float(timeout_seconds))
+            or not 0 < float(timeout_seconds) <= 60
+        ):
+            raise ValueError("OpenSearch timeout must be within 60 seconds")
+        if type(max_response_bytes) is not int or not 1 <= max_response_bytes <= 32 * 1024 * 1024:
+            raise ValueError("OpenSearch response limit is invalid")
+        if (secret_handle is None) != (secret_provider is None):
+            raise ValueError("OpenSearch secret handle and provider must be supplied together")
+        material = OpenSearchSecretMaterial(headers={})
+        if secret_handle is not None and secret_provider is not None:
+            if not secret_handle.strip():
+                raise ValueError("OpenSearch secret handle must be nonblank")
+            material = secret_provider.resolve(secret_handle)
+        if any(
+            value is not None
+            for value in (
+                material.client_certificate_path,
+                material.client_key_path,
+                material.ca_bundle_path,
+            )
+        ):
+            raise ValueError(
+                "guarded OpenSearch does not accept per-origin mTLS or CA file material"
+            )
+        authority_host = f"[{canonical_host}]" if ":" in canonical_host else canonical_host
+        authority = authority_host if port in {None, 443} else f"{authority_host}:{port}"
+        self._endpoint = f"https://{authority}"
+        self._client = guarded_http_client
+        self._timeout_seconds = float(timeout_seconds)
+        self._max_response_bytes = max_response_bytes
+        self._max_request_bytes = 64 * 1024 * 1024
+        self._auth_headers = HttpxOpenSearchTransport._validate_secret_material(material)
+
+    def request(
+        self,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, object] | None = None,
+        content: bytes | None = None,
+        content_type: str = "application/json",
+        query_params: Mapping[str, str] | None = None,
+    ) -> OpenSearchTransportResponse:
+        if method not in {"GET", "POST", "PUT", "DELETE"}:
+            raise ValueError("OpenSearch HTTP method is not allowed")
+        if (
+            type(path) is not str
+            or not path.startswith("/")
+            or "//" in path
+            or "?" in path
+            or "#" in path
+            or "\r" in path
+            or "\n" in path
+            or any(segment in {".", ".."} for segment in path.split("/"))
+        ):
+            raise ValueError("OpenSearch request path must be canonical")
+        if json_body is not None and content is not None:
+            raise ValueError("OpenSearch request must use either JSON or bytes")
+        if query_params is not None:
+            if set(query_params) == {"search_pipeline"}:
+                pipeline = query_params.get("search_pipeline")
+                if (
+                    type(pipeline) is not str
+                    or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", pipeline) is None
+                ):
+                    raise ValueError("OpenSearch search pipeline parameter is invalid")
+            elif query_params != {"conflicts": "abort"}:
+                raise ValueError("OpenSearch query parameters are not allowed")
+        encoded_content = (
+            json.dumps(json_body, ensure_ascii=False, separators=(",", ":")).encode()
+            if json_body is not None
+            else content
+        )
+        if encoded_content is not None and len(encoded_content) > self._max_request_bytes:
+            raise OpenSearchProjectionError("OpenSearch request exceeds the configured limit")
+        url = f"{self._endpoint}{path}"
+        if query_params:
+            url = f"{url}?{urlencode(tuple(sorted(query_params.items())))}"
+        try:
+            response = self._client.request(
+                method,
+                url,
+                headers={
+                    **self._auth_headers,
+                    "Content-Type": content_type,
+                    "Accept": "application/json",
+                },
+                body=encoded_content,
+                timeout_seconds=self._timeout_seconds,
+            )
+        except Exception as exc:
+            raise OpenSearchProjectionError("OpenSearch transport request failed") from exc
+        if 300 <= response.status_code < 400:
+            raise OpenSearchProjectionError("OpenSearch redirects are forbidden")
+        if len(response.body) > self._max_response_bytes:
+            raise OpenSearchProjectionError("OpenSearch response exceeds the configured limit")
+        try:
+            decoded = json.loads(response.body) if response.body else {}
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise OpenSearchProjectionError("OpenSearch returned invalid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise OpenSearchProjectionError("OpenSearch response must be a JSON object")
+        _validate_bounded_json(decoded)
+        return OpenSearchTransportResponse(status_code=response.status_code, body=decoded)
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> GuardedOpenSearchTransport:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -3115,6 +3268,7 @@ class OpenSearchHybridIndex:
 
 
 __all__ = [
+    "GuardedOpenSearchTransport",
     "HttpxOpenSearchTransport",
     "OpenSearchHybridIndex",
     "OpenSearchProjectionError",

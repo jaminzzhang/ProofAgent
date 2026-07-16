@@ -58,3 +58,9 @@ class FrozenModel(BaseModel):
     """Base model for public contracts crossing policy, audit, and runtime boundaries."""
 
     model_config = ConfigDict(frozen=True)
+
+
+class StrictFrozenModel(FrozenModel):
+    """Frozen boundary contract that rejects undeclared input fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")

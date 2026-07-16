@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { usePagination } from '../usePagination'
@@ -57,7 +57,7 @@ describe('usePagination', () => {
     const { result, rerender } = renderHook(() => usePagination({ total: 751 }), {
       wrapper: wrapper('/runs'),
     })
-    result.current.setPage(4)
+    act(() => result.current.setPage(4))
     rerender()
     expect(result.current.page).toBe(4)
   })
@@ -68,7 +68,7 @@ describe('usePagination', () => {
       { wrapper: wrapper('/runs?page=10&pageSize=25') },
     )
     expect(result.current.page).toBe(10)
-    result.current.setPageSize(100)
+    act(() => result.current.setPageSize(100))
     rerender()
     // after changing page size, page must reset to 1
     expect(result.current.page).toBe(1)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import parse
 
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.contracts import (
     ModelCallRole,
     ModelConnectionResolutionRecord,
@@ -28,7 +28,7 @@ def resolve_model_role_config(
     role_config: Any,
     *,
     role: ModelCallRole,
-    configuration_store: LocalAgentConfigurationStore | None,
+    configuration_store: ModelConnectionReader | None,
     require_runtime_credentials: bool,
 ) -> ResolvedModelConnection:
     """Resolve inline, custom, or shared model role config for provider adapters."""
@@ -54,17 +54,19 @@ def _resolve_shared_model_role_config(
     role_config: Any,
     *,
     role: ModelCallRole,
-    configuration_store: LocalAgentConfigurationStore | None,
+    configuration_store: ModelConnectionReader | None,
     require_runtime_credentials: bool,
 ) -> ResolvedModelConnection:
     if configuration_store is None:
         raise ProofAgentError(
             "PA_MODEL_CONNECTION_001",
             "Shared Model Connection resolution requires a configuration store.",
-            "Provide LocalAgentConfigurationStore when resolving shared model_source configs.",
+            "Provide a Model Asset Repository when resolving shared model_source configs.",
         )
     connection_id = getattr(role_config, "connection_id", None)
-    connection = configuration_store.get_model_connection(connection_id) if connection_id else None
+    connection = (
+        configuration_store.get_model_connection(connection_id) if connection_id else None
+    )
     if connection is None:
         raise ProofAgentError(
             "PA_MODEL_CONNECTION_001",

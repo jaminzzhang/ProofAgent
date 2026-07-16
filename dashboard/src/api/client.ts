@@ -53,7 +53,12 @@ import type {
   WorkflowStagePromptConfig,
   WorkflowTemplateDescriptor,
   WorkflowTemplatesResponse,
+  OperatorSession,
+  PermissionMappingsResponse,
+  EgressPoliciesResponse,
+  SecretHandleValidation,
 } from './types'
+import { currentCsrfToken, notifySessionExpired } from '../auth/sessionStore'
 
 const BASE = '/api'
 const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined ?? 'http://localhost:5174'
@@ -77,7 +82,13 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(url, options)
+  const headers = new Headers(options?.headers)
+  const method = (options?.method ?? 'GET').toUpperCase()
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const csrfToken = currentCsrfToken()
+    if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
+  }
+  const resp = await fetch(url, { ...options, headers, credentials: 'same-origin' })
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '')
     let detail: unknown = null
@@ -87,9 +98,71 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       detail = null
     }
+    if (resp.status === 401) notifySessionExpired()
     throw new ApiError(resp.status, resp.statusText, errText, detail)
   }
   return resp.json() as Promise<T>
+}
+
+export function fetchOperatorSession(): Promise<OperatorSession> {
+  return fetchJson<OperatorSession>(`${BASE}/auth/session`)
+}
+
+export function fetchPermissionMappings(): Promise<PermissionMappingsResponse> {
+  return fetchJson<PermissionMappingsResponse>(`${BASE}/security/permission-mappings`)
+}
+
+export function createPermissionMapping(payload: {
+  version_id: string
+  expected_revision: number
+  rules: PermissionMappingsResponse['versions'][number]['rules']
+}): Promise<PermissionMappingsResponse['versions'][number]> {
+  return fetchJson(`${BASE}/security/permission-mappings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function activatePermissionMapping(versionId: string): Promise<unknown> {
+  return fetchJson(`${BASE}/security/permission-mappings/${versionId}/activate`, {
+    method: 'POST',
+  })
+}
+
+export function fetchEgressPolicies(): Promise<EgressPoliciesResponse> {
+  return fetchJson<EgressPoliciesResponse>(`${BASE}/security/egress-policies`)
+}
+
+export function createEgressPolicy(payload: {
+  version_id: string
+  expected_revision: number
+  rules: EgressPoliciesResponse['versions'][number]['rules']
+}): Promise<EgressPoliciesResponse['versions'][number]> {
+  return fetchJson(`${BASE}/security/egress-policies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function activateEgressPolicy(versionId: string): Promise<unknown> {
+  return fetchJson(`${BASE}/security/egress-policies/${versionId}/activate`, {
+    method: 'POST',
+  })
+}
+
+export function validateSecretHandle(payload: {
+  protocol_id: string
+  handle_id: string
+  purpose: string
+  version_id?: string | null
+}): Promise<SecretHandleValidation> {
+  return fetchJson<SecretHandleValidation>(`${BASE}/security/secret-handles/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ handle: payload }),
+  })
 }
 
 export function fetchRuns(params?: {

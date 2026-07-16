@@ -455,7 +455,7 @@ def test_disposable_postgres_resolves_explicit_and_default_retrieval_profiles() 
     try:
         publication = env["service"].publish(env["request"])
         default_profile = KnowledgeRetrievalProfileRevision(
-            profile_revision_id="profile-default",
+            profile_revision_id=f"profile-default-{env['source_id']}",
             lexical_budget=100,
             dense_budget=100,
             rrf_window=50,
@@ -465,7 +465,7 @@ def test_disposable_postgres_resolves_explicit_and_default_retrieval_profiles() 
         )
         explicit_profile = default_profile.model_copy(
             update={
-                "profile_revision_id": "profile-explicit",
+                "profile_revision_id": f"profile-explicit-{env['source_id']}",
                 "reranker_revision": "reranker-explicit",
             }
         )
@@ -784,7 +784,7 @@ def test_disposable_authority_loads_exact_online_hybrid_binding() -> None:
     try:
         publication = env["service"].publish(env["request"])
         profile = KnowledgeRetrievalProfileRevision(
-            profile_revision_id="profile-online-1",
+            profile_revision_id=f"profile-online-{env['source_id']}",
             lexical_budget=10,
             dense_budget=10,
             rrf_window=10,
@@ -832,7 +832,7 @@ def test_disposable_online_loader_keeps_frozen_publication_after_source_advances
     try:
         first = env["service"].publish(env["request"])
         profile = KnowledgeRetrievalProfileRevision(
-            profile_revision_id="profile-frozen-1",
+            profile_revision_id=f"profile-frozen-{env['source_id']}",
             lexical_budget=10,
             dense_budget=10,
             rrf_window=10,

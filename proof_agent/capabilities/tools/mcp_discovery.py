@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import hashlib
 import json
+import os
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ from pydantic import Field, field_serializer, field_validator
 
 from proof_agent.contracts import ToolSource, ToolSourceLifecycleState
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.errors import ProofAgentError
 
 MCPDiscoveryTransport = Callable[["MCPToolSourceConnection"], tuple["MCPDiscoveredTool", ...]]
@@ -113,11 +115,17 @@ def discover_mcp_tools(
     *,
     env: Mapping[str, str] | None = None,
     transport: MCPDiscoveryTransport | None = None,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> MCPDiscoveryPreview:
     """Initialize an MCP Tool Source, list tools, and return a trace-safe preview."""
 
     connection = build_mcp_tool_source_connection(source, env=env)
-    selected_transport = transport or _default_mcp_discovery_transport
+    selected_transport = transport or (
+        lambda selected: _default_mcp_discovery_transport(
+            selected,
+            guarded_http_client=guarded_http_client,
+        )
+    )
     tools = tuple(_normalize_discovered_tool(tool) for tool in selected_transport(connection))
     return MCPDiscoveryPreview(
         tool_source_id=source.source_id,
@@ -377,11 +385,24 @@ def _timeout_seconds(source: ToolSource) -> float:
 
 def _default_mcp_discovery_transport(
     connection: MCPToolSourceConnection,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> tuple[MCPDiscoveredTool, ...]:
     if connection.transport == "stdio":
         return _run_sdk_discovery(connection, _discover_stdio_tools)
     if connection.transport == "http":
-        return _run_sdk_discovery(connection, _discover_http_tools)
+        if _production_mode() and guarded_http_client is None:
+            raise _mcp_discovery_error(
+                "production HTTP MCP discovery requires guarded HTTPS.",
+                "Inject the active Egress Policy guarded HTTP client.",
+            )
+        return _run_sdk_discovery(
+            connection,
+            lambda selected: _discover_http_tools(
+                selected,
+                guarded_http_client=guarded_http_client,
+            ),
+        )
     raise _mcp_discovery_error(
         f"MCP {connection.transport} discovery transport is not configured.",
         "Pass an MCPDiscoveryTransport or use a concrete MCP SDK adapter.",
@@ -431,10 +452,13 @@ async def _discover_stdio_tools(
 
 async def _discover_http_tools(
     connection: MCPToolSourceConnection,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> tuple[MCPDiscoveredTool, ...]:
     import httpx
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
+    from proof_agent.capabilities.egress.httpx_adapter import GuardedAsyncHttpxTransport
 
     if connection.endpoint is None or not connection.endpoint.strip():
         raise _mcp_discovery_error(
@@ -445,6 +469,11 @@ async def _discover_http_tools(
         headers=dict(connection.http_headers),
         timeout=connection.timeout_seconds,
         trust_env=False,
+        transport=(
+            GuardedAsyncHttpxTransport(guarded_http_client)
+            if guarded_http_client is not None
+            else None
+        ),
     ) as http_client:
         async with streamable_http_client(
             connection.endpoint,
@@ -458,6 +487,10 @@ async def _discover_http_tools(
                 await session.initialize()
                 result = await session.list_tools()
     return tuple(_tool_from_sdk(tool) for tool in result.tools)
+
+
+def _production_mode() -> bool:
+    return os.environ.get("PROOF_AGENT_MODE", "development").strip().lower() == "production"
 
 
 def _tool_from_sdk(tool: Any) -> MCPDiscoveredTool:

@@ -9,6 +9,7 @@ from pydantic import Field, field_serializer, field_validator, model_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
 from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
+from proof_agent.contracts.shared_assets import ResolvedSharedAssetVersions
 from proof_agent.contracts.workflow_stage_configuration import (
     EffectiveWorkflowStageConfiguration,
     WorkflowStageAvailabilitySet,
@@ -189,6 +190,9 @@ class PublishedAgentVersion(FrozenModel):
     workflow_stage_availability: WorkflowStageAvailabilitySet | None = None
     effective_workflow_stage_configuration: PublishedWorkflowStageConfigurationSnapshot | None = (
         None
+    )
+    resolved_shared_asset_versions: ResolvedSharedAssetVersions = Field(
+        default_factory=ResolvedSharedAssetVersions
     )
 
     @field_validator("validation_run_id")

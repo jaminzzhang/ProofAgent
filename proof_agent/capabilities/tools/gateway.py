@@ -4,7 +4,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
@@ -14,9 +16,11 @@ from proof_agent.capabilities.tools.brave_search import (
     create_brave_untrusted_web_search_handler,
 )
 from proof_agent.capabilities.tools.mcp_runtime import MCPToolCallTransport, call_mcp_tool
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import ApprovalState, ApprovalStatus
+from proof_agent.contracts.ports.shared_assets import ToolSourceReader
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts import ApprovalState, ApprovalStatus, ProductionToolEffect
 from proof_agent.control.tools.untrusted_web import sanitize_web_search_query
+from proof_agent.control.security.production_tools import require_production_mcp_source
 from proof_agent.errors import ProofAgentError
 from proof_agent.capabilities.tools.approval import create_approval_state
 from proof_agent.contracts._base import freeze_value
@@ -36,6 +40,7 @@ class ToolConfig:
     read_only: bool
     allowed_parameters: frozenset[str]
     denied_parameters: frozenset[str]
+    effect: ProductionToolEffect | None = None
     source: str = "local"
     mcp_tool_name: str | None = None
     mcp_contract_snapshot: Mapping[str, Any] = field(default_factory=dict)
@@ -62,24 +67,27 @@ class ToolGateway:
         self,
         tools: Mapping[str, ToolConfig],
         *,
-        configuration_store: LocalAgentConfigurationStore | None = None,
+        configuration_store: ToolSourceReader | None = None,
         tool_source_env: Mapping[str, str] | None = None,
         mcp_tool_transport: MCPToolCallTransport | None = None,
+        guarded_http_client: GuardedHttpClient | None = None,
     ) -> None:
         self.tools = dict(tools)
         self._configuration_store = configuration_store
         self._tool_source_env = dict(tool_source_env or {})
         self._mcp_tool_transport = mcp_tool_transport
+        self._guarded_http_client = guarded_http_client
 
     @classmethod
     def from_file(
         cls,
         path: str | Path,
         *,
-        configuration_store: LocalAgentConfigurationStore | None = None,
+        configuration_store: ToolSourceReader | None = None,
         tool_source_env: Mapping[str, str] | None = None,
         brave_search_transport: BraveSearchTransport | None = None,
         mcp_tool_transport: MCPToolCallTransport | None = None,
+        guarded_http_client: GuardedHttpClient | None = None,
     ) -> ToolGateway:
         tools_path = Path(path)
         raw = yaml.safe_load(tools_path.read_text(encoding="utf-8")) or {}
@@ -97,6 +105,7 @@ class ToolGateway:
                     configuration_store=configuration_store,
                     tool_source_env=tool_source_env,
                     brave_search_transport=brave_search_transport,
+                    guarded_http_client=guarded_http_client,
                 ),
                 tool_source_id=tool_source_id,
                 risk_level=tool["risk_level"],
@@ -104,6 +113,7 @@ class ToolGateway:
                 read_only=bool(tool.get("read_only", False)),
                 allowed_parameters=frozenset(tool.get("allowed_parameters", [])),
                 denied_parameters=frozenset(tool.get("denied_parameters", [])),
+                effect=_optional_tool_effect(tool.get("effect")),
                 source=source,
                 mcp_tool_name=_optional_string(tool.get("mcp_tool_name")),
                 mcp_contract_snapshot=_frozen_mapping(tool.get("mcp_contract_snapshot")),
@@ -123,6 +133,7 @@ class ToolGateway:
             configuration_store=configuration_store,
             tool_source_env=tool_source_env,
             mcp_tool_transport=mcp_tool_transport,
+            guarded_http_client=guarded_http_client,
         )
 
     def request_tool(
@@ -136,6 +147,7 @@ class ToolGateway:
         """Validate the request, enforce approval, and execute only if permitted."""
 
         config = self._require_tool(tool_name)
+        _validate_production_tool(config)
         self._validate_parameters(config, parameters)
         approval_status = ApprovalStatus.GRANTED
         if config.requires_approval and not approved:
@@ -230,12 +242,21 @@ class ToolGateway:
                 f"Tool Source not found: {config.tool_source_id}",
                 "Create the Tool Source in Dashboard configuration before execution.",
             )
+        if _production_mode():
+            require_production_mcp_source(source)
+            if self._guarded_http_client is None:
+                raise ProofAgentError(
+                    "PA_TOOL_001",
+                    "production MCP execution requires the active Egress Policy client.",
+                    "Inject the guarded HTTPS client before resolving the frozen tool scope.",
+                )
         raw_result = call_mcp_tool(
             source,
             mcp_tool_name=config.mcp_tool_name,
             arguments=parameters,
             env=self._tool_source_env,
             transport=self._mcp_tool_transport,
+            guarded_http_client=self._guarded_http_client,
         )
         _validate_mcp_result_schema(config, raw_result)
         summary = _mcp_summary_projection(config, raw_result)
@@ -312,6 +333,19 @@ def _optional_string(raw: Any) -> str | None:
     return str(raw)
 
 
+def _optional_tool_effect(raw: Any) -> ProductionToolEffect | None:
+    if raw is None:
+        return None
+    try:
+        return ProductionToolEffect(str(raw))
+    except ValueError as exc:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "tool effect is unknown.",
+            "Declare one supported effect; production permits only effect: read.",
+        ) from exc
+
+
 def _frozen_mapping(raw: Any) -> Mapping[str, Any]:
     if raw is None:
         return {}
@@ -337,6 +371,7 @@ def _string_tuple(raw: Any, *, field_name: str) -> tuple[str, ...]:
 
 
 def _validate_tool_contract(config: ToolConfig) -> None:
+    _validate_production_tool(config)
     if config.source != "mcp":
         return
     if config.mcp_tool_name is None:
@@ -495,9 +530,10 @@ def _built_in_handler_from_tool_source(
     tool_name: str,
     configured_source: str,
     tool_source_id: str | None,
-    configuration_store: LocalAgentConfigurationStore | None,
+    configuration_store: ToolSourceReader | None,
     tool_source_env: Mapping[str, str] | None,
     brave_search_transport: BraveSearchTransport | None,
+    guarded_http_client: GuardedHttpClient | None,
 ) -> ToolCallable | None:
     if tool_source_id is None:
         return None
@@ -505,7 +541,7 @@ def _built_in_handler_from_tool_source(
         raise ProofAgentError(
             "PA_TOOL_001",
             f"tool_source_id requires a configuration store: {tool_source_id}",
-            "Run with a LocalAgentConfigurationStore containing the Tool Source.",
+            "Run with a Tool Asset Repository containing the Tool Source.",
         )
     source = configuration_store.get_tool_source(tool_source_id)
     if source is None:
@@ -520,11 +556,14 @@ def _built_in_handler_from_tool_source(
             "MCP tools require an MCP Tool Source.",
             "Bind source: mcp tools only to Tool Sources with provider: mcp.",
         )
+    if _production_mode():
+        require_production_mcp_source(source)
     if tool_name == "untrusted_web_search" and source.provider == "brave_search":
         return create_brave_untrusted_web_search_handler(
             source,
             env=tool_source_env or {},
             transport=brave_search_transport,
+            guarded_http_client=guarded_http_client,
         )
     if source.provider == "mcp":
         return None
@@ -556,3 +595,43 @@ def _prepare_parameters_for_execution(
         "sanitization_applied": context.sanitization_applied,
         "sanitization_categories": context.sanitization_categories,
     }
+
+
+def _validate_production_tool(config: ToolConfig) -> None:
+    if not _production_mode():
+        return
+    if config.effect is not ProductionToolEffect.READ:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "production tools require explicit effect: read.",
+            "Declare effect: read or remove the tool from the production Agent Version.",
+        )
+    if not config.read_only or config.requires_approval:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "production supports read-only tools without workflow approval.",
+            "Set read_only: true and requires_approval: false.",
+        )
+    if config.tool_source_id is None:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "production tools require a managed Tool Source binding.",
+            "Bind the frozen Tool Contract to a validated Tool Source.",
+        )
+    if config.source != "mcp" or config.built_in_handler is not None:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "production tools require a managed MCP HTTPS source and forbid local handlers.",
+            "Bind the frozen Tool Contract to a validated MCP HTTPS Tool Source.",
+        )
+    digest = config.mcp_contract_snapshot.get("digest")
+    if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise ProofAgentError(
+            "PA_TOOL_001",
+            "production Tool Contract requires an immutable SHA-256 digest.",
+            "Re-import and validate the MCP Tool Contract before publication.",
+        )
+
+
+def _production_mode() -> bool:
+    return os.environ.get("PROOF_AGENT_MODE", "development").strip().lower() == "production"

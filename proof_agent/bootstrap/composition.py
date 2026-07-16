@@ -19,7 +19,7 @@ from proof_agent.capabilities.react import (
 )
 from proof_agent.capabilities.review import HarnessReviewSubagent, resolve_review_subagent
 from proof_agent.capabilities.tools.gateway import ToolGateway
-from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 from proof_agent.contracts import (
     AgentManifest,
     BusinessFlowSkillPackDefinition,
@@ -76,6 +76,9 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorkerFactory,
     HybridPrivateParserBuildConfig,
 )
+from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import SecretProvider
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -96,6 +99,7 @@ class HybridKnowledgeModelSettings:
     parser_revision: str
     model_digests: tuple[str, ...]
     parser_configuration_sha256: str
+    require_insurance_metadata_drafts: bool = False
     host_policy: PrivateHostPolicy = field(init=False, repr=False)
     network_policy: PrivateNetworkPolicy = field(init=False, repr=False)
     build_config: HybridPrivateParserBuildConfig = field(init=False, repr=False)
@@ -252,6 +256,7 @@ def compose_hybrid_knowledge(
             transport=resolved_transports.paddle,
             scheduler=scheduler,
         ),
+        require_insurance_metadata_drafts=settings.require_insurance_metadata_drafts,
     )
     return HybridKnowledgeComposition(
         scheduler=scheduler,
@@ -272,6 +277,8 @@ def compose_hybrid_knowledge(
 
 def compose_hybrid_knowledge_from_env(
     environ: Mapping[str, str] | None = None,
+    *,
+    guarded_http_client: GuardedHttpsClient | None = None,
 ) -> HybridKnowledgeComposition | None:
     """Activate Hybrid production composition only through an explicit flag."""
 
@@ -324,15 +331,69 @@ def compose_hybrid_knowledge_from_env(
             "PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256 is required when private Knowledge models "
             "are enabled"
         )
-    return compose_hybrid_knowledge(
-        settings=HybridKnowledgeModelSettings(
+    settings = HybridKnowledgeModelSettings(
             **values,
             allowed_hosts=allowed_hosts,
             allowed_cidrs=allowed_cidrs,
             parser_revision=parser_revision,
             model_digests=model_digests,
-            parser_configuration_sha256=parser_configuration_sha256,
+        parser_configuration_sha256=parser_configuration_sha256,
+        require_insurance_metadata_drafts=(
+            source.get("PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes"}
+        ),
         )
+    production_mode = source.get("PROOF_AGENT_MODE", "development").strip() == "production"
+    if production_mode and guarded_http_client is None:
+        raise ValueError(
+            "production Hybrid Knowledge requires the active Egress Policy guarded client"
+        )
+    return compose_hybrid_knowledge(
+        settings=settings,
+        transports=(
+            _guarded_hybrid_transports(settings, guarded_http_client)
+            if guarded_http_client is not None
+            else None
+        ),
+    )
+
+
+def _guarded_hybrid_transports(
+    settings: HybridKnowledgeModelSettings,
+    client: GuardedHttpsClient,
+) -> HybridKnowledgeTransportBundle:
+    from proof_agent.capabilities.knowledge.hybrid.guarded_transports import (
+        GuardedEmbeddingHttpTransport,
+        GuardedParserHttpTransport,
+        GuardedRerankerHttpTransport,
+        GuardedSchedulerTransport,
+    )
+
+    strict_client = client.restricted(
+        max_redirects=0,
+        max_attempts_per_hop=1,
+        max_response_bytes=64 * 1024 * 1024,
+    )
+    return HybridKnowledgeTransportBundle(
+        scheduler=GuardedSchedulerTransport(strict_client),
+        docling=GuardedParserHttpTransport(
+            strict_client,
+            endpoint=settings.docling_endpoint,
+        ),
+        paddle=GuardedParserHttpTransport(
+            strict_client,
+            endpoint=settings.paddle_endpoint,
+        ),
+        embedding=GuardedEmbeddingHttpTransport(
+            strict_client,
+            endpoint=settings.embedding_endpoint,
+        ),
+        reranker=GuardedRerankerHttpTransport(
+            strict_client,
+            endpoint=settings.reranker_endpoint,
+        ),
     )
 
 
@@ -411,6 +472,8 @@ class HarnessInvocation:
         default_factory=InstitutionAuthorizationContext
     )
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None
+    model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider
+    cancellation_check: Callable[[], None] = lambda: None
 
     def create_memory(self) -> SessionMemory:
         """Create per-run memory with the configured sensitivity boundary."""
@@ -424,15 +487,22 @@ def compose_harness_invocation(
     manifest: AgentManifest | None = None,
     knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
-    configuration_store: LocalAgentConfigurationStore | None = None,
+    configuration_store: RuntimeSharedAssetReader | None = None,
     require_runtime_credentials: bool = True,
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
     institution_authorization: InstitutionAuthorizationContext | None = None,
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
     hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
+    guarded_http_client: GuardedHttpClient | None = None,
+    secret_provider: SecretProvider | None = None,
+    cancellation_check: Callable[[], None] | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
 
+    model_provider_resolver = _model_provider_resolver(
+        guarded_http_client=guarded_http_client,
+        secret_provider=secret_provider,
+    )
     manifest_path = Path(agent_yaml).resolve()
     resolved_manifest = manifest or load_agent_manifest(manifest_path)
     template = resolve_workflow_template(resolved_manifest.workflow.template)
@@ -479,7 +549,9 @@ def compose_harness_invocation(
                 provider=resolved_planner_model.model_config.provider,
                 name=resolved_planner_model.model_config.name,
                 params=resolved_planner_model.model_config.params,
-            )
+            ),
+            guarded_http_client=guarded_http_client,
+            secret_provider=secret_provider,
         )
         resolved_intent_model = resolve_model_role_config(
             resolved_manifest.react.planner,
@@ -495,6 +567,8 @@ def compose_harness_invocation(
                 params=resolved_intent_model.model_config.params,
             ),
             max_queries=resolved_manifest.retrieval.max_queries,
+            guarded_http_client=guarded_http_client,
+            secret_provider=secret_provider,
         )
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
@@ -511,7 +585,9 @@ def compose_harness_invocation(
                 name=resolved_review_model.model_config.name,
                 fail_closed=resolved_manifest.review.subagent.fail_closed,
                 params=resolved_review_model.model_config.params,
-            )
+            ),
+            guarded_http_client=guarded_http_client,
+            secret_provider=secret_provider,
         )
     resolved_bindings = resolved_knowledge_bindings
     if resolved_bindings is None:
@@ -537,10 +613,11 @@ def compose_harness_invocation(
             ),
         ),
         resolved_knowledge_bindings=resolved_bindings,
-        model_provider=resolve_provider(resolved_answer_model.model_config),
+        model_provider=model_provider_resolver(resolved_answer_model.model_config),
         tool_gateway=_tool_gateway_for_manifest(
             resolved_manifest,
             configuration_store=configuration_store,
+            guarded_http_client=guarded_http_client,
         ),
         intent_resolver=intent_resolver,
         react_planner=react_planner,
@@ -556,13 +633,30 @@ def compose_harness_invocation(
         ),
         institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
         governed_hybrid_request_factory=governed_hybrid_request_factory,
+        model_resolver=model_provider_resolver,
+        cancellation_check=cancellation_check or (lambda: None),
+    )
+
+
+def _model_provider_resolver(
+    *,
+    guarded_http_client: GuardedHttpClient | None,
+    secret_provider: SecretProvider | None,
+) -> Callable[[ModelConfig], ModelProvider]:
+    if guarded_http_client is None and secret_provider is None:
+        return resolve_provider
+    return lambda config: resolve_provider(
+        config,
+        guarded_http_client=guarded_http_client,
+        secret_provider=secret_provider,
     )
 
 
 def _tool_gateway_for_manifest(
     manifest: AgentManifest,
     *,
-    configuration_store: LocalAgentConfigurationStore | None,
+    configuration_store: RuntimeSharedAssetReader | None,
+    guarded_http_client: GuardedHttpClient | None = None,
 ) -> ToolGateway:
     tools = manifest.capabilities.tools
     if not tools.enabled:
@@ -573,4 +667,5 @@ def _tool_gateway_for_manifest(
         tools.file,
         configuration_store=configuration_store,
         tool_source_env=os.environ,
+        guarded_http_client=guarded_http_client,
     )

@@ -1,10 +1,18 @@
 from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.errors import ProofAgentError
+from proof_agent.capabilities.models.openai_compatible import OpenAICompatibleModelProvider
 from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.capabilities.models.registry import PROVIDER_MAP
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import SecretProvider
 
 
-def resolve_provider(model_config: ModelConfig) -> ModelProvider:
+def resolve_provider(
+    model_config: ModelConfig,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
+    secret_provider: SecretProvider | None = None,
+) -> ModelProvider:
     provider = model_config.provider
     if provider is None:
         raise ProofAgentError(
@@ -18,6 +26,12 @@ def resolve_provider(model_config: ModelConfig) -> ModelProvider:
             "PA_MODEL_001",
             f"unsupported model provider: {provider}",
             f"Supported providers: {', '.join(sorted(PROVIDER_MAP))}.",
+        )
+    if provider in {"openai", "openai_compatible", "deepseek"}:
+        return OpenAICompatibleModelProvider.from_config(
+            model_config,
+            guarded_http_client=guarded_http_client,
+            secret_provider=secret_provider,
         )
     return provider_cls.from_config(model_config)
 

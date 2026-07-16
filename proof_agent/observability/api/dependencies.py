@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from proof_agent.observability.api.operator_identity import (
     LocalOperatorIdentityProvider,
@@ -42,6 +42,12 @@ def get_production_sample_curation_store(request: Request) -> ProductionSampleCu
 def get_operator_identity(request: Request) -> OperatorIdentityContext:
     """Resolve the current operator identity for internal command endpoints."""
 
+    authenticated = getattr(request.state, "operator_identity", None)
+    if authenticated is not None:
+        return cast(OperatorIdentityContext, authenticated)
+    mode = getattr(request.app.state, "proof_agent_mode", "development")
+    if mode == "production":
+        raise HTTPException(status_code=401, detail="authentication_required")
     provider = getattr(request.app.state, "operator_identity_provider", None)
     if provider is None:
         provider = LocalOperatorIdentityProvider()

@@ -1,0 +1,18 @@
+{
+  "requests": [
+    {
+      "contract_version": "proofagent.run-execution.v1",
+      "run_id": "019ba001-1111-7000-8000-000000000010",
+      "operator_subject": "operator-old",
+      "idempotency_key": "old-api-1",
+      "run_purpose": "production",
+      "agent_id": "agent_management_insurance_specialist",
+      "agent_version_id": "019ba001-1111-7000-8000-000000000001",
+      "question": "old API request",
+      "conversation_id": null,
+      "permission_mapping_version_id": "019ba001-1111-7000-8000-000000000099",
+      "permission_epoch": 7,
+      "submitted_at": "2026-07-15T00:00:00Z"
+    }
+  ]
+}

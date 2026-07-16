@@ -7,6 +7,8 @@ from typing import AbstractSet, Any, Protocol
 from pydantic import BaseModel, Field
 
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.capabilities.models.normalization import (
     ModelOutputNormalizationError,
     parse_model_contract,
@@ -783,7 +785,28 @@ def _deterministic_query(question: str) -> str:
     return question
 
 
-def resolve_react_planner(config: ReActPlannerConfig) -> ReActPlanner:
+def resolve_react_planner(
+    config: ReActPlannerConfig,
+    *,
+    guarded_http_client: GuardedHttpClient | None = None,
+    secret_provider: SecretProvider | None = None,
+) -> ReActPlanner:
     if config.provider == "deterministic":
         return DeterministicReActPlanner()
-    return LLMReActPlanner(config=config)
+    model_config = ModelConfig(
+        provider=config.provider,
+        name=config.name,
+        params=config.params,
+    )
+    return LLMReActPlanner(
+        config=config,
+        model_provider=(
+            resolve_provider(model_config)
+            if guarded_http_client is None and secret_provider is None
+            else resolve_provider(
+                model_config,
+                guarded_http_client=guarded_http_client,
+                secret_provider=secret_provider,
+            )
+        ),
+    )

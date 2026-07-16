@@ -15,7 +15,7 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from llama_index.core import Document, StorageContext, TreeIndex, load_index_from_storage
 from llama_index.core.schema import NodeWithScore
@@ -39,10 +39,8 @@ from proof_agent.capabilities.models.llama_index_bridge import ProofAgentLLM
 from proof_agent.capabilities.models.protocol import ModelProvider
 from proof_agent.contracts import EvidenceChunk, EvidenceStatus, ModelCallRole
 from proof_agent.contracts.manifest import KnowledgeConfig, ModelConfig
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.errors import ProofAgentError
-
-if TYPE_CHECKING:
-    from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 
 logger = logging.getLogger(__name__)
 UNSCORED_SELECTED_NODE_ADMISSION_SCORE = 1.0
@@ -121,7 +119,7 @@ class LocalIndexProvider(KnowledgeProvider):
         cls,
         config: KnowledgeConfig,
         *,
-        configuration_store: LocalAgentConfigurationStore | None = None,
+        configuration_store: ModelConnectionReader | None = None,
     ) -> LocalIndexProvider:
         """Create provider from KnowledgeConfig.
 
