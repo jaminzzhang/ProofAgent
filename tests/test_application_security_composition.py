@@ -7,12 +7,35 @@ from fastapi.testclient import TestClient
 
 from proof_agent.observability.api.app import create_app
 from proof_agent.contracts import Permission, RecoveryOidcGroupMapping
+from proof_agent.contracts.health import ProductionDeploymentIdentity
+from proof_agent.contracts.run_execution import RoleActivationState
 from proof_agent.delivery.production_status import ProductionReadinessProbe
 
 
 class NeverCalledSessionService:
     def resolve_session(self, cookie_token: str, *, now: object) -> object:
         raise AssertionError((cookie_token, now))
+
+
+def _readiness_probe(
+    checks: dict[str, object] | None = None,
+) -> ProductionReadinessProbe:
+    identity = ProductionDeploymentIdentity(
+        release_id="proofagent-2026.07.25-rc1",
+        image_digest="a" * 64,
+        deployment_slot="green",
+        role="api",
+        activation_state=RoleActivationState.STANDBY,
+        schema_revision="0010_hybrid_knowledge_workflow",
+        schema_compatible_from="0010_hybrid_knowledge_workflow",
+        schema_compatible_through="0010_hybrid_knowledge_workflow",
+        deployment_compatibility_manifest_sha256="b" * 64,
+    )
+    return ProductionReadinessProbe(
+        identity=identity,
+        checks=checks  # type: ignore[arg-type]
+        or {"postgresql": lambda: True, "s3": lambda: True},
+    )
 
 
 def _production_app(tmp_path: Path):
@@ -36,9 +59,7 @@ def _production_app(tmp_path: Path):
         conversation_repository=object(),  # type: ignore[arg-type]
         published_agent_registry=object(),
         guarded_http_client=object(),  # type: ignore[arg-type]
-        production_readiness_probe=ProductionReadinessProbe(
-            {"postgresql": lambda: True, "s3": lambda: True}
-        ),
+        production_readiness_probe=_readiness_probe(),
         production_hybrid_intake_service=object(),
         production_knowledge_repository=object(),
         production_hybrid_ingestion_repository=object(),
@@ -86,6 +107,8 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
     client = TestClient(application, base_url="https://proof-agent.example.com")
     assert client.get("/livez").json() == {"status": "alive"}
     assert client.get("/readyz").json()["status"] == "ready"
+    assert not any(route.path == "/api/docs" for route in application.routes)
+    assert not any(route.path == "/api/openapi.json" for route in application.routes)
     assert client.get("/api/runs").status_code == 401
 
 
@@ -95,7 +118,7 @@ def test_production_readiness_is_sanitized_and_fails_closed(tmp_path: Path) -> N
     def fail() -> bool:
         raise RuntimeError("postgresql://secret@database/internal")
 
-    application.state.production_readiness_probe = ProductionReadinessProbe(
+    application.state.production_readiness_probe = _readiness_probe(
         {"postgresql": fail, "s3": lambda: True}
     )
     # The route closes over the factory argument, so exercise the bounded projection directly.
@@ -104,5 +127,16 @@ def test_production_readiness_is_sanitized_and_fails_closed(tmp_path: Path) -> N
     assert result.ready is False
     assert result.public_payload() == {
         "status": "not_ready",
+        "release_id": "proofagent-2026.07.25-rc1",
+        "image_digest": "a" * 64,
+        "deployment_slot": "green",
+        "role": "api",
+        "activation_state": "STANDBY",
+        "schema": {
+            "revision": "0010_hybrid_knowledge_workflow",
+            "compatible_from": "0010_hybrid_knowledge_workflow",
+            "compatible_through": "0010_hybrid_knowledge_workflow",
+        },
+        "deployment_compatibility_manifest_sha256": "b" * 64,
         "components": {"postgresql": "unavailable", "s3": "ready"},
     }

@@ -1,0 +1,178 @@
+name: proofagent-${SLOT:?set blue or green}
+
+x-product-service: &product-service
+  image: "${PROOF_AGENT_IMAGE:?set an immutable name@sha256 image reference}"
+  user: "10001:10001"
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
+  restart: unless-stopped
+  init: true
+  env_file:
+    - "${SLOT_ENV_FILE:?set the candidate slot env file}"
+  configs:
+    - source: vault_compatibility
+      target: /run/configs/vault-compatibility.json
+      mode: 0444
+    - source: deployment_compatibility
+      target: /run/configs/deployment-compatibility-manifest.json
+      mode: 0444
+  secrets:
+    - source: vault_agent_token
+      target: vault-agent-token
+      mode: 0400
+  tmpfs:
+    - /tmp:size=64m,mode=1770,uid=10001,gid=10001
+    - /var/lib/proofagent:size=256m,mode=0700,uid=10001,gid=10001
+  networks:
+    slot: {}
+
+services:
+  migrate:
+    <<: *product-service
+    command:
+      - proof-agent
+      - database
+      - upgrade
+      - --locked
+      - --expand-only
+      - --target
+      - "${PROOF_AGENT_RELEASE_SCHEMA:?set the exact candidate schema revision}"
+    profiles: ["migration"]
+    restart: "no"
+    cpus: "1.0"
+    mem_limit: 512m
+
+  api:
+    <<: *product-service
+    command:
+      - proof-agent
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-seed-example-agent
+    expose: ["8000"]
+    cpus: "2.0"
+    mem_limit: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      slot:
+        aliases: ["${SLOT:?set blue or green}-api"]
+
+  run-executor:
+    <<: *product-service
+    command:
+      - proof-agent
+      - run-executor
+      - --concurrency
+      - "5"
+      - --health-host
+      - 127.0.0.1
+      - --health-port
+      - "8001"
+      - --slot
+      - "${SLOT_NUMBER:?set 1 for blue or 2 for green}"
+    cpus: "4.0"
+    mem_limit: 6g
+    stop_grace_period: 150s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  knowledge-worker:
+    <<: *product-service
+    command:
+      - proof-agent
+      - knowledge-worker
+      - --poll-interval
+      - "5"
+      - --health-host
+      - 127.0.0.1
+      - --health-port
+      - "8002"
+      - --slot
+      - "${SLOT_NUMBER:?set 1 for blue or 2 for green}"
+    cpus: "4.0"
+    mem_limit: 8g
+    stop_grace_period: 150s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/readyz', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  dashboard:
+    <<: *product-service
+    command:
+      - proof-agent
+      - serve-static
+      - --surface
+      - dashboard
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    expose: ["8080"]
+    cpus: "0.5"
+    mem_limit: 256m
+    networks:
+      slot:
+        aliases: ["${SLOT:?set blue or green}-dashboard"]
+
+  operator-chat:
+    <<: *product-service
+    command:
+      - proof-agent
+      - serve-static
+      - --surface
+      - operator-chat
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    expose: ["8080"]
+    cpus: "0.5"
+    mem_limit: 256m
+    networks:
+      slot:
+        aliases: ["${SLOT:?set blue or green}-operator-chat"]
+
+networks:
+  slot:
+    external: true
+    name: "proofagent-${SLOT:?set blue or green}"
+
+configs:
+  vault_compatibility:
+    file: "${VAULT_COMPATIBILITY_FILE:?set exact Vault compatibility input}"
+  deployment_compatibility:
+    file: "${DEPLOYMENT_COMPATIBILITY_FILE:?set exact deployment compatibility manifest}"
+
+secrets:
+  vault_agent_token:
+    external: true
+    name: "${VAULT_AGENT_TOKEN_SECRET:?set external Vault agent token secret}"

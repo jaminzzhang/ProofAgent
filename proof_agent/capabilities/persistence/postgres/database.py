@@ -15,6 +15,21 @@ from sqlalchemy.exc import DBAPIError
 
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"PROOFAGE", byteorder="big", signed=True)
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
+EXPAND_ONLY_REVISIONS: Final = frozenset(
+    {
+        "0001_foundation",
+        "0002_hybrid_knowledge_authority",
+        "0003_identity_security",
+        "0004_oidc_sessions",
+        "0005_egress_policy",
+        "0006_artifact_authority",
+        "0007_run_queue_executor",
+        "0008_run_receipt_outcome",
+        "0009_hybrid_ingestion_jobs",
+        "0010_hybrid_knowledge_workflow",
+        "0011_worker_role_leases",
+    }
+)
 
 
 class DatabaseConfigurationError(ValueError):
@@ -31,6 +46,10 @@ class DatabaseSchemaTooNewError(RuntimeError):
 
 class MigrationLockUnavailableError(RuntimeError):
     """Another process owns the global Proof Agent migration lock."""
+
+
+class UnsafeMigrationError(RuntimeError):
+    """The requested migration path is not declared expand-only."""
 
 
 @dataclass(frozen=True)
@@ -104,13 +123,27 @@ def check_database(engine_or_dsn: Engine | str) -> DatabaseCheckResult:
             engine.dispose()
 
 
-def upgrade_database(dsn: str, *, lock_timeout_seconds: float = 30.0) -> str:
+def upgrade_database(
+    dsn: str,
+    *,
+    lock_timeout_seconds: float = 30.0,
+    target_revision: str | None = None,
+    expand_only: bool = False,
+) -> str:
     """Run locked expand-only migrations; application startup never calls this function."""
 
     if lock_timeout_seconds <= 0:
         raise ValueError("lock_timeout_seconds must be positive")
+    target = target_revision or head_revision()
+    if target != head_revision():
+        raise UnsafeMigrationError(
+            "migration target must equal the schema head packaged in this image"
+        )
     engine = create_postgres_engine(dsn)
     try:
+        installed_revision = current_revision(engine)
+        if expand_only:
+            _require_expand_only_path(installed_revision, target)
         with engine.connect() as connection, connection.begin():
             connection.execute(
                 text("SELECT set_config('lock_timeout', :timeout, true)"),
@@ -129,13 +162,31 @@ def upgrade_database(dsn: str, *, lock_timeout_seconds: float = 30.0) -> str:
                 raise
             config = _alembic_config()
             config.attributes["connection"] = connection
-            command.upgrade(config, "head")
+            command.upgrade(config, target)
         revision = current_revision(engine)
         if revision is None:
             raise RuntimeError("migration completed without an Alembic revision")
         return revision
     finally:
         engine.dispose()
+
+
+def _require_expand_only_path(current: str | None, target: str) -> None:
+    scripts = ScriptDirectory.from_config(_alembic_config())
+    try:
+        revisions = tuple(scripts.iterate_revisions(target, current))
+    except CommandError as exc:
+        raise UnsafeMigrationError("migration path is not known to this image") from exc
+    unsafe = tuple(
+        revision.revision
+        for revision in revisions
+        if revision.revision not in EXPAND_ONLY_REVISIONS
+    )
+    if unsafe:
+        raise UnsafeMigrationError(
+            "migration path contains a revision not declared expand-only: "
+            + ", ".join(unsafe)
+        )
 
 
 def _resolve_engine(engine_or_dsn: Engine | str) -> tuple[Engine, bool]:

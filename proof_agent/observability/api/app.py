@@ -166,8 +166,8 @@ def create_app(
     application = FastAPI(
         title="Proof Agent Dashboard API",
         version="0.1.0",
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        docs_url=None if selected_mode == "production" else "/api/docs",
+        openapi_url=None if selected_mode == "production" else "/api/openapi.json",
     )
 
     application.state.proof_agent_mode = selected_mode

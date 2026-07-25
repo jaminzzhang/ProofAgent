@@ -1,0 +1,49 @@
+name: proofagent-gateway
+
+services:
+  gateway:
+    image: "${GATEWAY_IMAGE:?set immutable gateway image reference with @sha256: digest}"
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    cpus: "1.0"
+    mem_limit: 512m
+    restart: unless-stopped
+    init: true
+    ports: ["443:8443"]
+    tmpfs:
+      - /tmp:size=64m,mode=1770,uid=101,gid=101
+      - /var/cache/nginx:size=64m,mode=0700,uid=101,gid=101
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # Directory bind is required: an atomic host-side rename must become
+      # visible inside the container. A single-file bind pins the old inode.
+      - ./:/etc/nginx/proofagent:ro
+    secrets:
+      - source: tls_certificate
+        target: tls.crt
+        mode: 0444
+      - source: tls_private_key
+        target: tls.key
+        mode: 0400
+    networks: ["edge", "blue", "green"]
+
+networks:
+  edge:
+    name: proofagent-edge
+  blue:
+    external: true
+    name: proofagent-blue
+  green:
+    external: true
+    name: proofagent-green
+
+secrets:
+  tls_certificate:
+    external: true
+    name: "${TLS_CERTIFICATE_SECRET:?set external TLS certificate secret}"
+  tls_private_key:
+    external: true
+    name: "${TLS_PRIVATE_KEY_SECRET:?set external TLS private key secret}"

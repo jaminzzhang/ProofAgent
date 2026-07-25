@@ -74,6 +74,7 @@ The gateway is local-only at `http://127.0.0.1:18080`. It does not create a publ
 - Workflow stage prompts are Business Context Addenda, not control instructions.
 - Business Flow Skill Packs may narrow routing; they never grant tool or data authority.
 - Memory is context, never Accepted Evidence.
+- Runtime Case Memory is disabled for the initial private pilot; do not enable it in the production Agent manifest without a separately approved, candidate-bound memory release slice.
 - Model output is untrusted until deterministic validators admit it.
 - Trace stores safe summaries, never raw chain-of-thought, credentials or unrestricted payloads.
 
@@ -87,14 +88,19 @@ Do not execute arbitrary scripts or commands in API, Executor, Knowledge Worker 
 
 ## 6. Production adapter boundary
 
-S0 uses local development stores. Do not describe them as production-safe. Production implementation must add:
+S0 uses local development stores. Do not describe them as production-safe. The production code now includes:
 
 - PostgreSQL repositories and migrations;
 - OIDC-only seven-day sessions and permission mapping;
 - CSRF, secret handles and default-deny egress;
 - S3-compatible immutable artifacts and verified materialization;
 - bounded PostgreSQL queue, same-image Run Executor and coarse SSE progress;
-- hardened Compose/Blue-Green deployment and recovery procedures.
+- PostgreSQL conversation context; runtime Case Memory remains deliberately disabled for the initial pilot;
+- strict Deployment Compatibility Manifest validation;
+- a non-editable multi-stage image definition, immutable static server, stable Gateway and hardened Blue/Green slot definitions;
+- candidate identity and sanitized dependency status in `/readyz`.
+
+The definitions are not a completed release. PostgreSQL schema, OIDC discovery/JWKS, Secret Provider and recent S3 write-read API probes plus a locked expand-only migration job are implemented. Worker roles use PostgreSQL activation epochs, renewable ownership leases, explicit drain/release, claim fencing and loopback readiness endpoints; `STANDBY`/`DRAINING` do not claim new work. Candidate image build and scan, Blue/Green controller choreography, recovery exercises, Release Registry/download, telemetry, alerts, runbooks and all candidate-bound Gates remain required.
 
 S3-first finalization intentionally accepts losing uncommitted partial progress: write and verify S3 objects/manifest first, then make them visible in one PostgreSQL transaction.
 

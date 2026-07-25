@@ -53,6 +53,9 @@ from proof_agent.capabilities.persistence.postgres.hybrid_ingestion_repository i
 from proof_agent.capabilities.persistence.postgres.metadata_review_repository import (
     PostgresInsuranceMetadataReviewRepository,
 )
+from proof_agent.capabilities.persistence.postgres.worker_role_repository import (
+    PostgresWorkerRoleRepository,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class PostgresPersistenceBundle:
     artifacts: PostgresArtifactReferenceRepository
     hybrid_ingestion: PostgresHybridIngestionRepository
     metadata_reviews: PostgresInsuranceMetadataReviewRepository
+    worker_roles: PostgresWorkerRoleRepository
 
     @classmethod
     def create(cls, dsn: str) -> "PostgresPersistenceBundle":
@@ -99,6 +103,7 @@ class PostgresPersistenceBundle:
             artifacts=PostgresArtifactReferenceRepository(engine),
             hybrid_ingestion=PostgresHybridIngestionRepository(engine),
             metadata_reviews=PostgresInsuranceMetadataReviewRepository(engine),
+            worker_roles=PostgresWorkerRoleRepository(engine),
         )
 
     def configuration_uow(self) -> PostgresConfigurationUnitOfWork:

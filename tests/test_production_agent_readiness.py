@@ -107,7 +107,12 @@ def _binding() -> ResolvedHybridKnowledgeBinding:
     )
 
 
-def _write_manifest(tmp_path: Path, *, answer_provider: str = "openai_compatible") -> Path:
+def _write_manifest(
+    tmp_path: Path,
+    *,
+    answer_provider: str = "openai_compatible",
+    memory_enabled: bool = False,
+) -> Path:
     fixture = Path(
         "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
     )
@@ -157,7 +162,24 @@ def _write_manifest(tmp_path: Path, *, answer_provider: str = "openai_compatible
             },
         },
     }
-    raw["capabilities"]["memory"] = {"enabled": False}
+    raw["capabilities"]["memory"] = (
+        {
+            "enabled": True,
+            "provider": "local",
+            "scopes": {
+                "case": {
+                    "enabled": True,
+                    "retention_days": 30,
+                    "max_records": 5,
+                    "allow_restricted": False,
+                },
+                "user": {"enabled": False},
+                "shared": {"enabled": False},
+            },
+        }
+        if memory_enabled
+        else {"enabled": False}
+    )
     package = tmp_path / "agent"
     package.mkdir()
     manifest_path = package / "agent.yaml"
@@ -307,6 +329,26 @@ def test_rejects_deterministic_answer_model(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path, answer_provider="deterministic")
 
     with pytest.raises(ProductionAgentValidationError, match="real model"):
+        validate_production_agent_candidate(
+            agent=agent,
+            version=version,
+            secret_provider=Secrets(),
+        )
+
+
+def test_rejects_runtime_memory_for_initial_private_pilot(tmp_path: Path) -> None:
+    manifest_path = _write_manifest(tmp_path, memory_enabled=True)
+    bundle = build_agent_package_contract_bundle(manifest_path)
+    candidate_root = tmp_path / "candidate"
+    candidate_root.mkdir()
+    agent, version = _candidate(candidate_root)
+    agent = replace(agent, manifest_path=manifest_path)
+    version = version.model_copy(update={"contract_bundle": bundle})
+
+    with pytest.raises(
+        ProductionAgentValidationError,
+        match="cannot enable non-authoritative runtime memory",
+    ):
         validate_production_agent_candidate(
             agent=agent,
             version=version,

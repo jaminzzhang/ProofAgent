@@ -191,6 +191,19 @@ run_executor_activations = sa.Table(
     sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
 )
 
+production_worker_role_activations = sa.Table(
+    "production_worker_role_activations",
+    metadata,
+    sa.Column("role", sa.Text(), primary_key=True),
+    sa.Column("slot", sa.SmallInteger(), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("activation_epoch", sa.BigInteger(), nullable=False),
+    sa.Column("owner_id", sa.Text()),
+    sa.Column("heartbeat_at", UTC_TIMESTAMP),
+    sa.Column("lease_expires_at", UTC_TIMESTAMP),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+)
+
 run_operator_fairness = sa.Table(
     "run_operator_fairness",
     metadata,

@@ -880,6 +880,58 @@ def test_parser_cannot_commit_after_lease_expires_during_call(tmp_path) -> None:
     assert repository.get_build_result("job_1") is None
 
 
+def test_worker_role_guard_prevents_claim_and_cancels_inflight_build(tmp_path) -> None:
+    original = b"%PDF-1.7\n"
+    request = _build_request(original)
+    lifecycle = FakeLifecycle(request)
+    role_owned = [False]
+    worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "artifacts"),
+        pipeline=FakePipeline(),
+        worker_id="worker_1",
+        lease_seconds=60,
+        heartbeat_interval_seconds=0.02,
+        ownership_guard=lambda: role_owned[0],
+    )
+
+    assert worker.run_once() is None
+    assert lifecycle.claimed is False
+
+    build_started = Event()
+
+    class BlockingPipeline:
+        scheduler = None
+
+        def build(self, request, *, cancellation):
+            del request
+            build_started.set()
+            while not cancellation.is_cancelled():
+                sleep(0.002)
+            raise KnowledgeModelWorkCancelled("cancelled after worker-role fencing")
+
+    role_owned[0] = True
+    fenced_worker = HybridKnowledgeWorker(
+        lifecycle=lifecycle,
+        original_store=MemoryOriginalStore(original),
+        artifact_store=FileSystemKnowledgeArtifactStore(tmp_path / "fenced-artifacts"),
+        pipeline=BlockingPipeline(),
+        worker_id="worker_1",
+        lease_seconds=60,
+        heartbeat_interval_seconds=0.02,
+        ownership_guard=lambda: role_owned[0],
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fenced_worker.run_once)
+        assert build_started.wait(timeout=1)
+        role_owned[0] = False
+        with pytest.raises(RuntimeError, match="worker role lease"):
+            future.result(timeout=1)
+
+    assert lifecycle.committed is None
+
+
 @pytest.mark.parametrize("blocked_stage", ["queue", "service"])
 @pytest.mark.parametrize("renew_failure", ["error", "false"])
 def test_claim_heartbeat_cancels_blocked_private_build_and_allows_new_owner(

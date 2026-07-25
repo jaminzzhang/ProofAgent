@@ -77,6 +77,7 @@ class RunExecutor:
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] | None = None,
         manifest_id_factory: Callable[[], str] | None = None,
+        claim_guard: Callable[[], bool] | None = None,
     ) -> None:
         if not 1 <= concurrency <= 5:
             raise ValueError("Run Executor concurrency must be between one and five")
@@ -100,6 +101,7 @@ class RunExecutor:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper or time.sleep
         self._manifest_id_factory = manifest_id_factory or (lambda: str(uuid4()))
+        self._claim_guard = claim_guard or (lambda: True)
         self._activation: RoleActivation | None = None
         self._stop = Event()
 
@@ -128,7 +130,7 @@ class RunExecutor:
             max_workers=self._concurrency,
             thread_name_prefix="proofagent-run",
         ) as pool:
-            while not self._stop.is_set():
+            while active or not self._stop.is_set():
                 now = self._now()
                 self._repository.reap_expired_leases(now=now)
                 for future, (running_claim, last_heartbeat) in tuple(active.items()):
@@ -150,7 +152,11 @@ class RunExecutor:
                     active[future] = (renewed, now)
 
                 claimed_any = False
-                while len(active) < self._concurrency:
+                while (
+                    not self._stop.is_set()
+                    and len(active) < self._concurrency
+                    and self._claim_guard()
+                ):
                     claim = self._repository.claim_next(
                         slot=self._slot,
                         executor_id=self._executor_id,
@@ -165,6 +171,8 @@ class RunExecutor:
                     claimed_any = True
                     future = pool.submit(self._execute_claim, claim)
                     active[future] = (claim, self._now())
+                if self._stop.is_set() and not active:
+                    break
                 if active or claimed_any:
                     empty_polls = 0
                 else:

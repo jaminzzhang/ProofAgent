@@ -83,3 +83,7 @@ dist/
 e2e/
 .gstack/
 deploy/production/compatibility-input.json
+deploy/production/deployment-compatibility-manifest.json
+
+# Graphify
+graphify-out/

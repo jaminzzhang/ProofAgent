@@ -68,7 +68,12 @@ class S3ArtifactStore:
             "s3",
             endpoint_url=endpoint_url,
             region_name=region_name,
-            config=Config(proxies={}, retries={"max_attempts": 1, "mode": "standard"}),
+            config=Config(
+                proxies={},
+                retries={"max_attempts": 1, "mode": "standard"},
+                connect_timeout=3,
+                read_timeout=5,
+            ),
         )
         try:
             return cls(client=client, bucket=bucket, key_prefix=key_prefix)
@@ -219,6 +224,25 @@ class S3ArtifactStore:
         except Exception:
             return False
         return bool(status.get("Status") == "Enabled")
+
+    def check_read_write_ready(self, *, probe_owner_id: str) -> bool:
+        """Write, exact-read, and remove one short-lived readiness object version."""
+
+        content = b"proof-agent-s3-readiness-v1"
+        request = ArtifactPutRequest(
+            kind=ArtifactKind.VALIDATION_CAPTURE,
+            owner=ArtifactOwner(
+                owner_type="deployment_readiness",
+                owner_id=probe_owner_id,
+            ),
+            content_type="application/octet-stream",
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+            expected_size_bytes=len(content),
+            display_filename="s3-readiness.bin",
+        )
+        ref = self.put_immutable(request, BytesIO(content))
+        self.delete_exact(ref)
+        return True
 
     def _ref_from_list_item(self, item: dict[str, Any]) -> ArtifactObjectVersion:
         key = item.get("Key")

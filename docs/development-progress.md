@@ -1,10 +1,26 @@
 # Development Progress
 
-Updated: 2026-07-15
+Updated: 2026-07-25
 
 ## Current decision
 
-[KNOWN | HIGH] The Hybrid Knowledge happy path is now code-complete and deployment-executable from PDF upload through controlled production Agent publication. Formal production release remains **NO-GO**: the workspace has no real private parser/embedding/reranker/answer-model/evaluator execution, S5 still lacks PostgreSQL Case Memory integration, S6 deployment/operations is incomplete, and none of the 13 candidate-bound release Gates has a formal passing Evidence result.
+[KNOWN | HIGH] The Hybrid Knowledge happy path is code-complete and deployment-executable from PDF upload through controlled production Agent publication. S6 foundations now include compatibility binding, image/Compose definitions, deep API/Worker readiness, PostgreSQL-fenced Worker role leases, an explicit locked expand-only migration job, provider-neutral Blue/Green choreography, atomic multi-surface nginx switching and a first built-in `docker-compose-v1` operations driver. Formal production release remains **NO-GO**: no immutable candidate image has been built or scanned here, the driver has not run against disposable or real Docker/nginx infrastructure, the workspace has no real private parser/embedding/reranker/answer-model/evaluator execution, S6 operational evidence is incomplete, and none of the 13 candidate-bound release Gates has a formal passing Evidence result.
+
+[FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-07-25 initial S6 implementation
+
+- [KNOWN | HIGH] The strict Deployment Compatibility Manifest now requires exact PostgreSQL, S3, OIDC, Secret Provider, Gateway and model identities, immutable revisions, a credential-free native PostgreSQL authority or exact HTTPS origins, component capability evidence and at most 72-hour-old content-addressed evidence. `proof-agent deployment validate-compatibility` emits machine JSON and a canonical manifest digest.
+- [KNOWN | HIGH] `deploy/production/Dockerfile` builds frontend assets and wheel/sdist in separate stages, installs the production extra non-editably, and runs as UID/GID 10001 without copying the source tree into the runtime stage. `mcp[cli]` moved out of base runtime dependencies into the development extra.
+- [KNOWN | HIGH] The checked-in slot topology defines five same-image roles with read-only filesystems, all Linux capabilities dropped, no public slot ports, bounded tmpfs/resources and per-slot external networks. The stable Gateway attaches to blue and green, routes API/OIDC callback/SSE/Dashboard/Operator Chat as one routing generation, and enforces TLS and request limits.
+- [KNOWN | HIGH] Production `/readyz` now reports release ID, image digest, slot, role, activation state, schema revision/compatible range and DCM digest without exposing dependency exceptions or secrets. `STANDBY` is a healthy deployment state.
+- [KNOWN | HIGH] API `/readyz` now binds candidate identity and verifies exact PostgreSQL schema, OIDC discovery/JWKS, a dedicated Vault probe handle, versioned S3 and a background exact write-read success no older than 60 seconds, active egress policy, sole Published Agent and queue authority. Provider errors are reduced to sanitized component states.
+- [KNOWN | HIGH] `run-executor` and the production Knowledge Worker use PostgreSQL-fenced role activation epochs and renewable leases. `STANDBY`/`DRAINING` do not claim new work; lease loss fails Worker readiness, prevents new claims and fences final commits. Both roles expose loopback `/livez` and `/readyz` for Compose health checks.
+- [KNOWN | HIGH] `deploy/production/slot/compose.yaml` includes a non-restarting `migration` profile that invokes the candidate image with `database upgrade --locked --expand-only --target <exact-head>`. Production CLI use requires all three acknowledgements; application startup remains migration-free.
+- [KNOWN | HIGH] The Blue/Green choreography now records every step against one candidate-binding digest, enforces the 150-second pre-switch drain abort, requires explicit admission pause when N/N-1 queue compatibility fails, promotes only with a higher epoch, runs the fixed 30-minute soak, and performs route-first rollback with candidate drain/fencing and explicit lost-Attempt failure.
+- [KNOWN | HIGH] Gateway switching renders all three upstream groups and public slot/generation markers together, validates a same-directory candidate through containerized `nginx -t`, atomically replaces and reloads it, verifies Dashboard/Operator Chat/API/OIDC callback/SSE on one generation, and restores/reloads the old include on mixed observations.
+- [KNOWN | HIGH] `scripts/deployment/blue_green.py` is an external shell-free command boundary with bounded subprocess output, Docker-based nginx control and an atomic mode-0600 result journal. Its built-in `docker-compose-v1` driver validates both immutable slots, runs migration/standby/readiness/N/N-1 checks, atomically controls Run admission, drains and promotes PostgreSQL-fenced Workers, executes stable-origin OIDC/submission/SSE/terminal/S3 smoke, soaks and performs route-first rollback. Other environments can still supply one trusted entry point. No real deployment rehearsal is claimed.
+- [COMPUTED | HIGH] Local verification on 2026-07-25: 3032 backend tests passed with 64 skipped and 13 opt-in tests deselected; the focused changed deployment/Worker slice passed 33 tests with 3 real-PostgreSQL tests skipped. Dashboard/Operator Chat passed 218/35 tests and both production builds; both production Compose files passed `docker compose config`; Ruff passed, mypy passed over 376 product sources and separately over all 3 deployment scripts, the lock file was current, domain checks passed and `git diff --check` passed. The three Worker-role PostgreSQL concurrency tests are among the skips because no real test DSN was configured. Operator Chat still reports a 600.22 kB minified chunk warning. Dockerfile/Nginx container checks and a real driver rehearsal were not executed; Docker/nginx command ordering, atomic restoration and rollback were verified through fakes, not a running container.
 
 ## 2026-07-15 Hybrid Knowledge closed loop
 
@@ -65,8 +81,8 @@ The eight deselected tests require loopback socket binding, which the current ex
 | S2 OIDC/permissions/secrets/egress | core implementation complete; reference-service exercises pending | S1 | real OIDC/Vault, Recovery Group, revoke/rotate and negative browser evidence |
 | S3 S3 artifacts/recovery | core implementation complete; timed combined restore pending | S1 | candidate S3 compatibility, PITR + exact-version restore, RPO/RTO exercise |
 | S4 queue/Executor/SSE | core implementation complete; load/deployment evidence pending | S2 + S3 | bound 5/50 load, coarse reconnect and N/N-1 deployment execution |
-| S5 sole production Agent | partial | S3 + S4 | wire PostgreSQL Case Memory or formally narrow the contract; run real-LLM/Phase F and publish the candidate |
-| S6 deployment/operations | not complete | S2–S5 | hardened image, stable Gateway, Blue/Green jobs, security bootstrap, Release Registry/download, alerts, runbooks and pilot |
+| S5 sole production Agent | contract narrowed; external evidence pending | S3 + S4 | run real-LLM/Phase F against private services and publish the exact candidate |
+| S6 deployment/operations | partial: Tasks 1–5 plus Task 6 choreography, atomic Gateway and first Compose driver; real execution evidence missing | S2–S5 | build/scan exact image; review and rehearse Blue/Green driver, security bootstrap, Release Registry/download, alerts, runbooks and pilot |
 
 ## Formal 13-Gate inventory
 

@@ -134,6 +134,39 @@ class GuardedOidcClient:
             token_response["refresh_token"] = refresh_token
         return self._verified_material(token_response, expected_nonce=None)
 
+    def check_ready(self) -> bool:
+        """Verify exact provider metadata and a usable JWKS through guarded HTTPS."""
+
+        discovery_url = (
+            self._configuration.issuer.rstrip("/")
+            + "/.well-known/openid-configuration"
+        )
+        try:
+            response = self._http_client.request(
+                "GET",
+                discovery_url,
+                headers={"Accept": "application/json"},
+                timeout_seconds=self._timeout_seconds,
+            )
+        except Exception as exc:
+            raise OidcVerificationError("discovery_unavailable") from exc
+        if response.status_code != 200:
+            raise OidcVerificationError("discovery_unavailable")
+        metadata = _decode_json_object(
+            response.body,
+            max_response_bytes=self._max_response_bytes,
+        )
+        expected = {
+            "issuer": self._configuration.issuer,
+            "authorization_endpoint": self._configuration.authorization_endpoint,
+            "token_endpoint": self._configuration.token_endpoint,
+            "jwks_uri": self._configuration.jwks_uri,
+        }
+        if any(metadata.get(key) != value for key, value in expected.items()):
+            raise OidcVerificationError("discovery_metadata_mismatch")
+        self._load_jwks()
+        return True
+
     def _post_token(self, form: Mapping[str, str]) -> dict[str, Any]:
         credential = base64.b64encode(
             (
@@ -216,8 +249,12 @@ class GuardedOidcClient:
             response.body,
             max_response_bytes=self._max_response_bytes,
         )
-        if not isinstance(jwks.get("keys"), list):
+        if not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
             raise OidcVerificationError("jwks_invalid")
+        try:
+            JsonWebKey.import_key_set(jwks)
+        except (JoseError, ValueError, TypeError) as exc:
+            raise OidcVerificationError("jwks_invalid") from exc
         return jwks
 
     def _validate_claims(

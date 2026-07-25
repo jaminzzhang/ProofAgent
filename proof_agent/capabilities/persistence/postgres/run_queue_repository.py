@@ -18,6 +18,7 @@ from proof_agent.capabilities.persistence.postgres._common import (
     write_connection,
 )
 from proof_agent.capabilities.persistence.postgres.schema import (
+    production_worker_role_activations,
     run_attempts,
     run_executor_activations,
     run_operator_fairness,
@@ -246,6 +247,13 @@ class PostgresRunQueueRepository:
         self._require_aware(now)
         with write_connection(self._connection_source) as connection:
             self._advisory_lock(connection, _ACTIVATION_LOCK)
+            self._require_worker_role_lease(
+                connection,
+                slot=slot,
+                executor_id=executor_id,
+                now=now,
+                allow_draining=False,
+            )
             current_epoch = connection.execute(
                 sa.select(sa.func.coalesce(sa.func.max(run_executor_activations.c.activation_epoch), 0))
             ).scalar_one()
@@ -311,6 +319,8 @@ class PostgresRunQueueRepository:
                 slot=slot,
                 executor_id=executor_id,
                 activation_epoch=activation_epoch,
+                now=now,
+                allow_draining=False,
             )
             active_count = connection.execute(
                 sa.select(sa.func.count())
@@ -803,6 +813,8 @@ class PostgresRunQueueRepository:
         slot: int,
         executor_id: str,
         activation_epoch: int,
+        now: datetime,
+        allow_draining: bool,
     ) -> None:
         active = connection.execute(
             sa.select(run_executor_activations).where(
@@ -814,6 +826,37 @@ class PostgresRunQueueRepository:
         ).first()
         if active is None:
             raise RunClaimRejectedError("Run Executor role is not active at this epoch")
+        PostgresRunQueueRepository._require_worker_role_lease(
+            connection,
+            slot=slot,
+            executor_id=executor_id,
+            now=now,
+            allow_draining=allow_draining,
+        )
+
+    @staticmethod
+    def _require_worker_role_lease(
+        connection: sa.Connection,
+        *,
+        slot: int,
+        executor_id: str,
+        now: datetime,
+        allow_draining: bool,
+    ) -> None:
+        states = [RoleActivationState.ACTIVE.value]
+        if allow_draining:
+            states.append(RoleActivationState.DRAINING.value)
+        owned = connection.execute(
+            sa.select(production_worker_role_activations.c.role).where(
+                production_worker_role_activations.c.role == "run_executor",
+                production_worker_role_activations.c.slot == slot,
+                production_worker_role_activations.c.state.in_(states),
+                production_worker_role_activations.c.owner_id == executor_id,
+                production_worker_role_activations.c.lease_expires_at > now,
+            )
+        ).first()
+        if owned is None:
+            raise RunClaimRejectedError("Run Executor worker-role lease is not live")
 
     def _lock_owned_attempt(
         self,
@@ -828,6 +871,8 @@ class PostgresRunQueueRepository:
             slot=self._active_slot_for_claim(connection, claim),
             executor_id=claim.attempt.executor_id,
             activation_epoch=claim.attempt.activation_epoch,
+            now=now,
+            allow_draining=True,
         )
         row = connection.execute(
             sa.select(run_attempts)

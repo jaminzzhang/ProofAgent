@@ -116,6 +116,21 @@ def guarded_responses(token: str, jwk: dict[str, object]) -> list[GuardedHttpRes
     ]
 
 
+def discovery_response() -> GuardedHttpResponse:
+    return GuardedHttpResponse(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body=json.dumps(
+            {
+                "issuer": "https://identity.example.com/tenant/v2.0",
+                "authorization_endpoint": "https://identity.example.com/authorize",
+                "token_endpoint": "https://identity.example.com/token",
+                "jwks_uri": "https://identity.example.com/jwks",
+            }
+        ).encode(),
+    )
+
+
 def test_authorization_url_is_exact_oidc_code_flow_with_s256_pkce() -> None:
     client = GuardedOidcClient(
         QueueGuardedClient([]),
@@ -140,6 +155,55 @@ def test_authorization_url_is_exact_oidc_code_flow_with_s256_pkce() -> None:
     assert query["code_challenge_method"] == ["S256"]
     assert query["code_challenge"] == ["s256-challenge"]
     assert "code_verifier" not in query
+
+
+def test_readiness_verifies_exact_discovery_metadata_and_nonempty_jwks() -> None:
+    _key, jwk = key_pair()
+    guarded = QueueGuardedClient(
+        [
+            discovery_response(),
+            GuardedHttpResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=json.dumps({"keys": [jwk]}).encode(),
+            ),
+        ]
+    )
+    client = GuardedOidcClient(
+        guarded,
+        configuration=configuration(),
+        client_secret=b"client-secret",
+        clock=lambda: NOW,
+    )
+
+    assert client.check_ready() is True
+    assert [call["url"] for call in guarded.calls] == [
+        "https://identity.example.com/tenant/v2.0/.well-known/openid-configuration",
+        "https://identity.example.com/jwks",
+    ]
+
+
+def test_readiness_rejects_discovery_metadata_drift() -> None:
+    response = discovery_response()
+    payload = json.loads(response.body)
+    payload["jwks_uri"] = "https://identity.example.com/changed-jwks"
+    client = GuardedOidcClient(
+        QueueGuardedClient(
+            [
+                GuardedHttpResponse(
+                    status_code=200,
+                    headers=response.headers,
+                    body=json.dumps(payload).encode(),
+                )
+            ]
+        ),
+        configuration=configuration(),
+        client_secret=b"client-secret",
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(OidcVerificationError, match="discovery_metadata_mismatch"):
+        client.check_ready()
 
 
 def test_code_exchange_uses_guarded_token_and_jwks_calls_then_verifies_claims() -> None:

@@ -21,6 +21,7 @@ from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionReposito
 from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
 from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.contracts.ports.unit_of_work import ConfigurationUnitOfWork
+from proof_agent.contracts.ports.worker_roles import WorkerRoleRepository
 
 __all__ = [
     "AgentLifecycleRepository",
@@ -42,5 +43,6 @@ __all__ = [
     "SecretProvider",
     "ToolAssetRepository",
     "ToolSourceReader",
+    "WorkerRoleRepository",
     "resolve_shared_asset_versions",
 ]

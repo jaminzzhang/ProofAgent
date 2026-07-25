@@ -1,0 +1,127 @@
+{
+  "schema_version": "proofagent.deployment-compatibility.v1",
+  "topology": "single_host_blue_green",
+  "tls_required": true,
+  "tool_mode": "disabled",
+  "components": [
+    {
+      "component_id": "postgresql",
+      "product": "PostgreSQL",
+      "product_version": "17.5",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "endpoint_origin": "postgresql://postgresql.internal.example:5432/proofagent",
+      "authentication_method": "workload-identity",
+      "adapter_protocol_id": "postgresql-psycopg-v1",
+      "tested_capabilities": ["transactions", "advisory_lock", "pitr"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "s3",
+      "product": "MinIO",
+      "product_version": "RELEASE.2026-07-02T00-00-00Z",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "endpoint_origin": "https://s3.internal.example",
+      "authentication_method": "workload-identity",
+      "adapter_protocol_id": "s3-boto3-v1",
+      "tested_capabilities": [
+        "versioning",
+        "conditional_put",
+        "exact_version_read",
+        "exact_version_delete"
+      ],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "oidc",
+      "product": "Keycloak",
+      "product_version": "26.3.1",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "endpoint_origin": "https://oidc.internal.example",
+      "authentication_method": "authorization-code-pkce",
+      "adapter_protocol_id": "oidc-authlib-v1",
+      "tested_capabilities": ["discovery", "jwks", "refresh", "revocation", "recovery_group"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "secret_provider",
+      "product": "HashiCorp Vault",
+      "product_version": "2.0.3",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "endpoint_origin": "https://vault.internal.example",
+      "authentication_method": "vault-agent-token-file",
+      "adapter_protocol_id": "hashicorp-vault-2.0-kv-v2",
+      "tested_capabilities": ["validate", "resolve", "revoke", "rotate"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/2222222222222222222222222222222222222222222222222222222222222222",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "gateway",
+      "product": "NGINX",
+      "product_version": "1.28.0",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "endpoint_origin": "https://proof-agent.internal.example",
+      "authentication_method": "mutual-tls",
+      "adapter_protocol_id": "nginx-blue-green-v1",
+      "tested_capabilities": ["tls", "sse", "atomic_reload"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/4444444444444444444444444444444444444444444444444444444444444444",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "model_provider",
+      "product": "vLLM",
+      "product_version": "0.10.0",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "endpoint_origin": "https://models.internal.example",
+      "authentication_method": "vault-secret-handle",
+      "adapter_protocol_id": "openai-compatible-http-v1",
+      "tested_capabilities": ["governed_calls", "timeout", "rate_limit", "provider_errors"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/6666666666666666666666666666666666666666666666666666666666666666",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "active_gateway_generation": 1,
+  "admission_pause_authorized": false,
+  "binding": {
+    "deployment_compatibility_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "image_reference": "registry.example.test/proof-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "migration_set_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "release_id": "replace-with-candidate-release-id",
+    "schema_revision": "0011_worker_role_leases"
+  },
+  "candidate_slot": "green",
+  "drain_timeout_seconds": 150,
+  "old_activation_epoch": 1,
+  "old_slot": "blue",
+  "soak_seconds": 1800
+}

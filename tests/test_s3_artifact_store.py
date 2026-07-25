@@ -128,3 +128,14 @@ def test_s3_store_requires_bucket_versioning() -> None:
 
     with pytest.raises(ArtifactStoreError, match="versioning"):
         S3ArtifactStore(client=client, bucket="proof-agent")
+
+
+def test_s3_readiness_writes_reads_and_removes_one_exact_version() -> None:
+    client = VersionedS3()
+    store = S3ArtifactStore(client=client, bucket="proof-agent", clock=lambda: NOW)
+
+    assert store.check_read_write_ready(probe_owner_id="release-green") is True
+
+    assert len(client.puts) == 1
+    assert len(client.deletes) == 1
+    assert client.deletes[0]["VersionId"] == "version-1"

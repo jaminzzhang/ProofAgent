@@ -47,6 +47,14 @@ from proof_agent.contracts.artifacts import (
     ArtifactVisibility,
     BoundArtifactManifest,
 )
+from proof_agent.contracts.deployment import (
+    CompatibilityEvidenceRef,
+    DeploymentCompatibilityComponent,
+    DeploymentCompatibilityManifest,
+    ImmutableServiceReference,
+)
+from proof_agent.contracts.health import ProductionDeploymentIdentity
+from proof_agent.contracts.worker_roles import ProductionWorkerRole, WorkerRoleActivation
 from proof_agent.contracts.run_execution import (
     RoleActivation,
     RoleActivationState,
@@ -456,6 +464,7 @@ __all__ = [
     "ContextAssemblyBudget",
     "ContextSourceRef",
     "ContextSourceType",
+    "CompatibilityEvidenceRef",
     "ControlledRunContext",
     "ConversationCompactionSummary",
     "RunStartContextAssembly",
@@ -490,6 +499,8 @@ __all__ = [
     "ContextBudgetProfile",
     "ContextConvergenceLadder",
     "DraftAgent",
+    "DeploymentCompatibilityComponent",
+    "DeploymentCompatibilityManifest",
     "EnvironmentModelCredentialReference",
     "EffectiveWorkflowStageConfiguration",
     "EffectiveWorkflowStageConfigurationStage",
@@ -568,6 +579,7 @@ __all__ = [
     "InsuranceParserObservation",
     "InsuranceRetrievalMetrics",
     "InstitutionAuthorizationContext",
+    "ImmutableServiceReference",
     "InsuranceRuleApplicability",
     "InsuranceRuleAuthorityGateResult",
     "InsuranceRuleCellCoordinate",
@@ -660,6 +672,7 @@ __all__ = [
     "PersistencePointerConflictError",
     "PrevalidatedRetrievalDegradation",
     "ProductionSecretHandle",
+    "ProductionDeploymentIdentity",
     "ProductionToolEffect",
     "ProposedInsuranceKnowledgeVisibilityScope",
     "PublishedAgentVersion",
@@ -697,6 +710,8 @@ __all__ = [
     "RunLifecycleState",
     "RoleActivation",
     "RoleActivationState",
+    "ProductionWorkerRole",
+    "WorkerRoleActivation",
     "RunAttempt",
     "RunClaim",
     "RunExecutionSnapshot",

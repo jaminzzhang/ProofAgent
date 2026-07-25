@@ -126,7 +126,8 @@ This target belongs to S4 and depends on S2 and S3.
 - Package Markdown supports offline regression. Production knowledge must resolve published, verified S3-backed snapshots.
 - Read-only HTTP/MCP tools may be introduced only through frozen contracts, publication validation, server-side authorization, redaction, schema validation and default-deny egress.
 - MCP stdio, local handler imports and state-changing tools are not production-admissible.
-- Case Memory may provide continuity but is not evidence. Production memory state requires PostgreSQL and retention/deletion controls.
+- The initial private pilot keeps runtime Case Memory disabled. PostgreSQL conversation context may provide bounded continuity but is not evidence.
+- A later Case Memory release must use PostgreSQL authority and define admission, deletion, expiry, audit, sensitive-data and evaluation controls before enabling runtime reads or writes.
 
 ## 10. Audit and release authority
 
@@ -151,6 +152,12 @@ The built-in production adapter uses allowlisted HTTPS, validated and pinned pri
 Initial production is one hardened Linux host with a stable gateway and Blue/Green application slots. Gateway, API, Run Executor, Knowledge Worker, Dashboard and Operator Chat are separate Compose roles; API and Executor use the same product image.
 
 External PostgreSQL, S3-compatible storage, OIDC, secret provider and model endpoints are deployment bindings. `/readyz` must verify their concrete compatibility, not merely process liveness. Migrations are explicit and backward-compatible across the rollback window.
+
+The readiness projection reports release ID, image digest, deployment slot, process role, activation state, schema revision/compatible range and Deployment Compatibility Manifest digest together with sanitized component status. The API verifies exact PostgreSQL schema compatibility, OIDC discovery/JWKS, a dedicated Secret Provider probe handle, versioned S3 plus a background exact write-read success no older than 60 seconds, active egress policy, the sole Published Agent and its referenced production configuration, and the durable run queue. Run Executor and Knowledge Worker own PostgreSQL-fenced role leases with monotonically increasing activation epochs, background heartbeats, explicit drain/release transitions and loopback `/livez`/`/readyz`; `STANDBY` and `DRAINING` do not claim new work, while in-flight work is fenced from committing after role ownership loss.
+
+Production migration is an explicit, non-restarting Compose profile. The candidate command must acknowledge the advisory lock and expand-only policy and bind the exact packaged schema head; API and worker composition never invokes migration code. Every shipped Alembic revision must be present in the code-owned reviewed expand-only allowlist, while downgrade/contract operations remain unavailable during the rollback window.
+
+The provider-neutral Blue/Green controller records each action against one candidate-binding digest. It validates and migrates before candidate standby, runs bidirectional queue compatibility, drains old claims for at most 150 seconds, switches all Gateway surfaces as one routing generation, then promotes only at a higher Worker activation epoch. Pre-switch failures restore the old epoch without activating the candidate; post-switch failures route back to the ready old API before candidate drain/fencing and higher-epoch old-Worker activation. Nginx configuration is tested as a temporary complete candidate, atomically renamed and reloaded, then verified through both browser surfaces, API, OIDC callback and SSE. Environment-specific Compose, authentication and provider operations remain behind an external deployment-driver entry point and are not part of the Agent runtime image.
 
 ## 12. Verification policy
 

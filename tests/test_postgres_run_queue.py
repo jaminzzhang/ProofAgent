@@ -11,6 +11,9 @@ from postgres_fixtures import TEST_AGENT_ID, TEST_AGENT_VERSION_ID, seed_agent_v
 from proof_agent.capabilities.persistence.postgres.run_queue_repository import (
     PostgresRunQueueRepository,
 )
+from proof_agent.capabilities.persistence.postgres.worker_role_repository import (
+    PostgresWorkerRoleRepository,
+)
 from proof_agent.capabilities.persistence.postgres.artifact_repository import (
     PostgresArtifactReferenceRepository,
 )
@@ -38,6 +41,7 @@ from proof_agent.contracts.run_execution import (
     RunFailureCode,
     RunLifecycleState,
 )
+from proof_agent.contracts.worker_roles import ProductionWorkerRole
 
 
 pytestmark = pytest.mark.postgres_integration
@@ -95,6 +99,29 @@ def _repository(engine: Engine) -> PostgresRunQueueRepository:
     return PostgresRunQueueRepository(engine)
 
 
+def _activate(
+    repository: PostgresRunQueueRepository,
+    engine: Engine,
+    *,
+    slot: int,
+    executor_id: str,
+    now: datetime,
+):
+    roles = PostgresWorkerRoleRepository(engine)
+    current = roles.get(ProductionWorkerRole.RUN_EXECUTOR)
+    if current.is_live(at=now):
+        current = roles.release(current, now=now)
+    roles.activate(
+        role=ProductionWorkerRole.RUN_EXECUTOR,
+        slot=slot,
+        owner_id=executor_id,
+        expected_epoch=current.activation_epoch,
+        now=now,
+        lease_seconds=15,
+    )
+    return repository.activate_role(slot=slot, executor_id=executor_id, now=now)
+
+
 def test_admission_is_idempotent_and_conflicting_repeat_does_not_mutate(
     postgres_engine: Engine,
 ) -> None:
@@ -143,8 +170,12 @@ def test_claim_requires_current_active_role_and_higher_epoch_fences_old_owner(
     seed_agent_version(postgres_engine)
     repository = _repository(postgres_engine)
     repository.admit(_request(1))
-    first = repository.activate_role(slot=1, executor_id="executor-blue", now=NOW)
-    second = repository.activate_role(
+    first = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor-blue", now=NOW
+    )
+    second = _activate(
+        repository,
+        postgres_engine,
         slot=2,
         executor_id="executor-green",
         now=NOW + timedelta(seconds=1),
@@ -181,7 +212,9 @@ def test_concurrent_claims_never_exceed_five_or_double_claim(
     repository = _repository(postgres_engine)
     for index in range(1, 11):
         repository.admit(_request(index, operator=f"operator-{index}"))
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
 
     def claim_one(index: int):
         return _repository(postgres_engine).claim_next(
@@ -218,7 +251,9 @@ def test_claim_fairness_rotates_operators_before_second_request(
     repository.admit(_request(1, operator="operator-a"))
     repository.admit(_request(2, operator="operator-a"))
     repository.admit(_request(3, operator="operator-b"))
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
 
     first = repository.claim_next(
         slot=1,
@@ -249,7 +284,9 @@ def test_heartbeat_renews_only_the_live_claim_and_activation_epoch(
     seed_agent_version(postgres_engine)
     repository = _repository(postgres_engine)
     repository.admit(_request(1))
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",
@@ -267,7 +304,9 @@ def test_heartbeat_renews_only_the_live_claim_and_activation_epoch(
         lease_seconds=15,
     )
     assert renewed.attempt.lease_expires_at == NOW + timedelta(seconds=20)
-    repository.activate_role(
+    _activate(
+        repository,
+        postgres_engine,
         slot=2,
         executor_id="replacement",
         now=NOW + timedelta(seconds=6),
@@ -304,7 +343,9 @@ def test_queued_and_running_cancellation_are_atomic_and_idempotent(
 
     running_request = _request(2)
     repository.admit(running_request)
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",
@@ -338,7 +379,9 @@ def test_expired_lease_fails_without_replay_and_frees_exactly_one_slot(
     repository = _repository(postgres_engine)
     for index in range(1, 7):
         repository.admit(_request(index, operator=f"operator-{index}"))
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claims = [
         repository.claim_next(
             slot=1,
@@ -392,7 +435,9 @@ def test_cancel_wins_against_finalization_and_blocks_stale_success_path(
     repository = _repository(postgres_engine)
     request = _request(1)
     repository.admit(request)
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",
@@ -423,7 +468,9 @@ def test_success_visibility_and_terminal_state_commit_in_one_postgres_transactio
     repository = _repository(postgres_engine)
     request = _request(1)
     repository.admit(request)
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",
@@ -480,7 +527,9 @@ def test_cancelled_finalization_cannot_publish_prepared_artifacts(
     repository = _repository(postgres_engine)
     request = _request(1)
     repository.admit(request)
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",
@@ -565,7 +614,9 @@ def test_conversation_single_flight_and_turn_append_commit_with_success(
     with pytest.raises(RunConversationBusyError):
         repository.admit(competing)
 
-    activation = repository.activate_role(slot=1, executor_id="executor", now=NOW)
+    activation = _activate(
+        repository, postgres_engine, slot=1, executor_id="executor", now=NOW
+    )
     claim = repository.claim_next(
         slot=1,
         executor_id="executor",

@@ -1632,7 +1632,6 @@ source = { editable = "." }
 dependencies = [
     { name = "filelock" },
     { name = "jinja2" },
-    { name = "mcp", extra = ["cli"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1659,6 +1658,7 @@ dashboard = [
 ]
 dev = [
     { name = "httpx" },
+    { name = "mcp", extra = ["cli"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1683,9 +1683,14 @@ production = [
     { name = "authlib" },
     { name = "boto3" },
     { name = "cryptography" },
+    { name = "fastapi" },
     { name = "httpx" },
+    { name = "openai" },
+    { name = "openpyxl" },
     { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pypdf" },
     { name = "sqlalchemy" },
+    { name = "uvicorn" },
 ]
 security = [
     { name = "authlib" },
@@ -1706,6 +1711,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'production'", specifier = ">=45,<47" },
     { name = "cryptography", marker = "extra == 'security'", specifier = ">=45,<47" },
     { name = "fastapi", marker = "extra == 'dashboard'", specifier = ">=0.111.0" },
+    { name = "fastapi", marker = "extra == 'production'", specifier = ">=0.111.0" },
     { name = "filelock", specifier = ">=3.29.0,<4" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "httpx", marker = "extra == 'hybrid'", specifier = ">=0.27.0,<1" },
@@ -1713,15 +1719,18 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'security'", specifier = ">=0.27,<1" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "llama-index-core", marker = "extra == 'tree'", specifier = ">=0.12.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.27.0" },
+    { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.30.0" },
+    { name = "openai", marker = "extra == 'production'", specifier = ">=1.30.0" },
     { name = "openpyxl", marker = "extra == 'hybrid'", specifier = ">=3.1.5,<4" },
+    { name = "openpyxl", marker = "extra == 'production'", specifier = ">=3.1.5,<4" },
     { name = "proof-agent", extras = ["hybrid", "ingestion", "openai", "production", "security", "tree"], marker = "extra == 'all'" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'production'", specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pypdf", marker = "extra == 'ingestion'", specifier = ">=6.12.2,<7" },
+    { name = "pypdf", marker = "extra == 'production'", specifier = ">=6.12.2,<7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
@@ -1730,6 +1739,7 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'production'", specifier = ">=2.0,<3" },
     { name = "typer", specifier = ">=0.12.0" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30.0" },
+    { name = "uvicorn", marker = "extra == 'production'", specifier = ">=0.30.0" },
 ]
 provides-extras = ["dev", "dashboard", "openai", "tree", "ingestion", "hybrid", "postgres", "security", "production", "all"]
 

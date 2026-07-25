@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -28,16 +28,20 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorker,
 )
 from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
+from proof_agent.capabilities.persistence.postgres.database import check_database, head_revision
 from proof_agent.capabilities.persistence.postgres.runtime_assets import (
     PostgresRuntimeSharedAssetReader,
 )
 from proof_agent.contracts import (
     InstitutionAuthorizationContext,
+    ProductionDeploymentIdentity,
     ProductionSecretHandle,
+    RoleActivationState,
     SecretPurpose,
 )
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.worker_roles import ProductionWorkerRole
 from proof_agent.control.artifacts.finalization import ArtifactBundleFinalizer
 from proof_agent.control.production_agent import validate_production_agent_candidate
 from proof_agent.control.production_agent_publication import (
@@ -51,7 +55,14 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,
     FileObservationTruthStore,
 )
-from proof_agent.delivery.production_status import ProductionReadinessProbe
+from proof_agent.delivery.production_status import (
+    PeriodicFreshnessProbe,
+    ProductionReadinessProbe,
+)
+from proof_agent.deployment.compatibility import (
+    deployment_compatibility_sha256,
+    load_deployment_compatibility_manifest,
+)
 from proof_agent.delivery.production_agent_validation import (
     ProductionOnlineAgentCandidateValidator,
 )
@@ -66,6 +77,7 @@ from proof_agent.delivery.run_artifact_results import (
 )
 from proof_agent.delivery.run_execution_service import RunExecutionDependencies
 from proof_agent.delivery.run_executor import RunExecutor
+from proof_agent.delivery.worker_health import WorkerRoleLeaseController
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.storage.run_store import RunStore
 
@@ -184,10 +196,16 @@ class ProductionKnowledgeReleaseAuthority:
 @dataclass
 class ProductionExecutorComposition:
     executor: RunExecutor
+    role_controller: WorkerRoleLeaseController
+    readiness: ProductionReadinessProbe
     resources: tuple[object, ...]
 
     def close(self) -> None:
         failures: list[Exception] = []
+        try:
+            self.role_controller.close()
+        except Exception as exc:
+            failures.append(exc)
         for resource in reversed(self.resources):
             close = getattr(resource, "close", None)
             if not callable(close):
@@ -203,10 +221,16 @@ class ProductionExecutorComposition:
 @dataclass
 class ProductionKnowledgeWorkerComposition:
     worker: HybridKnowledgeWorker
+    role_controller: WorkerRoleLeaseController
+    readiness: ProductionReadinessProbe
     resources: tuple[object, ...]
 
     def close(self) -> None:
         failures: list[Exception] = []
+        try:
+            self.role_controller.close()
+        except Exception as exc:
+            failures.append(exc)
         for resource in reversed(self.resources):
             close = getattr(resource, "close", None)
             if not callable(close):
@@ -288,6 +312,15 @@ def create_production_api_application(
         )
         artifact_store = _artifact_store(values)
         resources.append(artifact_store)
+        s3_read_write_probe = PeriodicFreshnessProbe(
+            check=lambda: artifact_store.check_read_write_ready(
+                probe_owner_id=_required(values, "PROOF_AGENT_RELEASE_ID")
+            ),
+            max_age=timedelta(seconds=60),
+            interval=timedelta(seconds=30),
+        )
+        resources.append(s3_read_write_probe)
+        s3_read_write_probe.start()
         authority = _published_agent_authority(persistence, values)
         result_reader = RunArtifactResultReader(
             store=artifact_store,
@@ -295,9 +328,11 @@ def create_production_api_application(
             projector=StatelessRunDetailProjector(),
         )
         readiness = ProductionReadinessProbe(
-            {
+            identity=_production_readiness_identity(values),
+            checks={
                 "artifact_store": artifact_store.check_ready,
                 "hybrid_artifact_store": hybrid_runtime.artifact_store.check_ready,
+                "oidc": security.oidc_client.check_ready,
                 "egress_policy": lambda: (
                     persistence.security.get_active_egress_policy() is not None
                 ),
@@ -307,11 +342,12 @@ def create_production_api_application(
                     secret_provider,
                 ),
                 "run_queue": lambda: _queue_ready(persistence),
+                "s3_read_write": s3_read_write_probe,
                 "secret_provider": lambda: _secret_provider_ready(
                     secret_provider,
                     values,
                 ),
-            }
+            },
         )
         application = create_app(
             mode="production",
@@ -388,6 +424,13 @@ def compose_production_run_executor(
         authority = _published_agent_authority(persistence, values)
         if not _sole_agent_ready(authority, secret_provider):
             raise ValueError("the sole production Published Agent is unavailable")
+        role_controller = WorkerRoleLeaseController(
+            repository=persistence.worker_roles,
+            role=ProductionWorkerRole.RUN_EXECUTOR,
+            slot=slot,
+            owner_id=_required(values, "PROOF_AGENT_EXECUTOR_ID"),
+            configured_state=_activation_state(values),
+        )
         work_dir = Path(_required(values, "PROOF_AGENT_EXECUTOR_WORK_DIR")).resolve()
         work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         execution_store = RunStore(work_dir / "run-artifacts")
@@ -431,8 +474,27 @@ def compose_production_run_executor(
             slot=slot,
             concurrency=concurrency,
             poll_interval_seconds=poll_interval_seconds,
+            claim_guard=role_controller.can_claim,
         )
-        return ProductionExecutorComposition(executor=executor, resources=tuple(resources))
+        readiness = ProductionReadinessProbe(
+            identity=_production_readiness_identity(values, role="run_executor"),
+            checks={
+                "artifact_store": artifact_store.check_ready,
+                "hybrid_artifact_store": hybrid_runtime.artifact_store.check_ready,
+                "postgresql": lambda: _postgres_ready(persistence),
+                "published_agent": lambda: _sole_agent_ready(authority, secret_provider),
+                "role_lease": role_controller.check_ready,
+                "secret_provider": lambda: _secret_provider_ready(
+                    secret_provider, values
+                ),
+            },
+        )
+        return ProductionExecutorComposition(
+            executor=executor,
+            role_controller=role_controller,
+            readiness=readiness,
+            resources=tuple(resources),
+        )
     except BaseException:
         for resource in reversed(resources):
             close = getattr(resource, "close", None)
@@ -446,6 +508,7 @@ def compose_production_knowledge_worker(
     *,
     lease_seconds: int = 60,
     heartbeat_interval_seconds: float | None = None,
+    slot: int = 1,
 ) -> ProductionKnowledgeWorkerComposition:
     """Compose the real-model Hybrid worker over PG fencing and exact S3 artifacts."""
 
@@ -475,6 +538,13 @@ def compose_production_knowledge_worker(
         if hybrid_runtime is None:
             raise ValueError("production Knowledge Worker requires the Hybrid runtime")
         resources.append(hybrid_runtime)
+        role_controller = WorkerRoleLeaseController(
+            repository=persistence.worker_roles,
+            role=ProductionWorkerRole.KNOWLEDGE_WORKER,
+            slot=slot,
+            owner_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
+            configured_state=_activation_state(values),
+        )
         worker = hybrid_runtime.model_graph.ingestion_worker.create(
             lifecycle=persistence.hybrid_ingestion,
             original_store=hybrid_runtime.artifact_store,
@@ -483,9 +553,23 @@ def compose_production_knowledge_worker(
             worker_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
             lease_seconds=lease_seconds,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
+            ownership_guard=role_controller.can_claim,
+        )
+        readiness = ProductionReadinessProbe(
+            identity=_production_readiness_identity(values, role="knowledge_worker"),
+            checks={
+                "hybrid_artifact_store": hybrid_runtime.artifact_store.check_ready,
+                "postgresql": lambda: _postgres_ready(persistence),
+                "role_lease": role_controller.check_ready,
+                "secret_provider": lambda: _secret_provider_ready(
+                    secret_provider, values
+                ),
+            },
         )
         return ProductionKnowledgeWorkerComposition(
             worker=worker,
+            role_controller=role_controller,
+            readiness=readiness,
             resources=tuple(resources),
         )
     except BaseException:
@@ -591,6 +675,47 @@ def _published_agent_authority(
     return PublishedAgentAuthority(materializer=materializer, agents=persistence.agents)
 
 
+def _production_readiness_identity(
+    values: Mapping[str, str],
+    *,
+    role: str = "api",
+) -> ProductionDeploymentIdentity:
+    compatibility = load_deployment_compatibility_manifest(
+        Path(
+            _required(
+                values,
+                "PROOF_AGENT_DEPLOYMENT_COMPATIBILITY_MANIFEST",
+            )
+        ),
+        checked_at=datetime.now(UTC),
+    )
+    schema_revision = head_revision()
+    return ProductionDeploymentIdentity(
+        release_id=_required(values, "PROOF_AGENT_RELEASE_ID"),
+        image_digest=_required(values, "PROOF_AGENT_IMAGE_DIGEST"),
+        deployment_slot=_required(values, "PROOF_AGENT_DEPLOYMENT_SLOT"),  # type: ignore[arg-type]
+        role=role,  # type: ignore[arg-type]
+        activation_state=_activation_state(values),
+        schema_revision=schema_revision,
+        schema_compatible_from=schema_revision,
+        schema_compatible_through=schema_revision,
+        deployment_compatibility_manifest_sha256=(
+            deployment_compatibility_sha256(compatibility)
+        ),
+    )
+
+
+def _activation_state(values: Mapping[str, str]) -> RoleActivationState:
+    try:
+        return RoleActivationState(
+            _required(values, "PROOF_AGENT_ACTIVATION_STATE").lower()
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "PROOF_AGENT_ACTIVATION_STATE must be standby, active or draining"
+        ) from exc
+
+
 def _artifact_store(values: Mapping[str, str]) -> S3ArtifactStore:
     return S3ArtifactStore.from_environment(
         bucket=_required(values, "PROOF_AGENT_ARTIFACT_S3_BUCKET"),
@@ -601,10 +726,8 @@ def _artifact_store(values: Mapping[str, str]) -> S3ArtifactStore:
 
 
 def _postgres_ready(persistence: PostgresPersistenceBundle) -> bool:
-    from sqlalchemy import text
-
-    with persistence.engine.connect() as connection:
-        return int(connection.execute(text("SELECT 1")).scalar_one()) == 1
+    result = check_database(persistence.engine)
+    return result.current_revision == result.head_revision
 
 
 def _queue_ready(persistence: PostgresPersistenceBundle) -> bool:
@@ -640,8 +763,8 @@ def _secret_provider_ready(
     validation = provider.validate(
         ProductionSecretHandle(
             protocol_id=provider.protocol_id,
-            handle_id=_required(values, "PROOF_AGENT_CSRF_KEY_HANDLE"),
-            purpose=SecretPurpose.SESSION_ENVELOPE_KEY,
+            handle_id=_required(values, "PROOF_AGENT_SECRET_PROBE_HANDLE"),
+            purpose=SecretPurpose.INFRASTRUCTURE_CREDENTIAL,
         ),
         checked_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )

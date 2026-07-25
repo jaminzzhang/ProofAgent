@@ -22,6 +22,7 @@ The initial private pilot is an internal operator product, not a customer-servic
 | Workflow | only `react_enterprise_qa_v3`; no legacy runtime selector/checkpointer |
 | Surfaces | Dashboard and `/operator`; customer and approval routes absent |
 | Knowledge | governed published snapshots; production artifacts backed by S3-compatible storage |
+| Memory | runtime Case Memory is deferred; PostgreSQL conversation context remains non-evidence |
 | Tools | optional validated read-only HTTPS/MCP tools; no local handler, stdio or state-changing tool |
 | Execution | persistent bounded queue inside Proof Agent; same product image runs the Run Executor role |
 | Progress | immediate admission response and coarse SSE progress; reconnect restores durable current state |
@@ -34,6 +35,7 @@ The initial private pilot is an internal operator product, not a customer-servic
 
 - local username/password, user directory or user-management page;
 - customer Chat, customer identity, handoff monitoring or customer memory;
+- runtime Case Memory reads or writes in the initial private pilot;
 - approval queues, approve/deny commands or an approval workflow;
 - Kubernetes, multi-host HA or a separate Run Worker microservice;
 - arbitrary scripts or shell commands in the Agent process;

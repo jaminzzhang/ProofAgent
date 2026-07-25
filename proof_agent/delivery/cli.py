@@ -109,6 +109,7 @@ knowledge_app = typer.Typer(no_args_is_help=True)
 database_app = typer.Typer(no_args_is_help=True)
 artifacts_app = typer.Typer(no_args_is_help=True)
 recovery_app = typer.Typer(no_args_is_help=True)
+deployment_app = typer.Typer(no_args_is_help=True)
 app.add_typer(evaluate_app, name="evaluate")
 evaluate_app.add_typer(campaign_app, name="campaign")
 app.add_typer(release_app, name="release")
@@ -116,6 +117,7 @@ app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(database_app, name="database")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(recovery_app, name="recovery")
+app.add_typer(deployment_app, name="deployment")
 
 DEMO_AGENT_PATH = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
 REACT_DEMO_AGENT_PATH = DEMO_AGENT_PATH
@@ -215,13 +217,53 @@ def database_upgrade(
         min=0.001,
         help="Maximum wait for the global PostgreSQL migration lock.",
     ),
+    locked: bool = typer.Option(
+        False,
+        "--locked",
+        help="Acknowledge that this one-shot job must own the global migration lock.",
+    ),
+    expand_only: bool = typer.Option(
+        False,
+        "--expand-only",
+        help="Reject any migration revision not declared safe for the rollback window.",
+    ),
+    target: str | None = typer.Option(
+        None,
+        "--target",
+        help="Exact candidate schema revision; production requires the packaged head.",
+    ),
 ) -> None:
     """Run the explicit locked expand-only migration path."""
 
-    from proof_agent.capabilities.persistence.postgres.database import upgrade_database
+    from proof_agent.capabilities.persistence.postgres.database import (
+        head_revision,
+        upgrade_database,
+    )
+
+    if os.environ.get("PROOF_AGENT_MODE", "development").strip() == "production" and (
+        not locked or not expand_only or target is None
+    ):
+        typer.echo(
+            json.dumps(
+                {
+                    "error": (
+                        "production migration requires --locked --expand-only "
+                        "--target RELEASE_SCHEMA"
+                    )
+                },
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     try:
-        revision = upgrade_database(dsn, lock_timeout_seconds=lock_timeout_seconds)
+        revision = upgrade_database(
+            dsn,
+            lock_timeout_seconds=lock_timeout_seconds,
+            target_revision=target or head_revision(),
+            expand_only=expand_only,
+        )
     except Exception as exc:
         typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
         raise typer.Exit(code=1) from exc
@@ -390,8 +432,60 @@ def run_plain_rag(*args: Any, **kwargs: Any) -> Any:
 def load_environment(ctx: typer.Context) -> None:
     """Load local environment variables before running any CLI command."""
 
-    if ctx.invoked_subcommand != "release":
+    if ctx.invoked_subcommand not in {"release", "deployment"}:
         _load_local_dotenv()
+
+
+@deployment_app.command("validate-compatibility")
+def deployment_validate_compatibility(
+    manifest: Path = typer.Option(
+        ...,
+        "--manifest",
+        help="Deployment Compatibility Manifest JSON file.",
+    ),
+    at: str = typer.Option(
+        ...,
+        "--at",
+        help="Explicit RFC3339 validation time used for the 72-hour evidence limit.",
+    ),
+) -> None:
+    """Validate and hash one concrete production dependency binding."""
+
+    from proof_agent.deployment.compatibility import (
+        deployment_compatibility_sha256,
+        load_deployment_compatibility_manifest,
+    )
+
+    try:
+        checked_at = _parse_release_checked_at(at)
+        compatibility = load_deployment_compatibility_manifest(
+            manifest,
+            checked_at=checked_at,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValidationError, ValueError):
+        typer.echo(
+            json.dumps(
+                {
+                    "error_code": "deployment_compatibility_invalid",
+                    "status": "invalid",
+                },
+                sort_keys=True,
+            )
+        )
+        raise typer.Exit(code=2) from None
+    typer.echo(
+        json.dumps(
+            {
+                "component_ids": [
+                    component.component_id for component in compatibility.components
+                ],
+                "manifest_sha256": deployment_compatibility_sha256(compatibility),
+                "status": "valid",
+                "tool_mode": compatibility.tool_mode,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @release_app.command("verify", cls=ReleaseVerifyCommand)
@@ -1525,6 +1619,8 @@ def run_executor(
         min=0.05,
         max=5.0,
     ),
+    health_host: str = typer.Option("127.0.0.1", "--health-host"),
+    health_port: int = typer.Option(8001, "--health-port", min=1, max=65535),
 ) -> None:
     """Run the same-image PostgreSQL-queued production Executor role."""
 
@@ -1536,19 +1632,68 @@ def run_executor(
         poll_interval_seconds=poll_interval_seconds,
     )
     executor = composition.executor
+    role_controller = getattr(composition, "role_controller", None)
+    readiness = getattr(composition, "readiness", None)
+    health_server = None
+    activation_state = _production_activation_state()
+    stop_requested = False
     previous_handlers: dict[int, Any] = {}
 
     def request_stop(_signum: int, _frame: object) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        if role_controller is not None:
+            role_controller.begin_draining()
         executor.stop()
 
     try:
+        if role_controller is not None:
+            role_controller.start(background=not once)
         if once:
+            if activation_state != "active":
+                typer.echo(
+                    json.dumps(
+                        {
+                            "activation_state": activation_state.upper(),
+                            "completed_runs": 0,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return
             completed = executor.run_until_idle()
             typer.echo(json.dumps({"completed_runs": completed}, sort_keys=True))
             return
+        if readiness is not None:
+            from proof_agent.delivery.worker_health import WorkerHealthServer
+
+            health_server = WorkerHealthServer(
+                readiness=readiness,
+                host=health_host,
+                port=health_port,
+            )
+            health_server.start()
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, request_stop)
+        if role_controller is not None:
+            from proof_agent.delivery.worker_health import (
+                install_worker_role_deployment_signals,
+            )
+
+            previous_handlers.update(
+                install_worker_role_deployment_signals(role_controller)
+            )
+        if activation_state != "active":
+            typer.echo(
+                json.dumps(
+                    {"activation_state": activation_state.upper(), "status": "ready"},
+                    sort_keys=True,
+                )
+            )
+            while not stop_requested:
+                time.sleep(min(poll_interval_seconds, 1.0))
+            return
         activation = executor.activate()
         typer.echo(
             json.dumps(
@@ -1563,9 +1708,42 @@ def run_executor(
         )
         executor.serve()
     finally:
+        if health_server is not None:
+            health_server.close()
         for restore_signum, previous in previous_handlers.items():
             signal.signal(restore_signum, previous)
         composition.close()
+
+
+@app.command("serve-static")
+def serve_static(
+    surface: str = typer.Option(..., "--surface"),
+    host: str = typer.Option("0.0.0.0", "--host"),
+    port: int = typer.Option(..., "--port", min=1, max=65535),
+    root: Path | None = typer.Option(
+        None,
+        "--root",
+        help="Override the image-owned asset root for verification only.",
+    ),
+) -> None:
+    """Serve one immutable browser surface from the production image."""
+
+    if surface not in {"dashboard", "operator-chat"}:
+        typer.echo("--surface must be dashboard or operator-chat", err=True)
+        raise typer.Exit(code=2)
+    try:
+        import uvicorn
+
+        from proof_agent.delivery.static_server import create_static_application
+
+        static_application = create_static_application(
+            surface=surface,  # type: ignore[arg-type]
+            root=root,
+        )
+    except (ImportError, OSError, ValueError) as exc:
+        typer.echo(f"static server configuration failed: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+    uvicorn.run(static_application, host=host, port=port)
 
 
 @app.command("knowledge-worker")
@@ -1578,6 +1756,9 @@ def knowledge_worker(
         min=0.01,
         help="Seconds to wait after an idle continuous worker poll.",
     ),
+    slot: int = typer.Option(1, "--slot", min=1, max=2),
+    health_host: str = typer.Option("127.0.0.1", "--health-host"),
+    health_port: int = typer.Option(8002, "--health-port", min=1, max=65535),
 ) -> None:
     """Process persisted Knowledge jobs; production uses the PG/S3 Hybrid role."""
 
@@ -1585,6 +1766,9 @@ def knowledge_worker(
         _run_production_knowledge_worker(
             once=once,
             poll_interval_seconds=poll_interval_seconds,
+            slot=slot,
+            health_host=health_host,
+            health_port=health_port,
         )
         return
 
@@ -1645,22 +1829,44 @@ def _run_production_knowledge_worker(
     *,
     once: bool,
     poll_interval_seconds: float,
+    slot: int,
+    health_host: str,
+    health_port: int,
 ) -> None:
     from proof_agent.bootstrap.production_roles import (
         compose_production_knowledge_worker,
     )
 
-    composition = compose_production_knowledge_worker()
+    composition = compose_production_knowledge_worker(slot=slot)
     worker = composition.worker
+    role_controller = getattr(composition, "role_controller", None)
+    readiness = getattr(composition, "readiness", None)
+    health_server = None
+    activation_state = _production_activation_state()
     stop_requested = False
     previous_handlers: dict[int, Any] = {}
 
     def request_stop(_signum: int, _frame: object) -> None:
         nonlocal stop_requested
         stop_requested = True
+        if role_controller is not None:
+            role_controller.begin_draining()
 
     try:
+        if role_controller is not None:
+            role_controller.start(background=not once)
         if once:
+            if activation_state != "active":
+                typer.echo(
+                    json.dumps(
+                        {
+                            "activation_state": activation_state.upper(),
+                            "outcome": None,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return
             outcome = worker.run_once()
             typer.echo(
                 json.dumps(
@@ -1669,11 +1875,41 @@ def _run_production_knowledge_worker(
                 )
             )
             return
+        if readiness is not None:
+            from proof_agent.delivery.worker_health import WorkerHealthServer
+
+            health_server = WorkerHealthServer(
+                readiness=readiness,
+                host=health_host,
+                port=health_port,
+            )
+            health_server.start()
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, request_stop)
+        if role_controller is not None:
+            from proof_agent.delivery.worker_health import (
+                install_worker_role_deployment_signals,
+            )
+
+            previous_handlers.update(
+                install_worker_role_deployment_signals(role_controller)
+            )
+        if activation_state != "active":
+            typer.echo(
+                json.dumps(
+                    {"activation_state": activation_state.upper(), "status": "ready"},
+                    sort_keys=True,
+                )
+            )
+            while not stop_requested:
+                time.sleep(min(poll_interval_seconds, 1.0))
+            return
         typer.echo("production Hybrid knowledge worker started")
         while not stop_requested:
+            if role_controller is not None and not role_controller.can_claim():
+                time.sleep(min(poll_interval_seconds, 1.0))
+                continue
             outcome = worker.run_once()
             if outcome is None:
                 time.sleep(min(poll_interval_seconds, 60.0))
@@ -1681,9 +1917,23 @@ def _run_production_knowledge_worker(
                 typer.echo(json.dumps(outcome.model_dump(mode="json"), sort_keys=True))
         typer.echo("production Hybrid knowledge worker stopped")
     finally:
+        if health_server is not None:
+            health_server.close()
         for restore_signum, previous in previous_handlers.items():
             signal.signal(restore_signum, previous)
         composition.close()
+
+
+def _production_activation_state() -> str:
+    from proof_agent.contracts import RoleActivationState
+
+    value = os.environ.get("PROOF_AGENT_ACTIVATION_STATE", "").strip().lower()
+    try:
+        return RoleActivationState(value).value
+    except ValueError as exc:
+        raise ValueError(
+            "PROOF_AGENT_ACTIVATION_STATE must be standby, active or draining"
+        ) from exc
 
 
 def create_knowledge_ingestion_worker(

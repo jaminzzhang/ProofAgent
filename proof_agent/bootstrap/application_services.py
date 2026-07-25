@@ -40,6 +40,7 @@ class ProductionSecurityComposition:
     guarded_http_client: GuardedHttpsClient
     permission_service: PermissionMappingService
     operator_session_service: OperatorSessionService
+    oidc_client: GuardedOidcClient
     recovery_mapping: RecoveryOidcGroupMapping
     secret_provider: SecretProvider
 
@@ -222,6 +223,7 @@ def compose_production_security(
         guarded_http_client=guarded_client,
         permission_service=permission_service,
         operator_session_service=session_service,
+        oidc_client=oidc_client,
         recovery_mapping=recovery,
         secret_provider=secret_provider,
     )

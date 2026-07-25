@@ -342,12 +342,14 @@ class _HybridClaimHeartbeat:
         lease_seconds: int,
         interval_seconds: float,
         cancellation: KnowledgeModelCancellation,
+        ownership_guard: Callable[[], bool],
     ) -> None:
         self._lifecycle = lifecycle
         self._claim = claim
         self._lease_seconds = lease_seconds
         self._interval_seconds = interval_seconds
         self._cancellation = cancellation
+        self._ownership_guard = ownership_guard
         self._stop = Event()
         self._lock = RLock()
         self._failure: BaseException | None = None
@@ -387,6 +389,8 @@ class _HybridClaimHeartbeat:
     def _run(self) -> None:
         while not self._stop.wait(self._interval_seconds):
             try:
+                if not self._ownership_guard():
+                    raise RuntimeError("Production worker role lease was lost")
                 renewed = self._lifecycle.renew_claim(
                     self.claim,
                     lease_seconds=self._lease_seconds,
@@ -432,6 +436,7 @@ class HybridKnowledgeWorkerFactory:
         worker_id: str,
         lease_seconds: int = 60,
         heartbeat_interval_seconds: float | None = None,
+        ownership_guard: Callable[[], bool] | None = None,
     ) -> "HybridKnowledgeWorker":
         pipeline_scheduler = getattr(pipeline, "scheduler", None)
         if pipeline_scheduler is not self.scheduler:
@@ -445,6 +450,7 @@ class HybridKnowledgeWorkerFactory:
             lease_seconds=lease_seconds,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             scheduler=self.scheduler,
+            ownership_guard=ownership_guard,
         )
 
 
@@ -462,6 +468,7 @@ class HybridKnowledgeWorker:
         lease_seconds: int = 60,
         heartbeat_interval_seconds: float | None = None,
         scheduler: KnowledgeModelWorkScheduler | None = None,
+        ownership_guard: Callable[[], bool] | None = None,
     ) -> None:
         if not worker_id.strip():
             raise ValueError("worker_id must be non-empty")
@@ -487,12 +494,15 @@ class HybridKnowledgeWorker:
         self._worker_id = worker_id.strip()
         self._lease_seconds = lease_seconds
         self._heartbeat_interval_seconds = float(resolved_heartbeat_interval)
+        self._ownership_guard = ownership_guard or (lambda: True)
 
     @property
     def scheduler(self) -> KnowledgeModelWorkScheduler | None:
         return self._scheduler
 
     def run_once(self) -> HybridWorkerOutcome | None:
+        if not self._ownership_guard():
+            return None
         claim = self._lifecycle.claim_next(
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,
@@ -504,6 +514,8 @@ class HybridKnowledgeWorker:
     def process_claim(self, claim: HybridKnowledgeJobClaim) -> HybridWorkerOutcome:
         """Process one claim already owned by the authoritative lifecycle repository."""
 
+        if not self._ownership_guard():
+            raise RuntimeError("Production worker role lease was lost")
         request: HybridArtifactBuildRequest | None = None
         try:
             request = self._lifecycle.load_build_request(claim)
@@ -524,6 +536,7 @@ class HybridKnowledgeWorker:
                 lease_seconds=self._lease_seconds,
                 interval_seconds=self._heartbeat_interval_seconds,
                 cancellation=cancellation,
+                ownership_guard=self._ownership_guard,
             ) as ownership:
                 ownership.check()
                 original = self._original_store.get_exact(request.original_ref)

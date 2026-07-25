@@ -85,10 +85,12 @@ S0 establishes the strict V3-only source baseline and release-gate contracts. Fo
 2. S2 — OIDC-only sessions, Dashboard permission mapping, CSRF, secret handles and default-deny egress;
 3. S3 — S3-compatible artifact storage, S3-first finalization, verified materialization, retention and recovery;
 4. S4 — bounded PostgreSQL async queue inside Proof Agent, same-image Run Executor, cancellation and coarse SSE progress;
-5. S5 — production publication of the sole Agent with production knowledge, memory and optional validated read-only HTTPS tools;
+5. S5 — production publication of the sole Agent with production knowledge, runtime Case Memory deferred, and optional validated read-only HTTPS tools;
 6. S6 — hardened image/Compose topology, Blue/Green deployment, readiness, runbooks, release registry and pilot gates.
 
 The authoritative closure design is `docs/superpowers/specs/2026-07-11-proofagent-initial-production-release-closure-design.md`. The current readiness report is under `reports/`.
+
+[KNOWN | HIGH] The first S6 foundations now live under `deploy/production/`: strict dependency compatibility binding, a production image definition, stable Gateway/Blue-Green slot topology, deep API and Worker readiness, PostgreSQL-fenced Worker activation leases, standby/draining claim gating and a locked expand-only migration job. They remain pre-release implementation; deployment-controller choreography, soak/rollback automation and release evidence are incomplete, and no immutable candidate image or Gate Evidence has been produced by those files alone.
 
 ## Verification
 
@@ -108,4 +110,4 @@ Some HTTP transport and gateway tests open loopback sockets. In a filesystem-onl
 
 ## Documentation
 
-Start with `docs/README.md`. Active product truth lives in README, PRD, technical design, developer guide and development progress. ADRs and dated specifications are historical decision records and may describe removed or deferred surfaces.
+Start with `docs/README.md`. Chinese newcomers can use `docs/operations-deployment-development-guide.zh-CN.md` for local operation, deployment boundaries, development and incident triage. Active product truth lives in README, PRD, technical design, developer guide and development progress. ADRs and dated specifications are historical decision records and may describe removed or deferred surfaces.

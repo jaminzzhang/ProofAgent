@@ -12,13 +12,18 @@ dependencies = [
   "pydantic>=2.7.0",
   "pyyaml>=6.0.1",
   "jinja2>=3.1.0",
-  "mcp[cli]>=1.27.0",
   "filelock>=3.29.0,<4",
   "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.5.0", "mypy>=1.10.0", "httpx>=0.27.0"]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  "httpx>=0.27.0",
+  "mcp[cli]>=1.27.0",
+]
 dashboard = ["fastapi>=0.111.0", "uvicorn>=0.30.0"]
 openai = ["openai>=1.30.0"]
 tree = ["llama-index-core>=0.12.0"]
@@ -35,6 +40,8 @@ security = [
   "httpx>=0.27,<1",
 ]
 production = [
+  "fastapi>=0.111.0",
+  "uvicorn>=0.30.0",
   "alembic>=1.13,<2",
   "psycopg[binary,pool]>=3.2,<4",
   "sqlalchemy>=2.0,<3",
@@ -42,6 +49,9 @@ production = [
   "authlib>=1.6,<2",
   "cryptography>=45,<47",
   "httpx>=0.27,<1",
+  "openai>=1.30.0",
+  "openpyxl>=3.1.5,<4",
+  "pypdf>=6.12.2,<7",
 ]
 all = ["proof-agent[hybrid,ingestion,openai,production,security,tree]"]
 
