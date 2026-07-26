@@ -875,6 +875,17 @@ export interface EnvironmentModelCredentialReference {
   name: string
 }
 
+export interface ProductionSecretHandle {
+  protocol_id: string
+  handle_id: string
+  purpose: 'model_credential'
+  version_id?: string | null
+}
+
+export type ModelCredentialReference =
+  | EnvironmentModelCredentialReference
+  | ProductionSecretHandle
+
 export interface SharedModelConnectionReferenceSummary {
   connection_id: string
   draft_agent_reference_count: number
@@ -898,9 +909,9 @@ export interface ModelConnectionValidationRecord {
   created_by: string
   provider: string
   model_identifier: string
-  credential_ref: EnvironmentModelCredentialReference
-  checked_env_vars: string[]
-  missing_env_vars: string[]
+  credential_ref: ModelCredentialReference
+  checked_env_vars?: string[]
+  missing_env_vars?: string[]
   error_code: string | null
   message: string
 }
@@ -913,7 +924,7 @@ export interface ModelConnectionSmokeTestRecord {
   created_by: string
   provider: string
   model_identifier: string
-  credential_ref: EnvironmentModelCredentialReference
+  credential_ref: ModelCredentialReference
   request_sent: boolean
   error_code: string | null
   message: string
@@ -927,13 +938,14 @@ export interface SharedModelConnection {
   provider: string
   model_identifier: string
   base_url: string | null
-  credential_ref: EnvironmentModelCredentialReference
+  credential_ref: ModelCredentialReference
   organization_env: string | null
   project_env: string | null
   timeout_seconds: number | null
   lifecycle_state: SharedModelConnectionLifecycleState
   created_at: string
   updated_at: string
+  revision?: number
   reference_summary: SharedModelConnectionReferenceSummary
   last_validation: ModelConnectionValidationRecord | null
   last_smoke_test: ModelConnectionSmokeTestRecord | null
@@ -951,6 +963,7 @@ export interface ModelConnectionsResponse {
   data: SharedModelConnection[]
   meta: {
     total: number
+    credential_reference_type?: 'env' | 'secret_handle'
   }
 }
 

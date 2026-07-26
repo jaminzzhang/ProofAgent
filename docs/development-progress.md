@@ -1,12 +1,21 @@
 # Development Progress
 
-Updated: 2026-07-25
+Updated: 2026-07-26
 
 ## Current decision
 
 [KNOWN | HIGH] The Hybrid Knowledge happy path is code-complete and deployment-executable from PDF upload through controlled production Agent publication. S6 foundations now include compatibility binding, image/Compose definitions, deep API/Worker readiness, PostgreSQL-fenced Worker role leases, an explicit locked expand-only migration job, provider-neutral Blue/Green choreography, atomic multi-surface nginx switching and a first built-in `docker-compose-v1` operations driver. Formal production release remains **NO-GO**: no immutable candidate image has been built or scanned here, the driver has not run against disposable or real Docker/nginx infrastructure, the workspace has no real private parser/embedding/reranker/answer-model/evaluator execution, S6 operational evidence is incomplete, and none of the 13 candidate-bound release Gates has a formal passing Evidence result.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-07-26 production Model Connection management
+
+- [KNOWN | HIGH] Production now exposes an independent `/api/config/model-connections` delivery slice instead of falling through to Dashboard `StaticFiles`. OIDC named permissions, CSRF middleware, PostgreSQL optimistic revisions, same-transaction audit, Secret Provider protocol checks and trace-safe projections remain mandatory.
+- [KNOWN | HIGH] Production create/update accepts only opaque `ProductionSecretHandle` values with purpose `model_credential`; the existing development path continues to use environment-variable references. Runtime model resolution now carries the handle into the guarded OpenAI-compatible provider path without resolving or tracing secret material.
+- [KNOWN | HIGH] PostgreSQL reference projection counts exact shared-model occurrences in Draft Agents and Knowledge Sources plus immutable Published Agent Version references. High-impact changes require explicit review when references exist; physical deletion remains blocked by retained audit.
+- [KNOWN | HIGH] Dashboard Models list and detail surfaces select Env versus Secret Handle inputs from API capability/response shape and send current production revisions for update, archive and restore.
+- [COMPUTED | HIGH] Local verification on 2026-07-26: the complete backend suite with the test-only PostgreSQL DSN passed 3126 tests with 1 skip and 13 opt-in Hybrid tests deselected; Dashboard passed 224 tests and its production build; mypy passed over 382 product sources; the changed Python slice passed Ruff.
+- [KNOWN | HIGH] The currently running `production-local` Docker stack is sourced from another worktree and was not rebuilt from these changes. No real Vault lifecycle or provider request was executed, so browser/runtime deployment proof and release Gate evidence remain pending.
 
 ## 2026-07-25 initial S6 implementation
 

@@ -37,6 +37,7 @@ import type {
   KnowledgeUploadsResponse,
   ModelConnectionSmokeTestRecord,
   ModelConnectionValidationRecord,
+  ModelCredentialReference,
   ModelConnectionsResponse,
   PublishedAgentVersion,
   QuarantinedKnowledgeUpload,
@@ -312,7 +313,7 @@ export function createModelConnection(payload: {
   provider: string
   model_identifier: string
   base_url?: string | null
-  credential_ref: { type: 'env'; name: string }
+  credential_ref: ModelCredentialReference
   organization_env?: string | null
   project_env?: string | null
   timeout_seconds?: number | null
@@ -337,11 +338,12 @@ export function updateModelConnection(
     provider?: string | null
     model_identifier?: string | null
     base_url?: string | null
-    credential_ref?: { type: 'env'; name: string } | null
+    credential_ref?: ModelCredentialReference | null
     organization_env?: string | null
     project_env?: string | null
     timeout_seconds?: number | null
     confirm_impact?: boolean
+    expected_revision?: number
   },
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}`, {
@@ -353,7 +355,7 @@ export function updateModelConnection(
 
 export function archiveModelConnection(
   connectionId: string,
-  payload: { reason: string },
+  payload: { reason: string; expected_revision?: number },
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/archive`, {
     method: 'POST',
@@ -364,7 +366,7 @@ export function archiveModelConnection(
 
 export function restoreModelConnection(
   connectionId: string,
-  payload: { reason?: string | null } = {},
+  payload: { reason?: string | null; expected_revision?: number } = {},
 ): Promise<SharedModelConnection> {
   return fetchJson<SharedModelConnection>(`${BASE}/config/model-connections/${connectionId}/restore`, {
     method: 'POST',

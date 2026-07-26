@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.engine import RowMapping
 
 from proof_agent.capabilities.persistence.postgres._common import (
     ConnectionSource,
@@ -38,7 +40,7 @@ class PostgresAuditRepository:
                 actor_json=model_json(event.actor),
                 target_type=event.target_type,
                 target_id=event.target_id,
-                metadata_json=dict(event.metadata),
+                metadata_json=model_json(event)["metadata"],
                 occurred_at=occurred_at,
                 expires_at=occurred_at + self._RETENTION,
             )
@@ -56,7 +58,36 @@ class PostgresAuditRepository:
             )
 
     def get(self, audit_id: str) -> AuditMetadataRecord | None:
-        statement = sa.select(
+        statement = self._projection().where(
+            audit_events.c.audit_id == uuid_value(audit_id, field="audit_id")
+        )
+        with read_connection(self._connection_source) as connection:
+            row = connection.execute(statement).mappings().one_or_none()
+        return None if row is None else self._hydrate(row)
+
+    def list_for_target(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+    ) -> tuple[AuditMetadataRecord, ...]:
+        """Return retained audit metadata for one exact target in event order."""
+
+        statement = (
+            self._projection()
+            .where(
+                audit_events.c.target_type == target_type,
+                audit_events.c.target_id == target_id,
+            )
+            .order_by(audit_events.c.occurred_at, audit_events.c.audit_id)
+        )
+        with read_connection(self._connection_source) as connection:
+            rows = connection.execute(statement).mappings().all()
+        return tuple(self._hydrate(row) for row in rows)
+
+    @staticmethod
+    def _projection() -> sa.Select[Any]:
+        return sa.select(
             audit_events.c.audit_id,
             audit_events.c.category,
             audit_events.c.event_type,
@@ -66,11 +97,10 @@ class PostgresAuditRepository:
             audit_events.c.target_id,
             audit_events.c.metadata_json,
             audit_events.c.occurred_at,
-        ).where(audit_events.c.audit_id == uuid_value(audit_id, field="audit_id"))
-        with read_connection(self._connection_source) as connection:
-            row = connection.execute(statement).mappings().one_or_none()
-        if row is None:
-            return None
+        )
+
+    @staticmethod
+    def _hydrate(row: RowMapping) -> AuditMetadataRecord:
         return AuditMetadataRecord.model_validate(
             {
                 "audit_id": str(row["audit_id"]),

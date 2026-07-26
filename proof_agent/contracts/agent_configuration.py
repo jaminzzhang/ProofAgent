@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from pydantic import Field, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.secrets import ProductionSecretHandle
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
 from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
 from proof_agent.contracts.shared_assets import ResolvedSharedAssetVersions
@@ -56,6 +57,9 @@ class EnvironmentModelCredentialReference(FrozenModel):
 
     type: Literal["env"] = "env"
     name: str
+
+
+ModelCredentialReference = EnvironmentModelCredentialReference | ProductionSecretHandle
 
 
 class ContractBundle(FrozenModel):
@@ -223,7 +227,7 @@ class SharedModelConnection(FrozenModel):
     provider: str
     model_identifier: str
     base_url: str | None = None
-    credential_ref: EnvironmentModelCredentialReference
+    credential_ref: ModelCredentialReference
     organization_env: str | None = None
     project_env: str | None = None
     timeout_seconds: float | None = None
@@ -268,7 +272,7 @@ class ModelConnectionValidationRecord(FrozenModel):
     created_by: str
     provider: str
     model_identifier: str
-    credential_ref: EnvironmentModelCredentialReference
+    credential_ref: ModelCredentialReference
     checked_env_vars: tuple[str, ...] = Field(default_factory=tuple)
     missing_env_vars: tuple[str, ...] = Field(default_factory=tuple)
     error_code: str | None = None
@@ -285,7 +289,7 @@ class ModelConnectionSmokeTestRecord(FrozenModel):
     created_by: str
     provider: str
     model_identifier: str
-    credential_ref: EnvironmentModelCredentialReference
+    credential_ref: ModelCredentialReference
     request_sent: bool
     error_code: str | None = None
     message: str = ""

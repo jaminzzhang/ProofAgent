@@ -32,12 +32,17 @@ export function ModelsPage() {
   const [modelIdentifier, setModelIdentifier] = useState('deepseek-chat')
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
   const [credentialEnv, setCredentialEnv] = useState('DEEPSEEK_API_KEY')
+  const [credentialReferenceType, setCredentialReferenceType] = useState<'env' | 'secret_handle'>('env')
+  const [secretProtocol, setSecretProtocol] = useState('hashicorp-vault-2.0-kv-v2')
+  const [secretHandleId, setSecretHandleId] = useState('models/proof-agent/insurance-primary')
+  const [secretVersionId, setSecretVersionId] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
   const { t, formatDateTime, formatNumber } = useLocale()
 
   async function loadConnections() {
-    const { data } = await fetchModelConnections()
+    const { data, meta } = await fetchModelConnections()
     setConnections(data)
+    setCredentialReferenceType(meta.credential_reference_type ?? 'env')
   }
 
   useEffect(() => {
@@ -45,9 +50,10 @@ export function ModelsPage() {
 
     async function load() {
       try {
-        const { data } = await fetchModelConnections()
+        const { data, meta } = await fetchModelConnections()
         if (!cancelled) {
           setConnections(data)
+          setCredentialReferenceType(meta.credential_reference_type ?? 'env')
           setError(null)
         }
       } catch {
@@ -76,7 +82,7 @@ export function ModelsPage() {
         connection.provider,
         connection.model_identifier,
         connection.base_url ?? '',
-        connection.credential_ref.name,
+        credentialReferenceLabel(connection),
       ].some((value) => value.toLowerCase().includes(query))
     }),
     [connections, lifecycleFilter, providerFilter, referenceFilter, search, smokeFilter],
@@ -87,13 +93,21 @@ export function ModelsPage() {
     setError(null)
     setStatus(null)
     try {
+      const credentialRef = credentialReferenceType === 'secret_handle'
+        ? {
+            protocol_id: secretProtocol.trim(),
+            handle_id: secretHandleId.trim(),
+            purpose: 'model_credential' as const,
+            ...(secretVersionId.trim() ? { version_id: secretVersionId.trim() } : {}),
+          }
+        : { type: 'env' as const, name: credentialEnv.trim() }
       const connection = await createModelConnection({
         connection_id: connectionId || undefined,
         display_name: displayName,
         provider,
         model_identifier: modelIdentifier,
         base_url: baseUrl || undefined,
-        credential_ref: { type: 'env', name: credentialEnv },
+        credential_ref: credentialRef,
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
       })
       setStatus(t('models.created').replace('{name}', connection.display_name))
@@ -154,13 +168,28 @@ export function ModelsPage() {
           />
           <TextField label={t('models.modelIdentifier')} value={modelIdentifier} onChange={setModelIdentifier} />
           <TextField label={t('models.baseUrl')} value={baseUrl} onChange={setBaseUrl} placeholder="https://api.example.com" />
-          <TextField label={t('models.credentialEnv')} value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
+          {credentialReferenceType === 'secret_handle' ? (
+            <>
+              <TextField label={t('models.secretProtocol')} value={secretProtocol} onChange={setSecretProtocol} />
+              <TextField label={t('models.secretHandleId')} value={secretHandleId} onChange={setSecretHandleId} placeholder="models/proof-agent/primary" />
+              <TextField label={t('models.secretVersionId')} value={secretVersionId} onChange={setSecretVersionId} placeholder="optional" />
+            </>
+          ) : (
+            <TextField label={t('models.credentialEnv')} value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
+          )}
           <NumberField label={t('models.timeoutSeconds')} value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
         </div>
         <div className="mt-4 flex justify-end">
           <button
             onClick={handleCreate}
-            disabled={busy === 'create' || !displayName.trim() || !modelIdentifier.trim() || !credentialEnv.trim()}
+            disabled={
+              busy === 'create'
+              || !displayName.trim()
+              || !modelIdentifier.trim()
+              || (credentialReferenceType === 'env'
+                ? !credentialEnv.trim()
+                : !secretProtocol.trim() || !secretHandleId.trim())
+            }
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === 'create' ? t('models.creating') : t('models.create')}
@@ -237,7 +266,7 @@ export function ModelsPage() {
                 <TableHead>Model</TableHead>
                 <TableHead>{t('models.provider')}</TableHead>
                 <TableHead>{t('models.baseUrl')}</TableHead>
-                <TableHead>{t('models.credentialEnv')}</TableHead>
+                <TableHead>{t('models.credentialReference')}</TableHead>
                 <TableHead>Refs</TableHead>
                 <TableHead>{t('models.smoke')}</TableHead>
                 <TableHead>{t('agents.updated')}</TableHead>
@@ -263,7 +292,7 @@ export function ModelsPage() {
                   </td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{connection.provider}</td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{baseUrlHost(connection.base_url)}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{connection.credential_ref.name}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-[var(--text-secondary)]">{credentialReferenceLabel(connection)}</td>
                   <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{formatNumber(referenceCount(connection))} {t('models.refs')}</td>
                   <td className="px-5 py-3 text-xs text-[var(--text-secondary)]">{smokeLabel(connection, t)}</td>
                   <td className="px-5 py-3 font-mono text-xs text-[var(--text-muted)]">{formatDateTime(connection.updated_at)}</td>
@@ -275,6 +304,12 @@ export function ModelsPage() {
       )}
     </div>
   )
+}
+
+function credentialReferenceLabel(connection: SharedModelConnection): string {
+  return 'handle_id' in connection.credential_ref
+    ? connection.credential_ref.handle_id
+    : connection.credential_ref.name
 }
 
 function TextField({

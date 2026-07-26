@@ -18,6 +18,9 @@ from proof_agent.delivery.production_knowledge_api import router as production_k
 from proof_agent.delivery.configuration_api import router as configuration_router
 from proof_agent.delivery.auth_api import router as auth_router
 from proof_agent.delivery.security_configuration_api import router as security_router
+from proof_agent.delivery.production_model_connections import (
+    router as production_model_connections_router,
+)
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.contracts import KnowledgeOperationsHealthSources
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
@@ -310,6 +313,7 @@ def create_app(
         application.include_router(stats.router, prefix="/api")
         application.include_router(health.router, prefix="/api")
     else:
+        application.include_router(production_model_connections_router, prefix="/api")
         application.include_router(production_knowledge_router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.

@@ -9,6 +9,9 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     EnvironmentModelCredentialReference,
     ModelCallRole,
+    ProductionSecretHandle,
+    SecretPurpose,
+    SharedModelConnection,
     SharedModelConnectionLifecycleState,
 )
 from proof_agent.contracts.manifest import ModelConfig, ModelCredentialReferenceConfig
@@ -77,6 +80,49 @@ def test_shared_model_connection_default_timeout_is_used_when_not_overridden(
     )
 
     assert resolved.model_config.params["timeout_seconds"] == 20
+
+
+def test_production_shared_model_connection_resolves_to_secret_handle_params() -> None:
+    connection = SharedModelConnection(
+        connection_id="model_production_primary",
+        display_name="Production Primary",
+        provider="deepseek",
+        model_identifier="deepseek-chat",
+        base_url="https://api.deepseek.com",
+        credential_ref=ProductionSecretHandle(
+            protocol_id="hashicorp-vault-2.0-kv-v2",
+            handle_id="models/proof-agent/insurance-primary",
+            purpose=SecretPurpose.MODEL_CREDENTIAL,
+        ),
+        timeout_seconds=30,
+        lifecycle_state=SharedModelConnectionLifecycleState.ACTIVE,
+        created_at="2026-07-26T00:00:00Z",
+        updated_at="2026-07-26T00:00:00Z",
+    )
+
+    class _Reader:
+        def get_model_connection(self, connection_id: str):
+            return connection if connection_id == connection.connection_id else None
+
+    resolved = resolve_model_role_config(
+        ModelConfig(model_source="shared", connection_id=connection.connection_id),
+        role=ModelCallRole.FINAL_ANSWER,
+        configuration_store=_Reader(),
+        require_runtime_credentials=True,
+    )
+
+    assert resolved.model_config.params["credential_secret_handle"] == {
+        "protocol_id": "hashicorp-vault-2.0-kv-v2",
+        "handle_id": "models/proof-agent/insurance-primary",
+        "purpose": "model_credential",
+    }
+    assert "api_key_env" not in resolved.model_config.params
+    assert resolved.resolution_record.credential_ref == {
+        "type": "secret_handle",
+        "protocol_id": "hashicorp-vault-2.0-kv-v2",
+        "handle_id": "models/proof-agent/insurance-primary",
+        "purpose": "model_credential",
+    }
 
 
 def test_custom_model_connection_resolves_without_store_lookup(

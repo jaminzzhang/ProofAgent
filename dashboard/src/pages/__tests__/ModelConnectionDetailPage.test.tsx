@@ -144,6 +144,86 @@ describe('ModelConnectionDetailPage', () => {
     })
   })
 
+  it('edits production Secret Handles with optimistic revision checks', async () => {
+    const productionConnection = modelConnection({
+      connection_id: 'model_production_primary',
+      display_name: 'Production Primary',
+      revision: 3,
+      credential_ref: {
+        protocol_id: 'hashicorp-vault-2.0-kv-v2',
+        handle_id: 'models/proof-agent/insurance-primary',
+        purpose: 'model_credential',
+        version_id: '7',
+      },
+    })
+    vi.mocked(fetchModelConnection).mockResolvedValue(productionConnection)
+    vi.mocked(fetchModelConnectionReferences).mockResolvedValue(
+      productionConnection.reference_summary,
+    )
+    vi.mocked(updateModelConnection).mockResolvedValue({
+      ...productionConnection,
+      revision: 4,
+    })
+
+    renderPage('/models/model_production_primary')
+
+    expect(await screen.findByText('Production Primary')).toBeInTheDocument()
+    expect(screen.getByText('models/proof-agent/insurance-primary')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Credential Env')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Secret Handle ID'), {
+      target: { value: 'models/proof-agent/insurance-next' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Overview' }))
+
+    await waitFor(() => {
+      expect(updateModelConnection).toHaveBeenCalledWith(
+        'model_production_primary',
+        expect.objectContaining({
+          expected_revision: 3,
+          credential_ref: {
+            protocol_id: 'hashicorp-vault-2.0-kv-v2',
+            handle_id: 'models/proof-agent/insurance-next',
+            purpose: 'model_credential',
+            version_id: '7',
+          },
+        }),
+      )
+    })
+  })
+
+  it('archives production connections with the current revision', async () => {
+    const productionConnection = modelConnection({
+      connection_id: 'model_production_primary',
+      display_name: 'Production Primary',
+      revision: 3,
+      credential_ref: {
+        protocol_id: 'hashicorp-vault-2.0-kv-v2',
+        handle_id: 'models/proof-agent/insurance-primary',
+        purpose: 'model_credential',
+        version_id: null,
+      },
+    })
+    vi.mocked(fetchModelConnection).mockResolvedValue(productionConnection)
+    vi.mocked(fetchModelConnectionReferences).mockResolvedValue(
+      productionConnection.reference_summary,
+    )
+
+    renderPage('/models/model_production_primary')
+
+    expect(await screen.findByText('Production Primary')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Archive Reason'), {
+      target: { value: 'Rotate provider account' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+
+    await waitFor(() => {
+      expect(archiveModelConnection).toHaveBeenCalledWith('model_production_primary', {
+        reason: 'Rotate provider account',
+        expected_revision: 3,
+      })
+    })
+  })
+
   it('turns model impact conflicts into an explicit confirmation review', async () => {
     vi.mocked(updateModelConnection)
       .mockRejectedValueOnce(

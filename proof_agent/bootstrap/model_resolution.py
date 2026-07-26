@@ -8,8 +8,10 @@ from urllib import parse
 
 from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.contracts import (
+    EnvironmentModelCredentialReference,
     ModelCallRole,
     ModelConnectionResolutionRecord,
+    ProductionSecretHandle,
     SharedModelConnectionLifecycleState,
 )
 from proof_agent.contracts.manifest import ModelConfig
@@ -73,23 +75,40 @@ def _resolve_shared_model_role_config(
             f"Shared Model Connection not found: {connection_id}",
             "Create the Shared Model Connection or switch this model role to custom config.",
         )
-    _require_runtime_env_vars(
-        (connection.credential_ref.name, connection.organization_env, connection.project_env),
-        require_runtime_credentials=require_runtime_credentials,
-    )
     usage_params = _usage_params_with_connection_defaults(
         getattr(role_config, "params", {}),
         timeout_seconds=connection.timeout_seconds,
     )
-    provider_params = {
-        **_connection_provider_params(
-            credential_env=connection.credential_ref.name,
+    credential_ref = connection.credential_ref
+    if isinstance(credential_ref, EnvironmentModelCredentialReference):
+        _require_runtime_env_vars(
+            (credential_ref.name, connection.organization_env, connection.project_env),
+            require_runtime_credentials=require_runtime_credentials,
+        )
+        provider_params = _connection_provider_params(
+            credential_env=credential_ref.name,
             base_url=connection.base_url,
             organization_env=connection.organization_env,
             project_env=connection.project_env,
-        ),
-        **usage_params,
-    }
+        )
+        trace_credential_ref = {"type": "env", "name": credential_ref.name}
+    else:
+        assert isinstance(credential_ref, ProductionSecretHandle)
+        handle_payload = credential_ref.model_dump(mode="json", exclude_none=True)
+        provider_params = {
+            **_connection_provider_params(
+                credential_env=None,
+                base_url=connection.base_url,
+                organization_env=None,
+                project_env=None,
+            ),
+            "credential_secret_handle": handle_payload,
+        }
+        trace_credential_ref = {
+            "type": "secret_handle",
+            **handle_payload,
+        }
+    provider_params.update(usage_params)
     warnings = (
         ("connection_archived",)
         if connection.lifecycle_state is SharedModelConnectionLifecycleState.ARCHIVED
@@ -108,7 +127,7 @@ def _resolve_shared_model_role_config(
             provider=connection.provider,
             model_identifier=connection.model_identifier,
             base_url_host=_url_host(connection.base_url),
-            credential_ref={"type": "env", "name": connection.credential_ref.name},
+            credential_ref=trace_credential_ref,
             usage_params=usage_params,
             warnings=warnings,
         ),
