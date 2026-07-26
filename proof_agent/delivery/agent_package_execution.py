@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
     from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
     from proof_agent.contracts.ports.secret_provider import SecretProvider
+    from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 
 
 class ControlledReActOrchestratorDependency(Protocol):
@@ -100,6 +101,7 @@ class AgentPackageRunRequest:
     cancellation_check: Callable[[], None] | None = None
     guarded_http_client: "GuardedHttpClient" | None = None
     secret_provider: "SecretProvider" | None = None
+    model_credential_resolver: "ModelCredentialResolver" | None = None
 
 
 def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
@@ -184,6 +186,7 @@ def _execute_controlled_react_v3_agent_package_run(
             governed_hybrid_request_factory=request.governed_hybrid_request_factory,
             guarded_http_client=request.guarded_http_client,
             secret_provider=request.secret_provider,
+            model_credential_resolver=request.model_credential_resolver,
             cancellation_check=request.cancellation_check,
         )
     except ProofAgentError as exc:

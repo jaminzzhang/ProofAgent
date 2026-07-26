@@ -1,0 +1,10 @@
+{
+  "protocol_id": "hashicorp-vault-2.0-kv-v2",
+  "product": "HashiCorp Vault",
+  "product_version": "2.0.3",
+  "endpoint_origin": "https://vault.internal:8200",
+  "authentication_method": "vault-agent-token-file",
+  "contract_evidence": [
+    "tests/test_secret_handles.py::test_vault_kv_v2_contract_observes_rotation_without_caching"
+  ]
+}

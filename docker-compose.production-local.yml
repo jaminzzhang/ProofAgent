@@ -1,0 +1,397 @@
+name: proofagent-production-local
+
+x-proof-agent-environment: &proof-agent-environment
+  PROOF_AGENT_MODE: production
+  PROOF_AGENT_POSTGRES_DSN: postgresql+psycopg://proof:${POSTGRES_PASSWORD}@postgres:5432/proof
+  HYBRID_POSTGRES_DSN: postgresql://proof:${POSTGRES_PASSWORD}@postgres:5432/proof
+  PROOF_AGENT_STABLE_ORIGIN: https://proof-agent.localhost:8443
+  PROOF_AGENT_RELEASE_ID: local-production-candidate
+  PROOF_AGENT_IMAGE_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  PROOF_AGENT_PUBLISHED_AGENT_CACHE_DIR: /var/lib/proof-agent/cache
+  PROOF_AGENT_EXECUTOR_WORK_DIR: /var/lib/proof-agent/executor
+  PROOF_AGENT_RELEASE_WORK_DIR: /var/lib/proof-agent/release
+  PROOF_AGENT_EXECUTOR_ID: executor-local-production-1
+  PROOF_AGENT_KNOWLEDGE_WORKER_ID: knowledge-worker-local-production-1
+  PROOF_AGENT_ARTIFACT_S3_BUCKET: proof-agent-local
+  PROOF_AGENT_ARTIFACT_S3_KEY_PREFIX: runs/
+  PROOF_AGENT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+  PROOF_AGENT_ARTIFACT_S3_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  PROOF_AGENT_SECRET_PROVIDER_COMPATIBILITY_INPUT: /opt/proof-agent-local/compatibility-input.json
+  PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE: /run/proof-agent-secrets/model-credential-keyring.json
+  PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON: >-
+    {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"}}
+  PROOF_AGENT_VAULT_AGENT_TOKEN_FILE: /run/vault-agent/token
+  PROOF_AGENT_OPENSEARCH_SECRET_HANDLE: knowledge/opensearch/proof-agent
+  PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE: evaluation/proof-agent/release
+  PROOF_AGENT_RECOVERY_GROUP_CLAIM: groups
+  PROOF_AGENT_RECOVERY_GROUP_NAME: proof-agent-recovery
+  PROOF_AGENT_SESSION_ENVELOPE_KEY_HANDLES_JSON: '{"v1":"session-key-v1"}'
+  PROOF_AGENT_SESSION_ACTIVE_KEY_VERSION: v1
+  PROOF_AGENT_CSRF_KEY_HANDLE: csrf-key
+  PROOF_AGENT_OIDC_CLIENT_SECRET_HANDLE: oidc-client-secret
+  PROOF_AGENT_OIDC_ISSUER: https://proof-agent.localhost:8443/oidc/realms/proof-agent
+  PROOF_AGENT_OIDC_AUTHORIZATION_ENDPOINT: https://proof-agent.localhost:8443/oidc/realms/proof-agent/protocol/openid-connect/auth
+  PROOF_AGENT_OIDC_TOKEN_ENDPOINT: https://proof-agent.localhost:8443/oidc/realms/proof-agent/protocol/openid-connect/token
+  PROOF_AGENT_OIDC_JWKS_URI: https://proof-agent.localhost:8443/oidc/realms/proof-agent/protocol/openid-connect/certs
+  PROOF_AGENT_OIDC_CLIENT_ID: proof-agent
+  PROOF_AGENT_OIDC_GROUPS_CLAIM: groups
+  PROOF_AGENT_OIDC_ROLES_CLAIM: roles
+  PA_HYBRID_KNOWLEDGE_MODELS_ENABLED: "1"
+  PA_HYBRID_PRODUCTION_RUNTIME_ENABLED: "1"
+  PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS: "1"
+  PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT: https://models.internal:9443
+  PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE: proof-agent-local-production
+  PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS: models.internal
+  PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS: 172.16.0.0/12
+  PA_KNOWLEDGE_DOCLING_ENDPOINT: https://models.internal:9444
+  PA_KNOWLEDGE_PADDLE_ENDPOINT: https://models.internal:9445
+  PA_KNOWLEDGE_EMBEDDING_ENDPOINT: https://models.internal:9446
+  PA_KNOWLEDGE_RERANKER_ENDPOINT: https://models.internal:9447
+  PA_KNOWLEDGE_PARSER_REVISION: docling@sha256:localproductionv1
+  PA_KNOWLEDGE_MODEL_DIGESTS: docling@sha256:localproductionv1,paddle@sha256:localproductionv1
+  PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  HYBRID_S3_BUCKET: proof-agent-local
+  HYBRID_S3_KEY_PREFIX: knowledge/
+  HYBRID_S3_ENDPOINT: http://minio:9000
+  HYBRID_S3_REGION: us-east-1
+  HYBRID_S3_ALLOW_INSECURE_ENDPOINT: "1"
+  HYBRID_OPENSEARCH_ENDPOINT: https://opensearch.internal:9200
+  HYBRID_OPENSEARCH_NUMBER_OF_REPLICAS: "0"
+  HYBRID_EMBEDDING_INSTRUCTION: Represent the insurance rule query for retrieval.
+  HYBRID_EMBEDDING_MODEL_REVISION: embedding@sha256:localproductionv1
+  HYBRID_EMBEDDING_DIMENSION: "64"
+  HYBRID_RERANKER_REVISION: reranker@sha256:localproductionv1
+  HYBRID_RETRIEVAL_PROFILE_REVISION: insurance-profile-v1
+  HYBRID_CONDITION_TAXONOMY_JSON: >-
+    {"taxonomy_id":"insurance","taxonomy_revision_id":"insurance-local-v1","allowed_values":{"region":["LOCAL"]}}
+  HYBRID_APPROVED_VISIBILITY_JSON: >-
+    {"visibility":"RESTRICTED","institutions":{"mode":"ALLOWLIST","values":["local-branch"]},"regions":{"mode":"ALLOWLIST","values":["LOCAL"]},"channels":{"mode":"ALLOWLIST","values":["LOCAL"]},"roles":{"mode":"ALLOWLIST","values":["ADMIN"]},"business_lines":{"mode":"ALLOWLIST","values":["INSURANCE"]},"revision_id":"visibility-local-v1"}
+  PA_KNOWLEDGE_EVALUATION_ENDPOINT: https://models.internal:9448
+  PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON: >-
+    {"institutions":["local-branch"],"regions":["LOCAL"],"channels":["LOCAL"],"roles":["ADMIN"],"business_lines":["INSURANCE"],"public_only":false}
+  PROOF_AGENT_RELEASE_ACTOR_SUBJECT: local-release-operator
+  PROOF_AGENT_RELEASE_ACTOR_IDENTITY_PROVIDER: deployment-identity
+  PROOF_AGENT_RELEASE_ACTOR_SESSION_ID: local-production-release
+  SSL_CERT_FILE: /run/tls/ca.crt
+  REQUESTS_CA_BUNDLE: /run/tls/ca.crt
+  PYTHONUNBUFFERED: "1"
+
+x-proof-agent-volumes: &proof-agent-volumes
+  - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+  - vault-agent-token:/run/vault-agent:ro
+
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: proof
+      POSTGRES_USER: proof
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proof -d proof"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks: [production]
+
+  minio:
+    image: minio/minio:RELEASE.2025-06-13T11-33-47Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:59010:9000"
+      - "127.0.0.1:59011:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks: [production]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mc mb --ignore-existing local/proof-agent-local
+        mc version enable local/proof-agent-local
+    restart: "no"
+    networks: [production]
+
+  opensearch:
+    image: opensearchproject/opensearch:3.1.0
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms768m -Xmx768m
+    ports:
+      - "127.0.0.1:19210:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9200/_cluster/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    restart: unless-stopped
+    networks: [production]
+
+  vault:
+    image: hashicorp/vault:1.20.1
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_ROOT_TOKEN}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    command: server -dev
+    volumes:
+      - vault-data:/vault/file
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks: [production]
+
+  vault-init:
+    image: hashicorp/vault:1.20.1
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN}
+      SESSION_ENVELOPE_KEY: ${SESSION_ENVELOPE_KEY}
+      CSRF_KEY: ${CSRF_KEY}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      LOCAL_EVALUATION_TOKEN: ${LOCAL_EVALUATION_TOKEN}
+    volumes:
+      - vault-agent-token:/run/vault-agent
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        vault kv put secret/proof-agent/session value="$${SESSION_ENVELOPE_KEY}"
+        vault kv put secret/proof-agent/csrf value="$${CSRF_KEY}"
+        vault kv put secret/proof-agent/oidc value="$${OIDC_CLIENT_SECRET}"
+        vault kv put secret/proof-agent/opensearch value='{"authorization":"Basic bG9jYWwtcHJvZHVjdGlvbjpvcGVuc2VhcmNo"}'
+        vault kv put secret/proof-agent/evaluation value="$${LOCAL_EVALUATION_TOKEN}"
+        printf '%s' "$${VAULT_TOKEN}" > /run/vault-agent/token
+        chown 10001:10001 /run/vault-agent/token
+        chmod 0400 /run/vault-agent/token
+    restart: "no"
+    networks: [production]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.2
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /oidc
+      KC_HOSTNAME: https://proof-agent.localhost:8443/oidc
+      KC_PROXY_HEADERS: xforwarded
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      PROOF_AGENT_ADMIN_PASSWORD: ${PROOF_AGENT_ADMIN_PASSWORD}
+    volumes:
+      - ./docker/production-local/keycloak-realm.json:/opt/keycloak/data/import/proof-agent-realm.json:ro
+      - keycloak-data:/opt/keycloak/data
+    restart: unless-stopped
+    networks: [production]
+
+  model-credential-key-init:
+    image: alpine:3.22.1
+    volumes:
+      - ./docker/production-local/runtime/secrets/model-credential-keyring.json:/source/model-credential-keyring.json:ro
+      - model-credential-secrets:/target
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -o 10001 -g 10001 -m 0400 /source/model-credential-keyring.json /target/model-credential-keyring.json
+    restart: "no"
+    networks: [production]
+
+  model-plane:
+    image: proof-agent:production-local
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    entrypoint: ["uvicorn"]
+    command: ["model_plane:app", "--app-dir", "/opt/proof-agent-local", "--host", "0.0.0.0", "--port", "8081"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks: [production]
+
+  gateway:
+    image: nginx:1.29.0-alpine
+    depends_on:
+      keycloak:
+        condition: service_started
+      model-plane:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - ./docker/production-local/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/production-local/runtime/tls:/etc/nginx/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/gateway-health"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks:
+      production:
+        aliases:
+          - proof-agent.localhost
+          - vault.internal
+          - opensearch.internal
+          - models.internal
+
+  database-migrate:
+    image: proof-agent:production-local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *proof-agent-environment
+    volumes: *proof-agent-volumes
+    command: ["database", "upgrade"]
+    restart: "no"
+    networks: [production]
+
+  hybrid-migrate:
+    image: proof-agent:production-local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *proof-agent-environment
+    volumes: *proof-agent-volumes
+    command: ["hybrid-migrate"]
+    restart: "no"
+    networks: [production]
+
+  security-bootstrap:
+    image: proof-agent:production-local
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      hybrid-migrate:
+        condition: service_completed_successfully
+    environment: *proof-agent-environment
+    volumes: *proof-agent-volumes
+    entrypoint: ["python"]
+    command: ["/opt/proof-agent-local/bootstrap_security.py"]
+    restart: "no"
+    networks: [production]
+
+  api:
+    image: proof-agent:production-local
+    depends_on:
+      gateway:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      security-bootstrap:
+        condition: service_completed_successfully
+      model-credential-key-init:
+        condition: service_completed_successfully
+      vault-init:
+        condition: service_completed_successfully
+    environment: *proof-agent-environment
+    volumes:
+      - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+      - vault-agent-token:/run/vault-agent:ro
+      - model-credential-secrets:/run/proof-agent-secrets:ro
+      - published-agent-cache:/var/lib/proof-agent/cache
+    entrypoint: ["uvicorn"]
+    command:
+      - proof_agent.bootstrap.production_roles:create_production_api_application
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks: [production]
+
+  knowledge-worker:
+    image: proof-agent:production-local
+    depends_on:
+      api:
+        condition: service_healthy
+    environment: *proof-agent-environment
+    volumes: *proof-agent-volumes
+    command: ["knowledge-worker", "--poll-interval", "1"]
+    restart: unless-stopped
+    networks: [production]
+
+  run-executor:
+    image: proof-agent:production-local
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *proof-agent-environment
+      PROOF_AGENT_EXECUTOR_SLOT: "1"
+      PROOF_AGENT_EXECUTOR_CONCURRENCY: "5"
+    volumes:
+      - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+      - vault-agent-token:/run/vault-agent:ro
+      - model-credential-secrets:/run/proof-agent-secrets:ro
+      - executor-work:/var/lib/proof-agent/executor
+      - published-agent-cache:/var/lib/proof-agent/cache
+    entrypoint: ["python"]
+    command: ["/opt/proof-agent-local/wait_for_published_agent.py"]
+    restart: unless-stopped
+    networks: [production]
+
+volumes:
+  postgres-data:
+  minio-data:
+  opensearch-data:
+  vault-data:
+  vault-agent-token:
+  model-credential-secrets:
+  keycloak-data:
+  published-agent-cache:
+  executor-work:
+
+networks:
+  production:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24

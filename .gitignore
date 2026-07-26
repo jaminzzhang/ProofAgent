@@ -87,3 +87,5 @@ deploy/production/deployment-compatibility-manifest.json
 
 # Graphify
 graphify-out/
+docker/production-local/runtime/
+.env.production-local

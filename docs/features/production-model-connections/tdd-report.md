@@ -1,5 +1,7 @@
 # TDD 与辅助编码报告
 
+> 历史报告：ADR-0153 已将模型 Secret Handle 替换为 PostgreSQL 加密凭据与外置版本化 keyring；本文中的旧验证数字和 Secret Handle 场景不代表当前实现证据。
+
 ## 1. 建议结论
 
 | 项 | 内容 |

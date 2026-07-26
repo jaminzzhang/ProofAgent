@@ -1,5 +1,8 @@
 # Production Model Connections Scope Plan
 
+> Historical plan. ADR-0153 supersedes the model Secret Handle decision with a
+> write-only API Key encrypted in PostgreSQL under an external versioned keyring.
+
 ## In scope
 
 1. Add an independent production Model Connection Configuration API mounted at `/api/config/model-connections`.

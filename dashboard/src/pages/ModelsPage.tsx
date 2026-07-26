@@ -32,10 +32,8 @@ export function ModelsPage() {
   const [modelIdentifier, setModelIdentifier] = useState('deepseek-chat')
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
   const [credentialEnv, setCredentialEnv] = useState('DEEPSEEK_API_KEY')
-  const [credentialReferenceType, setCredentialReferenceType] = useState<'env' | 'secret_handle'>('env')
-  const [secretProtocol, setSecretProtocol] = useState('hashicorp-vault-2.0-kv-v2')
-  const [secretHandleId, setSecretHandleId] = useState('models/proof-agent/insurance-primary')
-  const [secretVersionId, setSecretVersionId] = useState('')
+  const [credentialReferenceType, setCredentialReferenceType] = useState<'env' | 'postgres_encrypted'>('env')
+  const [apiKey, setApiKey] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
   const { t, formatDateTime, formatNumber } = useLocale()
 
@@ -93,25 +91,20 @@ export function ModelsPage() {
     setError(null)
     setStatus(null)
     try {
-      const credentialRef = credentialReferenceType === 'secret_handle'
-        ? {
-            protocol_id: secretProtocol.trim(),
-            handle_id: secretHandleId.trim(),
-            purpose: 'model_credential' as const,
-            ...(secretVersionId.trim() ? { version_id: secretVersionId.trim() } : {}),
-          }
-        : { type: 'env' as const, name: credentialEnv.trim() }
       const connection = await createModelConnection({
         connection_id: connectionId || undefined,
         display_name: displayName,
         provider,
         model_identifier: modelIdentifier,
         base_url: baseUrl || undefined,
-        credential_ref: credentialRef,
+        ...(credentialReferenceType === 'postgres_encrypted'
+          ? { api_key: apiKey }
+          : { credential_ref: { type: 'env' as const, name: credentialEnv.trim() } }),
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : undefined,
       })
       setStatus(t('models.created').replace('{name}', connection.display_name))
       setConnectionId('')
+      setApiKey('')
       await loadConnections()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('models.createError'))
@@ -168,12 +161,13 @@ export function ModelsPage() {
           />
           <TextField label={t('models.modelIdentifier')} value={modelIdentifier} onChange={setModelIdentifier} />
           <TextField label={t('models.baseUrl')} value={baseUrl} onChange={setBaseUrl} placeholder="https://api.example.com" />
-          {credentialReferenceType === 'secret_handle' ? (
-            <>
-              <TextField label={t('models.secretProtocol')} value={secretProtocol} onChange={setSecretProtocol} />
-              <TextField label={t('models.secretHandleId')} value={secretHandleId} onChange={setSecretHandleId} placeholder="models/proof-agent/primary" />
-              <TextField label={t('models.secretVersionId')} value={secretVersionId} onChange={setSecretVersionId} placeholder="optional" />
-            </>
+          {credentialReferenceType === 'postgres_encrypted' ? (
+            <PasswordField
+              label={t('models.apiKey')}
+              value={apiKey}
+              onChange={setApiKey}
+              placeholder={t('models.apiKeyCreatePlaceholder')}
+            />
           ) : (
             <TextField label={t('models.credentialEnv')} value={credentialEnv} onChange={setCredentialEnv} placeholder={CREDENTIAL_ENV_DEFAULTS[provider] || 'API_KEY'} />
           )}
@@ -188,7 +182,7 @@ export function ModelsPage() {
               || !modelIdentifier.trim()
               || (credentialReferenceType === 'env'
                 ? !credentialEnv.trim()
-                : !secretProtocol.trim() || !secretHandleId.trim())
+                : !apiKey)
             }
             className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -307,9 +301,37 @@ export function ModelsPage() {
 }
 
 function credentialReferenceLabel(connection: SharedModelConnection): string {
-  return 'handle_id' in connection.credential_ref
-    ? connection.credential_ref.handle_id
-    : connection.credential_ref.name
+  if ('handle_id' in connection.credential_ref) return connection.credential_ref.handle_id
+  if (connection.credential_ref.type === 'postgres_encrypted') return 'PostgreSQL encrypted'
+  return connection.credential_ref.name
+}
+
+function PasswordField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </span>
+      <input
+        type="password"
+        autoComplete="new-password"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+      />
+    </label>
+  )
 }
 
 function TextField({

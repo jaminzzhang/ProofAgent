@@ -23,6 +23,10 @@ from proof_agent.capabilities.persistence.postgres.metadata_review_repository im
 from proof_agent.capabilities.persistence.postgres.model_repository import (
     PostgresModelAssetRepository,
 )
+from proof_agent.capabilities.persistence.postgres.model_credential_repository import (
+    PostgresModelCredentialRepository,
+)
+from proof_agent.control.security.envelope_cipher import EnvelopeCipher
 from proof_agent.capabilities.persistence.postgres.tool_repository import (
     PostgresToolAssetRepository,
 )
@@ -32,7 +36,12 @@ from proof_agent.contracts.persistence import PersistenceInvariantError
 class PostgresConfigurationUnitOfWork:
     """Own one PostgreSQL transaction across configuration and audit repositories."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        model_credential_cipher: EnvelopeCipher | None = None,
+    ) -> None:
         self._engine = engine
         self._connection: Connection | None = None
         self._transaction: Transaction | None = None
@@ -41,6 +50,8 @@ class PostgresConfigurationUnitOfWork:
         self.agents: PostgresAgentLifecycleRepository
         self.knowledge: PostgresKnowledgeAssetRepository
         self.models: PostgresModelAssetRepository
+        self.model_credentials: PostgresModelCredentialRepository | None
+        self._model_credential_cipher = model_credential_cipher
         self.tools: PostgresToolAssetRepository
         self.audit: PostgresAuditRepository
         self.hybrid_ingestion: PostgresHybridIngestionRepository
@@ -58,6 +69,14 @@ class PostgresConfigurationUnitOfWork:
         self.agents = PostgresAgentLifecycleRepository(connection)
         self.knowledge = PostgresKnowledgeAssetRepository(connection)
         self.models = PostgresModelAssetRepository(connection)
+        self.model_credentials = (
+            None
+            if self._model_credential_cipher is None
+            else PostgresModelCredentialRepository(
+                connection,
+                cipher=self._model_credential_cipher,
+            )
+        )
         self.tools = PostgresToolAssetRepository(connection)
         self.audit = PostgresAuditRepository(connection)
         self.hybrid_ingestion = PostgresHybridIngestionRepository(connection)

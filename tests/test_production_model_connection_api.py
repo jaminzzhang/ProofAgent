@@ -13,11 +13,12 @@ from proof_agent.capabilities.persistence.postgres.configuration_uow import (
 from proof_agent.capabilities.persistence.postgres.model_repository import (
     PostgresModelAssetRepository,
 )
+from proof_agent.capabilities.persistence.postgres.model_credential_repository import (
+    PostgresModelCredentialRepository,
+)
 from proof_agent.contracts import (
     Permission,
-    ProductionSecretHandle,
-    SecretHandleValidation,
-    SecretPurpose,
+    PostgresEncryptedModelCredentialReference,
     SharedModelConnectionReferenceSummary,
 )
 from proof_agent.contracts import SharedAssetKind, SharedAssetVersionRef
@@ -25,28 +26,15 @@ from proof_agent.contracts.persistence import PersistenceConflictError
 from proof_agent.delivery.production_model_connections import router
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
+from proof_agent.control.security.envelope_cipher import EnvelopeCipher
 
 
 pytest_plugins = ("postgres_fixtures",)
 
-_PROTOCOL_ID = "hashicorp-vault-2.0-kv-v2"
-
-
-class _SecretProviderBoundary:
-    protocol_id = _PROTOCOL_ID
-
-    def validate(
-        self,
-        handle: ProductionSecretHandle,
-        *,
-        checked_at: str,
-    ) -> SecretHandleValidation:
-        return SecretHandleValidation(
-            handle=handle,
-            resolvable=True,
-            provider_version_id="7",
-            checked_at=checked_at,
-        )
+_MODEL_CREDENTIAL_CIPHER = EnvelopeCipher(
+    active_key_version="v1",
+    keys={"v1": b"m" * 32},
+)
 
 
 class _MemoryModels:
@@ -116,9 +104,26 @@ class _MemoryAudit:
         )
 
 
+class _MemoryModelCredentials:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes] = {}
+
+    def store(self, connection_id: str, value: bytes, *, updated_at: object) -> None:
+        del updated_at
+        self.values[connection_id] = bytes(value)
+
+    def validate(self, connection_id: str):
+        class Validation:
+            resolvable = connection_id in self.values
+            reason_code = None if resolvable else "credential_not_found"
+
+        return Validation()
+
+
 class _MemoryUow:
     def __init__(self) -> None:
         self.models = _MemoryModels()
+        self.model_credentials = _MemoryModelCredentials()
         self.audit = _MemoryAudit()
         self.committed = False
 
@@ -136,7 +141,6 @@ def _memory_client(uow: _MemoryUow) -> TestClient:
     application = FastAPI()
     application.state.proof_agent_mode = "production"
     application.state.production_configuration_uow_factory = lambda: uow
-    application.state.secret_provider = _SecretProviderBoundary()
     application.include_router(router, prefix="/api")
     application.dependency_overrides[get_operator_identity] = lambda: (
         OperatorIdentityContext(
@@ -148,8 +152,6 @@ def _memory_client(uow: _MemoryUow) -> TestClient:
                     Permission.MODEL_CONNECTION_EDIT,
                     Permission.MODEL_CONNECTION_ARCHIVE,
                     Permission.MODEL_CONNECTION_VALIDATE,
-                    Permission.SECRET_HANDLE_VIEW,
-                    Permission.SECRET_HANDLE_USE,
                 }
             ),
         )
@@ -161,9 +163,11 @@ def _client(engine: Engine, *, permissions: frozenset[Permission]) -> TestClient
     application = FastAPI()
     application.state.proof_agent_mode = "production"
     application.state.production_configuration_uow_factory = lambda: (
-        PostgresConfigurationUnitOfWork(engine)
+        PostgresConfigurationUnitOfWork(
+            engine,
+            model_credential_cipher=_MODEL_CREDENTIAL_CIPHER,
+        )
     )
-    application.state.secret_provider = _SecretProviderBoundary()
     application.include_router(router, prefix="/api")
     application.dependency_overrides[get_operator_identity] = lambda: (
         OperatorIdentityContext(
@@ -182,16 +186,12 @@ def _create_payload() -> dict[str, object]:
         "provider": "deepseek",
         "model_identifier": "deepseek-chat",
         "base_url": "https://api.deepseek.com",
-        "credential_ref": {
-            "protocol_id": _PROTOCOL_ID,
-            "handle_id": "models/proof-agent/insurance-primary",
-            "purpose": "model_credential",
-        },
+        "api_key": "sk-production-test",
         "timeout_seconds": 30,
     }
 
 
-def test_production_create_uses_configuration_uow_and_secret_handle() -> None:
+def test_production_create_encrypts_api_key_behind_write_only_contract() -> None:
     uow = _MemoryUow()
     client = _memory_client(uow)
 
@@ -199,18 +199,23 @@ def test_production_create_uses_configuration_uow_and_secret_handle() -> None:
 
     assert response.status_code == 201
     assert response.json()["credential_ref"] == {
-        **_create_payload()["credential_ref"],  # type: ignore[misc]
-        "version_id": None,
+        "type": "postgres_encrypted",
+        "configured": True,
     }
+    assert "api_key" not in response.text
     assert response.json()["revision"] == 1
     assert set(uow.models.connections) == {"model_production_primary"}
+    assert uow.model_credentials.values == {
+        "model_production_primary": b"sk-production-test"
+    }
     assert [event.event_type for event in uow.audit.events] == [  # type: ignore[attr-defined]
         "model_connection.created"
     ]
+    assert "sk-production-test" not in repr(uow.audit.events)
     assert uow.committed
 
 
-def test_production_list_and_detail_report_secret_handle_capability() -> None:
+def test_production_list_and_detail_report_postgres_encrypted_capability() -> None:
     uow = _MemoryUow()
     client = _memory_client(uow)
     assert client.post("/api/config/model-connections", json=_create_payload()).status_code == 201
@@ -221,14 +226,15 @@ def test_production_list_and_detail_report_secret_handle_capability() -> None:
     assert listing.status_code == 200
     assert listing.json()["meta"] == {
         "total": 1,
-        "credential_reference_type": "secret_handle",
+        "credential_reference_type": "postgres_encrypted",
     }
     assert listing.json()["data"][0]["connection_id"] == "model_production_primary"
     assert listing.json()["data"][0]["revision"] == 1
     assert detail.status_code == 200
-    assert detail.json()["credential_ref"]["handle_id"] == (
-        "models/proof-agent/insurance-primary"
-    )
+    assert detail.json()["credential_ref"] == {
+        "type": "postgres_encrypted",
+        "configured": True,
+    }
 
 
 def test_production_update_requires_current_revision_and_audits_only_success() -> None:
@@ -260,6 +266,29 @@ def test_production_update_requires_current_revision_and_audits_only_success() -
         "model_connection.created",
         "model_connection.updated",
     ]
+
+
+def test_production_update_rotates_api_key_without_echo_or_audit_material() -> None:
+    uow = _MemoryUow()
+    client = _memory_client(uow)
+    assert client.post("/api/config/model-connections", json=_create_payload()).status_code == 201
+
+    response = client.patch(
+        "/api/config/model-connections/model_production_primary",
+        json={"expected_revision": 1, "api_key": "sk-rotated"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["revision"] == 2
+    assert response.json()["credential_ref"] == {
+        "type": "postgres_encrypted",
+        "configured": True,
+    }
+    assert "sk-rotated" not in response.text
+    assert "api_key" not in response.text
+    assert uow.model_credentials.values["model_production_primary"] == b"sk-rotated"
+    audit_payload = " ".join(repr(event) for event in uow.audit.events)
+    assert "sk-rotated" not in audit_payload
 
 
 def test_production_high_impact_update_requires_reference_review_confirmation() -> None:
@@ -338,9 +367,10 @@ def test_production_lifecycle_and_validation_are_revisioned_and_audited() -> Non
     assert archived.json()["lifecycle_state"] == "ARCHIVED"
     assert validation.status_code == 200
     assert validation.json()["status"] == "passed"
-    assert validation.json()["credential_ref"]["handle_id"] == (
-        "models/proof-agent/insurance-primary"
-    )
+    assert validation.json()["credential_ref"] == {
+        "type": "postgres_encrypted",
+        "configured": True,
+    }
     assert smoke.status_code == 200
     assert smoke.json()["status"] == "skipped"
     assert smoke.json()["request_sent"] is False
@@ -368,7 +398,7 @@ def test_production_lifecycle_and_validation_are_revisioned_and_audited() -> Non
     ]
 
 
-def test_production_create_persists_secret_handle_and_audit_atomically(
+def test_production_create_persists_encrypted_credential_and_audit_atomically(
     postgres_engine: Engine,
 ) -> None:
     client = _client(
@@ -384,11 +414,11 @@ def test_production_create_persists_secret_handle_and_audit_atomically(
         "model_production_primary"
     )
     assert connection is not None
-    assert connection.credential_ref == ProductionSecretHandle(
-        protocol_id=_PROTOCOL_ID,
-        handle_id="models/proof-agent/insurance-primary",
-        purpose=SecretPurpose.MODEL_CREDENTIAL,
-    )
+    assert connection.credential_ref == PostgresEncryptedModelCredentialReference()
+    assert PostgresModelCredentialRepository(
+        postgres_engine,
+        cipher=_MODEL_CREDENTIAL_CIPHER,
+    ).resolve("model_production_primary").reveal_for_use() == b"sk-production-test"
     audits = PostgresAuditRepository(postgres_engine).list_for_target(
         target_type="model_connection",
         target_id="model_production_primary",
@@ -407,8 +437,6 @@ def test_production_detail_projects_retained_validation_audit(
                 Permission.MODEL_CONNECTION_EDIT,
                 Permission.MODEL_CONNECTION_VIEW,
                 Permission.MODEL_CONNECTION_VALIDATE,
-                Permission.SECRET_HANDLE_VIEW,
-                Permission.SECRET_HANDLE_USE,
             }
         ),
     )
@@ -425,12 +453,13 @@ def test_production_detail_projects_retained_validation_audit(
     assert detail.json()["last_validation"]["validation_id"] == (
         validation.json()["validation_id"]
     )
-    assert detail.json()["last_validation"]["credential_ref"]["handle_id"] == (
-        "models/proof-agent/insurance-primary"
-    )
+    assert detail.json()["last_validation"]["credential_ref"] == {
+        "type": "postgres_encrypted",
+        "configured": True,
+    }
 
 
-def test_production_create_rejects_environment_credential_reference(
+def test_production_create_rejects_credential_reference_input(
     postgres_engine: Engine,
 ) -> None:
     client = _client(

@@ -9,8 +9,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     EnvironmentModelCredentialReference,
     ModelCallRole,
-    ProductionSecretHandle,
-    SecretPurpose,
+    PostgresEncryptedModelCredentialReference,
     SharedModelConnection,
     SharedModelConnectionLifecycleState,
 )
@@ -82,18 +81,14 @@ def test_shared_model_connection_default_timeout_is_used_when_not_overridden(
     assert resolved.model_config.params["timeout_seconds"] == 20
 
 
-def test_production_shared_model_connection_resolves_to_secret_handle_params() -> None:
+def test_production_shared_model_connection_resolves_to_postgres_credential_pointer() -> None:
     connection = SharedModelConnection(
         connection_id="model_production_primary",
         display_name="Production Primary",
         provider="deepseek",
         model_identifier="deepseek-chat",
         base_url="https://api.deepseek.com",
-        credential_ref=ProductionSecretHandle(
-            protocol_id="hashicorp-vault-2.0-kv-v2",
-            handle_id="models/proof-agent/insurance-primary",
-            purpose=SecretPurpose.MODEL_CREDENTIAL,
-        ),
+        credential_ref=PostgresEncryptedModelCredentialReference(),
         timeout_seconds=30,
         lifecycle_state=SharedModelConnectionLifecycleState.ACTIVE,
         created_at="2026-07-26T00:00:00Z",
@@ -111,17 +106,13 @@ def test_production_shared_model_connection_resolves_to_secret_handle_params() -
         require_runtime_credentials=True,
     )
 
-    assert resolved.model_config.params["credential_secret_handle"] == {
-        "protocol_id": "hashicorp-vault-2.0-kv-v2",
-        "handle_id": "models/proof-agent/insurance-primary",
-        "purpose": "model_credential",
-    }
+    assert resolved.model_config.params["credential_connection_id"] == (
+        "model_production_primary"
+    )
     assert "api_key_env" not in resolved.model_config.params
     assert resolved.resolution_record.credential_ref == {
-        "type": "secret_handle",
-        "protocol_id": "hashicorp-vault-2.0-kv-v2",
-        "handle_id": "models/proof-agent/insurance-primary",
-        "purpose": "model_credential",
+        "type": "postgres_encrypted",
+        "configured": "true",
     }
 
 

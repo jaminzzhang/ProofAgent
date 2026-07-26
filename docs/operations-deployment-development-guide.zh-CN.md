@@ -403,7 +403,7 @@ flowchart LR
 
 ```bash
 export PROOF_AGENT_MODE=production
-export PROOF_AGENT_RELEASE_SCHEMA=0011_worker_role_leases
+export PROOF_AGENT_RELEASE_SCHEMA=0012_model_credential
 uv run proof-agent database upgrade \
   --locked \
   --expand-only \

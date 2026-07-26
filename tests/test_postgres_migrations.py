@@ -35,6 +35,7 @@ def test_upgrade_empty_database_to_head_and_repeat(postgres_dsn: str) -> None:
         "hybrid_knowledge_publication",
         "hybrid_projection_attestation",
         "model_connection_versions",
+        "model_connection_credentials",
         "model_connections",
         "run_attempts",
         "runs",
@@ -105,3 +106,12 @@ def test_database_module_has_no_production_downgrade_api() -> None:
     from proof_agent.capabilities.persistence.postgres import database
 
     assert not hasattr(database, "downgrade_database")
+
+
+def test_alembic_revision_identifiers_fit_the_installed_version_column() -> None:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+
+    assert all(len(revision.revision) <= 32 for revision in scripts.walk_revisions())

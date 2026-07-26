@@ -157,19 +157,23 @@ The Operator Permission Vocabulary slice for reusable model access assets. `mode
 _Avoid_: One model admin boolean, Agent permission reuse, frontend-only permission check
 
 **Model Credential Reference**:
-A secret-safe pointer from a Shared Model Connection to credential material, represented by Production Secret Handle in production or Environment Model Credential Reference in local development.
-_Avoid_: Raw API key, stored provider secret, exported credential value
+A secret-safe connection projection represented by PostgreSQL Encrypted Model Credential in production or Environment Model Credential Reference in local development. The production projection says only that a separately stored envelope is configured.
+_Avoid_: Raw API key in connection JSON, ciphertext export, exported credential value
 
 **Environment Model Credential Reference**:
 The local-development Model Credential Reference type that names an environment variable while keeping the credential value outside Proof Agent configuration; it is not accepted by production configuration.
 _Avoid_: Production credential reference, Dashboard-stored API key, exported credential material
 
 **Production Secret Handle**:
-An opaque, non-secret identifier resolved by the backend through the production secret provider for an authorized model, Knowledge Source, MCP, or tool operation.
+An opaque, non-secret identifier resolved by the backend through the production secret provider for an authorized Knowledge Source, MCP, tool, session, or identity operation. It is no longer the production model-provider credential contract.
 _Avoid_: Environment variable name, raw secret, client-resolved secret, exported credential value
 
+**PostgreSQL Encrypted Model Credential**:
+The production-only model credential envelope stored outside Shared Model Connection JSON. AES-256-GCM binds ciphertext to connection id and key version; a deployment-mounted keyring outside PostgreSQL resolves it through ModelCredentialResolver. Dashboard/API projections expose only `configured`, never key material, ciphertext, or key version.
+_Avoid_: Production Secret Handle for model providers, plaintext API key column, database-stored key-encryption key, readable Dashboard secret
+
 **Production Secret Provider**:
-The deployment-owned external boundary that stores and resolves production credential material and owns its creation, rotation, revocation, and deletion lifecycle.
+The deployment-owned external boundary that stores and resolves non-model production credential material and owns its creation, rotation, revocation, and deletion lifecycle.
 _Avoid_: Proof Agent secret store, Dashboard secret editor, Agent-owned credential, exported secret value
 
 **Model Connection Parameters**:

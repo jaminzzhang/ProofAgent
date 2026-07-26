@@ -1,0 +1,74 @@
+{
+  "realm": "proof-agent",
+  "enabled": true,
+  "displayName": "Proof Agent Local Production",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      {"name": "proof-agent-admin", "description": "Local production administrator"}
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "proof-agent",
+      "name": "Proof Agent",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${OIDC_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://proof-agent.localhost:8443/api/auth/callback"],
+      "webOrigins": ["https://proof-agent.localhost:8443"],
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {"name": "proof-agent-recovery"}
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@proof-agent.local",
+      "firstName": "Local",
+      "lastName": "Administrator",
+      "credentials": [
+        {"type": "password", "value": "${PROOF_AGENT_ADMIN_PASSWORD}", "temporary": false}
+      ],
+      "realmRoles": ["proof-agent-admin"],
+      "groups": ["/proof-agent-recovery"]
+    }
+  ]
+}

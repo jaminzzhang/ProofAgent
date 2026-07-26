@@ -20,6 +20,7 @@ from proof_agent.contracts.ports.run_queue import RunQueueRepository
 from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionRepository
 from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 from proof_agent.contracts.ports.unit_of_work import ConfigurationUnitOfWork
 from proof_agent.contracts.ports.worker_roles import WorkerRoleRepository
 
@@ -35,6 +36,7 @@ __all__ = [
     "KnowledgeAssetRepository",
     "ModelAssetRepository",
     "ModelConnectionReader",
+    "ModelCredentialResolver",
     "OidcClient",
     "OperatorSessionRepository",
     "RunMetadataRepository",

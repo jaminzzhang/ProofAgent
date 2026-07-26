@@ -11,6 +11,7 @@ from proof_agent.contracts import (
     EnvironmentModelCredentialReference,
     ModelCallRole,
     ModelConnectionResolutionRecord,
+    PostgresEncryptedModelCredentialReference,
     ProductionSecretHandle,
     SharedModelConnectionLifecycleState,
 )
@@ -92,6 +93,20 @@ def _resolve_shared_model_role_config(
             project_env=connection.project_env,
         )
         trace_credential_ref = {"type": "env", "name": credential_ref.name}
+    elif isinstance(credential_ref, PostgresEncryptedModelCredentialReference):
+        provider_params = {
+            **_connection_provider_params(
+                credential_env=None,
+                base_url=connection.base_url,
+                organization_env=None,
+                project_env=None,
+            ),
+            "credential_connection_id": connection.connection_id,
+        }
+        trace_credential_ref = {
+            "type": "postgres_encrypted",
+            "configured": "true",
+        }
     else:
         assert isinstance(credential_ref, ProductionSecretHandle)
         handle_payload = credential_ref.model_dump(mode="json", exclude_none=True)

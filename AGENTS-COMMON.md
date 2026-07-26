@@ -40,7 +40,10 @@ Historical ADRs and dated specs may describe removed capabilities. Active truth 
 - Audit/read models do not become execution authority.
 - Third-party SDK objects and secrets do not leak into public contracts or trace.
 - Raw chain-of-thought is never stored or returned.
-- Configuration may reference environment variable names or secret handles, never secret values.
+- Configuration may reference environment variable names, secret handles, or a
+  configured encrypted-credential marker, never secret values. Production model API
+  keys live only as authenticated ciphertext in the separate PostgreSQL credential
+  table; its keyring remains outside PostgreSQL.
 
 ## Production boundary
 
@@ -48,7 +51,8 @@ S0 local files are development adapters. Production requires:
 
 - PostgreSQL authority for mutable state and queue/coordination;
 - OIDC-only sessions, CSRF and permission mappings;
-- secret handles and default-deny egress;
+- encrypted PostgreSQL model credentials with an external keyring, Secret Handles
+  for other production credentials, and default-deny egress;
 - S3-compatible immutable artifacts with S3-first verification and one PostgreSQL visibility transaction;
 - a bounded PostgreSQL queue and same-image Run Executor role;
 - coarse SSE progress with durable current-state reconnect;

@@ -19,11 +19,11 @@ from proof_agent.contracts import (
     ToolProposalParameterSource,
     ProductionSecretHandle,
     SecretHandleValidation,
-    SecretPurpose,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
 from proof_agent.contracts.ports.secret_provider import ResolvedSecretMaterial
+from proof_agent.contracts.ports.model_credentials import ResolvedModelCredential
 
 
 class RecordingGuardedModelClient:
@@ -84,6 +84,16 @@ class ModelSecretProvider:
         )
 
 
+class ModelCredentialResolver:
+    def __init__(self, value: bytes = b"test-key") -> None:
+        self.value = value
+        self.resolved: list[str] = []
+
+    def resolve(self, connection_id: str) -> ResolvedModelCredential:
+        self.resolved.append(connection_id)
+        return ResolvedModelCredential(value=self.value)
+
+
 def test_production_openai_compatible_provider_requires_and_uses_guarded_https(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -103,28 +113,26 @@ def test_production_openai_compatible_provider_requires_and_uses_guarded_https(
             guarded_http_client=RecordingGuardedModelClient(),
         )
 
-    secret_handle = {
-        "protocol_id": "hashicorp-vault-2.0-kv-v2",
-        "handle_id": "models/answer",
-        "purpose": "model_credential",
-    }
     config = ModelConfig(
         provider="openai_compatible",
         name="gpt-test",
         params={
-            "credential_secret_handle": secret_handle,
+            "credential_connection_id": "model_answer",
             "base_url": "https://models.example.test/v1",
         },
     )
-    secrets = ModelSecretProvider()
+    credentials = ModelCredentialResolver()
     with pytest.raises(ProofAgentError, match="guarded HTTPS"):
-        OpenAICompatibleModelProvider.from_config(config, secret_provider=secrets)
+        OpenAICompatibleModelProvider.from_config(
+            config,
+            model_credential_resolver=credentials,
+        )
 
     guarded = RecordingGuardedModelClient()
     provider = OpenAICompatibleModelProvider.from_config(
         config,
         guarded_http_client=guarded,
-        secret_provider=secrets,
+        model_credential_resolver=credentials,
     )
     result = provider.generate(
         ModelRequest(
@@ -140,13 +148,7 @@ def test_production_openai_compatible_provider_requires_and_uses_guarded_https(
         "https://models.example.test/v1/chat/completions"
     )
     assert guarded.calls[0]["headers"]["Authorization"] == "Bearer test-key"
-    assert secrets.resolved == [
-        ProductionSecretHandle(
-            protocol_id="hashicorp-vault-2.0-kv-v2",
-            handle_id="models/answer",
-            purpose=SecretPurpose.MODEL_CREDENTIAL,
-        )
-    ]
+    assert credentials.resolved == ["model_answer"]
 
 
 def test_openai_compatible_provider_maps_request_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:

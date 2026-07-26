@@ -1,0 +1,39 @@
+FROM node:22.17.0-alpine3.22 AS frontend
+
+WORKDIR /src
+COPY package.json package-lock.json ./
+COPY tsconfig.base.json ./
+COPY packages/ui/package.json packages/ui/package.json
+COPY dashboard/package.json dashboard/package.json
+COPY chat/package.json chat/package.json
+RUN npm ci
+COPY packages packages
+COPY dashboard dashboard
+COPY chat chat
+RUN npm run build
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_NO_CACHE=1
+
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY proof_agent proof_agent
+COPY examples examples
+COPY alembic.ini ./
+COPY deploy deploy
+COPY docker/production-local /opt/proof-agent-local
+RUN uv pip install --system --no-cache ".[dashboard,hybrid,ingestion,openai,production,security,tree]" \
+    && addgroup --system --gid 10001 proofagent \
+    && adduser --system --uid 10001 --ingroup proofagent --home /var/lib/proof-agent proofagent \
+    && install -d -o proofagent -g proofagent -m 0700 \
+        /var/lib/proof-agent/cache \
+        /var/lib/proof-agent/executor \
+        /var/lib/proof-agent/release
+COPY --from=frontend /src/dashboard/dist /app/proof_agent/dashboard/dist
+
+USER 10001:10001
+ENTRYPOINT ["proof-agent"]
+CMD ["server", "--host", "0.0.0.0", "--port", "8000", "--no-seed-example-agent"]
