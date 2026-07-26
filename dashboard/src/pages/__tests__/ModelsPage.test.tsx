@@ -209,6 +209,55 @@ describe('ModelsPage', () => {
     })
   })
 
+  it('creates production model connections with an opaque Secret Handle', async () => {
+    vi.mocked(fetchModelConnections).mockResolvedValue({
+      data: [],
+      meta: { total: 0, credential_reference_type: 'secret_handle' },
+    })
+    vi.mocked(createModelConnection).mockResolvedValue(
+      modelConnection({
+        connection_id: 'model_production_primary',
+        display_name: 'Production Primary',
+        credential_ref: {
+          protocol_id: 'hashicorp-vault-2.0-kv-v2',
+          handle_id: 'models/proof-agent/insurance-primary',
+          purpose: 'model_credential',
+          version_id: null,
+        },
+      }),
+    )
+
+    render(
+      <MemoryRouter>
+        <ModelsPage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Models')
+    expect(screen.queryByLabelText('Credential Env')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Secret Protocol'), {
+      target: { value: 'hashicorp-vault-2.0-kv-v2' },
+    })
+    fireEvent.change(screen.getByLabelText('Secret Handle ID'), {
+      target: { value: 'models/proof-agent/insurance-primary' },
+    })
+    fireEvent.change(screen.getByLabelText('Secret Version ID'), {
+      target: { value: '7' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Model' }))
+
+    await waitFor(() => {
+      expect(createModelConnection).toHaveBeenCalledWith(expect.objectContaining({
+        credential_ref: {
+          protocol_id: 'hashicorp-vault-2.0-kv-v2',
+          handle_id: 'models/proof-agent/insurance-primary',
+          purpose: 'model_credential',
+          version_id: '7',
+        },
+      }))
+    })
+  })
+
   it('shows an error state when model connections cannot load', async () => {
     vi.mocked(fetchModelConnections).mockRejectedValue(new Error('network down'))
 

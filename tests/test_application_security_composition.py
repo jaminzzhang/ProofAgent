@@ -79,6 +79,11 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
     assert not hasattr(application.state, "conversation_store")
     assert not hasattr(application.state, "agent_configuration_store")
     assert any(route.path == "/api/auth/login" for route in application.routes)
+    assert any(
+        route.path == "/api/config/model-connections"
+        and "POST" in (route.methods or set())
+        for route in application.routes
+    )
     assert not any(route.path == "/api/agents/import" for route in application.routes)
     assert not (tmp_path / "history").exists()
     assert not (tmp_path / "configuration").exists()

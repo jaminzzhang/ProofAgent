@@ -52,6 +52,9 @@ export function ModelConnectionDetailPage() {
   const [modelIdentifier, setModelIdentifier] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [credentialEnv, setCredentialEnv] = useState('')
+  const [secretProtocol, setSecretProtocol] = useState('')
+  const [secretHandleId, setSecretHandleId] = useState('')
+  const [secretVersionId, setSecretVersionId] = useState('')
   const [organizationEnv, setOrganizationEnv] = useState('')
   const [projectEnv, setProjectEnv] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
@@ -101,7 +104,17 @@ export function ModelConnectionDetailPage() {
     setProvider(nextConnection.provider)
     setModelIdentifier(nextConnection.model_identifier)
     setBaseUrl(nextConnection.base_url ?? '')
-    setCredentialEnv(nextConnection.credential_ref.name)
+    if ('handle_id' in nextConnection.credential_ref) {
+      setCredentialEnv('')
+      setSecretProtocol(nextConnection.credential_ref.protocol_id)
+      setSecretHandleId(nextConnection.credential_ref.handle_id)
+      setSecretVersionId(nextConnection.credential_ref.version_id ?? '')
+    } else {
+      setCredentialEnv(nextConnection.credential_ref.name)
+      setSecretProtocol('')
+      setSecretHandleId('')
+      setSecretVersionId('')
+    }
     setOrganizationEnv(nextConnection.organization_env ?? '')
     setProjectEnv(nextConnection.project_env ?? '')
     setTimeoutSeconds(nextConnection.timeout_seconds?.toString() ?? '')
@@ -109,11 +122,12 @@ export function ModelConnectionDetailPage() {
   }
 
   async function saveOverview(confirmedImpact = false) {
-    if (!connectionId) return
+    if (!connectionId || !connection) return
     setBusy('save')
     setError(null)
     setStatus(null)
     try {
+      const usesSecretHandle = 'handle_id' in connection.credential_ref
       const updated = await updateModelConnection(connectionId, {
         display_name: displayName,
         description,
@@ -121,11 +135,25 @@ export function ModelConnectionDetailPage() {
         provider,
         model_identifier: modelIdentifier,
         base_url: baseUrl || null,
-        credential_ref: { type: 'env', name: credentialEnv },
-        organization_env: organizationEnv || null,
-        project_env: projectEnv || null,
+        credential_ref: usesSecretHandle
+          ? {
+              protocol_id: secretProtocol.trim(),
+              handle_id: secretHandleId.trim(),
+              purpose: 'model_credential',
+              ...(secretVersionId.trim() ? { version_id: secretVersionId.trim() } : {}),
+            }
+          : { type: 'env', name: credentialEnv.trim() },
+        ...(!usesSecretHandle
+          ? {
+              organization_env: organizationEnv || null,
+              project_env: projectEnv || null,
+            }
+          : {}),
         timeout_seconds: timeoutSeconds ? Number(timeoutSeconds) : null,
         confirm_impact: confirmedImpact || confirmImpact,
+        ...(connection.revision !== undefined
+          ? { expected_revision: connection.revision }
+          : {}),
       })
       setConnection(updated)
       setForm(updated)
@@ -147,13 +175,16 @@ export function ModelConnectionDetailPage() {
   }
 
   async function archiveConnection() {
-    if (!connectionId || !archiveReason.trim()) return
+    if (!connectionId || !connection || !archiveReason.trim()) return
     setBusy('archive')
     setError(null)
     setStatus(null)
     try {
       await archiveModelConnection(connectionId, {
         reason: archiveReason.trim(),
+        ...(connection.revision !== undefined
+          ? { expected_revision: connection.revision }
+          : {}),
       })
       setArchiveReason('')
       setStatus('Model connection archived.')
@@ -166,13 +197,17 @@ export function ModelConnectionDetailPage() {
   }
 
   async function restoreConnection() {
-    if (!connectionId) return
+    if (!connectionId || !connection) return
+    if (connection.revision !== undefined && !restoreReason.trim()) return
     setBusy('restore')
     setError(null)
     setStatus(null)
     try {
       await restoreModelConnection(connectionId, {
         reason: restoreReason.trim() || null,
+        ...(connection.revision !== undefined
+          ? { expected_revision: connection.revision }
+          : {}),
       })
       setRestoreReason('')
       setStatus('Model connection restored.')
@@ -237,6 +272,7 @@ export function ModelConnectionDetailPage() {
   if (error && !connection) return <div className="text-sm text-[var(--danger)]">{error}</div>
   if (!connection) return <div className="text-sm text-[var(--text-muted)]">Model connection not found.</div>
   const isArchived = connection.lifecycle_state === 'ARCHIVED'
+  const usesSecretHandle = 'handle_id' in connection.credential_ref
 
   return (
     <div className="max-w-7xl space-y-6">
@@ -255,7 +291,7 @@ export function ModelConnectionDetailPage() {
         <Metric label="Lifecycle" value={isArchived ? 'archived' : 'active'} />
         <Metric label="Provider" value={connection.provider} />
         <Metric label="Base URL" value={baseUrlHost(connection.base_url)} />
-        <Metric label="Credential" value={connection.credential_ref.name} />
+        <Metric label="Credential" value={credentialReferenceLabel(connection)} />
       </section>
 
       <div className="flex flex-wrap gap-2 border-b border-[var(--border)]">
@@ -295,10 +331,22 @@ export function ModelConnectionDetailPage() {
             <TextField label="Provider" value={provider} onChange={setProvider} />
             <TextField label="Model Identifier" value={modelIdentifier} onChange={setModelIdentifier} />
             <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} />
-            <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} />
+            {usesSecretHandle ? (
+              <>
+                <TextField label="Secret Protocol" value={secretProtocol} onChange={setSecretProtocol} />
+                <TextField label="Secret Handle ID" value={secretHandleId} onChange={setSecretHandleId} />
+                <TextField label="Secret Version ID" value={secretVersionId} onChange={setSecretVersionId} placeholder="optional" />
+              </>
+            ) : (
+              <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} />
+            )}
             <NumberField label="Timeout Seconds" value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
-            <TextField label="Organization Env" value={organizationEnv} onChange={setOrganizationEnv} />
-            <TextField label="Project Env" value={projectEnv} onChange={setProjectEnv} />
+            {!usesSecretHandle && (
+              <>
+                <TextField label="Organization Env" value={organizationEnv} onChange={setOrganizationEnv} />
+                <TextField label="Project Env" value={projectEnv} onChange={setProjectEnv} />
+              </>
+            )}
             <TextField label="Tags" value={tags} onChange={setTags} placeholder="prod, deepseek" />
             <label className="block md:col-span-2 lg:col-span-3">
               <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Description</span>
@@ -321,7 +369,15 @@ export function ModelConnectionDetailPage() {
           <div className="mt-4 flex justify-end">
             <button
               onClick={() => void saveOverview()}
-              disabled={busy === 'save' || !displayName.trim() || !provider.trim() || !modelIdentifier.trim() || !credentialEnv.trim()}
+              disabled={
+                busy === 'save'
+                || !displayName.trim()
+                || !provider.trim()
+                || !modelIdentifier.trim()
+                || (usesSecretHandle
+                  ? !secretProtocol.trim() || !secretHandleId.trim()
+                  : !credentialEnv.trim())
+              }
               className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
               Save Overview
@@ -381,7 +437,7 @@ export function ModelConnectionDetailPage() {
             <div className="flex items-end">
               <button
                 onClick={restoreConnection}
-                disabled={busy === 'restore'}
+                disabled={busy === 'restore' || (connection.revision !== undefined && !restoreReason.trim())}
                 className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
               >
                 Restore
@@ -544,6 +600,12 @@ function RecordBlock({
 
 function splitTags(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function credentialReferenceLabel(connection: SharedModelConnection): string {
+  return 'handle_id' in connection.credential_ref
+    ? connection.credential_ref.handle_id
+    : connection.credential_ref.name
 }
 
 function impactReviewDetail(err: unknown): ModelConnectionImpactReviewDetail | null {

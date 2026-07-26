@@ -4210,7 +4210,13 @@ def _model_connection_smoke_test_record(
 
 
 def _model_connection_env_vars(connection: SharedModelConnection) -> tuple[str, ...]:
-    env_vars = [connection.credential_ref.name]
+    credential_ref = connection.credential_ref
+    if not isinstance(credential_ref, EnvironmentModelCredentialReference):
+        raise HTTPException(
+            status_code=409,
+            detail="Production Secret Handles require the production model connection API.",
+        )
+    env_vars = [credential_ref.name]
     if connection.organization_env is not None:
         env_vars.append(connection.organization_env)
     if connection.project_env is not None:
