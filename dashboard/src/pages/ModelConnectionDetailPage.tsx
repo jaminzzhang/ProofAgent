@@ -52,9 +52,7 @@ export function ModelConnectionDetailPage() {
   const [modelIdentifier, setModelIdentifier] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [credentialEnv, setCredentialEnv] = useState('')
-  const [secretProtocol, setSecretProtocol] = useState('')
-  const [secretHandleId, setSecretHandleId] = useState('')
-  const [secretVersionId, setSecretVersionId] = useState('')
+  const [apiKey, setApiKey] = useState('')
   const [organizationEnv, setOrganizationEnv] = useState('')
   const [projectEnv, setProjectEnv] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState('')
@@ -104,17 +102,12 @@ export function ModelConnectionDetailPage() {
     setProvider(nextConnection.provider)
     setModelIdentifier(nextConnection.model_identifier)
     setBaseUrl(nextConnection.base_url ?? '')
-    if ('handle_id' in nextConnection.credential_ref) {
-      setCredentialEnv('')
-      setSecretProtocol(nextConnection.credential_ref.protocol_id)
-      setSecretHandleId(nextConnection.credential_ref.handle_id)
-      setSecretVersionId(nextConnection.credential_ref.version_id ?? '')
-    } else {
+    if ('name' in nextConnection.credential_ref) {
       setCredentialEnv(nextConnection.credential_ref.name)
-      setSecretProtocol('')
-      setSecretHandleId('')
-      setSecretVersionId('')
+    } else {
+      setCredentialEnv('')
     }
+    setApiKey('')
     setOrganizationEnv(nextConnection.organization_env ?? '')
     setProjectEnv(nextConnection.project_env ?? '')
     setTimeoutSeconds(nextConnection.timeout_seconds?.toString() ?? '')
@@ -127,7 +120,7 @@ export function ModelConnectionDetailPage() {
     setError(null)
     setStatus(null)
     try {
-      const usesSecretHandle = 'handle_id' in connection.credential_ref
+      const usesEncryptedCredential = !('name' in connection.credential_ref)
       const updated = await updateModelConnection(connectionId, {
         display_name: displayName,
         description,
@@ -135,15 +128,10 @@ export function ModelConnectionDetailPage() {
         provider,
         model_identifier: modelIdentifier,
         base_url: baseUrl || null,
-        credential_ref: usesSecretHandle
-          ? {
-              protocol_id: secretProtocol.trim(),
-              handle_id: secretHandleId.trim(),
-              purpose: 'model_credential',
-              ...(secretVersionId.trim() ? { version_id: secretVersionId.trim() } : {}),
-            }
-          : { type: 'env', name: credentialEnv.trim() },
-        ...(!usesSecretHandle
+        ...(usesEncryptedCredential
+          ? (apiKey ? { api_key: apiKey } : {})
+          : { credential_ref: { type: 'env' as const, name: credentialEnv.trim() } }),
+        ...(!usesEncryptedCredential
           ? {
               organization_env: organizationEnv || null,
               project_env: projectEnv || null,
@@ -272,7 +260,7 @@ export function ModelConnectionDetailPage() {
   if (error && !connection) return <div className="text-sm text-[var(--danger)]">{error}</div>
   if (!connection) return <div className="text-sm text-[var(--text-muted)]">Model connection not found.</div>
   const isArchived = connection.lifecycle_state === 'ARCHIVED'
-  const usesSecretHandle = 'handle_id' in connection.credential_ref
+  const usesEncryptedCredential = !('name' in connection.credential_ref)
 
   return (
     <div className="max-w-7xl space-y-6">
@@ -331,17 +319,18 @@ export function ModelConnectionDetailPage() {
             <TextField label="Provider" value={provider} onChange={setProvider} />
             <TextField label="Model Identifier" value={modelIdentifier} onChange={setModelIdentifier} />
             <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} />
-            {usesSecretHandle ? (
-              <>
-                <TextField label="Secret Protocol" value={secretProtocol} onChange={setSecretProtocol} />
-                <TextField label="Secret Handle ID" value={secretHandleId} onChange={setSecretHandleId} />
-                <TextField label="Secret Version ID" value={secretVersionId} onChange={setSecretVersionId} placeholder="optional" />
-              </>
+            {usesEncryptedCredential ? (
+              <PasswordField
+                label="Replace API Key"
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder="Leave blank to keep the current encrypted key"
+              />
             ) : (
               <TextField label="Credential Env" value={credentialEnv} onChange={setCredentialEnv} />
             )}
             <NumberField label="Timeout Seconds" value={timeoutSeconds} onChange={setTimeoutSeconds} min={1} />
-            {!usesSecretHandle && (
+            {!usesEncryptedCredential && (
               <>
                 <TextField label="Organization Env" value={organizationEnv} onChange={setOrganizationEnv} />
                 <TextField label="Project Env" value={projectEnv} onChange={setProjectEnv} />
@@ -374,9 +363,7 @@ export function ModelConnectionDetailPage() {
                 || !displayName.trim()
                 || !provider.trim()
                 || !modelIdentifier.trim()
-                || (usesSecretHandle
-                  ? !secretProtocol.trim() || !secretHandleId.trim()
-                  : !credentialEnv.trim())
+                || (!usesEncryptedCredential && !credentialEnv.trim())
               }
               className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
             >
@@ -526,6 +513,34 @@ function NumberField({
   )
 }
 
+function PasswordField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </span>
+      <input
+        type="password"
+        autoComplete="new-password"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+      />
+    </label>
+  )
+}
+
 function ImpactReviewNotice({
   detail,
   busy,
@@ -603,9 +618,13 @@ function splitTags(value: string): string[] {
 }
 
 function credentialReferenceLabel(connection: SharedModelConnection): string {
-  return 'handle_id' in connection.credential_ref
-    ? connection.credential_ref.handle_id
-    : connection.credential_ref.name
+  if ('handle_id' in connection.credential_ref) {
+    return `${connection.credential_ref.handle_id} (migration required)`
+  }
+  if (connection.credential_ref.type === 'postgres_encrypted') {
+    return 'PostgreSQL encrypted'
+  }
+  return connection.credential_ref.name
 }
 
 function impactReviewDetail(err: unknown): ModelConnectionImpactReviewDetail | null {

@@ -17,6 +17,7 @@ from proof_agent.contracts import (
     AuditActorFacts,
     KnowledgeReleaseEvidenceSet,
     InstitutionAuthorizationContext,
+    PostgresEncryptedModelCredentialReference,
     ProductionSecretHandle,
     PersistencePointerConflictError,
     PublishedAgentVersion,
@@ -26,7 +27,10 @@ from proof_agent.contracts import (
     SecretHandleValidation,
     SharedAssetKind,
     SharedAssetVersionRef,
+    SharedModelConnection,
+    SharedModelConnectionLifecycleState,
 )
+from proof_agent.contracts.ports.model_credentials import ModelCredentialValidation
 from proof_agent.contracts.ports.secret_provider import ResolvedSecretMaterial
 from proof_agent.control.production_agent import (
     ProductionAgentValidationError,
@@ -76,6 +80,48 @@ class VaultSecrets(Secrets):
     protocol_id = "hashicorp-vault-2.0-kv-v2"
 
 
+class ModelConnections:
+    def __init__(self, *, provider: str = "openai_compatible") -> None:
+        self.connection = SharedModelConnection(
+            connection_id="model_production_primary",
+            display_name="Production Primary",
+            provider=provider,
+            model_identifier="insurance-model-v1",
+            base_url="https://models.internal.example/v1",
+            credential_ref=PostgresEncryptedModelCredentialReference(),
+            lifecycle_state=SharedModelConnectionLifecycleState.ACTIVE,
+            created_at="2026-07-15T00:00:00Z",
+            updated_at="2026-07-15T00:00:00Z",
+        )
+
+    def get_model_connection(self, connection_id: str):
+        return self.connection if connection_id == self.connection.connection_id else None
+
+class ModelCredentials:
+    def __init__(self, *, resolvable: bool = True) -> None:
+        self.resolvable = resolvable
+        self.validated: list[str] = []
+
+    def validate(self, connection_id: str) -> ModelCredentialValidation:
+        self.validated.append(connection_id)
+        return ModelCredentialValidation(
+            connection_id=connection_id,
+            resolvable=self.resolvable,
+            reason_code=None if self.resolvable else "credential_not_found",
+        )
+
+
+def _validation_dependencies(
+    *,
+    resolvable: bool = True,
+    provider: str = "openai_compatible",
+) -> dict[str, object]:
+    return {
+        "configuration_store": ModelConnections(provider=provider),
+        "model_credential_resolver": ModelCredentials(resolvable=resolvable),
+    }
+
+
 def _artifact(kind: str) -> ExactArtifactRef:
     return ExactArtifactRef(
         artifact_uri=f"s3://proof-agent/phase-f/{kind}.json",
@@ -112,12 +158,6 @@ def _write_manifest(tmp_path: Path, *, answer_provider: str = "openai_compatible
         "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
     )
     raw = yaml.safe_load(fixture.read_text(encoding="utf-8"))
-    handle = {
-        "protocol_id": "vault-v1",
-        "handle_id": "models/insurance-primary",
-        "purpose": "model_credential",
-        "version_id": "42",
-    }
     raw["name"] = AGENT_ID
     raw["package_knowledge_sources"] = []
     raw["knowledge_bindings"] = [
@@ -128,33 +168,28 @@ def _write_manifest(tmp_path: Path, *, answer_provider: str = "openai_compatible
             "failure_mode": "required",
         }
     ]
-    raw["model"] = {
-        "provider": answer_provider,
-        "name": "insurance-answer-v1",
-        "params": {
-            "base_url": "https://models.internal.example/v1",
-            "credential_secret_handle": handle,
-        },
-    }
+    raw["model"] = (
+        {
+            "model_source": "shared",
+            "connection_id": "model_production_primary",
+            "params": {"max_output_tokens": 2000},
+        }
+        if answer_provider != "deterministic"
+        else {"provider": "deterministic", "name": "demo", "params": {}}
+    )
     raw["react"]["planner"] = {
-        "provider": "openai_compatible",
-        "name": "insurance-planner-v1",
-        "params": {
-            "base_url": "https://models.internal.example/v1",
-            "credential_secret_handle": handle,
-        },
+        "model_source": "shared",
+        "connection_id": "model_production_primary",
+        "params": {"max_output_tokens": 1200},
     }
     raw["review"] = {
         "mode": "auto",
         "low_risk_fast_path": False,
         "subagent": {
-            "provider": "openai_compatible",
-            "name": "insurance-reviewer-v1",
+            "model_source": "shared",
+            "connection_id": "model_production_primary",
             "fail_closed": True,
-            "params": {
-                "base_url": "https://models.internal.example/v1",
-                "credential_secret_handle": handle,
-            },
+            "params": {"max_output_tokens": 1200},
         },
     }
     raw["capabilities"]["memory"] = {"enabled": False}
@@ -229,19 +264,16 @@ def _candidate(
 
 def test_accepts_exact_real_model_hybrid_phase_f_candidate(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path)
-    secrets = Secrets()
+    credentials = ModelCredentials()
 
     validate_production_agent_candidate(
         agent=agent,
         version=version,
-        secret_provider=secrets,
-        checked_at=datetime(2026, 7, 15, tzinfo=UTC),
+        configuration_store=ModelConnections(),
+        model_credential_resolver=credentials,
     )
 
-    assert len(secrets.validated) == 3
-    assert {handle.handle_id for handle in secrets.validated} == {
-        "models/insurance-primary"
-    }
+    assert credentials.validated == ["model_production_primary"] * 3
 
 
 def test_deployment_package_is_an_admissible_production_candidate() -> None:
@@ -289,28 +321,26 @@ def test_deployment_package_is_an_admissible_production_candidate() -> None:
         resolved_knowledge_bindings=bindings,
         source="postgres_publication",
     )
-    secrets = VaultSecrets()
+    credentials = ModelCredentials()
 
     validate_production_agent_candidate(
         agent=agent,
         version=version,
-        secret_provider=secrets,
-        checked_at=datetime(2026, 7, 15, tzinfo=UTC),
+        configuration_store=ModelConnections(),
+        model_credential_resolver=credentials,
     )
 
-    assert {handle.handle_id for handle in secrets.validated} == {
-        "models/proof-agent/insurance-primary"
-    }
+    assert credentials.validated == ["model_production_primary"] * 3
 
 
 def test_rejects_deterministic_answer_model(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path, answer_provider="deterministic")
 
-    with pytest.raises(ProductionAgentValidationError, match="real model"):
+    with pytest.raises(ProductionAgentValidationError, match="Shared Model Connection"):
         validate_production_agent_candidate(
             agent=agent,
             version=version,
-            secret_provider=Secrets(),
+            **_validation_dependencies(),
         )
 
 
@@ -321,18 +351,18 @@ def test_rejects_missing_phase_f_release_record(tmp_path: Path) -> None:
         validate_production_agent_candidate(
             agent=agent,
             version=version,
-            secret_provider=Secrets(),
+            **_validation_dependencies(),
         )
 
 
-def test_rejects_unresolvable_model_secret_handle(tmp_path: Path) -> None:
+def test_rejects_unresolvable_postgres_model_credential(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path)
 
     with pytest.raises(ProductionAgentValidationError, match="not resolvable"):
         validate_production_agent_candidate(
             agent=agent,
             version=version,
-            secret_provider=Secrets(resolvable=False),
+            **_validation_dependencies(resolvable=False),
         )
 
 
@@ -352,7 +382,7 @@ def test_rejects_more_than_one_frozen_hybrid_binding(tmp_path: Path) -> None:
             version=version.model_copy(
                 update={"resolved_knowledge_bindings": bindings}
             ),
-            secret_provider=Secrets(),
+            **_validation_dependencies(),
         )
 
 
@@ -485,7 +515,8 @@ def _publication_service(
             resolve_binding_authority=lambda **kwargs: snapshot
         ),
         release_authority=release_authority,
-        secret_provider=Secrets(),
+        configuration_store=ModelConnections(),
+        model_credential_resolver=ModelCredentials(),
         candidate_validator=runner,
         clock=lambda: datetime(2026, 7, 15, tzinfo=UTC),
     )
@@ -673,6 +704,7 @@ def test_online_candidate_validator_executes_real_path_and_retains_exact_artifac
         hybrid_runtime=object(),
         guarded_http_client=object(),
         secret_provider=Secrets(),
+        model_credential_resolver=ModelCredentials(),
         artifact_store=store,
         work_root=tmp_path / "validation-work",
         institution_authorization=InstitutionAuthorizationContext(

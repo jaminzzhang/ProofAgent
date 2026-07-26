@@ -882,9 +882,15 @@ export interface ProductionSecretHandle {
   version_id?: string | null
 }
 
+export interface PostgresEncryptedModelCredentialReference {
+  type: 'postgres_encrypted'
+  configured: true
+}
+
 export type ModelCredentialReference =
   | EnvironmentModelCredentialReference
   | ProductionSecretHandle
+  | PostgresEncryptedModelCredentialReference
 
 export interface SharedModelConnectionReferenceSummary {
   connection_id: string
@@ -963,7 +969,7 @@ export interface ModelConnectionsResponse {
   data: SharedModelConnection[]
   meta: {
     total: number
-    credential_reference_type?: 'env' | 'secret_handle'
+    credential_reference_type?: 'env' | 'postgres_encrypted'
   }
 }
 

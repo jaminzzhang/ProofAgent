@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 from proof_agent.capabilities.models.normalization import (
     ModelOutputNormalizationError,
     parse_model_contract,
@@ -790,6 +791,7 @@ def resolve_react_planner(
     *,
     guarded_http_client: GuardedHttpClient | None = None,
     secret_provider: SecretProvider | None = None,
+    model_credential_resolver: ModelCredentialResolver | None = None,
 ) -> ReActPlanner:
     if config.provider == "deterministic":
         return DeterministicReActPlanner()
@@ -802,11 +804,16 @@ def resolve_react_planner(
         config=config,
         model_provider=(
             resolve_provider(model_config)
-            if guarded_http_client is None and secret_provider is None
+            if (
+                guarded_http_client is None
+                and secret_provider is None
+                and model_credential_resolver is None
+            )
             else resolve_provider(
                 model_config,
                 guarded_http_client=guarded_http_client,
                 secret_provider=secret_provider,
+                model_credential_resolver=model_credential_resolver,
             )
         ),
     )

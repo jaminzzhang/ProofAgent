@@ -79,6 +79,7 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
 from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -495,6 +496,7 @@ def compose_harness_invocation(
     hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
     guarded_http_client: GuardedHttpClient | None = None,
     secret_provider: SecretProvider | None = None,
+    model_credential_resolver: ModelCredentialResolver | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
@@ -502,6 +504,7 @@ def compose_harness_invocation(
     model_provider_resolver = _model_provider_resolver(
         guarded_http_client=guarded_http_client,
         secret_provider=secret_provider,
+        model_credential_resolver=model_credential_resolver,
     )
     manifest_path = Path(agent_yaml).resolve()
     resolved_manifest = manifest or load_agent_manifest(manifest_path)
@@ -552,6 +555,7 @@ def compose_harness_invocation(
             ),
             guarded_http_client=guarded_http_client,
             secret_provider=secret_provider,
+            model_credential_resolver=model_credential_resolver,
         )
         resolved_intent_model = resolve_model_role_config(
             resolved_manifest.react.planner,
@@ -569,6 +573,7 @@ def compose_harness_invocation(
             max_queries=resolved_manifest.retrieval.max_queries,
             guarded_http_client=guarded_http_client,
             secret_provider=secret_provider,
+            model_credential_resolver=model_credential_resolver,
         )
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
@@ -588,6 +593,7 @@ def compose_harness_invocation(
             ),
             guarded_http_client=guarded_http_client,
             secret_provider=secret_provider,
+            model_credential_resolver=model_credential_resolver,
         )
     resolved_bindings = resolved_knowledge_bindings
     if resolved_bindings is None:
@@ -642,13 +648,19 @@ def _model_provider_resolver(
     *,
     guarded_http_client: GuardedHttpClient | None,
     secret_provider: SecretProvider | None,
+    model_credential_resolver: ModelCredentialResolver | None,
 ) -> Callable[[ModelConfig], ModelProvider]:
-    if guarded_http_client is None and secret_provider is None:
+    if (
+        guarded_http_client is None
+        and secret_provider is None
+        and model_credential_resolver is None
+    ):
         return resolve_provider
     return lambda config: resolve_provider(
         config,
         guarded_http_client=guarded_http_client,
         secret_provider=secret_provider,
+        model_credential_resolver=model_credential_resolver,
     )
 
 

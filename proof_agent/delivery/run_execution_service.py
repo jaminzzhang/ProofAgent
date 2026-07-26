@@ -31,6 +31,7 @@ from proof_agent.control.workflow.controlled_react.ports import (
 )
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class RunExecutionDependencies:
     hybrid_runtime: HybridRunRuntime | None = None
     guarded_http_client: GuardedHttpClient | None = None
     secret_provider: SecretProvider | None = None
+    model_credential_resolver: ModelCredentialResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ def execute_published_agent_run(
             cancellation_check=cancellation_check,
             guarded_http_client=dependencies.guarded_http_client,
             secret_provider=dependencies.secret_provider,
+            model_credential_resolver=dependencies.model_credential_resolver,
         )
     )
 

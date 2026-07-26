@@ -82,7 +82,8 @@ There is no active `proof_agent/runtime/` compatibility package. LangGraph and L
 S0 establishes the strict V3-only source baseline and release-gate contracts. Formal release still requires the dependent slices below:
 
 1. S1 — focused store ports, migrations and PostgreSQL authority;
-2. S2 — OIDC-only sessions, Dashboard permission mapping, CSRF, secret handles and default-deny egress;
+2. S2 — OIDC-only sessions, Dashboard permission mapping, CSRF, encrypted PostgreSQL
+   model credentials, Secret Handles for other credentials, and default-deny egress;
 3. S3 — S3-compatible artifact storage, S3-first finalization, verified materialization, retention and recovery;
 4. S4 — bounded PostgreSQL async queue inside Proof Agent, same-image Run Executor, cancellation and coarse SSE progress;
 5. S5 — production publication of the sole Agent with production knowledge, memory and optional validated read-only HTTPS tools;

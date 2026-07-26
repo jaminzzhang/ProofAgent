@@ -37,6 +37,7 @@ class ProductionOnlineAgentCandidateValidator:
         hybrid_runtime: Any,
         guarded_http_client: Any,
         secret_provider: Any,
+        model_credential_resolver: Any,
         artifact_store: Any,
         work_root: Path,
         institution_authorization: InstitutionAuthorizationContext,
@@ -46,6 +47,7 @@ class ProductionOnlineAgentCandidateValidator:
         self._hybrid_runtime = hybrid_runtime
         self._guarded_http_client = guarded_http_client
         self._secret_provider = secret_provider
+        self._model_credential_resolver = model_credential_resolver
         self._artifact_store = artifact_store
         self._work_root = work_root.resolve()
         self._work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -77,6 +79,7 @@ class ProductionOnlineAgentCandidateValidator:
                     hybrid_runtime=self._hybrid_runtime,
                     guarded_http_client=self._guarded_http_client,
                     secret_provider=self._secret_provider,
+                    model_credential_resolver=self._model_credential_resolver,
                 ),
                 published_agent=agent,
                 question=question,

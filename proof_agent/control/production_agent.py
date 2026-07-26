@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.importer import build_agent_package_contract_bundle
 from proof_agent.configuration.knowledge_release import require_knowledge_release_record
 from proof_agent.contracts import (
-    ProductionSecretHandle,
+    PostgresEncryptedModelCredentialReference,
     PublishedAgentVersion,
     ResolvedHybridKnowledgeBinding,
-    SecretPurpose,
+    SharedModelConnectionLifecycleState,
 )
-from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.delivery.published_agents import PublishedAgent
 
 
@@ -38,8 +37,8 @@ def validate_production_agent_candidate(
     *,
     agent: PublishedAgent,
     version: PublishedAgentVersion,
-    secret_provider: SecretProvider,
-    checked_at: datetime | None = None,
+    configuration_store: ModelConnectionReader,
+    model_credential_resolver: ModelCredentialResolver,
 ) -> None:
     """Validate identity, immutable release, Hybrid binding and model authority."""
 
@@ -167,14 +166,12 @@ def validate_production_agent_candidate(
             "production Agent requires a fail-closed review model"
         )
     model_roles.append(("harness_review", review.subagent))
-    validation_time = checked_at or datetime.now(UTC)
-    checked_at_text = validation_time.astimezone(UTC).isoformat().replace("+00:00", "Z")
     for role, config in model_roles:
         _validate_real_model_role(
             role=role,
             config=config,
-            secret_provider=secret_provider,
-            checked_at=checked_at_text,
+            configuration_store=configuration_store,
+            model_credential_resolver=model_credential_resolver,
         )
 
 
@@ -182,52 +179,51 @@ def _validate_real_model_role(
     *,
     role: str,
     config: Any,
-    secret_provider: SecretProvider,
-    checked_at: str,
+    configuration_store: ModelConnectionReader,
+    model_credential_resolver: ModelCredentialResolver,
 ) -> None:
-    provider = getattr(config, "provider", None)
-    model_name = getattr(config, "name", None)
     model_source = getattr(config, "model_source", "inline")
     params = dict(getattr(config, "params", {}))
-    if (
-        model_source != "inline"
-        or provider not in _REAL_MODEL_PROVIDERS
-        or not isinstance(model_name, str)
-        or not model_name.strip()
-    ):
+    connection_id = getattr(config, "connection_id", None)
+    if model_source != "shared" or not isinstance(connection_id, str) or not connection_id:
         raise ProductionAgentValidationError(
-            f"production Agent role {role} requires an admitted real model"
+            f"production Agent role {role} requires a Shared Model Connection"
         )
     forbidden = _FORBIDDEN_PRODUCTION_MODEL_PARAMS.intersection(params)
-    if forbidden or getattr(config, "credential_ref", None) is not None:
-        raise ProductionAgentValidationError(
-            f"production Agent role {role} cannot use environment credentials"
-        )
-    try:
-        raw_handle = params.get("credential_secret_handle")
-        handle = ProductionSecretHandle.model_validate(
-            dict(raw_handle) if isinstance(raw_handle, Mapping) else raw_handle,
-        )
-    except (TypeError, ValueError) as exc:
-        raise ProductionAgentValidationError(
-            f"production Agent role {role} has no valid model Secret Handle"
-        ) from exc
     if (
-        handle.purpose is not SecretPurpose.MODEL_CREDENTIAL
-        or handle.protocol_id != secret_provider.protocol_id
+        forbidden
+        or "credential_secret_handle" in params
+        or getattr(config, "credential_ref", None) is not None
     ):
         raise ProductionAgentValidationError(
-            f"production Agent role {role} has an incompatible model Secret Handle"
+            f"production Agent role {role} cannot declare inline credentials"
+        )
+    connection = configuration_store.get_model_connection(connection_id)
+    if connection is None:
+        raise ProductionAgentValidationError(
+            f"production Agent role {role} references a missing Model Connection"
+        )
+    if (
+        connection.provider not in _REAL_MODEL_PROVIDERS
+        or not connection.model_identifier.strip()
+        or connection.lifecycle_state is not SharedModelConnectionLifecycleState.ACTIVE
+        or not isinstance(
+            connection.credential_ref,
+            PostgresEncryptedModelCredentialReference,
+        )
+    ):
+        raise ProductionAgentValidationError(
+            f"production Agent role {role} has an inadmissible Model Connection"
         )
     try:
-        validation = secret_provider.validate(handle, checked_at=checked_at)
+        validation = model_credential_resolver.validate(connection_id)
     except Exception as exc:
         raise ProductionAgentValidationError(
-            f"production Agent role {role} Secret Handle validation failed"
+            f"production Agent role {role} credential validation failed"
         ) from exc
-    if validation.handle != handle or not validation.resolvable:
+    if not validation.resolvable:
         raise ProductionAgentValidationError(
-            f"production Agent role {role} Secret Handle is not resolvable"
+            f"production Agent role {role} credential is not resolvable"
         )
 
 

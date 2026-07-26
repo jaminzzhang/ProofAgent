@@ -82,6 +82,7 @@ export PROOF_AGENT_STABLE_ORIGIN='https://proof-agent.internal.example'
 export PROOF_AGENT_SECRET_PROVIDER_COMPATIBILITY_INPUT='deploy/production/compatibility-input.json'
 export PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON='<opaque-handle-to-vault-locator-json>'
 export PROOF_AGENT_VAULT_AGENT_TOKEN_FILE='/run/secrets/vault-agent-token'
+export PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE='/run/secrets/model-credential-keyring.json'
 export PROOF_AGENT_PUBLISHED_AGENT_CACHE_DIR="$PWD/var/production-agent-cache"
 export PROOF_AGENT_EXECUTOR_WORK_DIR="$PWD/var/executor"
 export PROOF_AGENT_RELEASE_WORK_DIR="$PWD/var/release-validation"
@@ -134,7 +135,7 @@ POST /api/config/knowledge-sources/{source_id}/publication/publish
 ## 5. Agent 在线检索与引用回答
 
 1. 使用 `deploy/production/agent_management_insurance_specialist/agent.yaml` 作为生产候选，而不是 `examples/` 下的 deterministic 开发示例。
-2. 候选固定 `source_id=insurance-rules` 和 `retrieval_profile_revision_id=insurance-profile-v1`；部署前必须把模型 URL、模型名和 Vault Handle 调整为候选的真实值并纳入同一次候选绑定。
+2. 候选固定 `source_id=insurance-rules`、`retrieval_profile_revision_id=insurance-profile-v1` 和共享连接 `model_production_primary`；部署前必须通过 Models API 配置真实模型 URL、模型名和一次性写入的 API Key。API Key 以 PostgreSQL 密文保存，候选 YAML 不包含凭据。
 3. Phase F 四门通过后，使用 `production-publish-agent`。服务端解析当前 PG Hybrid publication，冻结 publication/snapshot/generation/sequence/profile/manifest/attestation，并执行一次真实在线引用回答。
 4. 发布成功后调用 `POST /api/agents/{agent_id}/runs` 或 Operator Chat；Run Request 的机构授权只从服务端 OIDC claim mapping 注入，客户端不能自报 ACL。
 

@@ -59,7 +59,18 @@ class EnvironmentModelCredentialReference(FrozenModel):
     name: str
 
 
-ModelCredentialReference = EnvironmentModelCredentialReference | ProductionSecretHandle
+class PostgresEncryptedModelCredentialReference(FrozenModel):
+    """Trace-safe marker for a separately stored PostgreSQL credential envelope."""
+
+    type: Literal["postgres_encrypted"] = "postgres_encrypted"
+    configured: Literal[True] = True
+
+
+ModelCredentialReference = (
+    EnvironmentModelCredentialReference
+    | ProductionSecretHandle
+    | PostgresEncryptedModelCredentialReference
+)
 
 
 class ContractBundle(FrozenModel):

@@ -70,7 +70,10 @@ The gateway is local-only at `http://127.0.0.1:18080`. It does not create a publ
 ## 4. Authoring rules
 
 - Contracts are strict and provider-neutral.
-- Configuration may name environment variables but must not contain secret values.
+- Configuration may name environment variables or carry a configured encrypted model
+  credential marker, but must not contain secret values. Production model API keys
+  are authenticated ciphertext in a separate PostgreSQL table whose keyring is
+  deployment-owned and external to PostgreSQL.
 - Workflow stage prompts are Business Context Addenda, not control instructions.
 - Business Flow Skill Packs may narrow routing; they never grant tool or data authority.
 - Memory is context, never Accepted Evidence.
@@ -91,7 +94,8 @@ S0 uses local development stores. Do not describe them as production-safe. Produ
 
 - PostgreSQL repositories and migrations;
 - OIDC-only seven-day sessions and permission mapping;
-- CSRF, secret handles and default-deny egress;
+- CSRF, encrypted PostgreSQL model credentials with an external keyring, Secret
+  Handles for other credentials, and default-deny egress;
 - S3-compatible immutable artifacts and verified materialization;
 - bounded PostgreSQL queue, same-image Run Executor and coarse SSE progress;
 - hardened Compose/Blue-Green deployment and recovery procedures.

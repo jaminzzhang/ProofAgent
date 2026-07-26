@@ -87,7 +87,10 @@ Business Flow Skill Packs and editable stage prompts can narrow context or impro
 - Customer routes, customer Chat, handoff routes, approval queue and approve/deny commands are absent.
 - `verify-remote` provides a local single-entry verification gateway only.
 
-No browser request may supply trusted actor identity, permission, manifest path, workflow authority or secret value.
+No browser request may supply trusted actor identity, permission, manifest path, or
+workflow authority. The one secret-input exception is an OIDC/CSRF-protected Model
+Connection create/replace command: its API Key is write-only, encrypted before the
+transaction commits, and never returned to the browser.
 
 ## 6. Identity and permissions target
 
@@ -100,6 +103,13 @@ This target belongs to S2 and is not yet implemented by the S0 local stores.
 ## 7. Production state and artifacts
 
 PostgreSQL is the authority for mutable production configuration, sessions, permission mappings, runs, conversations, queue state, memory metadata, audit metadata and coordination. Local JSON/filesystem stores remain development adapters only.
+
+Production model API keys are stored outside configuration JSON in
+`model_connection_credentials` as AES-256-GCM ciphertext bound to connection id and
+key version. The deployment mounts the versioned keyring from
+`PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE`; the keyring is never stored in
+PostgreSQL. Connection, credential envelope and configuration audit mutations share
+one transaction. API, Dashboard, trace and audit expose only a configured marker.
 
 An S3-compatible object store is the authority for immutable trace, receipt, knowledge, validation, evaluation and release artifacts. Finalization is S3-first:
 
@@ -122,7 +132,10 @@ This target belongs to S4 and depends on S2 and S3.
 
 ## 9. Knowledge, models, tools and memory
 
-- Deterministic and OpenAI-compatible model adapters share provider-neutral contracts.
+- Deterministic and OpenAI-compatible model adapters share provider-neutral
+  contracts. Production model credentials resolve through `ModelCredentialResolver`
+  only at provider-client construction; development environment references do not
+  widen that production boundary.
 - Package Markdown supports offline regression. Production knowledge must resolve published, verified S3-backed snapshots.
 - Read-only HTTP/MCP tools may be introduced only through frozen contracts, publication validation, server-side authorization, redaction, schema validation and default-deny egress.
 - MCP stdio, local handler imports and state-changing tools are not production-admissible.

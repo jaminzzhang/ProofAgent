@@ -13,6 +13,10 @@ from proof_agent.contracts.ports.secret_provider import (
     SecretProvider,
     SecretProviderResolutionError,
 )
+from proof_agent.contracts.ports.model_credentials import (
+    ModelCredentialResolutionError,
+    ModelCredentialResolver,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -35,17 +39,48 @@ def _model_api_key(
     *,
     secret_handle_payload: object,
     secret_provider: SecretProvider | None,
+    credential_connection_id: object,
+    model_credential_resolver: ModelCredentialResolver | None,
     fallback_environment_name: str,
 ) -> str:
+    if credential_connection_id is not None:
+        if (
+            not isinstance(credential_connection_id, str)
+            or not credential_connection_id.strip()
+            or model_credential_resolver is None
+        ):
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                "stored model credential resolver is unavailable.",
+                "Inject the PostgreSQL model credential resolver.",
+            )
+        try:
+            value = model_credential_resolver.resolve(
+                credential_connection_id
+            ).reveal_for_use()
+            api_key = value.decode("utf-8")
+        except (ModelCredentialResolutionError, UnicodeDecodeError) as exc:
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                "stored model credential could not be resolved.",
+                "Replace the model connection API key or restore its keyring version.",
+            ) from exc
+        if not api_key or len(value) > 16 * 1024 or "\r" in api_key or "\n" in api_key:
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                "stored model credential returned invalid material.",
+                "Replace the model connection API key.",
+            )
+        return api_key
     if secret_handle_payload is None:
-        api_key = os.environ.get(fallback_environment_name)
-        if not api_key:
+        environment_api_key = os.environ.get(fallback_environment_name)
+        if not environment_api_key:
             raise ProofAgentError(
                 "PA_MODEL_003",
                 f"missing API key environment variable: {fallback_environment_name}",
                 f"Set {fallback_environment_name} or switch model.provider to deterministic.",
             )
-        return api_key
+        return environment_api_key
     try:
         handle = ProductionSecretHandle.model_validate(secret_handle_payload)
     except (TypeError, ValueError) as exc:
@@ -117,6 +152,7 @@ class OpenAICompatibleModelProvider:
         *,
         guarded_http_client: GuardedHttpClient | None = None,
         secret_provider: SecretProvider | None = None,
+        model_credential_resolver: ModelCredentialResolver | None = None,
     ) -> OpenAICompatibleModelProvider:
         if model_config.provider is None or model_config.name is None:
             raise ProofAgentError(
@@ -128,6 +164,7 @@ class OpenAICompatibleModelProvider:
         allowed = {
             "api_key_env",
             "credential_secret_handle",
+            "credential_connection_id",
             "base_url",
             "base_url_env",
             "organization_env",
@@ -173,15 +210,24 @@ class OpenAICompatibleModelProvider:
                 "Use a model_credential Secret Handle and an explicit admitted base URL.",
             )
         secret_handle_payload = params.get("credential_secret_handle")
-        if production_mode and secret_handle_payload is None:
+        credential_connection_id = params.get("credential_connection_id")
+        if production_mode and secret_handle_payload is not None:
             raise ProofAgentError(
                 "PA_MODEL_003",
-                "production model provider requires a model_credential Secret Handle.",
-                "Bind an opaque Secret Handle validated by the configured provider.",
+                "production model provider forbids model Secret Handles.",
+                "Store the API key in the encrypted PostgreSQL model connection.",
+            )
+        if production_mode and credential_connection_id is None:
+            raise ProofAgentError(
+                "PA_MODEL_003",
+                "production model provider requires a stored model credential.",
+                "Use a Shared Model Connection with an encrypted PostgreSQL API key.",
             )
         api_key = _model_api_key(
             secret_handle_payload=secret_handle_payload,
             secret_provider=secret_provider,
+            credential_connection_id=credential_connection_id,
+            model_credential_resolver=model_credential_resolver,
             fallback_environment_name=str(
                 params.get("api_key_env", provider_defaults["api_key_env"])
             ),

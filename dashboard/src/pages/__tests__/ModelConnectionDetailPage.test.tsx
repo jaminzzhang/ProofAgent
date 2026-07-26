@@ -144,17 +144,12 @@ describe('ModelConnectionDetailPage', () => {
     })
   })
 
-  it('edits production Secret Handles with optimistic revision checks', async () => {
+  it('replaces a production encrypted API key with optimistic revision checks', async () => {
     const productionConnection = modelConnection({
       connection_id: 'model_production_primary',
       display_name: 'Production Primary',
       revision: 3,
-      credential_ref: {
-        protocol_id: 'hashicorp-vault-2.0-kv-v2',
-        handle_id: 'models/proof-agent/insurance-primary',
-        purpose: 'model_credential',
-        version_id: '7',
-      },
+      credential_ref: { type: 'postgres_encrypted', configured: true },
     })
     vi.mocked(fetchModelConnection).mockResolvedValue(productionConnection)
     vi.mocked(fetchModelConnectionReferences).mockResolvedValue(
@@ -168,10 +163,13 @@ describe('ModelConnectionDetailPage', () => {
     renderPage('/models/model_production_primary')
 
     expect(await screen.findByText('Production Primary')).toBeInTheDocument()
-    expect(screen.getByText('models/proof-agent/insurance-primary')).toBeInTheDocument()
+    expect(screen.getByText('PostgreSQL encrypted')).toBeInTheDocument()
     expect(screen.queryByLabelText('Credential Env')).not.toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Secret Handle ID'), {
-      target: { value: 'models/proof-agent/insurance-next' },
+    const apiKey = screen.getByLabelText('Replace API Key')
+    expect(apiKey).toHaveAttribute('type', 'password')
+    expect(apiKey).toHaveValue('')
+    fireEvent.change(apiKey, {
+      target: { value: 'sk-rotated' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save Overview' }))
 
@@ -180,15 +178,14 @@ describe('ModelConnectionDetailPage', () => {
         'model_production_primary',
         expect.objectContaining({
           expected_revision: 3,
-          credential_ref: {
-            protocol_id: 'hashicorp-vault-2.0-kv-v2',
-            handle_id: 'models/proof-agent/insurance-next',
-            purpose: 'model_credential',
-            version_id: '7',
-          },
+          api_key: 'sk-rotated',
         }),
       )
     })
+    expect(updateModelConnection).toHaveBeenCalledWith(
+      'model_production_primary',
+      expect.not.objectContaining({ credential_ref: expect.anything() }),
+    )
   })
 
   it('archives production connections with the current revision', async () => {
@@ -196,12 +193,7 @@ describe('ModelConnectionDetailPage', () => {
       connection_id: 'model_production_primary',
       display_name: 'Production Primary',
       revision: 3,
-      credential_ref: {
-        protocol_id: 'hashicorp-vault-2.0-kv-v2',
-        handle_id: 'models/proof-agent/insurance-primary',
-        purpose: 'model_credential',
-        version_id: null,
-      },
+      credential_ref: { type: 'postgres_encrypted', configured: true },
     })
     vi.mocked(fetchModelConnection).mockResolvedValue(productionConnection)
     vi.mocked(fetchModelConnectionReferences).mockResolvedValue(

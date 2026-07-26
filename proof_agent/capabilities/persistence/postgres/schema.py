@@ -95,6 +95,25 @@ model_connection_versions = sa.Table(
     sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
 )
 
+model_connection_credentials = sa.Table(
+    "model_connection_credentials",
+    metadata,
+    sa.Column(
+        "connection_id",
+        sa.Text(),
+        sa.ForeignKey("model_connections.connection_id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("key_version", sa.Text(), nullable=False),
+    sa.Column("ciphertext", sa.LargeBinary(), nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.CheckConstraint(
+        "octet_length(ciphertext) BETWEEN 29 AND 16412",
+        name="ck_model_connection_credentials_ciphertext_size",
+    ),
+)
+
 tool_sources = sa.Table(
     "tool_sources",
     metadata,

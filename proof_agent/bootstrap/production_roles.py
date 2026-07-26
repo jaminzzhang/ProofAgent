@@ -17,6 +17,7 @@ from proof_agent.bootstrap.application_services import (
 from proof_agent.bootstrap.production_hybrid_runtime import (
     compose_production_hybrid_runtime_from_env,
 )
+from proof_agent.bootstrap.model_credentials import compose_model_credential_cipher
 from proof_agent.bootstrap.production_hybrid_publication import (
     PostgresHybridPublicationConfigurationStore,
 )
@@ -28,6 +29,12 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorker,
 )
 from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
+from proof_agent.capabilities.persistence.postgres.configuration_uow import (
+    PostgresConfigurationUnitOfWork,
+)
+from proof_agent.capabilities.persistence.postgres.model_credential_repository import (
+    PostgresModelCredentialRepository,
+)
 from proof_agent.capabilities.persistence.postgres.runtime_assets import (
     PostgresRuntimeSharedAssetReader,
 )
@@ -251,6 +258,15 @@ def create_production_api_application(
         raise ValueError("production API requires PostgreSQL persistence")
     resources: list[object] = [persistence]
     try:
+        model_credential_cipher = compose_model_credential_cipher(values)
+        model_credentials = PostgresModelCredentialRepository(
+            persistence.engine,
+            cipher=model_credential_cipher,
+        )
+        runtime_configuration = PostgresRuntimeSharedAssetReader(
+            models=persistence.models,
+            tools=persistence.tools,
+        )
         guarded = compose_production_egress_client(persistence)
         secret_provider = compose_production_vault_secret_provider(
             guarded,
@@ -304,7 +320,8 @@ def create_production_api_application(
                 "postgresql": lambda: _postgres_ready(persistence),
                 "published_agent": lambda: _sole_agent_ready(
                     authority,
-                    secret_provider,
+                    runtime_configuration,
+                    model_credentials,
                 ),
                 "run_queue": lambda: _queue_ready(persistence),
                 "secret_provider": lambda: _secret_provider_ready(
@@ -315,6 +332,7 @@ def create_production_api_application(
         )
         application = create_app(
             mode="production",
+            hybrid_runtime=hybrid_runtime,
             operator_session_service=security.operator_session_service,
             stable_origin=security.stable_origin,
             security_configuration_repository=persistence.security,
@@ -332,7 +350,10 @@ def create_production_api_application(
             production_metadata_review_repository=persistence.metadata_reviews,
             production_hybrid_publication_api=publication_api,
             production_hybrid_artifact_store=hybrid_runtime.artifact_store,
-            production_configuration_uow_factory=persistence.configuration_uow,
+            production_configuration_uow_factory=lambda: PostgresConfigurationUnitOfWork(
+                persistence.engine,
+                model_credential_cipher=model_credential_cipher,
+            ),
         )
 
         def close_resources() -> None:
@@ -368,6 +389,15 @@ def compose_production_run_executor(
         raise ValueError("production Run Executor requires PostgreSQL persistence")
     resources: list[object] = [persistence]
     try:
+        model_credential_cipher = compose_model_credential_cipher(values)
+        model_credentials = PostgresModelCredentialRepository(
+            persistence.engine,
+            cipher=model_credential_cipher,
+        )
+        runtime_configuration = PostgresRuntimeSharedAssetReader(
+            models=persistence.models,
+            tools=persistence.tools,
+        )
         guarded = compose_production_egress_client(persistence)
         secret_provider = compose_production_vault_secret_provider(
             guarded,
@@ -386,7 +416,11 @@ def compose_production_run_executor(
         artifact_store = _artifact_store(values)
         resources.append(artifact_store)
         authority = _published_agent_authority(persistence, values)
-        if not _sole_agent_ready(authority, secret_provider):
+        if not _sole_agent_ready(
+            authority,
+            runtime_configuration,
+            model_credentials,
+        ):
             raise ValueError("the sole production Published Agent is unavailable")
         work_dir = Path(_required(values, "PROOF_AGENT_EXECUTOR_WORK_DIR")).resolve()
         work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -395,10 +429,7 @@ def compose_production_run_executor(
         dependencies = RunExecutionDependencies(
             store=execution_store,
             runs_dir=work_dir / "latest",
-            configuration_store=PostgresRuntimeSharedAssetReader(
-                models=persistence.models,
-                tools=persistence.tools,
-            ),
+            configuration_store=runtime_configuration,
             controlled_react_snapshot_store=FileControlledReActSnapshotStore(
                 control_store_root
             ),
@@ -408,6 +439,7 @@ def compose_production_run_executor(
             hybrid_runtime=hybrid_runtime,
             guarded_http_client=guarded,
             secret_provider=secret_provider,
+            model_credential_resolver=model_credentials,
         )
         handler = PublishedAgentRunWorkHandler(
             dependencies=dependencies,
@@ -509,6 +541,15 @@ def compose_production_agent_publisher(
         raise ValueError("production Agent Publisher requires PostgreSQL persistence")
     resources: list[object] = [persistence]
     try:
+        model_credential_cipher = compose_model_credential_cipher(values)
+        model_credentials = PostgresModelCredentialRepository(
+            persistence.engine,
+            cipher=model_credential_cipher,
+        )
+        runtime_configuration = PostgresRuntimeSharedAssetReader(
+            models=persistence.models,
+            tools=persistence.tools,
+        )
         guarded = compose_production_egress_client(persistence)
         secret_provider = compose_production_vault_secret_provider(
             guarded,
@@ -549,13 +590,11 @@ def compose_production_agent_publisher(
                 "PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON is invalid"
             ) from exc
         candidate_validator = ProductionOnlineAgentCandidateValidator(
-            configuration_store=PostgresRuntimeSharedAssetReader(
-                models=persistence.models,
-                tools=persistence.tools,
-            ),
+            configuration_store=runtime_configuration,
             hybrid_runtime=hybrid_runtime,
             guarded_http_client=guarded,
             secret_provider=secret_provider,
+            model_credential_resolver=model_credentials,
             artifact_store=hybrid_runtime.artifact_store,
             work_root=Path(_required(values, "PROOF_AGENT_RELEASE_WORK_DIR")),
             institution_authorization=institution_authorization,
@@ -564,7 +603,8 @@ def compose_production_agent_publisher(
             unit_of_work_factory=persistence.configuration_uow,
             binding_authority=hybrid_runtime.repository,
             release_authority=release_authority,
-            secret_provider=secret_provider,
+            configuration_store=runtime_configuration,
+            model_credential_resolver=model_credentials,
             candidate_validator=candidate_validator,
         )
         return ProductionAgentPublisherComposition(
@@ -614,7 +654,8 @@ def _queue_ready(persistence: PostgresPersistenceBundle) -> bool:
 
 def _sole_agent_ready(
     authority: PublishedAgentAuthority,
-    secret_provider: SecretProvider,
+    configuration_store: PostgresRuntimeSharedAssetReader,
+    model_credential_resolver: PostgresModelCredentialRepository,
 ) -> bool:
     if authority.list_active_agent_ids() != (SOLE_PRODUCTION_AGENT_ID,):
         return False
@@ -626,7 +667,8 @@ def _sole_agent_ready(
         validate_production_agent_candidate(
             agent=agent,
             version=version,
-            secret_provider=secret_provider,
+            configuration_store=configuration_store,
+            model_credential_resolver=model_credential_resolver,
         )
     except Exception:
         return False

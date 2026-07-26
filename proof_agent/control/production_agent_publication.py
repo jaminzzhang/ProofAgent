@@ -38,7 +38,8 @@ from proof_agent.contracts import (
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
 )
-from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
+from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
 from proof_agent.control.production_agent import (
     ProductionAgentValidationError,
     validate_production_agent_candidate,
@@ -91,14 +92,16 @@ class ProductionAgentPublicationService:
         unit_of_work_factory: Callable[[], Any],
         binding_authority: HybridBindingAuthority,
         release_authority: KnowledgeReleaseEvidenceAuthority,
-        secret_provider: SecretProvider,
+        configuration_store: ModelConnectionReader,
+        model_credential_resolver: ModelCredentialResolver,
         candidate_validator: ProductionAgentCandidateValidator,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._binding_authority = binding_authority
         self._release_authority = release_authority
-        self._secret_provider = secret_provider
+        self._configuration_store = configuration_store
+        self._model_credential_resolver = model_credential_resolver
         self._candidate_validator = candidate_validator
         self._clock = clock
 
@@ -228,7 +231,8 @@ class ProductionAgentPublicationService:
         validate_production_agent_candidate(
             agent=provisional_agent,
             version=provisional_version,
-            secret_provider=self._secret_provider,
+            configuration_store=self._configuration_store,
+            model_credential_resolver=self._model_credential_resolver,
         )
 
         with self._unit_of_work_factory() as uow:
@@ -273,7 +277,8 @@ class ProductionAgentPublicationService:
         validate_production_agent_candidate(
             agent=agent,
             version=version,
-            secret_provider=self._secret_provider,
+            configuration_store=self._configuration_store,
+            model_credential_resolver=self._model_credential_resolver,
         )
         validation = self._candidate_validator.validate(
             agent=agent,

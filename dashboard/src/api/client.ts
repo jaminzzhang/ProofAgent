@@ -313,7 +313,8 @@ export function createModelConnection(payload: {
   provider: string
   model_identifier: string
   base_url?: string | null
-  credential_ref: ModelCredentialReference
+  credential_ref?: ModelCredentialReference
+  api_key?: string
   organization_env?: string | null
   project_env?: string | null
   timeout_seconds?: number | null
@@ -339,6 +340,7 @@ export function updateModelConnection(
     model_identifier?: string | null
     base_url?: string | null
     credential_ref?: ModelCredentialReference | null
+    api_key?: string
     organization_env?: string | null
     project_env?: string | null
     timeout_seconds?: number | null

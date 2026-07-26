@@ -9,7 +9,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from proof_agent.contracts import (
     AuditActorFacts,
@@ -19,8 +19,7 @@ from proof_agent.contracts import (
     ModelConnectionSmokeTestRecord,
     ModelConnectionValidationRecord,
     Permission,
-    ProductionSecretHandle,
-    SecretPurpose,
+    PostgresEncryptedModelCredentialReference,
     SharedModelConnection,
     SharedModelConnectionDeletionEligibility,
     SharedModelConnectionLifecycleState,
@@ -38,7 +37,7 @@ router = APIRouter(prefix="/config/model-connections", tags=["model-connections"
 
 _SUPPORTED_PROVIDERS = frozenset({"deepseek", "openai", "openai_compatible"})
 _HIGH_IMPACT_FIELDS = frozenset(
-    {"provider", "model_identifier", "base_url", "credential_ref", "timeout_seconds"}
+    {"provider", "model_identifier", "base_url", "api_key", "timeout_seconds"}
 )
 _NON_NULL_UPDATE_FIELDS = frozenset(
     {"display_name", "description", "tags", "provider", "model_identifier"}
@@ -55,7 +54,7 @@ class ProductionModelConnectionCreateRequest(BaseModel):
     provider: str = Field(min_length=1)
     model_identifier: str = Field(min_length=1)
     base_url: str | None = None
-    credential_ref: ProductionSecretHandle
+    api_key: SecretStr
     timeout_seconds: float | None = Field(default=None, gt=0)
 
 
@@ -69,7 +68,7 @@ class ProductionModelConnectionUpdateRequest(BaseModel):
     provider: str | None = Field(default=None, min_length=1)
     model_identifier: str | None = Field(default=None, min_length=1)
     base_url: str | None = None
-    credential_ref: ProductionSecretHandle | None = None
+    api_key: SecretStr | None = None
     timeout_seconds: float | None = Field(default=None, gt=0)
     confirm_impact: bool = False
 
@@ -110,7 +109,7 @@ def list_model_connections(
         "data": data,
         "meta": {
             "total": len(data),
-            "credential_reference_type": "secret_handle",
+            "credential_reference_type": "postgres_encrypted",
         },
     }
 
@@ -125,8 +124,9 @@ def create_model_connection(
 
     require_operator_permission(identity, Permission.MODEL_CONNECTION_EDIT)
     _require_provider(body.provider)
-    _require_model_secret_handle(request, body.credential_ref)
-    now = _now()
+    credential = _credential_bytes(body.api_key)
+    now_value = datetime.now(UTC)
+    now = _timestamp(now_value)
     connection = SharedModelConnection(
         connection_id=_connection_id(body.connection_id, body.display_name),
         display_name=body.display_name.strip(),
@@ -135,7 +135,7 @@ def create_model_connection(
         provider=body.provider,
         model_identifier=body.model_identifier,
         base_url=body.base_url,
-        credential_ref=body.credential_ref,
+        credential_ref=PostgresEncryptedModelCredentialReference(),
         timeout_seconds=body.timeout_seconds,
         lifecycle_state=SharedModelConnectionLifecycleState.ACTIVE,
         created_at=now,
@@ -144,6 +144,11 @@ def create_model_connection(
     try:
         with _configuration_uow(request) as uow:
             version = uow.models.save_connection(connection, expected_revision=0)
+            _model_credentials(uow).store(
+                connection.connection_id,
+                credential,
+                updated_at=now_value,
+            )
             uow.audit.append(
                 _audit_event(
                     request,
@@ -153,7 +158,7 @@ def create_model_connection(
                     metadata={
                         "provider": connection.provider,
                         "model_identifier": connection.model_identifier,
-                        "credential_ref": body.credential_ref.model_dump(mode="json"),
+                        "credential_storage": "postgres_encrypted",
                     },
                 )
             )
@@ -196,10 +201,8 @@ def update_model_connection(
     require_operator_permission(identity, Permission.MODEL_CONNECTION_EDIT)
     if body.provider is not None:
         _require_provider(body.provider)
-    if "credential_ref" in body.model_fields_set:
-        if body.credential_ref is None:
-            raise HTTPException(status_code=422, detail="model_credential_handle_required")
-        _require_model_secret_handle(request, body.credential_ref)
+    if "api_key" in body.model_fields_set and body.api_key is None:
+        raise HTTPException(status_code=422, detail="model_api_key_required")
     with _configuration_uow(request) as uow:
         existing = _require_connection(uow.models, connection_id)
         changed_fields = _changed_update_fields(body)
@@ -241,14 +244,26 @@ def update_model_connection(
         values = {
             field: getattr(body, field)
             for field in changed_fields
+            if field != "api_key"
         }
-        values["updated_at"] = _now()
+        now_value = datetime.now(UTC)
+        values["updated_at"] = _timestamp(now_value)
+        if "api_key" in changed_fields:
+            assert body.api_key is not None
+            values["credential_ref"] = PostgresEncryptedModelCredentialReference()
         updated = existing.model_copy(update=values)
         try:
             version = uow.models.save_connection(
                 updated,
                 expected_revision=body.expected_revision,
             )
+            if "api_key" in changed_fields:
+                assert body.api_key is not None
+                _model_credentials(uow).store(
+                    connection_id,
+                    _credential_bytes(body.api_key),
+                    updated_at=now_value,
+                )
             uow.audit.append(
                 _audit_event(
                     request,
@@ -321,30 +336,28 @@ def validate_model_connection(
     request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Validate the production Secret Handle without exposing resolved material."""
+    """Validate the encrypted PostgreSQL credential without exposing material."""
 
     del body
     require_operator_permission(identity, Permission.MODEL_CONNECTION_VALIDATE)
-    require_operator_permission(identity, Permission.SECRET_HANDLE_VIEW)
-    require_operator_permission(identity, Permission.SECRET_HANDLE_USE)
     with _configuration_uow(request) as uow:
         connection = _require_connection(uow.models, connection_id)
-        handle = _production_handle(connection)
-        validation = _secret_provider(request).validate(handle, checked_at=_now())
+        validation = _model_credentials(uow).validate(connection_id)
+        checked_at = _now()
         record = ModelConnectionValidationRecord(
             validation_id=f"modelvalidation_{uuid4().hex[:8]}",
             connection_id=connection.connection_id,
             status="passed" if validation.resolvable else "failed",
-            created_at=validation.checked_at,
+            created_at=checked_at,
             created_by=identity.operator_id,
             provider=connection.provider,
             model_identifier=connection.model_identifier,
-            credential_ref=handle,
+            credential_ref=PostgresEncryptedModelCredentialReference(),
             error_code=None if validation.resolvable else validation.reason_code,
             message=(
-                "Model connection Secret Handle validation passed."
+                "Encrypted model credential validation passed."
                 if validation.resolvable
-                else "Model connection Secret Handle is not resolvable."
+                else "Encrypted model credential is not resolvable."
             ),
         )
         uow.audit.append(
@@ -371,27 +384,25 @@ def smoke_test_model_connection(
 
     del body
     require_operator_permission(identity, Permission.MODEL_CONNECTION_VALIDATE)
-    require_operator_permission(identity, Permission.SECRET_HANDLE_VIEW)
-    require_operator_permission(identity, Permission.SECRET_HANDLE_USE)
     with _configuration_uow(request) as uow:
         connection = _require_connection(uow.models, connection_id)
-        handle = _production_handle(connection)
-        validation = _secret_provider(request).validate(handle, checked_at=_now())
+        validation = _model_credentials(uow).validate(connection_id)
+        checked_at = _now()
         record = ModelConnectionSmokeTestRecord(
             smoke_test_id=f"modelsmoke_{uuid4().hex[:8]}",
             connection_id=connection.connection_id,
             status="skipped" if validation.resolvable else "failed",
-            created_at=validation.checked_at,
+            created_at=checked_at,
             created_by=identity.operator_id,
             provider=connection.provider,
             model_identifier=connection.model_identifier,
-            credential_ref=handle,
+            credential_ref=PostgresEncryptedModelCredentialReference(),
             request_sent=False,
             error_code=None if validation.resolvable else validation.reason_code,
             message=(
-                "Remote smoke test is not enabled; Secret Handle validation passed."
+                "Remote smoke test is not enabled; encrypted credential validation passed."
                 if validation.resolvable
-                else "Remote smoke test was not sent because the Secret Handle failed validation."
+                else "Remote smoke test was not sent because credential decryption failed."
             ),
         )
         uow.audit.append(
@@ -465,13 +476,6 @@ def _configuration_uow(request: Request) -> Any:
     return factory()
 
 
-def _secret_provider(request: Request) -> Any:
-    provider = getattr(request.app.state, "secret_provider", None)
-    if provider is None:
-        raise HTTPException(status_code=503, detail="secret_provider_unavailable")
-    return provider
-
-
 def _require_provider(provider: str) -> None:
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail="unsupported_model_provider")
@@ -487,7 +491,7 @@ def _changed_update_fields(
         "provider",
         "model_identifier",
         "base_url",
-        "credential_ref",
+        "api_key",
         "timeout_seconds",
     )
     return tuple(field for field in mutable_fields if field in body.model_fields_set)
@@ -523,22 +527,22 @@ def _reference_summary(
     )
 
 
-def _require_model_secret_handle(
-    request: Request,
-    handle: ProductionSecretHandle,
-) -> None:
-    if handle.purpose is not SecretPurpose.MODEL_CREDENTIAL:
-        raise HTTPException(status_code=422, detail="model_credential_handle_required")
-    provider = _secret_provider(request)
-    if handle.protocol_id != getattr(provider, "protocol_id", None):
-        raise HTTPException(status_code=422, detail="secret_provider_protocol_mismatch")
+def _model_credentials(uow: Any) -> Any:
+    repository = getattr(uow, "model_credentials", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="model_credential_store_unavailable")
+    return repository
 
 
-def _production_handle(connection: SharedModelConnection) -> ProductionSecretHandle:
-    handle = connection.credential_ref
-    if not isinstance(handle, ProductionSecretHandle):
-        raise HTTPException(status_code=422, detail="model_credential_handle_required")
-    return handle
+def _credential_bytes(value: SecretStr) -> bytes:
+    raw = value.get_secret_value()
+    try:
+        material = raw.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(status_code=422, detail="model_api_key_invalid") from exc
+    if not 1 <= len(material) <= 16 * 1024 or "\r" in raw or "\n" in raw:
+        raise HTTPException(status_code=422, detail="model_api_key_invalid")
+    return material
 
 
 def _transition_lifecycle(
@@ -682,4 +686,8 @@ def _audit_event(
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return _timestamp(datetime.now(UTC))
+
+
+def _timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
