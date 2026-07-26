@@ -2314,11 +2314,16 @@ def unbind_knowledge_source_from_draft(
         draft.contract_bundle.agent_yaml,
         binding_id=binding_id,
     )
+    extra_files = _remove_business_flow_skill_pack_knowledge_binding_refs(
+        agent_yaml,
+        extra_files=draft.contract_bundle.extra_files,
+        binding_id=binding_id,
+    )
     bundle = ContractBundle(
         agent_yaml=agent_yaml,
         policy_yaml=draft.contract_bundle.policy_yaml,
         tools_yaml=draft.contract_bundle.tools_yaml,
-        extra_files=draft.contract_bundle.extra_files,
+        extra_files=extra_files,
         advanced_fields=draft.contract_bundle.advanced_fields,
     )
     candidate = _draft_with_contract_bundle(draft, bundle)
@@ -3880,6 +3885,50 @@ def _unbind_source_in_agent_yaml(
             break
 
     return _dump_agent_yaml(raw)
+
+
+def _remove_business_flow_skill_pack_knowledge_binding_refs(
+    agent_yaml: str,
+    *,
+    extra_files: Mapping[str, str],
+    binding_id: str,
+) -> dict[str, str]:
+    raw = yaml.safe_load(agent_yaml)
+    if not isinstance(raw, dict):
+        return dict(extra_files)
+    capabilities = raw.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        return dict(extra_files)
+    skills = capabilities.get("skills")
+    if not isinstance(skills, Mapping):
+        return dict(extra_files)
+    business_flows = skills.get("business_flows")
+    if not isinstance(business_flows, list):
+        return dict(extra_files)
+
+    updated_extra_files = dict(extra_files)
+    for flow_binding in business_flows:
+        if not isinstance(flow_binding, Mapping):
+            continue
+        definition_path = _package_extra_file_path(str(flow_binding.get("definition", "")))
+        definition_yaml = updated_extra_files.get(definition_path)
+        if definition_yaml is None:
+            continue
+        definition = yaml.safe_load(definition_yaml)
+        if not isinstance(definition, dict):
+            continue
+        knowledge_binding_refs = definition.get("knowledge_binding_refs")
+        if not isinstance(knowledge_binding_refs, list) or binding_id not in knowledge_binding_refs:
+            continue
+        definition["knowledge_binding_refs"] = [
+            reference for reference in knowledge_binding_refs if reference != binding_id
+        ]
+        updated_extra_files[definition_path] = yaml.safe_dump(
+            definition,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+    return updated_extra_files
 
 
 def _dump_agent_yaml(raw: dict[str, Any]) -> str:

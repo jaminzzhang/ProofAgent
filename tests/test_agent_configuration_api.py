@@ -3146,6 +3146,58 @@ def test_bind_shared_knowledge_source_keeps_business_flow_skill_refs_valid(
     }
 
 
+def test_unbind_knowledge_source_removes_business_flow_skill_pack_refs(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    draft = client.post(
+        "/api/config/agents/import",
+        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
+    ).json()
+
+    unbound = client.request(
+        "DELETE",
+        (
+            f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
+            "/knowledge-bindings/product_clause_docs"
+        ),
+        json={},
+    )
+
+    assert unbound.status_code == 200, unbound.text
+    contract = unbound.json()
+    agent_yaml = yaml.safe_load(contract["agent_yaml"])
+    assert "product_clause_docs" not in {
+        binding["binding_id"] for binding in agent_yaml["knowledge_bindings"]
+    }
+    for definition_path in (
+        "skills/product_clause_consultation.yaml",
+        "skills/claims_consultation.yaml",
+        "skills/customer_agent_question_support.yaml",
+    ):
+        definition = yaml.safe_load(contract["extra_files"][definition_path])
+        assert "product_clause_docs" not in definition["knowledge_binding_refs"]
+    claims_definition = yaml.safe_load(
+        contract["extra_files"]["skills/claims_consultation.yaml"]
+    )
+    assert claims_definition["knowledge_binding_refs"] == ["claims_sop_docs"]
+    loaded = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    )
+    skills = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/skills"
+    )
+    assert loaded.status_code == 200
+    assert loaded.json() == contract
+    assert skills.status_code == 200, skills.text
+    refs_by_pack = {
+        pack["id"]: pack["capability_refs"]["knowledge_binding_refs"]
+        for pack in skills.json()["packs"]
+    }
+    assert refs_by_pack["product_clause_consultation"] == []
+    assert refs_by_pack["claims_consultation"] == ["claims_sop_docs"]
+
+
 def test_bind_unpublished_knowledge_source_to_agent_draft_is_rejected(
     tmp_path: Path,
 ) -> None:
