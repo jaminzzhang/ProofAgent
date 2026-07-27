@@ -414,6 +414,90 @@ artifact_owner_bindings = sa.Table(
     sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
 )
 
+release_registry = sa.Table(
+    "release_registry",
+    metadata,
+    sa.Column("release_id", sa.Text(), primary_key=True),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("candidate_binding_sha256", sa.String(64), nullable=False, unique=True),
+    sa.Column("release_manifest_object_id", UUID, nullable=False, unique=True),
+    sa.Column("bundle_index_object_id", UUID, unique=True),
+    sa.Column("detached_attestation_object_id", UUID, unique=True),
+    sa.Column("trust_identity_json", JSONB),
+    sa.Column("registry_json", JSONB, nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("created_by", sa.Text(), nullable=False),
+    sa.Column("finalized_at", UTC_TIMESTAMP),
+)
+
+knowledge_source_operations = sa.Table(
+    "knowledge_source_operations",
+    metadata,
+    sa.Column("operation_id", sa.Text(), primary_key=True),
+    sa.Column("source_id", sa.Text(), nullable=False),
+    sa.Column("command", sa.Text(), nullable=False),
+    sa.Column("status", sa.Text(), nullable=False),
+    sa.Column("stage", sa.Text(), nullable=False),
+    sa.Column("source_revision", sa.BigInteger(), nullable=False),
+    sa.Column("operation_json", JSONB, nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("completed_at", UTC_TIMESTAMP),
+)
+
+knowledge_source_idempotency = sa.Table(
+    "knowledge_source_idempotency",
+    metadata,
+    sa.Column("operator_subject", sa.Text(), primary_key=True),
+    sa.Column("source_id", sa.Text(), primary_key=True),
+    sa.Column("command", sa.Text(), primary_key=True),
+    sa.Column("idempotency_key", sa.Text(), primary_key=True),
+    sa.Column("request_sha256", sa.String(64), nullable=False),
+    sa.Column("operation_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("outcome_json", JSONB, nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("expires_at", UTC_TIMESTAMP, nullable=False),
+)
+
+knowledge_ingestion_attempts = sa.Table(
+    "knowledge_ingestion_attempts",
+    metadata,
+    sa.Column("attempt_id", UUID, primary_key=True),
+    sa.Column("job_id", UUID, nullable=False),
+    sa.Column("attempt_number", sa.Integer(), nullable=False),
+    sa.Column("initiation", sa.Text(), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("fencing_token", sa.BigInteger(), nullable=False),
+    sa.Column("worker_id", sa.Text()),
+    sa.Column("attempt_json", JSONB, nullable=False),
+    sa.Column("started_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("completed_at", UTC_TIMESTAMP),
+    sa.UniqueConstraint("job_id", "attempt_number"),
+)
+
+prepared_knowledge_publications = sa.Table(
+    "prepared_knowledge_publications",
+    metadata,
+    sa.Column("validation_id", sa.Text(), primary_key=True),
+    sa.Column("operation_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("attempt_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("fencing_token", sa.BigInteger(), nullable=False),
+    sa.Column("source_id", sa.Text(), nullable=False),
+    sa.Column("source_draft_version_id", sa.Text(), nullable=False),
+    sa.Column("candidate_digest", sa.String(64), nullable=False),
+    sa.Column("generation_id", sa.Text(), nullable=False),
+    sa.Column("manifest_sha256", sa.String(64), nullable=False),
+    sa.Column("staged_projection_id", sa.Text(), nullable=False),
+    sa.Column("attestation_sha256", sa.String(64), nullable=False),
+    sa.Column("smoke_result_sha256", sa.String(64), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("prepared_json", JSONB, nullable=False),
+    sa.Column("prepared_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("consumed_at", UTC_TIMESTAMP),
+    sa.UniqueConstraint("source_id", "fencing_token"),
+)
+
 hybrid_ingestion_jobs = sa.Table(
     "hybrid_ingestion_jobs",
     metadata,
@@ -432,6 +516,7 @@ hybrid_ingestion_jobs = sa.Table(
     sa.Column("worker_id", sa.Text()),
     sa.Column("auto_retry_count", sa.Integer(), nullable=False),
     sa.Column("max_auto_retries", sa.Integer(), nullable=False),
+    sa.Column("next_attempt_initiation", sa.Text(), nullable=False),
     sa.Column("next_attempt_at", UTC_TIMESTAMP),
     sa.Column("claimed_at", UTC_TIMESTAMP),
     sa.Column("lease_expires_at", UTC_TIMESTAMP),
@@ -442,7 +527,53 @@ hybrid_ingestion_jobs = sa.Table(
     sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
     sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
     sa.Column("completed_at", UTC_TIMESTAMP),
+    sa.Column("cancel_requested_at", UTC_TIMESTAMP),
+    sa.Column("cancel_requested_by", sa.Text()),
+    sa.Column("cancelled_at", UTC_TIMESTAMP),
     sa.UniqueConstraint("source_id", "document_id", "revision_id"),
+    sa.CheckConstraint(
+        "next_attempt_initiation IN ('automatic','manual')",
+        name="hybrid_ingestion_jobs_attempt_initiation",
+    ),
+)
+
+hybrid_document_candidates = sa.Table(
+    "hybrid_document_candidates",
+    metadata,
+    sa.Column("source_id", sa.Text(), primary_key=True),
+    sa.Column("document_id", UUID, primary_key=True),
+    sa.Column("candidate_revision_id", UUID),
+    sa.Column("pending_revision_id", UUID),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.CheckConstraint(
+        "candidate_revision_id IS NOT NULL OR pending_revision_id IS NOT NULL",
+        name="hybrid_document_candidate_has_revision",
+    ),
+    sa.CheckConstraint(
+        "candidate_revision_id IS NULL OR pending_revision_id IS NULL "
+        "OR candidate_revision_id <> pending_revision_id",
+        name="hybrid_document_candidate_distinct_revisions",
+    ),
+    sa.ForeignKeyConstraint(
+        ["source_id", "document_id", "candidate_revision_id"],
+        [
+            "hybrid_ingestion_jobs.source_id",
+            "hybrid_ingestion_jobs.document_id",
+            "hybrid_ingestion_jobs.revision_id",
+        ],
+        ondelete="RESTRICT",
+        name="hybrid_document_candidate_selected_job",
+    ),
+    sa.ForeignKeyConstraint(
+        ["source_id", "document_id", "pending_revision_id"],
+        [
+            "hybrid_ingestion_jobs.source_id",
+            "hybrid_ingestion_jobs.document_id",
+            "hybrid_ingestion_jobs.revision_id",
+        ],
+        ondelete="RESTRICT",
+        name="hybrid_document_candidate_pending_job",
+    ),
 )
 
 hybrid_metadata_reviews = sa.Table(
@@ -459,4 +590,55 @@ hybrid_metadata_reviews = sa.Table(
     sa.Column("review_json", JSONB, nullable=False),
     sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
     sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+)
+
+hybrid_metadata_import_jobs = sa.Table(
+    "hybrid_metadata_import_jobs",
+    metadata,
+    sa.Column("import_job_id", UUID, primary_key=True),
+    sa.Column("operation_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("source_id", sa.Text(), nullable=False),
+    sa.Column("document_id", UUID, nullable=False),
+    sa.Column("revision_id", UUID, nullable=False),
+    sa.Column("source_revision", sa.BigInteger(), nullable=False),
+    sa.Column("request_sha256", sa.String(64), nullable=False),
+    sa.Column("filename", sa.Text(), nullable=False),
+    sa.Column("original_ref_json", JSONB, nullable=False),
+    sa.Column("content_sha256", sa.String(64), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("fencing_token", sa.BigInteger(), nullable=False),
+    sa.Column("worker_id", sa.Text()),
+    sa.Column("claimed_at", UTC_TIMESTAMP),
+    sa.Column("lease_expires_at", UTC_TIMESTAMP),
+    sa.Column("failure_code", sa.Text()),
+    sa.Column("safe_reason", sa.Text()),
+    sa.Column("result_import_id", sa.Text()),
+    sa.Column("created_by", sa.Text(), nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("completed_at", UTC_TIMESTAMP),
+)
+
+hybrid_publication_preparation_jobs = sa.Table(
+    "hybrid_publication_preparation_jobs",
+    metadata,
+    sa.Column("preparation_job_id", UUID, primary_key=True),
+    sa.Column("operation_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("validation_id", sa.Text(), nullable=False, unique=True),
+    sa.Column("source_id", sa.Text(), nullable=False),
+    sa.Column("source_revision", sa.BigInteger(), nullable=False),
+    sa.Column("source_draft_version_id", sa.Text(), nullable=False),
+    sa.Column("smoke_query", sa.Text(), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("fencing_token", sa.BigInteger(), nullable=False),
+    sa.Column("worker_id", sa.Text()),
+    sa.Column("claimed_at", UTC_TIMESTAMP),
+    sa.Column("lease_expires_at", UTC_TIMESTAMP),
+    sa.Column("prepared_commit_json", JSONB),
+    sa.Column("failure_code", sa.Text()),
+    sa.Column("safe_reason", sa.Text()),
+    sa.Column("created_by", sa.Text(), nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("completed_at", UTC_TIMESTAMP),
 )

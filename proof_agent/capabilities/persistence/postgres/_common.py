@@ -58,7 +58,13 @@ def timestamp_text(value: datetime) -> str:
 
 
 def model_json(model: BaseModel) -> dict[str, Any]:
-    value = _plain_json_value(model.model_dump(mode="python", warnings=False))
+    value = _plain_json_value(
+        model.model_dump(
+            mode="json",
+            warnings=False,
+            fallback=_plain_json_value,
+        )
+    )
     return cast(dict[str, Any], value)
 
 

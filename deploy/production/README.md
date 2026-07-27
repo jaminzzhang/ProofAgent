@@ -1,6 +1,6 @@
 # Production deployment assets
 
-[KNOWN | HIGH] This directory now contains the checked-in foundations for S6: a strict Deployment Compatibility Manifest contract, a multi-stage product image, hardened Blue/Green slot Compose, and a stable Nginx Gateway Compose. These files are production-oriented definitions, not evidence that a production candidate has been built, scanned, deployed or approved.
+[KNOWN | HIGH] This directory now contains the checked-in foundations for S6: a strict Deployment Compatibility Manifest contract, a multi-stage product image, hardened Blue/Green slot Compose, a stable Nginx Gateway Compose, and the runtime binding for finalized Release Registry downloads. These files are production-oriented definitions, not evidence that a production candidate has been built, scanned, deployed or approved.
 
 ## Files
 
@@ -62,6 +62,23 @@ docker compose \
 The job uses the same immutable image, obtains the global PostgreSQL advisory lock, accepts only revisions in the reviewed expand-only allowlist, and never performs a downgrade. A failed job is a deployment stop condition; API and worker startup do not retry or hide it.
 
 [KNOWN | HIGH] Candidate processes honor `PROOF_AGENT_ACTIVATION_STATE`: only an `ACTIVE` process holding the exact PostgreSQL role lease claims work; `STANDBY` and `DRAINING` do not start new claims. Run Executor and Knowledge Worker expose loopback `/readyz` on ports 8001 and 8002, and Compose marks a process unhealthy when dependencies or its exact role lease are unavailable.
+
+## Release Registry and exact downloads
+
+[KNOWN | HIGH] Alembic revision `0013_release_registry` adds the two-state Release Registry. `PREPARING` binds one candidate-binding SHA-256 and exact Release Gate Manifest but is never downloadable. A single conditional PostgreSQL transaction changes it to `FINALIZED` and records the exact Bundle Index, detached attestation, trust identity and finalization time. A second finalization or any candidate, Manifest, owner, index or attestation mismatch fails closed.
+
+The API needs a bounded tmpfs cache and deployment-owned Ed25519 public-key set:
+
+```dotenv
+PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR=/var/lib/proofagent/release-bundle-cache
+PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON={"release-key-2026-07":"BASE64_OF_32_RAW_PUBLIC_KEY_BYTES"}
+```
+
+The detached envelope uses schema `proofagent.release-bundle-attestation.v1` and protocol `ed25519-sha256-v1`. It binds `issuer`, `subject`, `key_id`, the lowercase SHA-256 of the exact Index bytes, and an Ed25519 signature over `proofagent.release-bundle-index.v1\0` followed by the 32 digest bytes. Those identity fields must exactly equal the finalized Registry trust identity. Public keys are not Secrets, but the mapping is deployment configuration and must be reviewed, candidate-bound and rotated deliberately.
+
+[KNOWN | HIGH] An authenticated operator with `audit.export` uses Dashboard `/releases` or `GET /api/releases/{release_id}/bundle/{artifact_name}`. The endpoint first materializes and verifies the exact PostgreSQL/S3 versions of `release-bundle-index.json` and its detached attestation into the read-only cache. Only then may the verified Index authorize its exact Manifest, HTML report, closure audit, Evidence, SBOM and provenance members. It supports single byte ranges from that cache, returns an attachment with `private, no-store` and `nosniff`, and records the actor, release, object and outcome in audit metadata. It never reads a repository-local `reports/` path, and the HTML report is never release authority.
+
+[KNOWN | HIGH] This repository provides the Registry, download verifier and UI prerequisite, but no real candidate is finalized here. Post-GO bundle generation/finalization and candidate-bound download evidence remain S8B/S7B work; do not create a fake `FINALIZED` row or treat an empty Registry as release approval.
 
 [KNOWN | HIGH] The provider-neutral controller now implements the exact forward, pre-switch abort and post-switch rollback state machine. Gateway changes render all upstreams and routing markers into a same-directory temporary include, validate it inside the running Gateway image, atomically replace it, reload nginx, then verify one generation across Dashboard, Operator Chat, API, OIDC callback and SSE. Mixed generations restore the old include and reload it. Every recorded step carries the candidate-binding SHA-256; rollback assets receive the later of a 24-hour deadline and the end of the next complete weekday 09:00–18:00 Asia/Shanghai support window.
 

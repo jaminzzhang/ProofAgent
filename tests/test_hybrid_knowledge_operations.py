@@ -1,13 +1,8 @@
-from pathlib import Path
-
-from fastapi.testclient import TestClient
-
 from proof_agent.delivery.knowledge_operations import (
     KnowledgeOperationsHealthSources,
     KnowledgeStageLatency,
     build_operations_projection,
 )
-from proof_agent.observability.api.app import create_app
 
 
 def fake_health_sources() -> KnowledgeOperationsHealthSources:
@@ -61,31 +56,3 @@ def test_incomplete_telemetry_is_a_release_blocker() -> None:
 
     assert projection.release_blocker_count == 1
     assert projection.telemetry_complete is False
-
-
-def test_hybrid_operations_endpoint_returns_safe_projection(tmp_path: Path) -> None:
-    app = create_app(
-        history_dir=tmp_path / "history",
-        runs_dir=tmp_path / "latest",
-        conversations_dir=tmp_path / "conversations",
-        published_agents={},
-        agent_configuration_dir=tmp_path / "config",
-        knowledge_operations_provider=lambda source_id: fake_health_sources(),
-    )
-    client = TestClient(app)
-    created = client.post(
-        "/api/config/knowledge-sources",
-        json={
-            "source_id": "ks_hybrid_index",
-            "name": "Hybrid Index Policies",
-            "provider": "hybrid_index",
-            "params": {},
-        },
-    )
-    assert created.status_code == 200
-    response = client.get("/api/config/knowledge-sources/ks_hybrid_index/operations")
-
-    assert response.status_code == 200
-    assert response.json()["review_backlog"] == 12
-    assert response.json()["scheduler_queue_p95_ms"] == 120.0
-    assert "raw_rule_content" not in response.json()

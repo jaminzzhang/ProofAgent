@@ -2,7 +2,6 @@ import { afterEach, expect, test, vi } from 'vitest'
 import {
   ApiError,
   archiveModelConnection,
-  archiveKnowledgeSource,
   bindKnowledgeSourceToDraft,
   createModelConnection,
   deleteModelConnection,
@@ -10,7 +9,6 @@ import {
   fetchModelConnectionDeletionEligibility,
   fetchModelConnectionReferences,
   fetchModelConnections,
-  createKnowledgeSource,
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
   fetchConfigAgents,
@@ -21,23 +19,14 @@ import {
   fetchEvaluationCampaignTrends,
   fetchEvaluationProductionSampleCandidates,
   fetchEvaluationProductionSamplePromotions,
-  fetchKnowledgeIngestionJobs,
-  fetchKnowledgeSourceDeletionEligibility,
-  fetchKnowledgeSources,
-  fetchQuarantinedKnowledgeUploads,
-  freezeCandidateKnowledgeSourceSnapshot,
   fetchRuns,
   fetchValidationCapture,
   fetchWorkflowTemplate,
   fetchWorkflowTemplates,
   importConfigAgent,
-  importInsuranceMetadataWorkbook,
-  permanentlyDeleteKnowledgeSource,
   promoteEvaluationProductionSample,
   previewWorkflowStageContext,
   publishConfigDraft,
-  retryKnowledgeIngestionJob,
-  restoreKnowledgeSource,
   restoreModelConnection,
   rollbackConfigVersion,
   smokeTestModelConnection,
@@ -45,10 +34,6 @@ import {
   updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
-  updateKnowledgeDocumentRoutingMetadata,
-  uploadKnowledgeDocument,
-  uploadKnowledgeDocuments,
-  validateCandidateKnowledgeSourceSnapshotFoundation,
   validateConfigDraft,
   validateModelConnection,
 } from './client'
@@ -61,34 +46,6 @@ const sameOriginRequest = (expected: RequestInit = {}) => expect.objectContainin
   ...expected,
   credentials: 'same-origin',
   headers: expect.any(Headers),
-})
-
-test('insurance metadata workbook import uses the protected Source route', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({
-      import_id: 'metadata_import_1',
-      template_revision: 'insurance-rule-metadata.v1',
-      row_count: 1,
-      reviews: [],
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-  const payload = {
-    filename: 'metadata.xlsx',
-    content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    content_base64: 'UEsDBA==',
-    document_id: 'doc_1',
-    revision_id: 'rev_1',
-  }
-
-  await importInsuranceMetadataWorkbook('ks_hybrid', payload)
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/config/knowledge-sources/ks_hybrid/metadata-workbooks/import',
-    expect.objectContaining({ method: 'POST', body: JSON.stringify(payload) }),
-  )
 })
 
 test('evaluation campaign client methods use dashboard campaign endpoints', async () => {
@@ -430,237 +387,6 @@ test('workflow stage update and preview use Agent Configuration endpoints', asyn
       }),
     }),
   )
-})
-
-test('knowledge source client methods use shared source endpoints', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch')
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [], meta: { total: 0 } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ source_id: 'ks_local_index' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ document_id: 'doc_1', state: 'ready' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [{ upload_id: 'upload_1' }], meta: { total: 1 } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [{ upload_id: 'upload_1', state: 'queued' }], meta: { total: 1 } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [{ job_id: 'ksjob_1', state: 'processing' }], meta: { total: 1 } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ job_id: 'ksjob_1', state: 'queued' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ validation_id: 'ksvalidation_1', status: 'passed' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ snapshot_id: 'kssnapshot_1', state: 'READY' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ document_id: 'doc_1', routing_metadata: { title: 'Policy' } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-
-  await fetchKnowledgeSources()
-  await createKnowledgeSource({
-    source_id: 'ks_local_index',
-    name: 'Local Index Policies',
-    provider: 'local_index',
-    params: {
-      ingestion_model: {
-        provider: 'openai_compatible',
-        name: 'gpt-4o-mini',
-        params: { api_key_env: 'OPENAI_API_KEY' },
-      },
-      document_selection_budget: 8,
-      worker_concurrency: 2,
-    },
-  })
-  await uploadKnowledgeDocument('ks_local_index', {
-    filename: 'travel-policy.pdf',
-    content_type: 'application/pdf',
-    content_base64: 'JVBERi0xLjQ=',
-  })
-  await uploadKnowledgeDocuments('ks_local_index', {
-    documents: [
-      {
-        filename: 'travel-policy.pdf',
-        content_type: 'application/pdf',
-        content_base64: 'JVBERi0xLjQ=',
-      },
-    ],
-  })
-  await fetchQuarantinedKnowledgeUploads('ks_local_index')
-  await fetchKnowledgeIngestionJobs('ks_local_index')
-  await retryKnowledgeIngestionJob('ks_local_index', 'ksjob_1')
-  await validateCandidateKnowledgeSourceSnapshotFoundation('ks_local_index')
-  await freezeCandidateKnowledgeSourceSnapshot('ks_local_index', {
-    validation_id: 'ksvalidation_1',
-  })
-  await updateKnowledgeDocumentRoutingMetadata('ks_local_index', 'doc_1', {
-    routing_metadata: { title: 'Policy' },
-  })
-
-  expect(fetchMock.mock.calls[0][0]).toBe('/api/config/knowledge-sources')
-  expect(fetchMock.mock.calls[1][0]).toBe('/api/config/knowledge-sources')
-  expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[2][0]).toBe('/api/config/knowledge-sources/ks_local_index/documents')
-  expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[3][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/documents/batch',
-  )
-  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[4][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/quarantined-uploads',
-  )
-  expect(fetchMock.mock.calls[5][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/ingestion-jobs',
-  )
-  expect(fetchMock.mock.calls[6][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/ingestion-jobs/ksjob_1/retry',
-  )
-  expect(fetchMock.mock.calls[6][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[7][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/candidate-snapshot/validate-foundation',
-  )
-  expect(fetchMock.mock.calls[7][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[8][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/candidate-snapshot/freeze',
-  )
-  expect(fetchMock.mock.calls[8][1]).toMatchObject({ method: 'POST' })
-  expect(fetchMock.mock.calls[9][0]).toBe(
-    '/api/config/knowledge-sources/ks_local_index/documents/doc_1/routing-metadata',
-  )
-  expect(fetchMock.mock.calls[9][1]).toMatchObject({ method: 'PATCH' })
-})
-
-test('knowledge source lifecycle methods use archive restore eligibility and delete endpoints', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch')
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ source_id: 'ks_local_index', lifecycle_state: 'ARCHIVED' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ source_id: 'ks_local_index', lifecycle_state: 'ACTIVE' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({
-        source_id: 'ks_local_index',
-        eligible: true,
-        lifecycle_state: 'ARCHIVED',
-        reference_summary: {
-          source_id: 'ks_local_index',
-          draft_agent_binding_count: 0,
-          published_agent_version_count: 0,
-          publication_count: 0,
-          snapshot_count: 0,
-          document_count: 0,
-          quarantined_upload_count: 0,
-          ingestion_job_count: 0,
-          audit_retention_blocked: false,
-        },
-        blockers: [],
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({
-        source_id: 'ks_local_index',
-        eligible: true,
-        lifecycle_state: 'ARCHIVED',
-        reference_summary: {
-          source_id: 'ks_local_index',
-          draft_agent_binding_count: 0,
-          published_agent_version_count: 0,
-          publication_count: 0,
-          snapshot_count: 0,
-          document_count: 0,
-          quarantined_upload_count: 0,
-          ingestion_job_count: 0,
-          audit_retention_blocked: false,
-        },
-        blockers: [],
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-
-  await archiveKnowledgeSource('ks_local_index', {
-    reason: 'Retire stale index',
-  })
-  await restoreKnowledgeSource('ks_local_index', {
-    reason: 'Reopened',
-  })
-  await fetchKnowledgeSourceDeletionEligibility('ks_local_index')
-  await permanentlyDeleteKnowledgeSource('ks_local_index', {
-    reason: 'Empty archived test fixture',
-  })
-
-  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/config/knowledge-sources/ks_local_index/archive', sameOriginRequest({
-    method: 'POST',
-    body: JSON.stringify({
-      reason: 'Retire stale index',
-    }),
-  }))
-  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/config/knowledge-sources/ks_local_index/restore', sameOriginRequest({
-    method: 'POST',
-    body: JSON.stringify({
-      reason: 'Reopened',
-    }),
-  }))
-  expect(fetchMock).toHaveBeenNthCalledWith(
-    3,
-    '/api/config/knowledge-sources/ks_local_index/deletion-eligibility',
-    sameOriginRequest(),
-  )
-  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/config/knowledge-sources/ks_local_index', sameOriginRequest({
-    method: 'DELETE',
-    body: JSON.stringify({
-      reason: 'Empty archived test fixture',
-    }),
-  }))
 })
 
 test('model connection client methods use shared model endpoints', async () => {

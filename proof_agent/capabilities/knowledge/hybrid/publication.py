@@ -124,6 +124,7 @@ class PublicationCommit(FrozenModel):
     staged_projection_documents: tuple[ProjectionAuthorityDocument, ...] = ()
     manifest: RuleUnitManifestMaterialization
     attestation: KnowledgeProjectionAttestation
+    smoke_result_sha256: Sha256
     published_by: NonBlankStr
 
 
@@ -182,6 +183,13 @@ class HybridPublicationService:
         """The composition owner closes shared scheduler/model clients, never this service."""
 
     def publish(self, request: HybridPublicationRequest) -> HybridKnowledgePublicationRecord:
+        """Compatibility composition of asynchronous preparation and final CAS."""
+
+        return self.commit(self.prepare(request))
+
+    def prepare(self, request: HybridPublicationRequest) -> PublicationCommit:
+        """Perform all artifact, model, projection, read-back, smoke, and attestation work."""
+
         _validate_publication_request(request)
         attempt = self.repository.begin_attempt(request)
         projected = False
@@ -362,10 +370,13 @@ class HybridPublicationService:
                 staged_projection_documents=new_authority,
                 manifest=manifest,
                 attestation=attestation,
+                smoke_result_sha256=stable_digest(
+                    smoke.model_dump(mode="json")
+                ),
                 published_by=request.published_by,
             )
             self.repository.stage_commit(commit)
-            return self.repository.commit_if_current(commit)
+            return commit
         except BaseException as exc:
             code = exc.code if isinstance(exc, PublicationConflict) else "PUBLICATION_FAILED"
             try:
@@ -373,6 +384,29 @@ class HybridPublicationService:
                     attempt.attempt_id,
                     failure_code=code,
                     projection_identity=request.identity if projected else None,
+                )
+            except Exception as cleanup_exc:
+                exc.add_note(
+                    "publication attempt failure recording also failed: "
+                    f"{type(cleanup_exc).__name__}"
+                )
+            raise
+
+    def commit(
+        self,
+        prepared: PublicationCommit,
+    ) -> HybridKnowledgePublicationRecord:
+        """Perform the sole PostgreSQL authority CAS without external I/O."""
+
+        try:
+            return self.repository.commit_if_current(prepared)
+        except BaseException as exc:
+            code = exc.code if isinstance(exc, PublicationConflict) else "PUBLICATION_FAILED"
+            try:
+                self.repository.fail_attempt(
+                    prepared.attempt.attempt_id,
+                    failure_code=code,
+                    projection_identity=prepared.identity,
                 )
             except Exception as cleanup_exc:
                 exc.add_note(

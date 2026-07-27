@@ -96,3 +96,32 @@ def test_postgres_conversation_identity_is_unique(postgres_engine: Engine) -> No
 
     with pytest.raises(PersistenceConflictError):
         repository.create(conversation_record())
+
+
+def test_postgres_conversation_serializes_frozen_evidence_mapping(
+    postgres_engine: Engine,
+) -> None:
+    _seed_run(postgres_engine)
+    repository = PostgresConversationRepository(postgres_engine)
+    conversation = conversation_record()
+    turn = ConversationTurn.model_validate(
+        {
+            **conversation_turn().model_dump(mode="python"),
+            "evidence": (
+                {
+                    "source": "terms.pdf#p=12",
+                    "citation": "terms.pdf#p=12:L3-L8",
+                    "status": "accepted",
+                },
+            )
+        }
+    )
+    repository.create(conversation)
+
+    updated = repository.append_turn(
+        conversation.conversation_id,
+        turn,
+        expected_turn_count=0,
+    )
+
+    assert updated.turns[0].evidence == turn.evidence

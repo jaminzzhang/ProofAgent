@@ -14,10 +14,11 @@ from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.run_queue_api import router as run_queue_router
-from proof_agent.delivery.production_knowledge_api import router as production_knowledge_router
 from proof_agent.delivery.configuration_api import router as configuration_router
+from proof_agent.delivery.knowledge_source_api import router as knowledge_source_router
 from proof_agent.delivery.auth_api import router as auth_router
 from proof_agent.delivery.security_configuration_api import router as security_router
+from proof_agent.delivery.release_bundle_api import router as release_bundle_router
 from proof_agent.delivery.production_model_connections import (
     router as production_model_connections_router,
 )
@@ -96,6 +97,16 @@ def create_app(
     production_hybrid_publication_api: object | None = None,
     production_hybrid_artifact_store: object | None = None,
     production_configuration_uow_factory: object | None = None,
+    knowledge_source_configuration_application: object | None = None,
+    knowledge_source_ingestion_application: object | None = None,
+    knowledge_source_operations_application: object | None = None,
+    knowledge_source_publication_preparation_application: object | None = None,
+    knowledge_source_publication_application: object | None = None,
+    knowledge_source_workspace_application: object | None = None,
+    release_registry_repository: object | None = None,
+    release_bundle_materializer: object | None = None,
+    release_bundle_attestation_verifier: object | None = None,
+    release_bundle_audit_repository: object | None = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -159,6 +170,34 @@ def create_app(
                 ("Hybrid publication API", production_hybrid_publication_api),
                 ("Hybrid exact artifact store", production_hybrid_artifact_store),
                 ("PostgreSQL configuration unit of work", production_configuration_uow_factory),
+                (
+                    "Knowledge Source configuration application",
+                    knowledge_source_configuration_application,
+                ),
+                (
+                    "Knowledge Source ingestion application",
+                    knowledge_source_ingestion_application,
+                ),
+                (
+                    "Knowledge Source operations application",
+                    knowledge_source_operations_application,
+                ),
+                (
+                    "Knowledge Source publication preparation application",
+                    knowledge_source_publication_preparation_application,
+                ),
+                (
+                    "Knowledge Source publication application",
+                    knowledge_source_publication_application,
+                ),
+                (
+                    "Knowledge Source workspace application",
+                    knowledge_source_workspace_application,
+                ),
+                ("PostgreSQL Release Registry", release_registry_repository),
+                ("release bundle verified cache", release_bundle_materializer),
+                ("release bundle attestation verifier", release_bundle_attestation_verifier),
+                ("release bundle audit repository", release_bundle_audit_repository),
             )
             if value is None
         )
@@ -192,6 +231,30 @@ def create_app(
     application.state.production_configuration_uow_factory = (
         production_configuration_uow_factory
     )
+    application.state.knowledge_source_configuration_application = (
+        knowledge_source_configuration_application
+    )
+    application.state.knowledge_source_ingestion_application = (
+        knowledge_source_ingestion_application
+    )
+    application.state.knowledge_source_operations_application = (
+        knowledge_source_operations_application
+    )
+    application.state.knowledge_source_publication_preparation_application = (
+        knowledge_source_publication_preparation_application
+    )
+    application.state.knowledge_source_publication_application = (
+        knowledge_source_publication_application
+    )
+    application.state.knowledge_source_workspace_application = (
+        knowledge_source_workspace_application
+    )
+    application.state.release_registry_repository = release_registry_repository
+    application.state.release_bundle_materializer = release_bundle_materializer
+    application.state.release_bundle_attestation_verifier = (
+        release_bundle_attestation_verifier
+    )
+    application.state.release_bundle_audit_repository = release_bundle_audit_repository
 
     @application.get("/livez", include_in_schema=False)
     def livez() -> dict[str, str]:
@@ -306,6 +369,8 @@ def create_app(
     application.include_router(execution_router, prefix="/api")
     application.include_router(auth_router, prefix="/api")
     application.include_router(security_router, prefix="/api")
+    application.include_router(release_bundle_router, prefix="/api")
+    application.include_router(knowledge_source_router, prefix="/api")
     if selected_mode == "development":
         application.include_router(configuration_router, prefix="/api")
         application.include_router(runs.router, prefix="/api")
@@ -314,7 +379,6 @@ def create_app(
         application.include_router(health.router, prefix="/api")
     else:
         application.include_router(production_model_connections_router, prefix="/api")
-        application.include_router(production_knowledge_router, prefix="/api")
 
     # Mount the built frontend SPA as a catch-all fallback.
     resolved_static = (

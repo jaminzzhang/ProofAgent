@@ -165,20 +165,60 @@ The global Dashboard Shared Asset Library surface at `/knowledge` for listing, c
 _Avoid_: Agent-only YAML browser, `/knowledge-sources` route, inline document manager inside one Agent
 
 **Knowledge Source Detail Workspace**:
-The Dashboard detail surface at `/knowledge/:sourceId` for administering one reusable Knowledge Source through Overview, Documents, Versions, Provider, and Audit tabs. Agent Knowledge modules link to this surface instead of embedding full document management.
+The Dashboard detail surface at `/knowledge/:sourceId` for administering one reusable Knowledge Source. A Hybrid Source uses Overview, Documents, Reviews, Versions & Publish, Operations, Provider & Health, and Audit tabs; provider and action capabilities determine content and commands without changing the public route. Agent Knowledge modules link to this surface instead of embedding full document management.
 _Avoid_: Agent-embedded file manager, Source detail modal, provider-only settings page
+
+**Hybrid Knowledge Source Overview Tab**:
+The Source summary surface for identity, lifecycle, published and candidate versions, authoritative document and review aggregates, sanitized dependency readiness, current action blockers, Agent reference impact, and Knowledge Binding Upgrade Available state.
+_Avoid_: Full document table, raw dependency diagnostics, inferred publication readiness, Agent activation action
 
 **Knowledge Source Workspace List Projection**:
 The operational list projection at `/knowledge` that shows Source name, description, tags, provider type, lifecycle state, local index or remote verification availability, current published snapshot or configuration version, local READY and total document counts or remote target index or namespace, referencing Agent count, and warning indicators for unpublished changes, failed ingestion, or stale remote verification. It supports filtering by name, tag, provider, lifecycle, and warning state.
 _Avoid_: Agent YAML excerpt list, provider-only inventory, unfilterable asset table
 
 **Knowledge Source Creation Wizard**:
-The `/knowledge` guided Source Draft setup flow that first selects one of three source-intake paths: upload local documents into `local_index`, connect remote knowledge through `http_json` or another registered remote adapter, or register an existing local `local_markdown` source for development, migration, and deterministic demos. The wizard creates or updates a Source Draft; validation and explicit Knowledge Source Publication remain separate steps.
-_Avoid_: Automatic Source publication, Agent-scoped upload, provider-free setup, remote-only wizard
+The `/knowledge` guided Source Draft setup flow that presents only Knowledge Source provider capabilities advertised by the active Proof Agent service. Production exposes Hybrid Index Knowledge Source creation, while development may expose Local Index or remote-adapter paths; the wizard never infers deployment mode or publishes implicitly.
+_Avoid_: Frontend-hardcoded provider inventory, automatic Source publication, Agent-scoped upload, deployment-mode guess
+
+**Knowledge Source Provider Capability Projection**:
+The deployment-level Proof Agent declaration of which Knowledge Source providers, intake envelopes, feature families, and sanitized dependency-readiness facts are available. Dashboard uses it to present valid creation paths without treating frontend configuration as provider authority.
+_Avoid_: Source lifecycle state, frontend provider allowlist, environment-mode inference, capability probing through failed commands
+
+**Knowledge Source Action Capability Projection**:
+The Source-specific declaration of which lifecycle actions are currently allowed or blocked after considering Source state, operator permission, dependency readiness, and conflicting work. It explains Dashboard affordances but never replaces command-time authorization and validation.
+_Avoid_: Deployment provider inventory, frontend authorization, disabled-button authority, optimistic success assumption
+
+**Knowledge Source API Contract**:
+The stable Proof Agent configuration boundary rooted at `/api/config/knowledge-sources` through which Dashboard administers Knowledge Sources regardless of deployment composition. Deployment capabilities come from `/api/config/knowledge-source-capabilities`, Source detail embeds its current action capabilities, and `knowledge-source-api.v1` evolves additively until an unavoidable breaking contract requires a new explicit version. Provider availability and valid lifecycle actions vary through projections, not through alternate public route semantics.
+_Avoid_: Development Knowledge API, Production Knowledge API, mode-specific response shape, duplicate public router contract
+
+**Knowledge Source API Problem**:
+The stable `application/problem+json` failure projection for a Knowledge Source API request. It carries HTTP status, machine-stable `code`, safe title and detail, trace-safe correlation identity, retryability, and bounded optional concurrency or action-blocker facts; Dashboard localizes by code, while endpoints, credentials, storage paths, raw worker errors, and authorization-sensitive resource facts remain excluded.
+_Avoid_: String-only detail, raw exception, response-shape branching by deployment mode, localized code, permission leak
+
+**Knowledge Source Cursor Page**:
+The common response envelope for a potentially large Knowledge Source collection. It carries at most 100 ordered items, an opaque keyset cursor bound to resource, normalized filters, and whitelisted sort, plus server-owned aggregate summary facts that remain independent of the current page. Dashboard restarts at the first page when the cursor expires or its query shape changes.
+_Avoid_: Offset pagination, client-derived readiness total, loading the full collection, cursor parsing in Dashboard
 
 **Knowledge Source Documents Tab**:
-The `local_index` Knowledge Source Detail Workspace tab for operating up to 500 Knowledge Documents. It supports batch PDF and Markdown upload, filtering and pagination, revision-state visibility, single-document replacement, failed-revision retry, routing-metadata editing, archive, revision history, bulk failed-revision retry, bulk archive, bulk tag editing, and a persistent Candidate Knowledge Source Snapshot summary with an explicit Publish Source action.
+The indexed-source workspace for bounded multipart upload sets, cursor-paged documents, immutable revision history, candidate and published membership, explicit replacement and archive, and capability-gated Retry or Cancel. Local Index retains its 500-document and text-based format envelope, while Hybrid renders its larger PDF intake envelope from provider capabilities.
 _Avoid_: Unpaginated file dump, filename-only status, implicit publication, one-document-only upload
+
+**Hybrid Knowledge Reviews Tab**:
+The Hybrid Source workspace for metadata workbook import, authoritative review aggregates, cursor-paged review records, and capability-gated approve, correct, or reject decisions. It does not treat workbook import, parser output, or page contents as business approval.
+_Avoid_: Review panel hidden in Overview, page-derived approval count, automatic approval, document upload
+
+**Hybrid Knowledge Operations Tab**:
+The Hybrid Source workspace for cursor-paged active and historical Knowledge Source Operations, ingestion jobs, and attempt history, with bounded progress, sanitized outcomes, and capability-gated Retry or Cancel actions.
+_Avoid_: In-memory progress only, raw worker log, revision history, operational button inferred from status
+
+**Hybrid Provider And Health Tab**:
+The read-only Hybrid Source surface for provider capabilities, pinned parser, model, retrieval-profile, and generation revisions, and sanitized readiness or degradation facts. Deployment endpoints, credentials, Secret Handles, Egress Policy, and raw dependency errors remain outside Source configuration.
+_Avoid_: Private-service control plane, endpoint editor, secret display, Source-owned model deployment
+
+**Knowledge Source Audit Tab**:
+The cursor-paged, trace-safe configuration history for Source commands, operator identity, accepted Source and Draft revision changes, review decisions, and publication records without document content or raw exceptions.
+_Avoid_: Runtime retrieval trace, raw file content, worker log, mutable activity feed authority
 
 **Remote Knowledge Source Provider Tab**:
 The layered Provider tab for a remote Knowledge Source. Its default form exposes adapter, endpoint, Production Secret Handle selection or local-development credential reference, index or namespace, timeout, and default `top_k`. Its advanced section exposes protocol version, Remote Retrieval Request Mapping, Remote Retrieval Response Mapping, and Structured Remote Source Reference mapping only when the selected adapter supports them. Typed remote adapters prefer descriptor-driven forms, while `http_json` exposes bounded mapping editors.
@@ -201,7 +241,7 @@ The non-ingesting Provider-tab action that validates local index ingestion and r
 _Avoid_: Knowledge Source Ingestion, Source publication, full-corpus rebuild
 
 **Knowledge Source Versions Tab**:
-The Knowledge Source Detail Workspace history surface for published snapshots or configuration versions. It shows publication time, actor, `change_note`, validation result, referencing Agent count, and version diff actions.
+The Knowledge Source Detail Workspace tab labeled Versions & Publish. It shows candidate diff and explicit exclusions, asynchronous publication-validation state, Prepared Hybrid Knowledge Publication confirmation, published snapshots or configuration versions, publication time, actor, `change_note`, referencing Agent count, version diff, and rollback-Draft actions.
 _Avoid_: Mutable current-state-only view, hidden validation history, Agent version list
 
 **Sidebar Navigation Section**:

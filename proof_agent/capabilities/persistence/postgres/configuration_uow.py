@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import TracebackType
+from typing import Any
 
 from sqlalchemy import Connection, Engine
 from sqlalchemy.engine import Transaction
@@ -19,6 +20,21 @@ from proof_agent.capabilities.persistence.postgres.hybrid_ingestion_repository i
 )
 from proof_agent.capabilities.persistence.postgres.metadata_review_repository import (
     PostgresInsuranceMetadataReviewRepository,
+)
+from proof_agent.capabilities.persistence.postgres.metadata_import_repository import (
+    PostgresMetadataImportRepository,
+)
+from proof_agent.capabilities.persistence.postgres.knowledge_source_operation_repository import (
+    PostgresKnowledgeSourceOperationRepository,
+)
+from proof_agent.capabilities.persistence.postgres.prepared_knowledge_publication_repository import (
+    PostgresPreparedKnowledgePublicationRepository,
+)
+from proof_agent.capabilities.persistence.postgres.publication_preparation_repository import (
+    PostgresPublicationPreparationRepository,
+)
+from proof_agent.capabilities.persistence.postgres.hybrid_publication_commit_authority import (
+    PostgresHybridPublicationCommitAuthority,
 )
 from proof_agent.capabilities.persistence.postgres.model_repository import (
     PostgresModelAssetRepository,
@@ -41,6 +57,7 @@ class PostgresConfigurationUnitOfWork:
         engine: Engine,
         *,
         model_credential_cipher: EnvelopeCipher | None = None,
+        hybrid_publication_repository: Any | None = None,
     ) -> None:
         self._engine = engine
         self._connection: Connection | None = None
@@ -52,10 +69,16 @@ class PostgresConfigurationUnitOfWork:
         self.models: PostgresModelAssetRepository
         self.model_credentials: PostgresModelCredentialRepository | None
         self._model_credential_cipher = model_credential_cipher
+        self._hybrid_publication_repository = hybrid_publication_repository
         self.tools: PostgresToolAssetRepository
         self.audit: PostgresAuditRepository
         self.hybrid_ingestion: PostgresHybridIngestionRepository
         self.metadata_reviews: PostgresInsuranceMetadataReviewRepository
+        self.metadata_imports: PostgresMetadataImportRepository
+        self.operations: PostgresKnowledgeSourceOperationRepository
+        self.prepared_publications: PostgresPreparedKnowledgePublicationRepository
+        self.publication_preparations: PostgresPublicationPreparationRepository
+        self.publication_authority: PostgresHybridPublicationCommitAuthority | None
 
     def __enter__(self) -> "PostgresConfigurationUnitOfWork":
         if self._connection is not None or self._closed:
@@ -81,6 +104,23 @@ class PostgresConfigurationUnitOfWork:
         self.audit = PostgresAuditRepository(connection)
         self.hybrid_ingestion = PostgresHybridIngestionRepository(connection)
         self.metadata_reviews = PostgresInsuranceMetadataReviewRepository(connection)
+        self.metadata_imports = PostgresMetadataImportRepository(connection)
+        self.operations = PostgresKnowledgeSourceOperationRepository(connection)
+        self.prepared_publications = PostgresPreparedKnowledgePublicationRepository(
+            connection
+        )
+        self.publication_preparations = PostgresPublicationPreparationRepository(
+            connection
+        )
+        self.publication_authority = (
+            None
+            if self._hybrid_publication_repository is None
+            else PostgresHybridPublicationCommitAuthority(
+                connection,
+                preparations=self.publication_preparations,
+                hybrid_repository=self._hybrid_publication_repository,
+            )
+        )
         return self
 
     def __exit__(

@@ -163,6 +163,19 @@ class PostgresVersionedAssetRepository:
             ).scalar_one_or_none()
         return payload
 
+    def get_payload_record(self, asset_id: str) -> tuple[dict[str, Any], int] | None:
+        id_column = self._base_table.c[self._id_column_name]
+        with read_connection(self._connection_source) as connection:
+            row = connection.execute(
+                sa.select(
+                    self._base_table.c.configuration_json,
+                    self._base_table.c.revision,
+                ).where(id_column == asset_id)
+            ).mappings().one_or_none()
+        if row is None:
+            return None
+        return row["configuration_json"], int(row["revision"])
+
     def list_payloads(self) -> tuple[dict[str, Any], ...]:
         id_column = self._base_table.c[self._id_column_name]
         with read_connection(self._connection_source) as connection:

@@ -17,6 +17,10 @@ from proof_agent.contracts.ports.shared_assets import (
 )
 from proof_agent.contracts.ports.run_metadata import RunMetadataRepository
 from proof_agent.contracts.ports.run_queue import RunQueueRepository
+from proof_agent.contracts.ports.knowledge_source_operations import (
+    KnowledgeSourceOperationRepository,
+)
+from proof_agent.contracts.ports.release_registry import ReleaseRegistryRepository
 from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionRepository
 from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
 from proof_agent.contracts.ports.secret_provider import SecretProvider
@@ -34,6 +38,7 @@ __all__ = [
     "ConfigurationUnitOfWork",
     "GuardedHttpClient",
     "KnowledgeAssetRepository",
+    "KnowledgeSourceOperationRepository",
     "ModelAssetRepository",
     "ModelConnectionReader",
     "ModelCredentialResolver",
@@ -41,6 +46,7 @@ __all__ = [
     "OperatorSessionRepository",
     "RunMetadataRepository",
     "RunQueueRepository",
+    "ReleaseRegistryRepository",
     "SecurityConfigurationRepository",
     "SecretProvider",
     "ToolAssetRepository",

@@ -110,25 +110,37 @@ export PROOF_AGENT_EXECUTOR_ID='executor-local-1'
 uv run proof-agent run-executor --slot 1 --concurrency 5
 ```
 
-[KNOWN | HIGH] 三个角色没有 production→local fallback。worker 把原 PDF、vendor 输出、canonical JSON、preview、build identity 和保险元数据写入版本化 S3；API 导入工作簿并发布 manifest；PG 是 Source publication、Agent、队列和 Retrieval Profile 的在线 authority；Executor 只执行冻结快照。
+[KNOWN | HIGH] 三个角色没有 production→local fallback。worker 把原 PDF、vendor 输出、canonical JSON、preview、build identity 和保险元数据写入版本化 S3；API 只接收 multipart admission、review CAS、异步 publication preparation 与短事务 publication commit；PG 是 Source publication、Agent、队列和 Retrieval Profile 的在线 authority；Executor 只执行冻结快照。
 
 ## 4. PDF 到 Source publication
 
-1. 创建 `source_id=insurance-rules`、`provider=hybrid_index` 的 Source，`params` 可使用 `{}` 或显式 intake 上限。该 ID 必须与生产候选包一致。
-2. 调用 `POST /api/config/knowledge-sources/{source_id}/documents`，JSON 包含 `filename`、`content_type: application/pdf` 和 `content_base64`。
-3. 轮询 document 和 ingestion-job API，直到 document/job 都为 `ready`。上传响应本身就是受控 admission projection；`review_required`、`failed` 或未完成文档会阻止候选发布。
-4. 按 `insurance-rule-metadata.v1` 工作簿格式导入业务元数据；逐条读取 metadata review 的 `review_version` 与 `review_identity`，再 approve/correct。未批准、冲突或多重不同 authority 会失败关闭。
-5. 调用 Source publication validate，取得 `validation_id`；随后 publish。
+1. 先读取 `GET /api/config/knowledge-source-capabilities`，再创建 `source_id=insurance-rules`、`provider=hybrid_index` 的 Source。该 ID 必须与生产候选包一致；Dashboard 不配置私有服务 endpoint、凭据或模型 digest。
+2. 调用 `POST /api/config/knowledge-sources/{source_id}/documents`，使用 `multipart/form-data` 传递原始 `file` 和当前 `expected_revision`，并提供 `Idempotency-Key`。浏览器不上传 Base64，也不持有 S3 authority。
+3. 通过响应中的 `operation_id` 轮询 `/operations/{operation_id}`，再读取 cursor document projection；`review_required`、`failed` 或未完成文档会阻止候选发布。
+4. 按 `insurance-rule-metadata.v1` 工作簿格式调用 `/metadata-imports`，同样使用 multipart、精确 `document_id`/`revision_id`、Source revision 与幂等键。操作完成后逐条读取 metadata review 的 `review_version` 与 `review_identity`，再 approve/correct。未批准、冲突或多重不同 authority 会失败关闭。
+5. 调用 `/publication-validations` 创建异步 preparation operation；轮询成功后读取 `prepared` validation 的 `validation_id` 与 `fencing_token`，最后调用 `/publications` 做短 PostgreSQL CAS。
 
-```text
-POST /api/config/knowledge-sources/{source_id}/publication/validate
-{"smoke_query":"该产品的保险责任是什么？"}
+```bash
+curl -fsS -X POST \
+  -H 'Idempotency-Key: upload-001' \
+  -F 'expected_revision=1' \
+  -F 'file=@policy.pdf;type=application/pdf' \
+  "$BASE_URL/api/config/knowledge-sources/$SOURCE_ID/documents"
 
-POST /api/config/knowledge-sources/{source_id}/publication/publish
-{"validation_id":"...","change_note":"首次类生产发布"}
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: prepare-001' \
+  -d '{"smoke_query":"该产品的保险责任是什么？","expected_revision":2}' \
+  "$BASE_URL/api/config/knowledge-sources/$SOURCE_ID/publication-validations"
+
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: publish-001' \
+  -d '{"validation_id":"...","expected_fencing_token":7,"change_note":"首次类生产发布","expected_revision":2}' \
+  "$BASE_URL/api/config/knowledge-sources/$SOURCE_ID/publications"
 ```
 
-[KNOWN | HIGH] publish 会在提交 PG 当前指针前完成：候选防漂移校验、PG fencing、S3 manifest 精确写入、真实 embedding、OpenSearch bulk/read-back、受治理 smoke retrieval、投影 attestation 和短事务 CAS。任一环节失败都不会发布 Source 指针。
+[KNOWN | HIGH] 异步 preparation worker 在 authority commit 前完成候选防漂移校验、PG fencing、S3 manifest 精确写入、真实 embedding、OpenSearch bulk/read-back、受治理 smoke retrieval 和投影 attestation。最终 publish 只验证幂等性、权限、新鲜度、validation/fence 与当前 Source revision，然后做短 PostgreSQL CAS；它不会调用私有模型、S3 或 OpenSearch。任一环节失败都不会发布 Source 指针。
 
 [KNOWN | HIGH] 升级到本版本后，旧代码生成但尚未发布的 validation 必须重新 validate；候选摘要 v2 新增了 OpenSearch index identity 和原始 smoke query，旧摘要不会被隐式接受。
 

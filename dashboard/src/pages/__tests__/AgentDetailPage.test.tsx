@@ -12,7 +12,6 @@ import {
   fetchValidationCapture,
   fetchRuns,
   fetchWorkflowTemplate,
-  fetchKnowledgeSources,
   fetchModelConnections,
   previewWorkflowStageContext,
   createConfigDraftSkillPack,
@@ -23,6 +22,7 @@ import {
   updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
+import { fetchKnowledgeSources } from '../../api/knowledgeSources'
 import type { DraftAgent, DraftValidationResponse, RunDetail } from '../../api/types'
 import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
@@ -49,7 +49,7 @@ vi.mock('../../api/client', () => ({
       { name: 'react_enterprise_qa_v3', description: 'React v3 loop.', descriptor_version: 'react_enterprise_qa.v3', stages: [] },
     ],
     meta: { total: 4 },
-  }),  fetchKnowledgeSources: vi.fn(),
+  }),
   fetchModelConnections: vi.fn(),
   previewWorkflowStageContext: vi.fn(),
   publishConfigDraft: vi.fn(),
@@ -60,6 +60,10 @@ vi.mock('../../api/client', () => ({
   updateConfigDraftContract: vi.fn(),
   updateWorkflowStages: vi.fn(),
   validateConfigDraft: vi.fn(),
+}))
+
+vi.mock('../../api/knowledgeSources', () => ({
+  fetchKnowledgeSources: vi.fn(),
 }))
 
 const refreshDraft = vi.fn()

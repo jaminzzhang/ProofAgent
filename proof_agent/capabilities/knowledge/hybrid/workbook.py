@@ -688,6 +688,56 @@ def create_workbook_only_review(
     return draft_review.model_copy(update={"review_identity": _review_identity(draft_review)})
 
 
+def workbook_row_draft(row: WorkbookMetadataRow) -> InsuranceMetadataDraftInput:
+    """Project one validated workbook row into its non-authoritative draft."""
+
+    applicability = row.metadata.applicability
+    precedence = row.metadata.precedence
+    if applicability is None or precedence is None or row.metadata.authority is None:
+        raise WorkbookValidationError("workbook row is missing governed metadata")
+    return InsuranceMetadataDraftInput(
+        metadata_draft_id=row.metadata.metadata_draft_id,
+        origin="workbook",
+        source_id=row.source_id,
+        document_id=row.document_id,
+        revision_id=row.revision_id,
+        canonical_anchor=row.canonical_anchor,
+        authority=row.metadata.authority,
+        effective_from=row.metadata.effective_from,
+        effective_to=row.metadata.effective_to,
+        taxonomy_id=applicability.taxonomy_id,
+        taxonomy_revision_id=applicability.taxonomy_revision_id,
+        precedence_policy_revision_id=precedence.policy_revision_id,
+        precedence_authority_tier=precedence.authority_tier,
+        precedence_order=precedence.order,
+    )
+
+
+def create_metadata_review_for_row(
+    *,
+    row: WorkbookMetadataRow,
+    import_record: WorkbookImportRecord,
+    pdf_draft: InsuranceMetadataDraftInput | None,
+    citation_uri: str,
+) -> InsuranceMetadataReview:
+    """Create the one governed review projection for a validated workbook row."""
+
+    workbook_draft = workbook_row_draft(row)
+    if pdf_draft is None:
+        return create_workbook_only_review(
+            workbook_draft,
+            import_record=import_record,
+            row=row,
+            citation_uri=citation_uri,
+        )
+    return reconcile_metadata_drafts(
+        pdf_draft,
+        workbook_draft,
+        import_record=import_record,
+        row=row,
+    )
+
+
 class FilesystemInsuranceMetadataReviewRepository:
     """Atomic local review projection with exact optimistic command identity."""
 

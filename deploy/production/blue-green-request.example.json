@@ -6,7 +6,7 @@
     "image_reference": "registry.example.test/proof-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "migration_set_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "release_id": "replace-with-candidate-release-id",
-    "schema_revision": "0012_model_credential"
+    "schema_revision": "0018_publication_preparation"
   },
   "candidate_slot": "green",
   "drain_timeout_seconds": 150,

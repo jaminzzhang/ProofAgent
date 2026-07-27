@@ -117,8 +117,12 @@ The protocol and domain validation policy that determines whether an external re
 _Avoid_: Arbitrary external link, javascript URL, secret-bearing URL
 
 **Knowledge Source Publication Validation**:
-The Source Draft-version-bound precondition for Knowledge Source Publication. Any relevant Draft configuration change invalidates the prior result and requires validation again before publication.
+The Source Draft-version-bound precondition for Knowledge Source Publication. Any relevant Draft configuration change invalidates the prior result and requires validation again before publication. For a Hybrid Source, validation is an asynchronous preparation operation that completes manifest construction, staged index projection, exact read-back, projection attestation, and smoke retrieval before issuing a one-use validation identity.
 _Avoid_: Agent Validation Run, one-time Source validation, configuration-drift publication
+
+**Prepared Hybrid Knowledge Publication**:
+The one-use, non-visible Hybrid publication candidate produced after asynchronous Knowledge Source Publication Validation completes all S3, private-model, and OpenSearch work. It binds the exact Source Draft version, candidate and generation digests, manifest, attempt-scoped staged projection, attestation, and smoke result so explicit Knowledge Source Publication can perform only a short PostgreSQL compare-and-swap; failed or stale preparation never changes runtime authority.
+_Avoid_: Published Knowledge Source Snapshot, API-held transaction, visible staged projection, reusable validation
 
 **Foundation Knowledge Source Publication Validation**:
 The incremental local-index publication check that binds one Knowledge Source Draft Version and proves at least one READY revision, compatible artifacts for every candidate revision, and no pending required reingestion. It may freeze a development-stage READY snapshot for subsequent routing work, but it does not claim production readiness before routing-model tests, smoke retrieval, and citation resolution validation are added.
@@ -488,6 +492,10 @@ _Avoid_: PageIndex Provider, Local Vector Provider, final answer generator, remo
 The production-directed Knowledge Provider Adapter for expanded insurance Knowledge that translates governed authorization and applicability inputs into bounded lexical and vector retrieval against Knowledge Retrieval Index Service, then returns normalized, cited Candidate Evidence without owning source authority, evidence admission, or answer generation.
 _Avoid_: Local Index Provider, OpenSearch SDK contract, vector-only provider, authority scorer
 
+**Hybrid Index Knowledge Source**:
+A shared Knowledge Source governed through Hybrid-specific document intake, business metadata review, immutable Source publication, and Hybrid Index Provider retrieval. It is one provider-owned Source lifecycle, not an informal mixture of several Knowledge Sources or retrieval providers.
+_Avoid_: Mixed knowledge base, Remote Knowledge Source, Local Index Knowledge Source, multi-provider bundle
+
 **RetrievalPlanner**:
 An orchestrator component that drives a multi-round agentic retrieval loop inside one governed retrieval execution. It may rewrite retrieval queries and assess evidence sufficiency, but it does not select Knowledge Sources, call tools, generate final answers, or alter the outer Controlled ReAct Workflow route.
 _Avoid_: ReAct planner, final answer model, source router, tool calling loop
@@ -564,9 +572,9 @@ _Avoid_: Page-count-free SLO, best-case benchmark, unlimited routine batch, hard
 The temporary Source-capacity slot held by one queued or processing Quarantined Knowledge Upload before promotion. Staging checks and reserves capacity atomically with the local queue lock; accepted promotion hands the slot to its managed Knowledge Document, while rejection releases it immediately even though quarantined bytes remain under Rejected Knowledge Upload Retention.
 _Avoid_: Pending-upload capacity bypass, rejected-upload slot retention, non-atomic concurrent staging
 
-**Atomic Knowledge Document Batch Upload**:
-The Dashboard-managed intake operation that stages one through 50 files for one `local_index` Knowledge Source through a single batch request. It validates every request envelope, reserves Source document capacity for the full batch under the queue lock, publishes quarantine records as one visible batch, and then lets each Quarantined Knowledge Upload proceed independently through asynchronous validation and ingestion.
-_Avoid_: Frontend loop over single-file upload, partial-capacity staging, synchronous batch indexing, batch-wide ingestion state
+**Dashboard Knowledge Document Upload Set**:
+The presentation-owned group of one through 50 files selected together for one Knowledge Source and submitted as independent single-document multipart commands with bounded concurrency, stable per-file Idempotency Keys, and per-file outcomes. Source capacity is checked authoritatively for every command, so partial acceptance remains explicit and a failed item neither rolls back nor hides accepted uploads.
+_Avoid_: Atomic server batch, Base64 JSON batch, unbounded parallel upload, batch-wide ingestion state
 
 **Knowledge Document**:
 An operator-managed file that belongs to exactly one Knowledge Source and has its own ingestion status and provider-backed index artifact.
@@ -664,6 +672,10 @@ _Avoid_: Persisted candidate.json mirror, immutable candidate version per worker
 The change-token identity of one editable Knowledge Source Draft state used to bind Knowledge Source Publication Validation. It changes when source provider configuration, remote retrieval mapping, publication-bound Source routing metadata, document routing metadata, or candidate-snapshot membership changes, but not for general Knowledge Source Metadata Configuration, lifecycle toggles such as Archive and Restore, worker leases, retry counters, or rejected uploads that do not alter the publication candidate. Archive and Restore are Knowledge Configuration Operation Audit events and bindability guards, not Source Draft Version changes.
 _Avoid_: Published snapshot id, immutable draft history, lifecycle state, display metadata version, worker-attempt id, candidate hash only
 
+**Knowledge Source Revision**:
+The monotonic optimistic-concurrency version of the mutable Knowledge Source record. It advances for every accepted Source-state mutation, including changes that do not alter the publication candidate, and is distinct from Knowledge Source Draft Version.
+_Avoid_: Knowledge Source Draft Version, update timestamp, Publication Sequence, last-write-wins token
+
 **Knowledge Source Publication**:
 The explicit operator action that promotes a fully validated immutable READY Knowledge Source Snapshot into a Published Knowledge Source Snapshot selected by the Source's production-bindable published snapshot pointer for use by Agent Knowledge Bindings.
 _Avoid_: Foundation snapshot freeze, automatic activation, document upload, Agent Publication
@@ -681,8 +693,28 @@ The Dashboard design-time upload boundary for text-based PDF and Markdown Knowle
 _Avoid_: Text-Only Customer Intake, OCR pipeline, arbitrary attachment upload
 
 **Knowledge Ingestion Job**:
-A persisted asynchronous unit of Knowledge Source Ingestion work with QUEUED, RUNNING, SUCCEEDED, FAILED, or CANCELLED status.
+A persisted asynchronous unit of Knowledge Source Ingestion work bound to one immutable Knowledge Document Revision, with `QUEUED`, `RUNNING`, `RETRY_SCHEDULED`, `CANCEL_REQUESTED`, `SUCCEEDED`, `FAILED`, or `CANCELLED` status. Retrying the job creates a new attempt without creating a new document or revision.
 _Avoid_: HTTP request lifetime, in-memory callback, Harness run
+
+**Knowledge Ingestion Attempt**:
+One immutable execution-history entry under a Knowledge Ingestion Job, recording its attempt identity, automatic or operator initiation, fencing ownership, timing, bounded failure classification, and safe outcome. Automatic and manual retries append attempts while preserving the job and document revision identity.
+_Avoid_: New document revision, overwritten failure, worker lease as business identity, unbounded retry
+
+**Knowledge Ingestion Cancellation**:
+The idempotent operator command that immediately cancels unclaimed or retry-scheduled ingestion work or moves claimed work to `CANCEL_REQUESTED`. A worker cooperatively stops at cancellation boundaries, and fencing prevents a non-interruptible late provider result from publishing artifacts or mutating candidate state.
+_Avoid_: Process kill, artifact rollback, Source publication cancellation, accepting late completion
+
+**Knowledge Source Operation Projection**:
+The durable, trace-safe read model used to follow one asynchronous Knowledge Source command across request completion, worker execution, process restart, and Dashboard reload. It exposes a stable operation identity, Source identity, accepted Source revision, bounded stage and status, timestamps, progress guidance, and sanitized terminal outcome while deriving authority from the underlying quarantine, ingestion, review, or publication records rather than becoming a second workflow authority.
+_Avoid_: In-memory progress callback, SSE event as authority, raw worker exception, replacement for Knowledge Ingestion Job
+
+**Knowledge Source Command Idempotency**:
+The replay contract for a retryable Knowledge Source mutation. Dashboard supplies one stable `Idempotency-Key` per intended command; the API scopes it to operator, Source, and command type, stores a canonical request fingerprint plus original outcome for at least 24 hours, returns that outcome for an exact replay before applying optimistic-concurrency checks, and rejects reuse with a different fingerprint as `idempotency_key_mismatch`. A new key represents a new intended command even when immutable content-addressed artifacts can be reused.
+_Avoid_: Content hash as user intent, last-write-wins retry, duplicate document after response loss, global unscoped key
+
+**Development Knowledge Hub Migration**:
+The explicit one-shot offline transfer from the legacy file-backed shared `local_index` or `http_json` Source store into the production-grade Knowledge application service running on disposable or durable dependencies. It supports dry-run, source backup verification, conflict reporting, and a migration manifest; re-admits originals instead of trusting cached indexes, copies only credential references rather than values, and never becomes an application-startup dual-read or fallback path.
+_Avoid_: Runtime compatibility adapter, automatic startup migration, Source overwrite, cached-index import, package-local Markdown migration
 
 **Knowledge Ingestion Worker**:
 The replaceable worker process that claims persisted Knowledge Ingestion Jobs and builds provider-backed index artifacts outside Dashboard API request handling.

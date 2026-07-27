@@ -7,19 +7,34 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import TracebackType
-from typing import Any, Protocol
-from uuid import uuid4
+from typing import Any, BinaryIO, Protocol
+from uuid import UUID, uuid4
 
-from proof_agent.capabilities.knowledge.hybrid.intake import preflight_hybrid_pdf
+from proof_agent.capabilities.knowledge.hybrid.intake import (
+    preflight_hybrid_pdf,
+    quarantine_hybrid_upload,
+)
+from proof_agent.capabilities.knowledge.hybrid.metadata_import_jobs import (
+    MetadataImportJob,
+)
 from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
+from proof_agent.capabilities.knowledge.hybrid.workbook import (
+    DEFAULT_WORKBOOK_IMPORT_LIMITS,
+    WORKBOOK_MEDIA_TYPE,
+)
 from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridPrivateParserBuildConfig,
     hybrid_build_request_sha256,
+)
+from proof_agent.control.knowledge.application import KnowledgeSourceCommandContext
+from proof_agent.control.knowledge.ingestion_service import (
+    KnowledgeSourceAdmissionEffect,
+    KnowledgeSourceIngestionService,
 )
 from proof_agent.contracts import (
     AuditActorFacts,
@@ -27,7 +42,12 @@ from proof_agent.contracts import (
     AuditMetadataRecord,
     AuditOutcome,
     KnowledgeSource,
+    KnowledgeSourceIntakeCapability,
     KnowledgeSourceLifecycleState,
+    KnowledgeSourceOperation,
+    KnowledgeSourceProviderCapability,
+    KnowledgeSourceProviderReadiness,
+    Permission,
 )
 
 
@@ -44,6 +64,48 @@ class HybridIntakeIngestionRepository(Protocol):
         *,
         filename: str = "document.pdf",
         uploaded_by: str = "system",
+        replacement: bool = False,
+    ) -> Any: ...
+
+    def list_records_for_source(self, source_id: str) -> tuple[Any, ...]: ...
+
+    def get_record(self, job_id: str) -> Any | None: ...
+
+    def get_document_candidate(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+    ) -> Any | None: ...
+
+    def get_result(self, job_id: str) -> Any | None: ...
+
+    def manual_retry(
+        self,
+        *,
+        job_id: str,
+        requested_by: str,
+        touch_source: bool = True,
+    ) -> Any: ...
+
+    def request_cancel(
+        self,
+        *,
+        job_id: str,
+        requested_by: str,
+        touch_source: bool = True,
+    ) -> Any: ...
+
+
+class HybridStreamingArtifactStore(KnowledgeArtifactStore, Protocol):
+    def put_immutable_stream(
+        self,
+        *,
+        key: str,
+        content: BinaryIO,
+        media_type: str,
+        expected_sha256: str,
+        expected_size_bytes: int,
     ) -> Any: ...
 
 
@@ -51,6 +113,7 @@ class HybridIntakeUnitOfWork(Protocol):
     knowledge: Any
     hybrid_ingestion: Any
     audit: Any
+    operations: Any
 
     def __enter__(self) -> "HybridIntakeUnitOfWork": ...
 
@@ -74,6 +137,71 @@ class HybridPdfAdmission:
     created_at: str
 
 
+class HybridKnowledgeSourceSummaryReader:
+    def __init__(self, ingestion: HybridIntakeIngestionRepository) -> None:
+        self._ingestion = ingestion
+
+    def summary_for_source(self, source_id: str) -> Mapping[str, int]:
+        records = self._ingestion.list_records_for_source(source_id)
+        return {
+            "documents": len({item.build_request.document_id for item in records}),
+            "ready": sum(item.job.state == "COMPLETED" for item in records),
+            "review_required": sum(
+                item.job.state == "REVIEW_REQUIRED" for item in records
+            ),
+            "retryable_ingestion": sum(
+                item.job.state == "CANCELLED"
+                or (
+                    item.job.state == "FAILED"
+                    and item.job.failure_classification == "recoverable_exhausted"
+                )
+                for item in records
+            ),
+            "cancellable_ingestion": sum(
+                item.job.state
+                in {"READY", "LEASED", "RETRY_SCHEDULED"}
+                for item in records
+            ),
+            "replacement_required": sum(
+                item.job.state == "FAILED"
+                and item.job.failure_classification == "non_recoverable"
+                for item in records
+            ),
+        }
+
+
+def hybrid_knowledge_source_provider_capability(
+    *,
+    readiness_revision: str | None = None,
+) -> KnowledgeSourceProviderCapability:
+    """Return the sanitized API capability for the composed Hybrid provider."""
+
+    limits = HybridIntakeLimits()
+    return KnowledgeSourceProviderCapability(
+        provider="hybrid_index",
+        creation_supported=True,
+        intake=KnowledgeSourceIntakeCapability(
+            content_types=("application/pdf",),
+            max_file_bytes=limits.max_file_bytes,
+            max_batch_files=1,
+            max_source_documents=limits.max_source_documents,
+        ),
+        features=(
+            "documents",
+            "document_revisions",
+            "metadata_imports",
+            "metadata_reviews",
+            "publication",
+            "operations",
+            "audit",
+        ),
+        readiness=KnowledgeSourceProviderReadiness(
+            state="ready",
+            revision=readiness_revision,
+        ),
+    )
+
+
 class ProductionHybridKnowledgeIntakeService:
     """Admit safe PDFs without making local files or environment secrets authoritative."""
 
@@ -83,7 +211,7 @@ class ProductionHybridKnowledgeIntakeService:
         knowledge: HybridIntakeKnowledgeRepository,
         ingestion: HybridIntakeIngestionRepository,
         unit_of_work_factory: Callable[[], HybridIntakeUnitOfWork],
-        artifact_store: KnowledgeArtifactStore,
+        artifact_store: HybridStreamingArtifactStore,
         build_config: HybridPrivateParserBuildConfig,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -93,6 +221,12 @@ class ProductionHybridKnowledgeIntakeService:
         self._artifact_store = artifact_store
         self._build_config = build_config
         self._clock = clock
+        self._commands = KnowledgeSourceIngestionService(
+            unit_of_work_factory=unit_of_work_factory,
+            provider_capability=hybrid_knowledge_source_provider_capability(),
+            summary_reader=HybridKnowledgeSourceSummaryReader(ingestion),
+            clock=clock,
+        )
 
     def create_source(
         self,
@@ -139,6 +273,25 @@ class ProductionHybridKnowledgeIntakeService:
         content: bytes,
         actor: AuditActorFacts,
     ) -> HybridPdfAdmission:
+        if type(content) is not bytes:
+            raise ValueError("Hybrid Index PDF content must be exact bytes")
+        return self.admit_pdf_stream(
+            source_id=source_id,
+            filename=filename,
+            content_type=content_type,
+            content=BytesIO(content),
+            actor=actor,
+        )
+
+    def admit_pdf_stream(
+        self,
+        *,
+        source_id: str,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        actor: AuditActorFacts,
+    ) -> HybridPdfAdmission:
         source = self._knowledge.get_knowledge_source(source_id)
         if (
             source is None
@@ -151,43 +304,42 @@ class ProductionHybridKnowledgeIntakeService:
         normalized_content_type = content_type.partition(";")[0].strip().lower()
         if normalized_content_type != "application/pdf":
             raise ValueError("Hybrid Index uploads require application/pdf")
-        if type(content) is not bytes or not content or len(content) > limits.max_file_bytes:
-            raise ValueError("Hybrid Index PDF is empty or outside the configured byte limit")
+        with quarantine_hybrid_upload(
+            content,
+            max_file_bytes=limits.max_file_bytes,
+        ) as quarantined:
+            preflight = preflight_hybrid_pdf(quarantined.path, limits=limits)
+            if (
+                preflight.source_size_bytes != quarantined.size_bytes
+                or preflight.source_sha256 != quarantined.sha256
+            ):
+                raise ValueError("Hybrid PDF preflight identity diverged from upload quarantine")
 
-        with TemporaryDirectory(prefix="proof-agent-hybrid-intake-") as directory:
-            path = Path(directory) / "upload.pdf"
-            path.write_bytes(content)
-            preflight = preflight_hybrid_pdf(path, limits=limits)
-        if (
-            preflight.source_size_bytes != len(content)
-            or preflight.source_sha256 != hashlib.sha256(content).hexdigest()
-        ):
-            raise ValueError("Hybrid PDF preflight identity diverged from uploaded bytes")
-
-        job_id = str(uuid4())
-        document_id = str(uuid4())
-        revision_id = str(uuid4())
-        request_identity = f"{source.source_id}:{document_id}:{revision_id}"
-        intake_identity = hashlib.sha256(
-            _canonical_json(
-                {
-                    "source_id": source.source_id,
-                    "document_id": document_id,
-                    "revision_id": revision_id,
-                    "source_sha256": preflight.source_sha256,
-                    "parser_revision": self._build_config.parser_revision,
-                    "model_digests": self._build_config.model_digests,
-                    "configuration_sha256": self._build_config.configuration_sha256,
-                }
-            )
-        ).hexdigest()
-        original_ref = self._artifact_store.put_immutable(
-            key=f"hybrid/{preflight.source_sha256}/{intake_identity}/original.pdf",
-            content=content,
-            media_type="application/pdf",
-        )
-        if self._artifact_store.get_exact(original_ref) != content:
-            raise ValueError("Hybrid PDF exact storage read-back failed")
+            job_id = str(uuid4())
+            document_id = str(uuid4())
+            revision_id = str(uuid4())
+            request_identity = f"{source.source_id}:{document_id}:{revision_id}"
+            intake_identity = hashlib.sha256(
+                _canonical_json(
+                    {
+                        "source_id": source.source_id,
+                        "document_id": document_id,
+                        "revision_id": revision_id,
+                        "source_sha256": preflight.source_sha256,
+                        "parser_revision": self._build_config.parser_revision,
+                        "model_digests": self._build_config.model_digests,
+                        "configuration_sha256": self._build_config.configuration_sha256,
+                    }
+                )
+            ).hexdigest()
+            with quarantined.path.open("rb") as exact_stream:
+                original_ref = self._artifact_store.put_immutable_stream(
+                    key=f"hybrid/{preflight.source_sha256}/{intake_identity}/original.pdf",
+                    content=exact_stream,
+                    media_type="application/pdf",
+                    expected_sha256=preflight.source_sha256,
+                    expected_size_bytes=preflight.source_size_bytes,
+                )
         request = HybridArtifactBuildRequest(
             job_id=job_id,
             request_identity=request_identity,
@@ -210,7 +362,6 @@ class ProductionHybridKnowledgeIntakeService:
         now = _timestamp(self._clock())
         updated_source = source.model_copy(
             update={
-                "source_draft_version_id": str(uuid4()),
                 "updated_at": now,
             }
         )
@@ -251,6 +402,449 @@ class ProductionHybridKnowledgeIntakeService:
             created_at=now,
         )
 
+    def upload_document(
+        self,
+        *,
+        source_id: str,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        """Admit one new stable document through the V1 command authority."""
+
+        return self._admit_pdf_command(
+            source_id=source_id,
+            document_id=None,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+
+    def replace_document(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        """Admit an immutable revision for one existing stable document."""
+
+        return self._admit_pdf_command(
+            source_id=source_id,
+            document_id=str(UUID(document_id)),
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+
+    def import_metadata(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        """Stage one exact XLSX and queue validation in the Knowledge Worker."""
+
+        source = self._knowledge.get_knowledge_source(source_id)
+        if (
+            source is None
+            or source.provider != "hybrid_index"
+            or source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE
+        ):
+            raise KeyError(source_id)
+        normalized_document_id = str(UUID(document_id))
+        normalized_revision_id = str(UUID(revision_id))
+        normalized_filename = _workbook_filename(filename)
+        normalized_content_type = content_type.partition(";")[0].strip().lower()
+        if normalized_content_type != WORKBOOK_MEDIA_TYPE:
+            raise ValueError(
+                "Hybrid metadata imports require the official XLSX content type"
+            )
+        normalized_idempotency_key = _nonblank(
+            idempotency_key,
+            "idempotency_key",
+            maximum=255,
+        )
+        with quarantine_hybrid_upload(
+            content,
+            max_file_bytes=DEFAULT_WORKBOOK_IMPORT_LIMITS.max_file_bytes,
+        ) as quarantined:
+            request_sha256 = hashlib.sha256(
+                _canonical_json(
+                    {
+                        "schema_version": "hybrid-metadata-import-command.v1",
+                        "command": "import_metadata",
+                        "source_id": source_id,
+                        "document_id": normalized_document_id,
+                        "revision_id": normalized_revision_id,
+                        "filename": normalized_filename,
+                        "content_type": normalized_content_type,
+                        "content_sha256": quarantined.sha256,
+                        "size_bytes": quarantined.size_bytes,
+                        "expected_revision": expected_revision,
+                    }
+                )
+            ).hexdigest()
+            with quarantined.path.open("rb") as exact_stream:
+                original_ref = self._artifact_store.put_immutable_stream(
+                    key=(
+                        f"metadata-workbooks/{quarantined.sha256}/original.xlsx"
+                    ),
+                    content=exact_stream,
+                    media_type=WORKBOOK_MEDIA_TYPE,
+                    expected_sha256=quarantined.sha256,
+                    expected_size_bytes=quarantined.size_bytes,
+                )
+
+        import_job_id = str(uuid4())
+
+        def persist_import(
+            unit_of_work: Any,
+            source_record: Any,
+            operation: KnowledgeSourceOperation,
+            admitted_at: datetime,
+        ) -> None:
+            del source_record
+            _require_completed_candidate(
+                unit_of_work.hybrid_ingestion,
+                source_id=source_id,
+                document_id=normalized_document_id,
+                revision_id=normalized_revision_id,
+            )
+            now = admitted_at.astimezone(UTC)
+            unit_of_work.metadata_imports.enqueue(
+                MetadataImportJob(
+                    import_job_id=import_job_id,
+                    operation_id=operation.operation_id,
+                    source_id=source_id,
+                    document_id=normalized_document_id,
+                    revision_id=normalized_revision_id,
+                    source_revision=operation.source_revision,
+                    request_sha256=request_sha256,
+                    filename=normalized_filename,
+                    original_ref=original_ref,
+                    content_sha256=quarantined.sha256,
+                    state="READY",
+                    fencing_token=0,
+                    created_by=actor.subject,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            unit_of_work.audit.append(
+                _audit_event(
+                    actor=actor,
+                    event_type="hybrid_metadata_workbook.import_admitted",
+                    target_type="metadata_import_job",
+                    target_id=import_job_id,
+                    occurred_at=_timestamp(now),
+                    metadata={
+                        "source_id": source_id,
+                        "document_id": normalized_document_id,
+                        "revision_id": normalized_revision_id,
+                        "operation_id": operation.operation_id,
+                        "size_bytes": original_ref.size_bytes,
+                        "content_sha256": original_ref.sha256,
+                    },
+                )
+            )
+
+        admission_effect: KnowledgeSourceAdmissionEffect = persist_import
+        operation, _created = self._commands.admit_async_command(
+            source_id=source_id,
+            action="import_metadata",
+            command="import_metadata",
+            expected_revision=expected_revision,
+            idempotency_key=normalized_idempotency_key,
+            request_sha256=request_sha256,
+            context=KnowledgeSourceCommandContext(
+                operator_subject=actor.subject,
+                permissions=tuple(Permission(value) for value in actor.permissions),
+            ),
+            stage="metadata_import_queued",
+            admission_effect=admission_effect,
+        )
+        return operation
+
+    def _admit_pdf_command(
+        self,
+        *,
+        source_id: str,
+        document_id: str | None,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        source = self._knowledge.get_knowledge_source(source_id)
+        if (
+            source is None
+            or source.provider != "hybrid_index"
+            or source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE
+        ):
+            raise KeyError(source_id)
+        limits = HybridIntakeLimits.model_validate(dict(source.params), strict=True)
+        normalized_filename = _pdf_filename(filename)
+        normalized_content_type = content_type.partition(";")[0].strip().lower()
+        if normalized_content_type != "application/pdf":
+            raise ValueError("Hybrid Index uploads require application/pdf")
+        normalized_idempotency_key = _nonblank(
+            idempotency_key,
+            "idempotency_key",
+            maximum=255,
+        )
+        command = "upload_document" if document_id is None else "replace_document"
+        with quarantine_hybrid_upload(
+            content,
+            max_file_bytes=limits.max_file_bytes,
+        ) as quarantined:
+            preflight = preflight_hybrid_pdf(quarantined.path, limits=limits)
+            if (
+                preflight.source_size_bytes != quarantined.size_bytes
+                or preflight.source_sha256 != quarantined.sha256
+            ):
+                raise ValueError(
+                    "Hybrid PDF preflight identity diverged from upload quarantine"
+                )
+            request_sha256 = hashlib.sha256(
+                _canonical_json(
+                    {
+                        "schema_version": "hybrid-intake-command.v1",
+                        "command": command,
+                        "source_id": source.source_id,
+                        "document_id": document_id,
+                        "filename": normalized_filename,
+                        "content_type": normalized_content_type,
+                        "content_sha256": preflight.source_sha256,
+                        "size_bytes": preflight.source_size_bytes,
+                        "expected_revision": expected_revision,
+                        "parser_revision": self._build_config.parser_revision,
+                        "model_digests": self._build_config.model_digests,
+                        "configuration_sha256": self._build_config.configuration_sha256,
+                    }
+                )
+            ).hexdigest()
+            with quarantined.path.open("rb") as exact_stream:
+                original_ref = self._artifact_store.put_immutable_stream(
+                    key=(
+                        f"hybrid/{preflight.source_sha256}/"
+                        f"{request_sha256}/original.pdf"
+                    ),
+                    content=exact_stream,
+                    media_type="application/pdf",
+                    expected_sha256=preflight.source_sha256,
+                    expected_size_bytes=preflight.source_size_bytes,
+                )
+
+        admitted_document_id = document_id or str(uuid4())
+        revision_id = str(uuid4())
+        job_id = str(uuid4())
+        request_identity = (
+            f"{source.source_id}:{admitted_document_id}:{revision_id}"
+        )
+        build_request = HybridArtifactBuildRequest(
+            job_id=job_id,
+            request_identity=request_identity,
+            source_id=source.source_id,
+            document_id=admitted_document_id,
+            revision_id=revision_id,
+            original_ref=original_ref,
+            page_numbers=tuple(range(1, preflight.page_count + 1)),
+            parser_revision=self._build_config.parser_revision,
+            model_digests=self._build_config.model_digests,
+            configuration_sha256=self._build_config.configuration_sha256,
+        )
+        build_request = build_request.model_copy(
+            update={"request_sha256": hybrid_build_request_sha256(build_request)}
+        )
+
+        def persist_work(
+            unit_of_work: Any,
+            source_record: Any,
+            operation: KnowledgeSourceOperation,
+            admitted_at: datetime,
+        ) -> None:
+            del source_record
+            unit_of_work.hybrid_ingestion.enqueue(
+                build_request,
+                filename=normalized_filename,
+                uploaded_by=actor.subject,
+                replacement=document_id is not None,
+            )
+            unit_of_work.audit.append(
+                _audit_event(
+                    actor=actor,
+                    event_type=f"hybrid_pdf.{command}.admitted",
+                    target_type="hybrid_ingestion_job",
+                    target_id=job_id,
+                    occurred_at=_timestamp(admitted_at),
+                    metadata={
+                        "source_id": source.source_id,
+                        "document_id": admitted_document_id,
+                        "revision_id": revision_id,
+                        "operation_id": operation.operation_id,
+                        "page_count": preflight.page_count,
+                        "size_bytes": preflight.source_size_bytes,
+                        "content_sha256": preflight.source_sha256,
+                    },
+                )
+            )
+
+        admission_effect: KnowledgeSourceAdmissionEffect = persist_work
+        operation, _created = self._commands.admit_async_command(
+            source_id=source.source_id,
+            action=command,
+            command=command,
+            expected_revision=expected_revision,
+            idempotency_key=normalized_idempotency_key,
+            request_sha256=request_sha256,
+            context=KnowledgeSourceCommandContext(
+                operator_subject=actor.subject,
+                permissions=tuple(Permission(value) for value in actor.permissions),
+            ),
+            stage="ingestion_queued",
+            admission_effect=admission_effect,
+        )
+        return operation
+
+    def retry_ingestion(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        return self._admit_job_command(
+            source_id=source_id,
+            job_id=job_id,
+            command="retry_ingestion",
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+
+    def cancel_ingestion(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        return self._admit_job_command(
+            source_id=source_id,
+            job_id=job_id,
+            command="cancel_ingestion",
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        )
+
+    def _admit_job_command(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        command: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation:
+        record = self._ingestion.get_record(job_id)
+        if record is None or record.build_request.source_id != source_id:
+            raise KeyError(job_id)
+        request_sha256 = hashlib.sha256(
+            _canonical_json(
+                {
+                    "schema_version": "hybrid-job-command.v1",
+                    "command": command,
+                    "source_id": source_id,
+                    "job_id": job_id,
+                    "expected_revision": expected_revision,
+                }
+            )
+        ).hexdigest()
+
+        def persist_command(
+            unit_of_work: Any,
+            source_record: Any,
+            operation: KnowledgeSourceOperation,
+            admitted_at: datetime,
+        ) -> None:
+            del source_record
+            if command == "retry_ingestion":
+                unit_of_work.hybrid_ingestion.manual_retry(
+                    job_id=job_id,
+                    requested_by=actor.subject,
+                    touch_source=False,
+                )
+            else:
+                unit_of_work.hybrid_ingestion.request_cancel(
+                    job_id=job_id,
+                    requested_by=actor.subject,
+                    touch_source=False,
+                )
+            unit_of_work.audit.append(
+                _audit_event(
+                    actor=actor,
+                    event_type=f"hybrid_ingestion.{command}.admitted",
+                    target_type="hybrid_ingestion_job",
+                    target_id=job_id,
+                    occurred_at=_timestamp(admitted_at),
+                    metadata={
+                        "source_id": source_id,
+                        "operation_id": operation.operation_id,
+                    },
+                )
+            )
+
+        admission_effect: KnowledgeSourceAdmissionEffect = persist_command
+        operation, _created = self._commands.admit_async_command(
+            source_id=source_id,
+            action=command,
+            command=command,
+            expected_revision=expected_revision,
+            idempotency_key=_nonblank(
+                idempotency_key,
+                "idempotency_key",
+                maximum=255,
+            ),
+            request_sha256=request_sha256,
+            context=KnowledgeSourceCommandContext(
+                operator_subject=actor.subject,
+                permissions=tuple(Permission(value) for value in actor.permissions),
+            ),
+            stage="retry_queued" if command == "retry_ingestion" else "cancellation_queued",
+            admission_effect=admission_effect,
+        )
+        return operation
+
 
 def _audit_event(
     *,
@@ -290,6 +884,50 @@ def _pdf_filename(value: str) -> str:
     return normalized
 
 
+def _workbook_filename(value: str) -> str:
+    normalized = _nonblank(value, "filename", maximum=255)
+    if (
+        Path(normalized).name != normalized
+        or not normalized.lower().endswith(".xlsx")
+    ):
+        raise ValueError(
+            "Hybrid metadata imports require one safe .xlsx filename"
+        )
+    return normalized
+
+
+def _require_completed_candidate(
+    ingestion: Any,
+    *,
+    source_id: str,
+    document_id: str,
+    revision_id: str,
+) -> Any:
+    candidate = ingestion.get_document_candidate(
+        source_id=source_id,
+        document_id=document_id,
+    )
+    if (
+        candidate is None
+        or candidate.candidate_revision_id != revision_id
+        or candidate.pending_revision_id is not None
+    ):
+        raise LookupError("Hybrid metadata import revision is not the selected candidate")
+    matches = tuple(
+        record
+        for record in ingestion.list_records_for_source(source_id)
+        if record.build_request.document_id == document_id
+        and record.build_request.revision_id == revision_id
+        and record.job.state == "COMPLETED"
+    )
+    if len(matches) != 1:
+        raise LookupError("Hybrid metadata import completed build was not found")
+    result = ingestion.get_result(matches[0].build_request.job_id)
+    if result is None:
+        raise LookupError("Hybrid metadata import build result was not found")
+    return result
+
+
 def _nonblank(value: str, field: str, *, maximum: int) -> str:
     if type(value) is not str or not value.strip() or len(value.strip()) > maximum:
         raise ValueError(f"{field} is invalid")
@@ -312,4 +950,9 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-__all__ = ["HybridPdfAdmission", "ProductionHybridKnowledgeIntakeService"]
+__all__ = [
+    "HybridKnowledgeSourceSummaryReader",
+    "HybridPdfAdmission",
+    "ProductionHybridKnowledgeIntakeService",
+    "hybrid_knowledge_source_provider_capability",
+]

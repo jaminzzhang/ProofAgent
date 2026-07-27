@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, date, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 
@@ -29,6 +30,20 @@ from proof_agent.capabilities.knowledge.hybrid.publication import (
     PublicationConflict,
     hybrid_candidate_material_fingerprint,
 )
+from proof_agent.capabilities.knowledge.hybrid.publication_jobs import (
+    PublicationPreparationJob,
+)
+from proof_agent.capabilities.knowledge.ingestion.publication_preparation_worker import (
+    PublicationPreparationWorker,
+)
+from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
+from proof_agent.capabilities.persistence.postgres.database import upgrade_database
+from proof_agent.capabilities.persistence.postgres.hybrid_publication_commit_authority import (
+    PostgresHybridPublicationCommitAuthority,
+)
+from proof_agent.capabilities.persistence.postgres.publication_preparation_repository import (
+    PostgresPublicationPreparationRepository,
+)
 from proof_agent.capabilities.knowledge.hybrid.versioning import stable_digest
 from proof_agent.configuration.hybrid_knowledge_repository import FileSystemKnowledgeArtifactStore
 from proof_agent.contracts.hybrid_documents import BoundingBox
@@ -41,10 +56,20 @@ from proof_agent.contracts.insurance_rules import (
     InsuranceRuleUnitLineage,
     InsuranceRuleUnitRevision,
 )
-from proof_agent.contracts.knowledge_index import KnowledgeIndexGeneration, RuleUnitManifestEntry
+from proof_agent.contracts.knowledge_index import (
+    HybridKnowledgePublicationRecord,
+    KnowledgeIndexGeneration,
+    RuleUnitManifestEntry,
+)
+from proof_agent.contracts import (
+    KnowledgeSource,
+    KnowledgeSourceLifecycleState,
+    KnowledgeSourceOperation,
+)
 
 
 SHA = "a" * 64
+pytest_plugins = ("postgres_fixtures",)
 
 
 def _generation() -> KnowledgeIndexGeneration:
@@ -344,6 +369,170 @@ def test_publication_is_offline_attested_and_metrics_do_not_change_candidate(tmp
     assert service.close() is None
 
 
+def test_preparation_stages_external_work_and_commit_is_postgres_only(
+    tmp_path: Any,
+) -> None:
+    service, repository, embedding, index = _service(tmp_path)
+
+    prepared = service.prepare(_request())
+
+    assert repository.list_publications("source-1") == ()
+    assert repository.staged_commits[prepared.attempt.attempt_id] == prepared
+    embedding_calls = tuple(embedding.priorities)
+    bulk_calls = tuple(index.requests)
+    smoke_calls = tuple(index.smokes)
+
+    publication = service.commit(prepared)
+
+    assert publication.source_publication_seq == 1
+    assert tuple(embedding.priorities) == embedding_calls
+    assert tuple(index.requests) == bulk_calls
+    assert tuple(index.smokes) == smoke_calls
+
+
+@pytest.mark.postgres_integration
+def test_preparation_worker_persists_one_use_prepared_authority(
+    tmp_path: Any,
+    postgres_dsn: str,
+) -> None:
+    service, _, _, _ = _service(tmp_path)
+
+    class _Preparer:
+        def prepare(self, **kwargs: Any):
+            assert kwargs == {
+                "source_id": "source-1",
+                "validation_id": "validation-1",
+                "smoke_query": "What is covered?",
+                "actor": "publisher-1",
+            }
+            return service.prepare(_request())
+
+    upgrade_database(postgres_dsn)
+    bundle = PostgresPersistenceBundle.create(postgres_dsn)
+    now = datetime.now(UTC)
+    try:
+        bundle.knowledge.save_source(
+            KnowledgeSource(
+                source_id="source-1",
+                name="Prepared source",
+                provider="hybrid_index",
+                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
+                params={},
+                source_draft_version_id="draft-1",
+                created_at=now.isoformat(),
+                updated_at=now.isoformat(),
+            ),
+            expected_revision=0,
+        )
+        operation = KnowledgeSourceOperation(
+            operation_id=f"ksop_{uuid4().hex}",
+            source_id="source-1",
+            command="prepare_publication",
+            status="queued",
+            stage="publication_preparation_queued",
+            source_revision=2,
+            poll_after_ms=1_000,
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+        bundle.knowledge_source_operations.save(operation)
+        job = PublicationPreparationJob(
+            preparation_job_id=str(uuid4()),
+            operation_id=operation.operation_id,
+            validation_id="validation-1",
+            source_id="source-1",
+            source_revision=2,
+            source_draft_version_id="draft-1",
+            smoke_query="What is covered?",
+            state="READY",
+            fencing_token=0,
+            created_by="publisher-1",
+            created_at=now,
+            updated_at=now,
+        )
+        bundle.publication_preparations.enqueue(job)
+        worker = PublicationPreparationWorker(
+            jobs=bundle.publication_preparations,
+            preparer=_Preparer(),
+            unit_of_work_factory=bundle.configuration_uow,
+            worker_id="knowledge-worker-publication",
+        )
+
+        outcome = worker.run_once()
+
+        assert outcome is not None
+        assert outcome.state == "prepared"
+        prepared = bundle.prepared_knowledge_publications.get("validation-1")
+        assert prepared is not None
+        assert prepared.fencing_token == outcome.fencing_token
+        persisted_job = bundle.publication_preparations.get(
+            job.preparation_job_id
+        )
+        assert persisted_job is not None
+        assert persisted_job.state == "PREPARED"
+        persisted_operation = bundle.knowledge_source_operations.get(
+            operation.operation_id
+        )
+        assert persisted_operation is not None
+        assert persisted_operation.status == "succeeded"
+
+        class _CommitRepository:
+            def __init__(self) -> None:
+                self.raw_connection: Any | None = None
+
+            def commit_if_current(
+                self,
+                commit: Any,
+                *,
+                connection: Any,
+                publication_id: str,
+            ) -> HybridKnowledgePublicationRecord:
+                self.raw_connection = connection
+                return HybridKnowledgePublicationRecord(
+                    publication_id=publication_id,
+                    source_id=commit.attempt.source_id,
+                    source_draft_version_id=(
+                        commit.attempt.source_draft_version_id
+                    ),
+                    source_snapshot_id=commit.manifest.root.source_snapshot_id,
+                    source_publication_seq=(
+                        commit.attempt.reserved_publication_seq
+                    ),
+                    candidate_digest=commit.attempt.candidate_digest,
+                    generation_id=commit.attempt.generation_id,
+                    manifest_ref=commit.manifest.root_ref,
+                    attestation=commit.attestation,
+                    validation_id=commit.attempt.validation_id,
+                    published_at=now,
+                    published_by=commit.published_by,
+                )
+
+        repository = _CommitRepository()
+        with bundle.engine.begin() as connection:
+            authority = PostgresHybridPublicationCommitAuthority(
+                connection,
+                preparations=PostgresPublicationPreparationRepository(
+                    connection
+                ),
+                hybrid_repository=repository,
+            )
+            assert (
+                authority.commit_prepared(
+                    prepared,
+                    publication_id="kspub_001",
+                    published_by="publisher-2",
+                    change_note="Publish prepared candidate.",
+                    published_at=now.isoformat(),
+                )
+                == "kspub_001"
+            )
+            assert repository.raw_connection is (
+                connection.connection.driver_connection
+            )
+    finally:
+        bundle.close()
+
+
 def test_publication_requires_governed_smoke_before_attestation(tmp_path: Any) -> None:
     class SmokeFailingIndex(_Index):
         def validate_smoke_retrieval(
@@ -513,6 +702,7 @@ def test_failed_first_attempt_allows_sequence_gap_but_validation_id_is_consumed(
     request = _request()
     with pytest.raises(RuntimeError, match="projection failed"):
         service.publish(request)
+    assert repository.orphans
     index.fail = False
     with pytest.raises(PublicationConflict, match="VALIDATION_REUSED"):
         service.publish(request)

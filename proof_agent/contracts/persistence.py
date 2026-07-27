@@ -11,6 +11,7 @@ from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.agent_configuration import (
     ActiveAgentVersion,
     DraftAgent,
+    KnowledgeSource,
     PublishedAgentVersion,
 )
 from proof_agent.contracts.dashboard import RunPurpose
@@ -78,6 +79,13 @@ class AgentDraftRecord(FrozenModel):
     """A Draft Agent plus its adapter-neutral optimistic revision."""
 
     draft: DraftAgent
+    revision: int = Field(ge=1)
+
+
+class KnowledgeSourceRecord(FrozenModel):
+    """A Knowledge Source plus its adapter-neutral optimistic revision."""
+
+    source: KnowledgeSource
     revision: int = Field(ge=1)
 
 

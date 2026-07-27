@@ -91,6 +91,17 @@ class PostgresHybridKnowledgeRepository:
             with connection.transaction():
                 yield connection
 
+    @contextmanager
+    def _connection_or_existing(
+        self,
+        connection: Any | None,
+    ) -> Iterator[Any]:
+        if connection is not None:
+            yield connection
+            return
+        with self._connection() as owned:
+            yield owned
+
     def register_source(
         self,
         *,
@@ -588,14 +599,20 @@ class PostgresHybridKnowledgeRepository:
             if stored is None or _json_object(stored[0]) != attestation.model_dump(mode="json"):
                 raise PublicationConflict("STAGED_COMMIT_MISMATCH")
 
-    def commit_if_current(self, commit: PublicationCommit) -> HybridKnowledgePublicationRecord:
+    def commit_if_current(
+        self,
+        commit: PublicationCommit,
+        *,
+        connection: Any | None = None,
+        publication_id: str | None = None,
+    ) -> HybridKnowledgePublicationRecord:
         """Advance publication pointers in one short Source-row CAS transaction."""
 
         attempt = commit.attempt
         root = commit.manifest.root
         attestation = commit.attestation
-        self._validate_staged_commit(commit)
-        with self._connection() as connection:
+        self._validate_staged_commit(commit, connection=connection)
+        with self._connection_or_existing(connection) as connection:
             source = connection.execute(
                 """
                 SELECT draft_version_id, candidate_digest, live_attempt_id
@@ -716,7 +733,7 @@ class PostgresHybridKnowledgeRepository:
             if projection_update.rowcount != 1:
                 raise PublicationConflict("FENCE_LOST")
             published_at = datetime.now(UTC)
-            publication_id = f"publication-{uuid4().hex}"
+            publication_id = publication_id or f"publication-{uuid4().hex}"
             publication = HybridKnowledgePublicationRecord(
                 publication_id=publication_id,
                 source_id=attempt.source_id,
@@ -940,13 +957,18 @@ class PostgresHybridKnowledgeRepository:
             ),
         )
 
-    def _validate_staged_commit(self, commit: PublicationCommit) -> None:
+    def _validate_staged_commit(
+        self,
+        commit: PublicationCommit,
+        *,
+        connection: Any | None = None,
+    ) -> None:
         """Verify immutable staged material outside the final Source lock transaction."""
 
         attempt = commit.attempt
         root = commit.manifest.root
         attestation = commit.attestation
-        with self._connection() as connection:
+        with self._connection_or_existing(connection) as connection:
             staged = connection.execute(
                 """
                 SELECT m.manifest_json, a.attestation_json

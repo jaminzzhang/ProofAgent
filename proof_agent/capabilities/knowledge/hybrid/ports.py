@@ -427,9 +427,11 @@ HybridKnowledgeJobState = Literal[
     "READY",
     "LEASED",
     "RETRY_SCHEDULED",
+    "CANCEL_REQUESTED",
     "REVIEW_REQUIRED",
     "COMPLETED",
     "FAILED",
+    "CANCELLED",
 ]
 
 
@@ -455,14 +457,15 @@ class HybridKnowledgeJob(_PortModel):
     completed_at: AwareTimestamp | None = None
     failure_code: NonBlankStr | None = None
     failure_classification: Literal["non_recoverable", "recoverable_exhausted"] | None = None
+    cancel_requested_at: AwareTimestamp | None = None
+    cancel_requested_by: NonBlankStr | None = None
+    cancelled_at: AwareTimestamp | None = None
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> Self:
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must not precede created_at")
-        if self.state == "READY" and self.fencing_token != 0:
-            raise ValueError("READY jobs require fencing_token zero")
-        if self.state != "READY" and self.fencing_token <= 0:
+        if self.state not in {"READY", "CANCELLED"} and self.fencing_token <= 0:
             raise ValueError("claimed and terminal jobs require a positive fencing_token")
         if self.auto_retry_count > self.max_auto_retries:
             raise ValueError("auto_retry_count cannot exceed max_auto_retries")
@@ -475,9 +478,9 @@ class HybridKnowledgeJob(_PortModel):
                 raise ValueError(f"{self.state} jobs require safe_reason")
         elif self.safe_reason is not None:
             raise ValueError("successful and active jobs cannot contain safe_reason")
-        if self.state in {"COMPLETED", "FAILED"} and self.completed_at is None:
+        if self.state in {"COMPLETED", "FAILED", "CANCELLED"} and self.completed_at is None:
             raise ValueError("terminal jobs require completed_at")
-        if self.state not in {"COMPLETED", "FAILED"} and self.completed_at is not None:
+        if self.state not in {"COMPLETED", "FAILED", "CANCELLED"} and self.completed_at is not None:
             raise ValueError("nonterminal jobs do not accept completed_at")
         if self.state == "FAILED" and self.failure_code is None:
             raise ValueError("FAILED jobs require failure_code")
@@ -487,11 +490,20 @@ class HybridKnowledgeJob(_PortModel):
             raise ValueError("FAILED jobs require a failure classification")
         if self.state != "FAILED" and self.failure_classification is not None:
             raise ValueError("only FAILED jobs accept a failure classification")
+        cancellation = self.state in {"CANCEL_REQUESTED", "CANCELLED"}
+        if cancellation != (
+            self.cancel_requested_at is not None and self.cancel_requested_by is not None
+        ):
+            raise ValueError("cancelled jobs require complete cancellation request facts")
+        if (self.state == "CANCELLED") != (self.cancelled_at is not None):
+            raise ValueError("only CANCELLED jobs require cancelled_at")
         if self.completed_at is not None:
             if self.completed_at < self.created_at:
                 raise ValueError("completed_at must not precede created_at")
             if self.updated_at != self.completed_at:
                 raise ValueError("terminal updated_at must equal completed_at")
+        if self.cancelled_at is not None and self.cancelled_at != self.completed_at:
+            raise ValueError("cancelled_at must equal terminal completion time")
         return self
 
 

@@ -15,6 +15,9 @@ from proof_agent.capabilities.persistence.postgres.artifact_repository import (
 from proof_agent.capabilities.persistence.postgres.run_queue_repository import (
     PostgresRunQueueRepository,
 )
+from proof_agent.capabilities.persistence.postgres.worker_role_repository import (
+    PostgresWorkerRoleRepository,
+)
 from proof_agent.control.artifacts.finalization import (
     ArtifactBundleFinalizer,
     ArtifactMemberPayload,
@@ -25,6 +28,7 @@ from proof_agent.contracts.run_execution import (
     RunLifecycleState,
     RunRequest,
 )
+from proof_agent.contracts.worker_roles import ProductionWorkerRole
 from proof_agent.delivery.run_executor import RunExecutor
 
 
@@ -93,6 +97,19 @@ def _member(index: str) -> tuple[ArtifactMemberPayload, ...]:
     )
 
 
+def _activate_worker_role(engine: Engine, *, executor_id: str) -> None:
+    roles = PostgresWorkerRoleRepository(engine)
+    current = roles.get(ProductionWorkerRole.RUN_EXECUTOR)
+    roles.activate(
+        role=ProductionWorkerRole.RUN_EXECUTOR,
+        slot=1,
+        owner_id=executor_id,
+        expected_epoch=current.activation_epoch,
+        now=NOW,
+        lease_seconds=300,
+    )
+
+
 def test_executor_processes_governed_result_to_atomic_visible_success(
     postgres_engine: Engine,
     tmp_path: Path,
@@ -101,6 +118,7 @@ def test_executor_processes_governed_result_to_atomic_visible_success(
     repository = PostgresRunQueueRepository(postgres_engine)
     for index in range(1, 4):
         repository.admit(_request(index))
+    _activate_worker_role(postgres_engine, executor_id="executor-green")
     executor = RunExecutor(
         repository=repository,
         snapshot_factory=_snapshot,
@@ -128,6 +146,7 @@ def test_executor_never_starts_sixth_attempt_before_a_slot_is_released(
     repository = PostgresRunQueueRepository(postgres_engine)
     for index in range(1, 7):
         repository.admit(_request(index))
+    _activate_worker_role(postgres_engine, executor_id="executor-green")
     release = Event()
     five_started = Event()
     lock = Lock()
@@ -155,6 +174,7 @@ def test_executor_never_starts_sixth_attempt_before_a_slot_is_released(
         executor_id="executor-green",
         concurrency=5,
         poll_interval_seconds=0.05,
+        clock=lambda: NOW + timedelta(seconds=1),
     )
     thread = Thread(target=executor.run_until_idle)
     thread.start()
@@ -185,6 +205,7 @@ def test_executor_sanitizes_handler_failure_to_stable_terminal_code(
     repository = PostgresRunQueueRepository(postgres_engine)
     request = _request(1)
     repository.admit(request)
+    _activate_worker_role(postgres_engine, executor_id="executor-green")
 
     def fail(_claim, _check):
         raise RuntimeError("provider secret and body must not escape")
@@ -197,6 +218,7 @@ def test_executor_sanitizes_handler_failure_to_stable_terminal_code(
         executor_id="executor-green",
         concurrency=1,
         poll_interval_seconds=0.05,
+        clock=lambda: NOW + timedelta(seconds=1),
     )
     assert executor.run_until_idle() == 1
 

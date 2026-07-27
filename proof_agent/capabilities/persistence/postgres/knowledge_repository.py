@@ -9,6 +9,7 @@ from proof_agent.capabilities.persistence.postgres.schema import (
     knowledge_sources,
 )
 from proof_agent.contracts.agent_configuration import KnowledgeSource
+from proof_agent.contracts.persistence import KnowledgeSourceRecord
 from proof_agent.contracts.shared_assets import SharedAssetKind, SharedAssetVersionRef
 
 
@@ -40,6 +41,16 @@ class PostgresKnowledgeAssetRepository:
     def get_knowledge_source(self, source_id: str) -> KnowledgeSource | None:
         payload = self._assets.get_payload(source_id)
         return None if payload is None else KnowledgeSource.model_validate(payload)
+
+    def get_source_record(self, source_id: str) -> KnowledgeSourceRecord | None:
+        record = self._assets.get_payload_record(source_id)
+        if record is None:
+            return None
+        payload, revision = record
+        return KnowledgeSourceRecord(
+            source=KnowledgeSource.model_validate(payload),
+            revision=revision,
+        )
 
     def list_knowledge_sources(self) -> tuple[KnowledgeSource, ...]:
         return tuple(

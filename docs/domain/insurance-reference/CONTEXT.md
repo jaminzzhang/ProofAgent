@@ -185,8 +185,8 @@ A non-authoritative proposal of rule scope, effective period, authority, precede
 _Avoid_: Published rule authority, model-approved metadata, retrieval metadata, automatic activation
 
 **Insurance Rule Metadata Workbook Import**:
-The audited template-bound XLSX or CSV curation input that maps rows to exact Knowledge Source, document revision, and optional reviewed section, clause, table-row, or row-group anchors, rejects executable macros and external links, stores original and normalized row artifacts, and creates Insurance Rule Metadata Draft values without becoming evidence or automatically overwriting approved metadata.
-_Avoid_: Knowledge Document intake, filename join, spreadsheet as rule evidence, formula execution, direct publication
+The audited template-bound XLSX curation input submitted as one multipart asynchronous Knowledge Source command and mapped to an exact persisted document revision plus reviewed section, clause, table-row, or row-group anchors. A worker verifies the completed Hybrid build and template, rejects executable macros and external links, stores original and normalized artifacts, and atomically creates the complete review set or none of it. The import creates Insurance Rule Metadata Draft values without becoming evidence or automatically overwriting approved metadata.
+_Avoid_: Base64 JSON workbook, synchronous API parsing, partial review creation, Knowledge Document intake, filename join, spreadsheet as rule evidence, formula execution, direct publication
 
 **Approved Insurance Rule Metadata**:
 The business-confirmed rule scope, effective period, authority, precedence, and supersession facts that may determine Insurance Rule Applicability and Insurance Rule Precedence Order for a published Knowledge version.

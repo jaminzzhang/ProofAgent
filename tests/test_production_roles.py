@@ -120,12 +120,15 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
         tools = object()
         knowledge = object()
         hybrid_ingestion = object()
+        knowledge_source_operations = object()
         metadata_reviews = object()
         configuration_uow = object()
         security = object()
         run_queue = object()
         conversations = object()
         artifacts = object()
+        releases = object()
+        audit = object()
 
         def close(self) -> None:
             return None
@@ -138,6 +141,8 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
     hybrid_runtime = SimpleNamespace(
         artifact_store=artifact_store,
         model_graph=SimpleNamespace(build_config=object()),
+        repository=object(),
+        settings=SimpleNamespace(retrieval_profile_revision="profile-test"),
         publication_api=lambda **kwargs: object(),
         close=lambda: None,
     )
@@ -202,6 +207,16 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
         "_production_readiness_identity",
         lambda values: object(),
     )
+    monkeypatch.setattr(
+        production_roles,
+        "VerifiedArtifactMaterializer",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        production_roles,
+        "_release_attestation_verifier",
+        lambda values: object(),
+    )
     monkeypatch.setattr(production_roles, "create_app", create_app_stub)
 
     application = create_production_api_application(
@@ -210,6 +225,7 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
             "PROOF_AGENT_POSTGRES_DSN": "postgresql+psycopg://proof@postgres/proof",
             "HYBRID_POSTGRES_DSN": "postgresql://proof@postgres/proof",
             "PROOF_AGENT_OPENSEARCH_SECRET_HANDLE": "knowledge/opensearch",
+            "PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR": "/tmp/release-bundles",
         }
     )
 

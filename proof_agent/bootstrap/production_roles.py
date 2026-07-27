@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
+import secrets
+from typing import cast
 from urllib.parse import urlsplit
 from fastapi import FastAPI
 
@@ -22,11 +26,22 @@ from proof_agent.bootstrap.production_hybrid_publication import (
     PostgresHybridPublicationConfigurationStore,
 )
 from proof_agent.capabilities.artifacts.s3 import S3ArtifactStore
+from proof_agent.capabilities.artifacts.materialization import VerifiedArtifactMaterializer
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     OpenSearchSecretMaterial,
 )
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorker,
+    HybridWorkerOutcome,
+)
+from proof_agent.capabilities.knowledge.ingestion.metadata_import_worker import (
+    MetadataImportWorkerOutcome,
+    MetadataWorkbookImportWorker,
+)
+from proof_agent.capabilities.knowledge.ingestion.publication_preparation_worker import (
+    HybridPublicationPreparer,
+    PublicationPreparationWorker,
+    PublicationPreparationWorkerOutcome,
 )
 from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
 from proof_agent.capabilities.persistence.postgres.database import check_database, head_revision
@@ -36,11 +51,21 @@ from proof_agent.capabilities.persistence.postgres.configuration_uow import (
 from proof_agent.capabilities.persistence.postgres.model_credential_repository import (
     PostgresModelCredentialRepository,
 )
+from proof_agent.capabilities.persistence.postgres.knowledge_source_operation_query import (
+    PostgresKnowledgeSourceOperationQuery,
+)
+from proof_agent.capabilities.persistence.postgres.knowledge_source_query import (
+    PostgresKnowledgeSourceQuery,
+)
+from proof_agent.capabilities.persistence.postgres.knowledge_source_workspace_query import (
+    PostgresKnowledgeSourceWorkspaceQuery,
+)
 from proof_agent.capabilities.persistence.postgres.runtime_assets import (
     PostgresRuntimeSharedAssetReader,
 )
 from proof_agent.contracts import (
     InstitutionAuthorizationContext,
+    KnowledgeSourceCapabilityProjection,
     ProductionDeploymentIdentity,
     ProductionSecretHandle,
     RoleActivationState,
@@ -56,7 +81,29 @@ from proof_agent.control.production_agent_publication import (
 )
 from proof_agent.control.run_execution import RunExecutionSnapshotAuthority
 from proof_agent.control.knowledge.production_intake import (
+    HybridKnowledgeSourceSummaryReader,
     ProductionHybridKnowledgeIntakeService,
+    hybrid_knowledge_source_provider_capability,
+)
+from proof_agent.control.knowledge.configuration_service import (
+    KnowledgeSourceConfigurationService,
+    KnowledgeSourceLifecycleUnitOfWork,
+)
+from proof_agent.control.knowledge.operations_service import (
+    KnowledgeSourceOperationsService,
+)
+from proof_agent.control.knowledge.ingestion_service import (
+    KnowledgeSourceCommandUnitOfWork,
+)
+from proof_agent.control.knowledge.publication_preparation_service import (
+    KnowledgeSourcePublicationPreparationService,
+)
+from proof_agent.control.knowledge.publication_service import (
+    KnowledgeSourcePublicationService,
+    KnowledgeSourcePublicationUnitOfWork,
+)
+from proof_agent.control.knowledge.workspace_service import (
+    KnowledgeSourceWorkspaceService,
 )
 from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,
@@ -65,6 +112,9 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
 from proof_agent.delivery.production_status import (
     PeriodicFreshnessProbe,
     ProductionReadinessProbe,
+)
+from proof_agent.delivery.release_bundle_api import (
+    Ed25519ReleaseBundleAttestationVerifier,
 )
 from proof_agent.deployment.compatibility import (
     deployment_compatibility_sha256,
@@ -227,7 +277,7 @@ class ProductionExecutorComposition:
 
 @dataclass
 class ProductionKnowledgeWorkerComposition:
-    worker: HybridKnowledgeWorker
+    worker: "ProductionKnowledgeWorker"
     role_controller: WorkerRoleLeaseController
     readiness: ProductionReadinessProbe
     resources: tuple[object, ...]
@@ -248,6 +298,45 @@ class ProductionKnowledgeWorkerComposition:
                 failures.append(exc)
         if failures:
             raise ExceptionGroup("production Knowledge Worker shutdown failed", failures)
+
+
+class ProductionKnowledgeWorker:
+    """Fairly poll all private Knowledge work queues under one role lease."""
+
+    def __init__(
+        self,
+        *,
+        hybrid_worker: HybridKnowledgeWorker,
+        metadata_worker: MetadataWorkbookImportWorker,
+        publication_worker: PublicationPreparationWorker | None = None,
+    ) -> None:
+        self._workers = tuple(
+            worker
+            for worker in (
+                hybrid_worker,
+                metadata_worker,
+                publication_worker,
+            )
+            if worker is not None
+        )
+        self._next_index = 0
+
+    def run_once(
+        self,
+    ) -> (
+        HybridWorkerOutcome
+        | MetadataImportWorkerOutcome
+        | PublicationPreparationWorkerOutcome
+        | None
+    ):
+        for offset in range(len(self._workers)):
+            index = (self._next_index + offset) % len(self._workers)
+            outcome = self._workers[index].run_once()
+            if outcome is not None:
+                self._next_index = (index + 1) % len(self._workers)
+                return outcome
+        self._next_index = (self._next_index + 1) % len(self._workers)
+        return None
 
 
 @dataclass
@@ -328,6 +417,11 @@ def create_production_api_application(
         )
         artifact_store = _artifact_store(values)
         resources.append(artifact_store)
+        release_bundle_materializer = VerifiedArtifactMaterializer(
+            artifact_store,
+            cache_root=Path(_required(values, "PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR")),
+        )
+        release_bundle_attestation_verifier = _release_attestation_verifier(values)
         s3_read_write_probe = PeriodicFreshnessProbe(
             check=lambda: artifact_store.check_read_write_ready(
                 probe_owner_id=_required(values, "PROOF_AGENT_RELEASE_ID")
@@ -359,12 +453,77 @@ def create_production_api_application(
                     model_credentials,
                 ),
                 "run_queue": lambda: _queue_ready(persistence),
+                "release_registry": lambda: _release_registry_ready(persistence),
                 "s3_read_write": s3_read_write_probe,
                 "secret_provider": lambda: _secret_provider_ready(
                     secret_provider,
                     values,
                 ),
             },
+        )
+        provider_capability = hybrid_knowledge_source_provider_capability(
+            readiness_revision=hybrid_runtime.settings.retrieval_profile_revision,
+        )
+        summary_reader = HybridKnowledgeSourceSummaryReader(
+            persistence.hybrid_ingestion
+        )
+        cursor_secret = secrets.token_bytes(32)
+        configuration_application = KnowledgeSourceConfigurationService(
+            knowledge=persistence.knowledge,
+            summaries=summary_reader,
+            capabilities=KnowledgeSourceCapabilityProjection(
+                providers=(provider_capability,)
+            ),
+            source_query=PostgresKnowledgeSourceQuery(
+                persistence.engine,
+                cursor_secret=cursor_secret,
+            ),
+            creator=intake_service,
+            unit_of_work_factory=cast(
+                Callable[[], KnowledgeSourceLifecycleUnitOfWork],
+                lambda: persistence.configuration_uow(),
+            ),
+        )
+        operations_application = KnowledgeSourceOperationsService(
+            operations=persistence.knowledge_source_operations,
+            operation_query=PostgresKnowledgeSourceOperationQuery(
+                persistence.engine,
+                cursor_secret=cursor_secret,
+            ),
+        )
+        workspace_application = KnowledgeSourceWorkspaceService(
+            knowledge=persistence.knowledge,
+            query=PostgresKnowledgeSourceWorkspaceQuery(
+                persistence.engine,
+                cursor_secret=cursor_secret,
+            ),
+            reviews=persistence.metadata_reviews,
+        )
+        publication_preparation_application = (
+            KnowledgeSourcePublicationPreparationService(
+                unit_of_work_factory=cast(
+                    Callable[[], KnowledgeSourceCommandUnitOfWork],
+                    lambda: persistence.configuration_uow(),
+                ),
+                provider_capability=provider_capability,
+                summary_reader=summary_reader,
+            )
+        )
+
+        def publication_uow() -> PostgresConfigurationUnitOfWork:
+            return PostgresConfigurationUnitOfWork(
+                persistence.engine,
+                model_credential_cipher=model_credential_cipher,
+                hybrid_publication_repository=hybrid_runtime.repository,
+            )
+
+        publication_application = KnowledgeSourcePublicationService(
+            unit_of_work_factory=cast(
+                Callable[[], KnowledgeSourcePublicationUnitOfWork],
+                publication_uow,
+            ),
+            provider_capability=provider_capability,
+            summary_reader=summary_reader,
         )
         application = create_app(
             mode="production",
@@ -389,7 +548,20 @@ def create_production_api_application(
             production_configuration_uow_factory=lambda: PostgresConfigurationUnitOfWork(
                 persistence.engine,
                 model_credential_cipher=model_credential_cipher,
+                hybrid_publication_repository=hybrid_runtime.repository,
             ),
+            knowledge_source_configuration_application=configuration_application,
+            knowledge_source_ingestion_application=intake_service,
+            knowledge_source_operations_application=operations_application,
+            knowledge_source_publication_preparation_application=(
+                publication_preparation_application
+            ),
+            knowledge_source_publication_application=publication_application,
+            knowledge_source_workspace_application=workspace_application,
+            release_registry_repository=persistence.releases,
+            release_bundle_materializer=release_bundle_materializer,
+            release_bundle_attestation_verifier=release_bundle_attestation_verifier,
+            release_bundle_audit_repository=persistence.audit,
         )
 
         def close_resources() -> None:
@@ -581,7 +753,7 @@ def compose_production_knowledge_worker(
             owner_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
             configured_state=_activation_state(values),
         )
-        worker = hybrid_runtime.model_graph.ingestion_worker.create(
+        hybrid_worker = hybrid_runtime.model_graph.ingestion_worker.create(
             lifecycle=persistence.hybrid_ingestion,
             original_store=hybrid_runtime.artifact_store,
             artifact_store=hybrid_runtime.artifact_store,
@@ -590,6 +762,38 @@ def compose_production_knowledge_worker(
             lease_seconds=lease_seconds,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             ownership_guard=role_controller.can_claim,
+        )
+        metadata_worker = MetadataWorkbookImportWorker(
+            jobs=persistence.metadata_imports,
+            ingestion=persistence.hybrid_ingestion,
+            unit_of_work_factory=persistence.configuration_uow,
+            artifact_store=hybrid_runtime.artifact_store,
+            worker_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
+            lease_seconds=lease_seconds,
+            ownership_guard=role_controller.can_claim,
+        )
+        publication_preparer = cast(
+            HybridPublicationPreparer,
+            hybrid_runtime.publication_api(
+                configuration_store=PostgresHybridPublicationConfigurationStore(
+                    knowledge=persistence.knowledge,
+                    ingestion=persistence.hybrid_ingestion,
+                ),
+                review_repository=persistence.metadata_reviews,
+            ),
+        )
+        publication_worker = PublicationPreparationWorker(
+            jobs=persistence.publication_preparations,
+            preparer=publication_preparer,
+            unit_of_work_factory=persistence.configuration_uow,
+            worker_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
+            lease_seconds=lease_seconds,
+            ownership_guard=role_controller.can_claim,
+        )
+        worker = ProductionKnowledgeWorker(
+            hybrid_worker=hybrid_worker,
+            metadata_worker=metadata_worker,
+            publication_worker=publication_worker,
         )
         readiness = ProductionReadinessProbe(
             identity=_production_readiness_identity(values, role="knowledge_worker"),
@@ -777,6 +981,32 @@ def _postgres_ready(persistence: PostgresPersistenceBundle) -> bool:
 def _queue_ready(persistence: PostgresPersistenceBundle) -> bool:
     persistence.run_queue.list_page(limit=1, offset=0)
     return True
+
+
+def _release_registry_ready(persistence: PostgresPersistenceBundle) -> bool:
+    persistence.releases.list()
+    return True
+
+
+def _release_attestation_verifier(
+    values: Mapping[str, str],
+) -> Ed25519ReleaseBundleAttestationVerifier:
+    raw = _required(values, "PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("release attestation public-key configuration must be JSON") from exc
+    if not isinstance(payload, dict) or not 1 <= len(payload) <= 32:
+        raise ValueError("release attestation public-key configuration is invalid")
+    public_keys: dict[str, bytes] = {}
+    for key_id, encoded in payload.items():
+        if not isinstance(key_id, str) or not isinstance(encoded, str):
+            raise ValueError("release attestation public-key configuration is invalid")
+        try:
+            public_keys[key_id] = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("release attestation public key is not canonical base64") from exc
+    return Ed25519ReleaseBundleAttestationVerifier(public_keys)
 
 
 def _sole_agent_ready(

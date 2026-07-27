@@ -3,7 +3,6 @@ import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
-  CandidateKnowledgeSourceSnapshot,
   ConfigAgentsResponse,
   ConfigVersionsResponse,
   ContractBundle,
@@ -17,30 +16,13 @@ import type {
   EvaluationProductionSamplePromotion,
   EvaluationProductionSamplePromotionRequest,
   EvaluationProductionSamplePromotionsResponse,
-  FoundationKnowledgeSourceValidation,
   HealthResponse,
-  KnowledgeDocument,
-  KnowledgeDocumentsResponse,
-  KnowledgeIngestionJob,
-  KnowledgeIngestionJobsResponse,
-  KnowledgeOperationsProjection,
-  InsuranceMetadataReview,
-  InsuranceMetadataReviewsResponse,
-  InsuranceMetadataWorkbookImportResponse,
-  KnowledgeSource,
-  KnowledgeSourceDeletionEligibility,
-  KnowledgeSourceSnapshotManifest,
-  KnowledgeSourcePublicationRecord,
-  KnowledgeSourcePublicationValidation,
-  KnowledgeSourcePublicationsResponse,
-  KnowledgeSourcesResponse,
-  KnowledgeUploadsResponse,
+  KnowledgeSourceApiProblem,
   ModelConnectionSmokeTestRecord,
   ModelConnectionValidationRecord,
   ModelCredentialReference,
   ModelConnectionsResponse,
   PublishedAgentVersion,
-  QuarantinedKnowledgeUpload,
   RunDetail,
   RunPurposeFilter,
   RunsListResponse,
@@ -58,6 +40,7 @@ import type {
   PermissionMappingsResponse,
   EgressPoliciesResponse,
   SecretHandleValidation,
+  ReleasesResponse,
 } from './types'
 import { currentCsrfToken, notifySessionExpired } from '../auth/sessionStore'
 
@@ -72,17 +55,25 @@ export class ApiError extends Error {
   readonly status: number
   readonly statusText: string
   readonly detail: unknown
+  readonly problem: KnowledgeSourceApiProblem | null
 
-  constructor(status: number, statusText: string, bodyText: string, detail: unknown) {
+  constructor(
+    status: number,
+    statusText: string,
+    bodyText: string,
+    detail: unknown,
+    problem: KnowledgeSourceApiProblem | null = null,
+  ) {
     super(`API error: ${status} ${statusText} ${bodyText}`)
     this.name = 'ApiError'
     this.status = status
     this.statusText = statusText
     this.detail = detail
+    this.problem = problem
   }
 }
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+export async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers)
   const method = (options?.method ?? 'GET').toUpperCase()
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -93,20 +84,52 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '')
     let detail: unknown = null
+    let problem: KnowledgeSourceApiProblem | null = null
     try {
-      const parsed = JSON.parse(errText) as { detail?: unknown }
-      detail = parsed.detail ?? null
+      const parsed: unknown = JSON.parse(errText)
+      if (isKnowledgeSourceApiProblem(parsed)) {
+        problem = parsed
+        detail = parsed.detail
+      } else if (isRecord(parsed)) {
+        detail = parsed.detail ?? null
+      }
     } catch {
       detail = null
     }
     if (resp.status === 401) notifySessionExpired()
-    throw new ApiError(resp.status, resp.statusText, errText, detail)
+    throw new ApiError(resp.status, resp.statusText, errText, detail, problem)
   }
   return resp.json() as Promise<T>
 }
 
+function isKnowledgeSourceApiProblem(value: unknown): value is KnowledgeSourceApiProblem {
+  return isRecord(value)
+    && typeof value.type === 'string'
+    && value.type.startsWith('urn:proof-agent:problem:')
+    && typeof value.title === 'string'
+    && typeof value.status === 'number'
+    && typeof value.code === 'string'
+    && typeof value.detail === 'string'
+    && typeof value.trace_id === 'string'
+    && typeof value.retryable === 'boolean'
+    && Array.isArray(value.field_errors)
+    && Array.isArray(value.blockers)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export function fetchOperatorSession(): Promise<OperatorSession> {
   return fetchJson<OperatorSession>(`${BASE}/auth/session`)
+}
+
+export function fetchReleases(): Promise<ReleasesResponse> {
+  return fetchJson<ReleasesResponse>(`${BASE}/releases`)
+}
+
+export function releaseBundleDownloadUrl(releaseId: string, artifactName: string): string {
+  return `${BASE}/releases/${encodeURIComponent(releaseId)}/bundle/${encodeURIComponent(artifactName)}`
 }
 
 export function fetchPermissionMappings(): Promise<PermissionMappingsResponse> {
@@ -250,10 +273,6 @@ export function promoteEvaluationProductionSample(
 
 export function fetchConfigAgents(): Promise<ConfigAgentsResponse> {
   return fetchJson<ConfigAgentsResponse>(`${BASE}/config/agents`)
-}
-
-export function fetchKnowledgeSources(): Promise<KnowledgeSourcesResponse> {
-  return fetchJson<KnowledgeSourcesResponse>(`${BASE}/config/knowledge-sources`)
 }
 
 export function fetchModelConnections(): Promise<ModelConnectionsResponse> {
@@ -429,279 +448,6 @@ export function smokeTestModelConnection(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    },
-  )
-}
-
-export function fetchKnowledgeSource(sourceId: string): Promise<KnowledgeSource> {
-  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}`)
-}
-
-export function fetchKnowledgeOperations(
-  sourceId: string,
-): Promise<KnowledgeOperationsProjection> {
-  return fetchJson<KnowledgeOperationsProjection>(
-    `${BASE}/config/knowledge-sources/${sourceId}/operations`,
-  )
-}
-
-export function createKnowledgeSource(payload: {
-  source_id?: string
-  name: string
-  provider: string
-  params?: Record<string, unknown>
-}): Promise<KnowledgeSource> {
-  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function archiveKnowledgeSource(
-  sourceId: string,
-  payload: { reason: string },
-): Promise<KnowledgeSource> {
-  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/archive`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function restoreKnowledgeSource(
-  sourceId: string,
-  payload: { reason?: string | null } = {},
-): Promise<KnowledgeSource> {
-  return fetchJson<KnowledgeSource>(`${BASE}/config/knowledge-sources/${sourceId}/restore`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function fetchKnowledgeSourceDeletionEligibility(
-  sourceId: string,
-): Promise<KnowledgeSourceDeletionEligibility> {
-  return fetchJson<KnowledgeSourceDeletionEligibility>(
-    `${BASE}/config/knowledge-sources/${sourceId}/deletion-eligibility`,
-  )
-}
-
-export function permanentlyDeleteKnowledgeSource(
-  sourceId: string,
-  payload: { reason: string },
-): Promise<KnowledgeSourceDeletionEligibility> {
-  return fetchJson<KnowledgeSourceDeletionEligibility>(`${BASE}/config/knowledge-sources/${sourceId}`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function fetchKnowledgeDocuments(sourceId: string): Promise<KnowledgeDocumentsResponse> {
-  return fetchJson<KnowledgeDocumentsResponse>(`${BASE}/config/knowledge-sources/${sourceId}/documents`)
-}
-
-export function fetchQuarantinedKnowledgeUploads(sourceId: string): Promise<KnowledgeUploadsResponse> {
-  return fetchJson<KnowledgeUploadsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/quarantined-uploads`,
-  )
-}
-
-export function fetchKnowledgeIngestionJobs(sourceId: string): Promise<KnowledgeIngestionJobsResponse> {
-  return fetchJson<KnowledgeIngestionJobsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/ingestion-jobs`,
-  )
-}
-
-export function retryKnowledgeIngestionJob(
-  sourceId: string,
-  jobId: string,
-): Promise<KnowledgeIngestionJob> {
-  return fetchJson<KnowledgeIngestionJob>(
-    `${BASE}/config/knowledge-sources/${sourceId}/ingestion-jobs/${jobId}/retry`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    },
-  )
-}
-
-export function fetchCandidateKnowledgeSourceSnapshot(
-  sourceId: string,
-): Promise<CandidateKnowledgeSourceSnapshot> {
-  return fetchJson<CandidateKnowledgeSourceSnapshot>(
-    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot`,
-  )
-}
-
-export function validateCandidateKnowledgeSourceSnapshotFoundation(
-  sourceId: string,
-): Promise<FoundationKnowledgeSourceValidation> {
-  return fetchJson<FoundationKnowledgeSourceValidation>(
-    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/validate-foundation`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    },
-  )
-}
-
-export function freezeCandidateKnowledgeSourceSnapshot(
-  sourceId: string,
-  payload: { validation_id: string },
-): Promise<KnowledgeSourceSnapshotManifest> {
-  return fetchJson<KnowledgeSourceSnapshotManifest>(
-    `${BASE}/config/knowledge-sources/${sourceId}/candidate-snapshot/freeze`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function validateKnowledgeSourcePublication(
-  sourceId: string,
-  payload: { smoke_query: string },
-): Promise<KnowledgeSourcePublicationValidation> {
-  return fetchJson<KnowledgeSourcePublicationValidation>(
-    `${BASE}/config/knowledge-sources/${sourceId}/publication/validate`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function publishKnowledgeSource(
-  sourceId: string,
-  payload: { validation_id: string; change_note: string },
-): Promise<KnowledgeSourcePublicationRecord> {
-  return fetchJson<KnowledgeSourcePublicationRecord>(
-    `${BASE}/config/knowledge-sources/${sourceId}/publication/publish`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function fetchKnowledgeSourcePublications(
-  sourceId: string,
-): Promise<KnowledgeSourcePublicationsResponse> {
-  return fetchJson<KnowledgeSourcePublicationsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/publications`,
-  )
-}
-
-export function fetchInsuranceMetadataReviews(
-  sourceId: string,
-  options: { limit?: number; cursor?: string; state?: InsuranceMetadataReview['state'] } = {},
-): Promise<InsuranceMetadataReviewsResponse> {
-  const query = new URLSearchParams()
-  query.set('limit', String(options.limit ?? 50))
-  if (options.cursor) query.set('cursor', options.cursor)
-  if (options.state) query.set('state', options.state)
-  return fetchJson<InsuranceMetadataReviewsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews?${query.toString()}`,
-  )
-}
-
-export function importInsuranceMetadataWorkbook(
-  sourceId: string,
-  payload: {
-    filename: string
-    content_type: string
-    content_base64: string
-    document_id: string
-    revision_id: string
-  },
-): Promise<InsuranceMetadataWorkbookImportResponse> {
-  return fetchJson<InsuranceMetadataWorkbookImportResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/metadata-workbooks/import`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function resolveInsuranceMetadataReview(
-  sourceId: string,
-  review: InsuranceMetadataReview,
-  action: 'approve' | 'correct' | 'reject',
-  payload: { reason: string; corrections?: Record<string, string | number | null> },
-): Promise<InsuranceMetadataReview> {
-  return fetchJson<InsuranceMetadataReview>(
-    `${BASE}/config/knowledge-sources/${sourceId}/metadata-reviews/${review.review_id}/${action}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_review_version: review.review_version,
-        expected_review_identity: review.review_identity,
-        reason: payload.reason,
-        corrections: payload.corrections ?? {},
-      }),
-    },
-  )
-}
-
-export function uploadKnowledgeDocument(
-  sourceId: string,
-  payload: {
-    filename: string
-    content_type: string
-    content_base64: string
-  },
-): Promise<QuarantinedKnowledgeUpload> {
-  return fetchJson<QuarantinedKnowledgeUpload>(`${BASE}/config/knowledge-sources/${sourceId}/documents`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function uploadKnowledgeDocuments(
-  sourceId: string,
-  payload: {
-    documents: {
-      filename: string
-      content_type: string
-      content_base64: string
-    }[]
-  },
-): Promise<KnowledgeUploadsResponse> {
-  return fetchJson<KnowledgeUploadsResponse>(
-    `${BASE}/config/knowledge-sources/${sourceId}/documents/batch`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function updateKnowledgeDocumentRoutingMetadata(
-  sourceId: string,
-  documentId: string,
-  payload: {
-    routing_metadata: Record<string, unknown>
-  },
-): Promise<KnowledgeDocument> {
-  return fetchJson<KnowledgeDocument>(
-    `${BASE}/config/knowledge-sources/${sourceId}/documents/${documentId}/routing-metadata`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
     },
   )
 }

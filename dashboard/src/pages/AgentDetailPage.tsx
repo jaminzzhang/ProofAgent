@@ -8,7 +8,6 @@ import {
   deleteConfigDraftSkillPack,
   fetchConfigDraftSkills,
   fetchWorkflowTemplate,
-  fetchKnowledgeSources,
   fetchModelConnections,
   previewWorkflowStageContext,
   publishConfigDraft,
@@ -20,6 +19,7 @@ import {
   updateWorkflowStages,
   validateConfigDraft,
 } from '../api/client'
+import { fetchKnowledgeSources } from '../api/knowledgeSources'
 import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,

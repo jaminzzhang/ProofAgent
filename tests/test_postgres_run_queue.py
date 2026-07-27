@@ -117,7 +117,9 @@ def _activate(
         owner_id=executor_id,
         expected_epoch=current.activation_epoch,
         now=now,
-        lease_seconds=15,
+        # Keep the deployment role lease independent from the shorter Attempt
+        # lease exercised by queue recovery tests below.
+        lease_seconds=300,
     )
     return repository.activate_role(slot=slot, executor_id=executor_id, now=now)
 

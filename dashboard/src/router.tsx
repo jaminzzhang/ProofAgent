@@ -12,6 +12,7 @@ import { ModelsPage } from './pages/ModelsPage'
 import { ModelConnectionDetailPage } from './pages/ModelConnectionDetailPage'
 import { EvaluationLabPage } from './pages/EvaluationLabPage'
 import { SecurityPage } from './pages/SecurityPage'
+import { ReleasesPage } from './pages/ReleasesPage'
 
 export { Routes, Route }
 
@@ -31,6 +32,7 @@ export function AppRoutes() {
       <Route path="/runs/:runId" element={<RunDetailPage />} />
       <Route path="/evaluation-lab" element={<EvaluationLabPage />} />
       <Route path="/security" element={<SecurityPage />} />
+      <Route path="/releases" element={<ReleasesPage />} />
     </Routes>
   )
 }

@@ -19,6 +19,9 @@ from proof_agent.capabilities.persistence.postgres.artifact_repository import (
 from proof_agent.capabilities.persistence.postgres.run_queue_repository import (
     PostgresRunQueueRepository,
 )
+from proof_agent.capabilities.persistence.postgres.worker_role_repository import (
+    PostgresWorkerRoleRepository,
+)
 from proof_agent.capabilities.persistence.postgres.conversation_repository import (
     PostgresConversationRepository,
 )
@@ -30,6 +33,7 @@ from proof_agent.contracts.artifacts import ArtifactKind
 from proof_agent.contracts.conversation import ContextAdmission, ConversationRecord, ConversationTurn
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run_execution import RunExecutionSnapshot
+from proof_agent.contracts.worker_roles import ProductionWorkerRole
 from proof_agent.delivery.published_agents import PublishedAgent
 from proof_agent.delivery.run_artifact_results import RunArtifactResultReader
 from proof_agent.delivery.run_executor import RunExecutor, RunWorkResult
@@ -284,6 +288,17 @@ def test_http_admission_to_postgres_executor_s3_visible_result(
                 expected_conversation_turn_count=0,
             )
 
+        executor_id = "executor-e2e"
+        roles = PostgresWorkerRoleRepository(postgres_engine)
+        current_role = roles.get(ProductionWorkerRole.RUN_EXECUTOR)
+        roles.activate(
+            role=ProductionWorkerRole.RUN_EXECUTOR,
+            slot=1,
+            owner_id=executor_id,
+            expected_epoch=current_role.activation_epoch,
+            now=datetime.now(UTC),
+            lease_seconds=300,
+        )
         executor = RunExecutor(
             repository=repository,
             snapshot_factory=snapshot,
@@ -292,7 +307,7 @@ def test_http_admission_to_postgres_executor_s3_visible_result(
                 store=store,
                 repository=artifact_references,
             ),
-            executor_id="executor-e2e",
+            executor_id=executor_id,
             concurrency=1,
             poll_interval_seconds=0.05,
         )
@@ -300,7 +315,11 @@ def test_http_admission_to_postgres_executor_s3_visible_result(
 
         result = client.get(f"/api/runs/{run_id}")
         assert result.status_code == 200
-        assert result.json()["state"] == "succeeded"
+        assert result.json()["state"] == "succeeded", json.dumps(
+            result.json(),
+            ensure_ascii=False,
+            indent=2,
+        )
         assert result.json()["result_available"] is True
         assert result.json()["artifact_manifest_id"] is not None
         assert result.json()["outcome"] == "ANSWERED_WITH_CITATIONS"

@@ -1,59 +1,109 @@
 // @vitest-environment jsdom
+
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  archiveKnowledgeSource,
-  fetchCandidateKnowledgeSourceSnapshot,
-  fetchKnowledgeIngestionJobs,
-  fetchKnowledgeOperations,
-  fetchKnowledgeDocuments,
-  fetchKnowledgeSource,
-  fetchKnowledgeSourceDeletionEligibility,
-  fetchKnowledgeSourcePublications,
-  fetchInsuranceMetadataReviews,
-  fetchQuarantinedKnowledgeUploads,
-  freezeCandidateKnowledgeSourceSnapshot,
-  permanentlyDeleteKnowledgeSource,
-  publishKnowledgeSource,
-  retryKnowledgeIngestionJob,
-  restoreKnowledgeSource,
-  updateKnowledgeDocumentRoutingMetadata,
-  uploadKnowledgeDocument,
-  uploadKnowledgeDocuments,
-  validateCandidateKnowledgeSourceSnapshotFoundation,
-  validateKnowledgeSourcePublication,
-} from '../../api/client'
+  changeKnowledgeSourceLifecycle,
+  commitKnowledgePublication,
+  executeKnowledgeSourceMutation,
+  fetchKnowledgeAuditPage,
+  fetchKnowledgeDocumentsPage,
+  fetchKnowledgeMetadataReviewsPage,
+  fetchKnowledgePublicationValidationsPage,
+  fetchKnowledgePublicationsPage,
+  fetchKnowledgeSourceCapabilities,
+  fetchKnowledgeSourceDetail,
+  fetchKnowledgeSourceOperationsPage,
+  pollKnowledgeSourceOperation,
+  prepareKnowledgePublication,
+  resolveKnowledgeMetadataReview,
+  uploadKnowledgeDocumentsBounded,
+} from '../../api/knowledgeSources'
 import { KnowledgeDetailPage } from '../KnowledgeDetailPage'
 
-vi.mock('../../api/client', () => ({
-  archiveKnowledgeSource: vi.fn(),
-  fetchCandidateKnowledgeSourceSnapshot: vi.fn(),
-  fetchKnowledgeIngestionJobs: vi.fn(),
-  fetchKnowledgeOperations: vi.fn(),
-  fetchKnowledgeDocuments: vi.fn(),
-  fetchKnowledgeSource: vi.fn(),
-  fetchKnowledgeSourceDeletionEligibility: vi.fn(),
-  fetchKnowledgeSourcePublications: vi.fn(),
-  fetchInsuranceMetadataReviews: vi.fn(),
-  resolveInsuranceMetadataReview: vi.fn(),
-  fetchQuarantinedKnowledgeUploads: vi.fn(),
-  freezeCandidateKnowledgeSourceSnapshot: vi.fn(),
-  permanentlyDeleteKnowledgeSource: vi.fn(),
-  publishKnowledgeSource: vi.fn(),
-  retryKnowledgeIngestionJob: vi.fn(),
-  restoreKnowledgeSource: vi.fn(),
-  updateKnowledgeDocumentRoutingMetadata: vi.fn(),
-  uploadKnowledgeDocument: vi.fn(),
-  uploadKnowledgeDocuments: vi.fn(),
-  validateCandidateKnowledgeSourceSnapshotFoundation: vi.fn(),
-  validateKnowledgeSourcePublication: vi.fn(),
+vi.mock('../../api/knowledgeSources', () => ({
+  changeKnowledgeSourceLifecycle: vi.fn(),
+  commitKnowledgePublication: vi.fn(),
+  executeKnowledgeSourceMutation: vi.fn(),
+  fetchKnowledgeAuditPage: vi.fn(),
+  fetchKnowledgeDocumentsPage: vi.fn(),
+  fetchKnowledgeMetadataReviewsPage: vi.fn(),
+  fetchKnowledgePublicationValidationsPage: vi.fn(),
+  fetchKnowledgePublicationsPage: vi.fn(),
+  fetchKnowledgeSourceCapabilities: vi.fn(),
+  fetchKnowledgeSourceDetail: vi.fn(),
+  fetchKnowledgeSourceOperationsPage: vi.fn(),
+  pollKnowledgeSourceOperation: vi.fn(),
+  prepareKnowledgePublication: vi.fn(),
+  resolveKnowledgeMetadataReview: vi.fn(),
+  uploadKnowledgeDocumentsBounded: vi.fn(),
 }))
+
+const page = <T,>(data: T[]) => ({
+  data,
+  page: { limit: 50, next_cursor: null, has_more: false },
+  summary: {},
+})
+
+const sourceDetail = {
+  schema_version: 'knowledge-source-api.v1' as const,
+  source: {
+    source_id: 'ks_hybrid',
+    name: 'Insurance Rules',
+    provider: 'hybrid_index',
+    lifecycle_state: 'ACTIVE' as const,
+    params: {},
+    created_at: '2026-07-27T00:00:00Z',
+    updated_at: '2026-07-27T00:01:00Z',
+    document_count: 1,
+    ready_document_count: 1,
+  },
+  revision: 7,
+  summary: { ready_documents: 1 },
+  action_capabilities: {
+    source_id: 'ks_hybrid',
+    source_revision: 7,
+    actions: [
+      { action: 'upload_document', allowed: true, blockers: [] },
+      { action: 'replace_document', allowed: true, blockers: [] },
+      { action: 'import_metadata', allowed: true, blockers: [] },
+      { action: 'retry_ingestion', allowed: false, blockers: [{ code: 'no_retryable_ingestion', detail: 'No retryable ingestion.' }] },
+      { action: 'cancel_ingestion', allowed: false, blockers: [{ code: 'no_cancellable_ingestion', detail: 'No cancellable ingestion.' }] },
+      { action: 'review_metadata', allowed: true, blockers: [] },
+      { action: 'prepare_publication', allowed: true, blockers: [] },
+      { action: 'publish', allowed: true, blockers: [] },
+      { action: 'archive', allowed: true, blockers: [] },
+      { action: 'restore', allowed: false, blockers: [{ code: 'source_active', detail: 'Source is active.' }] },
+      { action: 'view_audit', allowed: true, blockers: [] },
+    ],
+  },
+}
+
+const capabilities = {
+  schema_version: 'knowledge-source-api.v1' as const,
+  providers: [{
+    provider: 'hybrid_index',
+    creation_supported: true,
+    intake: {
+      content_types: ['application/pdf'],
+      max_file_bytes: 52_428_800,
+      max_batch_files: 4,
+      max_source_documents: 10_000,
+    },
+    features: ['documents', 'metadata_reviews', 'publication'],
+    readiness: {
+      state: 'ready' as const,
+      revision: 'private-plane.v1',
+      blockers: [],
+    },
+  }],
+}
 
 function renderPage() {
   render(
-    <MemoryRouter initialEntries={['/knowledge/ks_local_index']}>
+    <MemoryRouter initialEntries={['/knowledge/ks_hybrid']}>
       <Routes>
         <Route path="/knowledge/:sourceId" element={<KnowledgeDetailPage />} />
       </Routes>
@@ -61,757 +111,309 @@ function renderPage() {
   )
 }
 
-describe('KnowledgeDetailPage', () => {
+describe('KnowledgeDetailPage V1', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(fetchKnowledgeOperations).mockRejectedValue(
-      new Error('Operations telemetry unavailable in this page fixture.'),
-    )
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Local Index Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ACTIVE',
-      params: {
-        ingestion_model: { provider: 'deterministic', name: 'routing' },
-        document_selection_budget: 8,
-        worker_concurrency: 2,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: 'kssnapshot_1',
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
-    })
-    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({
-      data: [
-        {
-          document_id: 'ksdoc_1',
-          source_id: 'ks_local_index',
-          revision_id: 'ksrev_1',
-          filename: 'policy.md',
-          content_type: 'text/markdown',
-          content_hash: 'abc123',
-          size_bytes: 120,
-          state: 'ready',
-          storage_path: 'sources/policy.md',
-          provider_document_id: null,
-          error_code: null,
-          error_message: null,
-          routing_metadata: {},
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-      ],
-      meta: { total: 1 },
-    })
-    vi.mocked(fetchQuarantinedKnowledgeUploads).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(retryKnowledgeIngestionJob).mockResolvedValue({
-      job_id: 'ksjob_1',
-      source_id: 'ks_local_index',
-      document_id: 'ksdoc_1',
-      revision_id: 'ksrev_1',
-      state: 'queued',
-      attempt_count: 1,
-      auto_retry_count: 0,
-      max_auto_retries: 2,
-      ingestion_config_fingerprint: 'fingerprint_1',
-      artifact_build_spec: {},
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:01:00Z',
-    })
-    vi.mocked(fetchCandidateKnowledgeSourceSnapshot).mockResolvedValue({
-      source_id: 'ks_local_index',
-      source_draft_version_id: 'ksdraft_1',
-      candidate_digest: 'digest_1',
-      included_documents: [
-        {
-          document_id: 'ksdoc_1',
-          revision_id: 'ksrev_1',
-          filename: 'policy.md',
-          content_type: 'text/markdown',
-          content_hash: 'abc123',
-          artifact_path: 'artifacts/policy.json',
-          routing_metadata: {},
-        },
-      ],
-      queued_document_count: 0,
-      processing_document_count: 0,
-      failed_document_count: 0,
-      archived_document_count: 0,
-      required_reingestion_count: 0,
-    })
-    vi.mocked(fetchKnowledgeSourcePublications).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
-      data: [],
-      meta: {
-        total: 0, unresolved: 0, next_cursor: null,
-        summary: { total: 0, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 0, corrected: 0, rejected: 0, all_approved: false },
-      },
-    })
-    vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
-      source_id: 'ks_local_index',
-      eligible: false,
-      lifecycle_state: 'ARCHIVED',
-      reference_summary: {
-        source_id: 'ks_local_index',
-        draft_agent_binding_count: 0,
-        published_agent_version_count: 0,
-        publication_count: 0,
-        snapshot_count: 0,
-        document_count: 1,
-        quarantined_upload_count: 0,
-        ingestion_job_count: 0,
-        audit_retention_blocked: false,
-      },
-      blockers: ['documents'],
-    })
-    vi.mocked(archiveKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Local Index Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ARCHIVED',
-      params: {},
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T03:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: 'kssnapshot_1',
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
-    })
-    vi.mocked(restoreKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Local Index Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ACTIVE',
-      params: {},
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T04:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: 'kssnapshot_1',
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
-    })
-    vi.mocked(permanentlyDeleteKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      eligible: true,
-      lifecycle_state: 'ARCHIVED',
-      reference_summary: {
-        source_id: 'ks_local_index',
-        draft_agent_binding_count: 0,
-        published_agent_version_count: 0,
-        publication_count: 0,
-        snapshot_count: 0,
-        document_count: 0,
-        quarantined_upload_count: 0,
-        ingestion_job_count: 0,
-        audit_retention_blocked: false,
-      },
-      blockers: [],
-    })
-    vi.mocked(validateCandidateKnowledgeSourceSnapshotFoundation).mockResolvedValue({
-      validation_id: 'ksvalidation_1',
-      source_id: 'ks_local_index',
-      source_draft_version_id: 'ksdraft_1',
-      candidate_digest: 'digest_1',
-      validation_level: 'foundation',
-      status: 'passed',
-      document_count: 1,
-      required_reingestion_count: 0,
-      created_at: '2026-05-31T00:30:00Z',
-      created_by: 'dashboard',
-    })
-    vi.mocked(freezeCandidateKnowledgeSourceSnapshot).mockResolvedValue({
-      schema_version: 'local_index.snapshot.v2',
-      snapshot_id: 'kssnapshot_1',
-      source_id: 'ks_local_index',
-      state: 'READY',
-      validation_level: 'foundation',
-      source_draft_version_id: 'ksdraft_1',
-      candidate_digest: 'digest_1',
-      foundation_validation_id: 'ksvalidation_1',
-      documents: [
-        {
-          document_id: 'doc_1',
-          revision_id: 'rev_1',
-          filename: 'policy.md',
-          content_type: 'text/markdown',
-          content_hash: 'sha256:abc',
-          artifact_path: 'artifacts/policy.json',
-          routing_metadata: {},
-        },
-      ],
-      created_at: '2026-05-31T00:45:00Z',
-      created_by: 'dashboard',
-    })
-    vi.mocked(validateKnowledgeSourcePublication).mockResolvedValue({
-      validation_id: 'kspubval_1',
-      source_id: 'ks_local_index',
-      snapshot_id: 'kssnapshot_1',
-      source_draft_version_id: 'ksdraft_1',
-      candidate_digest: 'digest_1',
-      status: 'passed',
-      smoke_query: 'What does the policy require?',
-      candidate_count: 1,
-      citation_count: 1,
-      created_at: '2026-05-31T01:00:00Z',
-      created_by: 'dashboard',
-    })
-    vi.mocked(publishKnowledgeSource).mockResolvedValue({
-      publication_id: 'kspub_1',
-      source_id: 'ks_local_index',
-      snapshot_id: 'kssnapshot_1',
-      source_draft_version_id: 'ksdraft_1',
-      validation_id: 'kspubval_1',
-      change_note: 'Ready for Agent binding.',
-      published_at: '2026-05-31T02:00:00Z',
-      published_by: 'dashboard',
-      document_count: 1,
-      smoke_query: 'What does the policy require?',
-      smoke_result_summary: { candidate_count: 1, citation_count: 1 },
-    })
-    vi.mocked(uploadKnowledgeDocuments).mockResolvedValue({
-      data: [
-        {
-          upload_id: 'upload_first',
-          source_id: 'ks_local_index',
-          filename: 'first.md',
-          content_type: 'text/markdown',
-          size_bytes: 8,
-          storage_path: 'knowledge_sources/ks_local_index/quarantined_uploads/upload_first/original-upload.bin',
-          state: 'queued',
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-        {
-          upload_id: 'upload_second',
-          source_id: 'ks_local_index',
-          filename: 'second.md',
-          content_type: 'text/markdown',
-          size_bytes: 9,
-          storage_path: 'knowledge_sources/ks_local_index/quarantined_uploads/upload_second/original-upload.bin',
-          state: 'queued',
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-      ],
-      meta: { total: 2 },
-    })
-    vi.mocked(updateKnowledgeDocumentRoutingMetadata).mockResolvedValue({
-      document_id: 'ksdoc_1',
-      source_id: 'ks_local_index',
-      revision_id: 'ksrev_1',
-      filename: 'policy.md',
-      content_type: 'text/markdown',
-      content_hash: 'abc123',
-      size_bytes: 120,
-      state: 'ready',
-      storage_path: 'sources/policy.md',
-      provider_document_id: null,
-      error_code: null,
-      error_message: null,
-      routing_metadata: {
-        title: 'Claims Policy',
-        description: 'Inpatient claim rules',
-        tags: ['claims', 'inpatient'],
-        document_type: 'policy',
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-    })
+    vi.mocked(fetchKnowledgeSourceDetail).mockResolvedValue(sourceDetail)
+    vi.mocked(fetchKnowledgeSourceCapabilities).mockResolvedValue(capabilities)
+    vi.mocked(fetchKnowledgeDocumentsPage).mockResolvedValue(page([]))
+    vi.mocked(fetchKnowledgeMetadataReviewsPage).mockResolvedValue(page([]))
+    vi.mocked(fetchKnowledgePublicationValidationsPage).mockResolvedValue(page([]))
+    vi.mocked(fetchKnowledgePublicationsPage).mockResolvedValue(page([]))
+    vi.mocked(fetchKnowledgeSourceOperationsPage).mockResolvedValue(page([]))
+    vi.mocked(fetchKnowledgeAuditPage).mockResolvedValue(page([]))
+    vi.mocked(executeKnowledgeSourceMutation).mockImplementation(async (command) => (
+      command('dashboard-test-idempotency-key')
+    ))
   })
 
-  it('runs publication validation then publish', async () => {
+  it('renders the accepted seven-tab workspace', async () => {
     renderPage()
 
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
-    expect(screen.getByText('policy.md')).toBeInTheDocument()
-    expect(screen.getByText('1 candidate documents')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Insurance Rules' })).toBeInTheDocument()
+    const tablist = screen.getByRole('tablist')
+    expect(within(tablist).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Overview',
+      'Documents',
+      'Reviews',
+      'Versions & Publish',
+      'Operations',
+      'Provider & Health',
+      'Audit',
+    ])
+    expect(screen.getByText('Revision 7')).toBeInTheDocument()
+  })
 
-    fireEvent.change(screen.getByLabelText('Smoke Query'), {
-      target: { value: 'What does the policy require?' },
+  it('uses action capabilities instead of provider inference to gate uploads', async () => {
+    vi.mocked(fetchKnowledgeSourceDetail).mockResolvedValue({
+      ...sourceDetail,
+      action_capabilities: {
+        ...sourceDetail.action_capabilities,
+        actions: sourceDetail.action_capabilities.actions.map((action) => (
+          action.action === 'upload_document'
+            ? {
+                action: 'upload_document',
+                allowed: false,
+                blockers: [{
+                  code: 'permission_required',
+                  detail: 'The knowledge_source.edit permission is required.',
+                }],
+              }
+            : action
+        )),
+      },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Validate Publication' }))
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Documents' }))
+    expect(await screen.findByLabelText('Upload documents')).toBeDisabled()
+    expect(await screen.findByText('The knowledge_source.edit permission is required.')).toBeInTheDocument()
+  })
+
+  it('uploads raw files with the current revision and polls durable operations', async () => {
+    const operation = {
+      operation_id: 'op_upload',
+      source_id: 'ks_hybrid',
+      command: 'upload_document',
+      status: 'queued' as const,
+      stage: 'ingestion_queued',
+      source_revision: 8,
+      poll_after_ms: 500,
+      progress: null,
+      outcome_code: null,
+      outcome_detail: null,
+      created_at: '2026-07-27T00:02:00Z',
+      updated_at: '2026-07-27T00:02:00Z',
+      completed_at: null,
+    }
+    vi.mocked(uploadKnowledgeDocumentsBounded).mockResolvedValue([{
+      file: new File(['pdf'], 'policy.pdf', { type: 'application/pdf' }),
+      status: 'fulfilled',
+      operation,
+      error: null,
+    }])
+    vi.mocked(pollKnowledgeSourceOperation).mockResolvedValue({
+      ...operation,
+      status: 'succeeded',
+      completed_at: '2026-07-27T00:03:00Z',
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Documents' }))
+    const file = new File(['pdf'], 'policy.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText('Upload documents'), {
+      target: { files: [file] },
+    })
 
     await waitFor(() => {
-      expect(validateCandidateKnowledgeSourceSnapshotFoundation).toHaveBeenCalledWith('ks_local_index')
-      expect(freezeCandidateKnowledgeSourceSnapshot).toHaveBeenCalledWith('ks_local_index', {
-        validation_id: 'ksvalidation_1',
-      })
-      expect(validateKnowledgeSourcePublication).toHaveBeenCalledWith('ks_local_index', {
-        smoke_query: 'What does the policy require?',
+      expect(uploadKnowledgeDocumentsBounded).toHaveBeenCalledWith({
+        sourceId: 'ks_hybrid',
+        files: [file],
+        initialRevision: 7,
       })
     })
-    expect(await screen.findByText('Validation kspubval_1 passed.')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText('Change Note'), {
-      target: { value: 'Ready for Agent binding.' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Publish Source' }))
-
     await waitFor(() => {
-      expect(publishKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
-        validation_id: 'kspubval_1',
-        change_note: 'Ready for Agent binding.',
-      })
+      expect(pollKnowledgeSourceOperation).toHaveBeenCalledWith(expect.objectContaining({
+        sourceId: 'ks_hybrid',
+        operationId: 'op_upload',
+      }))
     })
-    expect(await screen.findByText('Published kspub_1.')).toBeInTheDocument()
-    expect(fetchKnowledgeSourcePublications).toHaveBeenCalledWith('ks_local_index')
-    expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
+    expect(await screen.findByText('policy.pdf')).toBeInTheDocument()
+    expect(screen.getByText('Completed')).toBeInTheDocument()
   })
 
-  it('wires approved Hybrid metadata reviews to a real readiness confirmation', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_hybrid_index',
-      name: 'Insurance Rules Hybrid',
-      provider: 'hybrid_index',
-      lifecycle_state: 'ACTIVE',
-      params: {},
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_hybrid',
-      latest_snapshot_id: null,
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
-    })
-    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchInsuranceMetadataReviews).mockResolvedValue({
-      data: [{
-        schema_version: 'insurance-metadata-review.v1',
-        review_id: 'metadata_review_approved',
-        review_identity: 'a'.repeat(64),
-        review_version: 2,
-        import_id: 'metadata_import_1',
-        workbook_row_number: 6,
-        workbook_draft_id: 'metadata_draft_1',
-        original_ref: {
-          artifact_uri: 'file:///managed/original.xlsx', version_id: `sha256:${'1'.repeat(64)}`,
-          sha256: '1'.repeat(64), size_bytes: 100,
-          media_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        },
-        normalized_ref: {
-          artifact_uri: 'file:///managed/normalized.json', version_id: `sha256:${'2'.repeat(64)}`,
-          sha256: '2'.repeat(64), size_bytes: 100, media_type: 'application/json',
-        },
-        source_id: 'ks_hybrid_index',
-        document_id: 'doc_1',
-        revision_id: 'rev_1',
-        canonical_anchor: 'section:eligibility',
-        citation_uri: 'proofagent://knowledge/ks_hybrid_index/doc_1/rev_1#section:eligibility',
-        state: 'approved',
-        publication_blocked: false,
-        pdf_draft: {
-          metadata_draft_id: 'pdf_metadata_draft_1',
-          origin: 'pdf', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
-          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
-          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
-          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
-        },
-        workbook_draft: {
-          metadata_draft_id: 'workbook_metadata_draft_1',
-          origin: 'workbook', source_id: 'ks_hybrid_index', document_id: 'doc_1', revision_id: 'rev_1',
-          canonical_anchor: 'section:eligibility', authority: 'national', effective_from: '2026-01-01',
-          effective_to: null, taxonomy_id: 'insurance', taxonomy_revision_id: 'tax_1',
-          precedence_policy_revision_id: 'policy_1', precedence_authority_tier: 'terms', precedence_order: 10,
-        },
-        conflicts: [],
-        resolved_values: {},
-        resolution_reason: 'Approved against the signed source.',
-        resolved_by: 'reviewer',
-        approved_metadata_revision_id: 'approved_metadata_1',
-        decision_history: [],
-      }],
-      meta: {
-        total: 1, unresolved: 0, next_cursor: null,
-        summary: { total: 1, unresolved: 0, review_required: 0, ready_for_review: 0, approved: 1, corrected: 0, rejected: 0, all_approved: true },
+  it('does not request Audit data when view_audit is blocked', async () => {
+    vi.mocked(fetchKnowledgeSourceDetail).mockResolvedValue({
+      ...sourceDetail,
+      action_capabilities: {
+        ...sourceDetail.action_capabilities,
+        actions: sourceDetail.action_capabilities.actions.map((action) => (
+          action.action === 'view_audit'
+            ? {
+                action: 'view_audit',
+                allowed: false,
+                blockers: [{
+                  code: 'permission_required',
+                  detail: 'The audit.view permission is required.',
+                }],
+              }
+            : action
+        )),
       },
     })
-
     renderPage()
 
-    expect(await screen.findByText('Insurance Rules Hybrid')).toBeInTheDocument()
-    const readiness = await screen.findByRole('button', { name: 'Confirm publication readiness' })
-    expect(readiness).toBeEnabled()
-    fireEvent.click(readiness)
-    expect(await screen.findByText(
-      'All insurance metadata reviews are approved. This Hybrid Source is ready for governed publication.',
-    )).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Audit' }))
+    expect(screen.getByText('The audit.view permission is required.')).toBeInTheDocument()
+    expect(fetchKnowledgeAuditPage).not.toHaveBeenCalled()
   })
 
-  it('summarizes source-owned model connection configuration', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Local Index Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ACTIVE',
-      params: {
-        ingestion_model: {
-          model_source: 'shared',
-          connection_id: 'model_ingestion',
-        },
-        routing_model: {
-          model_source: 'custom',
-          provider: 'deepseek',
-          name: 'deepseek-chat',
-        },
-        document_selection_budget: 8,
-        worker_concurrency: 2,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: 'kssnapshot_1',
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
-    })
-
-    renderPage()
-
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
-    expect(screen.getByText('shared:model_ingestion')).toBeInTheDocument()
-    expect(screen.getByText('custom:deepseek/deepseek-chat')).toBeInTheDocument()
-  })
-
-  it('uploads selected documents as one batch', async () => {
-    renderPage()
-
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText('Upload Documents'), {
-      target: {
-        files: [
-          new File(['# First\n'], 'first.md', { type: 'text/markdown' }),
-          new File(['# Second\n'], 'second.md', { type: 'text/markdown' }),
-        ],
+  it('applies lifecycle commands with the exact Source revision and reason', async () => {
+    vi.mocked(changeKnowledgeSourceLifecycle).mockResolvedValue({
+      ...sourceDetail,
+      revision: 8,
+      source: {
+        ...sourceDetail.source,
+        lifecycle_state: 'ARCHIVED',
       },
     })
-
-    await waitFor(() => {
-      expect(uploadKnowledgeDocuments).toHaveBeenCalledWith('ks_local_index', {
-        documents: [
-          {
-            filename: 'first.md',
-            content_type: 'text/markdown',
-            content_base64: expect.any(String),
-          },
-          {
-            filename: 'second.md',
-            content_type: 'text/markdown',
-            content_base64: expect.any(String),
-          },
-        ],
-      })
-    })
-    expect(await screen.findByText('2 uploads queued for validation.')).toBeInTheDocument()
-    expect(uploadKnowledgeDocument).not.toHaveBeenCalled()
-  })
-
-  it('shows queued upload intake when no managed document exists yet', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Local Index Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ACTIVE',
-      params: {
-        ingestion_model: { provider: 'deterministic', name: 'routing' },
-        document_selection_budget: 8,
-        worker_concurrency: 2,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: null,
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 0,
-      ready_document_count: 0,
-    })
-    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchQuarantinedKnowledgeUploads).mockResolvedValue({
-      data: [
-        {
-          upload_id: 'upload_pending',
-          source_id: 'ks_local_index',
-          filename: 'pending.pdf',
-          content_type: 'application/pdf',
-          size_bytes: 1024,
-          storage_path: 'knowledge_sources/ks_local_index/quarantined_uploads/upload_pending/original-upload.bin',
-          state: 'queued',
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-      ],
-      meta: { total: 1 },
-    })
-    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({
-      data: [
-        {
-          job_id: 'ksjob_1',
-          source_id: 'ks_local_index',
-          document_id: 'ksdoc_1',
-          revision_id: 'ksrev_1',
-          state: 'processing',
-          attempt_count: 1,
-          auto_retry_count: 0,
-          max_auto_retries: 2,
-          ingestion_config_fingerprint: 'fingerprint_1',
-          artifact_build_spec: {},
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-      ],
-      meta: { total: 1 },
-    })
-
     renderPage()
 
-    expect(await screen.findByText('No managed documents are ready yet.')).toBeInTheDocument()
-    expect(screen.getByText('Upload Intake')).toBeInTheDocument()
-    expect(screen.getByText('pending.pdf')).toBeInTheDocument()
-    expect(screen.getByText('queued')).toBeInTheDocument()
-    expect(screen.getByText('Ingestion Jobs')).toBeInTheDocument()
-    expect(screen.getByText('ksjob_1')).toBeInTheDocument()
-    expect(screen.getByText('processing')).toBeInTheDocument()
-  })
-
-  it('retries failed ingestion jobs from the documents section', async () => {
-    vi.mocked(fetchKnowledgeIngestionJobs).mockResolvedValue({
-      data: [
-        {
-          job_id: 'ksjob_failed',
-          source_id: 'ks_local_index',
-          document_id: 'ksdoc_1',
-          revision_id: 'ksrev_1',
-          state: 'failed',
-          attempt_count: 1,
-          auto_retry_count: 0,
-          max_auto_retries: 2,
-          ingestion_config_fingerprint: 'fingerprint_1',
-          artifact_build_spec: {},
-          error_code: 'PA_INGESTION_001',
-          error_message: 'Missing model credential environment variable(s): DEEPSEEK_API_KEY',
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-        },
-      ],
-      meta: { total: 1 },
-    })
-    vi.mocked(retryKnowledgeIngestionJob).mockResolvedValue({
-      job_id: 'ksjob_failed',
-      source_id: 'ks_local_index',
-      document_id: 'ksdoc_1',
-      revision_id: 'ksrev_1',
-      state: 'queued',
-      attempt_count: 1,
-      auto_retry_count: 0,
-      max_auto_retries: 2,
-      ingestion_config_fingerprint: 'fingerprint_1',
-      artifact_build_spec: {},
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:01:00Z',
-    })
-
-    renderPage()
-
-    expect(await screen.findByText('ksjob_failed')).toBeInTheDocument()
-    expect(screen.getByText('Missing model credential environment variable(s): DEEPSEEK_API_KEY')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-
-    await waitFor(() => {
-      expect(retryKnowledgeIngestionJob).toHaveBeenCalledWith('ks_local_index', 'ksjob_failed')
-    })
-    expect(await screen.findByText('Retry queued for ksjob_failed.')).toBeInTheDocument()
-  })
-
-  it('edits document routing metadata', async () => {
-    renderPage()
-
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Routing' }))
-    fireEvent.change(screen.getByLabelText('Routing Title'), {
-      target: { value: 'Claims Policy' },
-    })
-    fireEvent.change(screen.getByLabelText('Routing Description'), {
-      target: { value: 'Inpatient claim rules' },
-    })
-    fireEvent.change(screen.getByLabelText('Routing Tags'), {
-      target: { value: 'claims, inpatient' },
-    })
-    fireEvent.change(screen.getByLabelText('Document Type'), {
-      target: { value: 'policy' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Routing' }))
-
-    await waitFor(() => {
-      expect(updateKnowledgeDocumentRoutingMetadata).toHaveBeenCalledWith(
-        'ks_local_index',
-        'ksdoc_1',
-        {
-          routing_metadata: {
-            title: 'Claims Policy',
-            description: 'Inpatient claim rules',
-            tags: ['claims', 'inpatient'],
-            document_type: 'policy',
-          },
-        },
-      )
-    })
-    expect(await screen.findByText('Routing metadata saved for policy.md.')).toBeInTheDocument()
-  })
-
-  it('hides local document controls for http json sources', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Remote Policies',
-      provider: 'http_json',
-      lifecycle_state: 'ACTIVE',
-      params: {
-        endpoint: 'https://knowledge.example/retrieve',
-        top_k: 5,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: null,
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 0,
-      ready_document_count: 0,
-    })
-    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
-
-    renderPage()
-
-    expect(await screen.findByText('Remote Policies')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Upload Documents')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Validate Publication' })).toBeInTheDocument()
-    expect(fetchCandidateKnowledgeSourceSnapshot).not.toHaveBeenCalled()
-  })
-
-  it('archives an active source with a reason', async () => {
-    renderPage()
-
-    expect(await screen.findByText('Local Index Policies')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Archive Reason'), {
-      target: { value: 'Retire stale policies' },
+    await screen.findByRole('heading', { name: 'Insurance Rules' })
+    fireEvent.change(screen.getByLabelText('Decision reason'), {
+      target: { value: 'Superseded corpus' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Archive Source' }))
 
     await waitFor(() => {
-      expect(archiveKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
-        reason: 'Retire stale policies',
-      })
+      expect(changeKnowledgeSourceLifecycle).toHaveBeenCalledWith(
+        'ks_hybrid',
+        'archive',
+        {
+          expected_revision: 7,
+          reason: 'Superseded corpus',
+        },
+      )
     })
-    expect(await screen.findByText('Knowledge Source archived.')).toBeInTheDocument()
+    expect(await screen.findByText('Revision 8')).toBeInTheDocument()
   })
 
-  it('shows restore and deletion controls for archived sources', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Archived Policies',
-      provider: 'local_index',
-      lifecycle_state: 'ARCHIVED',
-      params: {
-        ingestion_model: { provider: 'deterministic', name: 'routing' },
-        document_selection_budget: 8,
-        worker_concurrency: 2,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: 'kssnapshot_1',
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 1,
-      ready_document_count: 1,
+  it('resolves a metadata review with exact identity and version', async () => {
+    const review = {
+      review_id: 'review-1',
+      review_identity: 'a'.repeat(64),
+      review_version: 3,
+      document_id: 'document-1',
+      revision_id: 'revision-1',
+      state: 'review_required' as const,
+      publication_blocked: true,
+      canonical_anchor: 'section:eligibility',
+      citation_uri: 'proof://knowledge/ks_hybrid/document-1',
+      conflict_count: 1,
+      resolution_reason: null,
+      resolved_by: null,
+    }
+    vi.mocked(fetchKnowledgeMetadataReviewsPage).mockResolvedValue(page([review]))
+    vi.mocked(resolveKnowledgeMetadataReview).mockResolvedValue({
+      ...review,
+      review_version: 4,
+      state: 'approved',
+      publication_blocked: false,
+      conflict_count: 0,
+      resolution_reason: 'Verified against signed authority.',
+      resolved_by: 'operator-1',
     })
-
     renderPage()
 
-    expect(await screen.findByText('Archived Policies')).toBeInTheDocument()
-    expect(fetchKnowledgeSourceDeletionEligibility).toHaveBeenCalledWith('ks_local_index')
-    expect(screen.getByRole('button', { name: 'Validate Publication' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Edit Routing' })).toBeDisabled()
-    expect(screen.getByText('documents')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText('Restore Reason'), {
-      target: { value: 'Need this source again' },
+    fireEvent.click(await screen.findByRole('tab', { name: 'Reviews' }))
+    expect(await screen.findByText('review-1')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Decision reason', { selector: '#review-reason' }), {
+      target: { value: 'Verified against signed authority.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Restore Source' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
 
     await waitFor(() => {
-      expect(restoreKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
-        reason: 'Need this source again',
-      })
+      expect(resolveKnowledgeMetadataReview).toHaveBeenCalledWith(
+        'ks_hybrid',
+        review,
+        'approve',
+        {
+          reason: 'Verified against signed authority.',
+          corrections: {},
+        },
+      )
     })
+    expect(await screen.findByText('approved')).toBeInTheDocument()
   })
 
-  it('permanently deletes an archived source only when eligible and reason is provided', async () => {
-    vi.mocked(fetchKnowledgeSource).mockResolvedValue({
-      source_id: 'ks_local_index',
-      name: 'Archived Policies',
-      provider: 'http_json',
-      lifecycle_state: 'ARCHIVED',
-      params: {
-        endpoint: 'https://knowledge.example/retrieve',
-        top_k: 5,
-      },
-      created_at: '2026-05-31T00:00:00Z',
-      updated_at: '2026-05-31T00:00:00Z',
-      source_draft_version_id: 'ksdraft_1',
-      latest_snapshot_id: null,
-      published_snapshot_id: null,
-      publication_count: 0,
-      document_count: 0,
-      ready_document_count: 0,
+  it('prepares and commits a Source publication without Agent activation', async () => {
+    const operation = {
+      operation_id: 'op-prepare',
+      source_id: 'ks_hybrid',
+      command: 'prepare_publication',
+      status: 'queued' as const,
+      stage: 'queued',
+      source_revision: 7,
+      poll_after_ms: 1,
+      progress: null,
+      outcome_code: null,
+      outcome_detail: null,
+      created_at: '2026-07-27T00:02:00Z',
+      updated_at: '2026-07-27T00:02:00Z',
+      completed_at: null,
+    }
+    const prepared = {
+      validation_id: 'validation-1',
+      state: 'prepared' as const,
+      source_revision: 7,
+      fencing_token: 3,
+      source_draft_version_id: 'draft-7',
+      generation_id: 'generation-1',
+      safe_reason: null,
+      created_at: '2026-07-27T00:03:00Z',
+      updated_at: '2026-07-27T00:03:00Z',
+    }
+    const publication = {
+      publication_id: 'publication-1',
+      source_publication_seq: 1,
+      source_draft_version_id: 'draft-7',
+      source_snapshot_id: 'snapshot-1',
+      generation_id: 'generation-1',
+      validation_id: 'validation-1',
+      published_at: '2026-07-27T00:04:00Z',
+      published_by: 'operator-1',
+    }
+    vi.mocked(fetchKnowledgePublicationValidationsPage)
+      .mockResolvedValueOnce(page([]))
+      .mockResolvedValueOnce(page([prepared]))
+      .mockResolvedValueOnce(page([{ ...prepared, state: 'consumed' }]))
+    vi.mocked(fetchKnowledgePublicationsPage)
+      .mockResolvedValueOnce(page([]))
+      .mockResolvedValueOnce(page([publication]))
+    vi.mocked(prepareKnowledgePublication).mockResolvedValue(operation)
+    vi.mocked(commitKnowledgePublication).mockResolvedValue({
+      ...operation,
+      operation_id: 'op-publish',
+      command: 'publish',
     })
-    vi.mocked(fetchKnowledgeDocuments).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchKnowledgeSourceDeletionEligibility).mockResolvedValue({
-      source_id: 'ks_local_index',
-      eligible: true,
-      lifecycle_state: 'ARCHIVED',
-      reference_summary: {
-        source_id: 'ks_local_index',
-        draft_agent_binding_count: 0,
-        published_agent_version_count: 0,
-        publication_count: 0,
-        snapshot_count: 0,
-        document_count: 0,
-        quarantined_upload_count: 0,
-        ingestion_job_count: 0,
-        audit_retention_blocked: false,
-      },
-      blockers: [],
-    })
-
+    vi.mocked(pollKnowledgeSourceOperation).mockImplementation(async ({ operationId }) => ({
+      ...operation,
+      operation_id: operationId,
+      status: 'succeeded',
+      completed_at: '2026-07-27T00:04:00Z',
+    }))
     renderPage()
 
-    expect(await screen.findByText('Archived Policies')).toBeInTheDocument()
-    const deleteButton = screen.getByRole('button', { name: 'Permanently Delete' })
-    expect(deleteButton).toBeDisabled()
-
-    fireEvent.change(screen.getByLabelText('Permanent Delete Reason'), {
-      target: { value: 'Empty archived fixture' },
+    fireEvent.click(await screen.findByRole('tab', { name: 'Versions & Publish' }))
+    fireEvent.change(await screen.findByLabelText('Smoke query'), {
+      target: { value: 'What is covered?' },
     })
-    expect(deleteButton).toBeEnabled()
-    fireEvent.click(deleteButton)
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare publication' }))
+
+    expect(await screen.findByText('Prepared authority')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Change note'), {
+      target: { value: 'Publish reviewed candidate.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Publish Source' }))
 
     await waitFor(() => {
-      expect(permanentlyDeleteKnowledgeSource).toHaveBeenCalledWith('ks_local_index', {
-        reason: 'Empty archived fixture',
-      })
+      expect(prepareKnowledgePublication).toHaveBeenCalledWith(
+        'ks_hybrid',
+        { smoke_query: 'What is covered?', expected_revision: 7 },
+        'dashboard-test-idempotency-key',
+      )
+      expect(commitKnowledgePublication).toHaveBeenCalledWith(
+        'ks_hybrid',
+        {
+          validation_id: 'validation-1',
+          expected_fencing_token: 3,
+          change_note: 'Publish reviewed candidate.',
+          expected_revision: 7,
+        },
+        'dashboard-test-idempotency-key',
+      )
     })
+    expect(await screen.findByText('publication-1')).toBeInTheDocument()
+    expect(screen.getByText(/Agent versions remain unchanged/)).toBeInTheDocument()
   })
 })

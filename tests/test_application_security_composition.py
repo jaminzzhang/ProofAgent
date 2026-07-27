@@ -67,6 +67,16 @@ def _production_app(tmp_path: Path):
         production_hybrid_publication_api=object(),
         production_hybrid_artifact_store=object(),
         production_configuration_uow_factory=object(),
+        knowledge_source_configuration_application=object(),
+        knowledge_source_ingestion_application=object(),
+        knowledge_source_operations_application=object(),
+        knowledge_source_publication_preparation_application=object(),
+        knowledge_source_publication_application=object(),
+        knowledge_source_workspace_application=object(),
+        release_registry_repository=object(),
+        release_bundle_materializer=object(),
+        release_bundle_attestation_verifier=object(),
+        release_bundle_audit_repository=object(),
         history_dir=tmp_path / "history",
         runs_dir=tmp_path / "latest",
         conversations_dir=tmp_path / "conversations",
@@ -103,6 +113,29 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
     assert any(
         route.path == "/api/config/model-connections"
         and "POST" in (route.methods or set())
+        for route in application.routes
+    )
+    assert (
+        sum(
+            route.path == "/api/config/knowledge-sources"
+            and "GET" in (route.methods or set())
+            for route in application.routes
+        )
+        == 1
+    )
+    assert any(
+        route.path
+        == "/api/config/knowledge-sources/{source_id}/publication-validations"
+        and "POST" in (route.methods or set())
+        for route in application.routes
+    )
+    assert not any(
+        route.path
+        in {
+            "/api/config/knowledge-sources/{source_id}/documents/batch",
+            "/api/config/knowledge-sources/{source_id}/publication/validate",
+            "/api/config/knowledge-sources/{source_id}/publication/publish",
+        }
         for route in application.routes
     )
     assert not any(route.path == "/api/agents/import" for route in application.routes)

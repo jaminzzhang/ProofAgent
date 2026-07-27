@@ -976,6 +976,73 @@ def hybrid_migrate(
     typer.echo(f"Schema SHA-256: {result.sha256}")
 
 
+@knowledge_app.command("migrate-development-hub")
+def migrate_development_knowledge_hub_command(
+    source_dir: Path = typer.Option(
+        ...,
+        "--source-dir",
+        help="Read-only file-backed Development Knowledge Hub root.",
+    ),
+    backup_dir: Path = typer.Option(
+        ...,
+        "--backup-dir",
+        help="Exact, independently created backup of --source-dir.",
+    ),
+    manifest: Path = typer.Option(
+        ...,
+        "--manifest",
+        help="Output .json manifest; a sibling .txt operator report is also written.",
+    ),
+    actor: str = typer.Option(
+        ...,
+        "--actor",
+        help="Audited operator subject performing the one-shot migration.",
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Mutate the target. Omit for dry-run.",
+    ),
+) -> None:
+    """Migrate the retired Development Knowledge Hub without runtime dual-read."""
+
+    from proof_agent.configuration.development_knowledge_hub_migration import (
+        compose_development_knowledge_hub_migration_target,
+        migrate_development_knowledge_hub,
+        write_development_knowledge_hub_migration_manifest,
+    )
+    from proof_agent.contracts import AuditActorFacts, Permission
+
+    try:
+        target = compose_development_knowledge_hub_migration_target(os.environ)
+        try:
+            result = migrate_development_knowledge_hub(
+                source_root=source_dir,
+                backup_root=backup_dir,
+                target=target,
+                actor=AuditActorFacts(
+                    subject=actor,
+                    identity_provider="migration-cli",
+                    session_id="development-knowledge-hub-one-shot",
+                    permissions=(Permission.KNOWLEDGE_SOURCE_EDIT.value,),
+                ),
+                dry_run=not apply,
+            )
+            json_path, text_path = (
+                write_development_knowledge_hub_migration_manifest(result, manifest)
+            )
+        finally:
+            target.close()
+    except Exception as exc:
+        typer.echo(f"Development Knowledge Hub migration failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Migration status: {result.status}")
+    typer.echo(f"Machine manifest: {json_path}")
+    typer.echo(f"Operator report: {text_path}")
+    if result.status in {"failed", "partial_failure"}:
+        raise typer.Exit(code=1)
+
+
 @app.command("hybrid-seal-release-evidence")
 def hybrid_seal_release_evidence(
     shadow: str = typer.Option(..., "--shadow"),
@@ -1905,7 +1972,7 @@ def _run_production_knowledge_worker(
             while not stop_requested:
                 time.sleep(min(poll_interval_seconds, 1.0))
             return
-        typer.echo("production Hybrid knowledge worker started")
+        typer.echo("production knowledge worker started")
         while not stop_requested:
             if role_controller is not None and not role_controller.can_claim():
                 time.sleep(min(poll_interval_seconds, 1.0))
@@ -1915,7 +1982,7 @@ def _run_production_knowledge_worker(
                 time.sleep(min(poll_interval_seconds, 60.0))
             else:
                 typer.echo(json.dumps(outcome.model_dump(mode="json"), sort_keys=True))
-        typer.echo("production Hybrid knowledge worker stopped")
+        typer.echo("production knowledge worker stopped")
     finally:
         if health_server is not None:
             health_server.close()

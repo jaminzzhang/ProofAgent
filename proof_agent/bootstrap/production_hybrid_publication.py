@@ -18,6 +18,7 @@ from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactSto
 from proof_agent.capabilities.knowledge.hybrid.publication import (
     HybridPublicationRequest,
     HybridPublicationValidationAuthority,
+    PublicationCommit,
     ProjectionSeed,
     PublicationConflict,
     hybrid_candidate_material_fingerprint,
@@ -73,6 +74,8 @@ class HybridPublicationFacadeRepository(Protocol):
 
 
 class HybridPublicationApplicationService(Protocol):
+    def prepare(self, request: HybridPublicationRequest) -> PublicationCommit: ...
+
     def publish(self, request: HybridPublicationRequest) -> HybridKnowledgePublicationRecord: ...
 
 
@@ -128,6 +131,48 @@ class ProductionHybridKnowledgePublicationFacade:
         )
         self._repository.register_validation(validation)
         return validation
+
+    def prepare(
+        self,
+        *,
+        source_id: str,
+        validation_id: str,
+        smoke_query: str,
+        actor: str,
+    ) -> PublicationCommit:
+        """Assemble, validate, and stage one publication without committing authority."""
+
+        _require_nonblank(smoke_query, "smoke_query")
+        request = self._assembler.build(
+            source_id=_require_nonblank(source_id, "source_id"),
+            validation_id=_require_nonblank(validation_id, "validation_id"),
+            actor=_require_nonblank(actor, "actor"),
+            smoke_query=smoke_query,
+        )
+        self._repository.stage_source_candidate(
+            source_id=request.source_id,
+            source_draft_version_id=request.source_draft_version_id,
+            candidate_digest=request.candidate_digest,
+            generation=request.generation,
+        )
+        self._repository.publish_retrieval_profile(
+            source_id=request.source_id,
+            profile=self._retrieval_profile,
+            make_default=True,
+        )
+        self._repository.register_validation(
+            HybridPublicationValidationAuthority(
+                validation_id=validation_id,
+                source_id=request.source_id,
+                source_draft_version_id=request.source_draft_version_id,
+                candidate_digest=request.candidate_digest,
+                generation_id=request.generation.generation_id,
+                validated_at=self._clock(),
+                validated_by=actor,
+                smoke_query=smoke_query,
+            )
+        )
+        return self._publication_service.prepare(request)
 
     def publish(
         self,
@@ -208,7 +253,7 @@ class PostgresHybridPublicationConfigurationStore:
     def list_knowledge_documents(self, source_id: str) -> Sequence[KnowledgeDocument]:
         return tuple(
             _knowledge_document_from_ingestion_record(record)
-            for record in self._ingestion.list_records_for_source(source_id)
+            for record in self._ingestion.list_candidate_records_for_source(source_id)
         )
 
     def get_completed_hybrid_artifact_build_result(

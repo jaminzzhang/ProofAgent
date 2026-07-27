@@ -20,6 +20,7 @@ EXPECTED_PERMISSIONS = {
     "agent.publish",
     "knowledge_source.view",
     "knowledge_source.edit",
+    "knowledge_source.review",
     "knowledge_source.publish",
     "knowledge_source.archive",
     "model_connection.view",

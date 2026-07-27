@@ -29,6 +29,12 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0010_hybrid_knowledge_workflow",
         "0011_worker_role_leases",
         "0012_model_credential",
+        "0013_release_registry",
+        "0014_knowledge_source_v1",
+        "0015_hybrid_candidates",
+        "0016_hybrid_attempt_lifecycle",
+        "0017_metadata_import_jobs",
+        "0018_publication_preparation",
     }
 )
 

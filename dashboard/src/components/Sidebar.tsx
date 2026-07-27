@@ -4,6 +4,7 @@ import {
   BookOpen,
   Cpu,
   LayoutDashboard,
+  PackageCheck,
   Settings,
   ShieldCheck,
   Wrench,
@@ -23,6 +24,7 @@ interface NavEntry {
 const MONITORING_ITEMS: NavEntry[] = [
   { to: '/', labelKey: 'nav.overview', icon: LayoutDashboard },
   { to: '/runs', labelKey: 'nav.runs', icon: Activity },
+  { to: '/releases', labelKey: 'nav.releases', icon: PackageCheck },
 ]
 
 const CONFIGURATION_ITEMS: NavEntry[] = [

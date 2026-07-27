@@ -572,7 +572,6 @@ def test_artifact_store_construction_fails_closed_without_posix_locking(
 @pytest.mark.parametrize(
     "updates",
     [
-        {"state": "READY", "fencing_token": 1},
         {"state": "LEASED", "fencing_token": 0},
         {"state": "COMPLETED", "fencing_token": 1},
         {
@@ -605,6 +604,18 @@ def test_job_contract_rejects_invalid_lifecycle_combinations(
     }
     with pytest.raises(ValidationError):
         HybridKnowledgeJob.model_validate({**values, **updates})
+
+
+def test_job_contract_retains_monotonic_fence_when_manual_retry_returns_ready() -> None:
+    retried = HybridKnowledgeJob(
+        request=job("job_1"),
+        state="READY",
+        created_at=NOW,
+        updated_at=NOW,
+        fencing_token=3,
+    )
+
+    assert retried.fencing_token == 3
 
 
 def test_claim_contract_rejects_mismatched_identity_and_incoherent_times() -> None:

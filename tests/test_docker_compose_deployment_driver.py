@@ -89,7 +89,7 @@ def _write_env(
             (
                 "PROOF_AGENT_MODE=production",
                 f"PROOF_AGENT_RELEASE_ID={release_id}",
-                "PROOF_AGENT_RELEASE_SCHEMA=0012_model_credential",
+                "PROOF_AGENT_RELEASE_SCHEMA=0013_release_registry",
                 f"PROOF_AGENT_IMAGE_DIGEST={image_digest}",
                 f"PROOF_AGENT_DEPLOYMENT_SLOT={slot.value}",
                 f"PROOF_AGENT_ACTIVATION_STATE={activation}",
@@ -112,7 +112,7 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
         dcm,
     )
     migration_set = tmp_path / "migration-set.json"
-    migration_set.write_bytes(b'{"head":"0012_model_credential"}\n')
+    migration_set.write_bytes(b'{"head":"0013_release_registry"}\n')
     vault_compatibility = tmp_path / "vault-compatibility.json"
     vault_compatibility.write_text("{}\n", encoding="utf-8")
     active_include = tmp_path / "active-upstreams.conf"
@@ -218,7 +218,7 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
             "project_name": "proofagent-blue",
             "release_id": "release-old",
             "image_reference": OLD_IMAGE,
-            "schema_revision": "0012_model_credential",
+            "schema_revision": "0013_release_registry",
             "active_environment_file": str(old_active),
             "standby_environment_file": str(old_standby),
             "run_executor_owner_id": "executor-blue",
@@ -230,7 +230,7 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
             "project_name": "proofagent-green",
             "release_id": "release-candidate",
             "image_reference": CANDIDATE_IMAGE,
-            "schema_revision": "0012_model_credential",
+            "schema_revision": "0013_release_registry",
             "active_environment_file": str(candidate_active),
             "standby_environment_file": str(candidate_standby),
             "run_executor_owner_id": "executor-green",
@@ -250,7 +250,7 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
             image_reference=CANDIDATE_IMAGE,
             deployment_compatibility_manifest_sha256=dcm_digest,
             migration_set_sha256=sha256_hex(migration_set.read_bytes()),
-            schema_revision="0012_model_credential",
+            schema_revision="0013_release_registry",
         ),
         old_slot=DeploymentSlot.BLUE,
         candidate_slot=DeploymentSlot.GREEN,

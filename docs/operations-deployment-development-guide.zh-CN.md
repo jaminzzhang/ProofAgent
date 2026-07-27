@@ -1,6 +1,6 @@
 # Proof Agent 新手运维、部署与开发指导书
 
-更新日期：2026-07-25
+更新日期：2026-07-27
 
 适用对象：第一次接触本仓库的开发人员、测试人员、平台运维人员和 Agent 负责人。
 
@@ -82,7 +82,26 @@ flowchart LR
 
 [KNOWN | HIGH] `deploy/production/` 现在包含生产镜像定义、稳定 Gateway、Blue/Green 槽位 Compose 和控制器/驱动示例；`proof_agent/deployment/` 包含纯状态机与原子 include 切换，`scripts/deployment/blue_green.py` 包含外部 Docker/nginx 命令边界，`scripts/deployment/compose_driver.py` 提供内置 `docker-compose-v1` 驱动。当前仍没有真实候选镜像、真实环境演练与 Gate 证据。根目录 `Dockerfile`、`docker-compose.yml` 仍只用于开发；`docker-compose.hybrid-test.yml` 使用测试凭据且关闭 OpenSearch 安全插件。三者都不能用于生产。
 
-### 2.3 目录职责
+### 2.3 Knowledge Source 配置目标
+
+[FRAME | HIGH] 已接受的目标不是让 Dashboard 直接配置 PostgreSQL、S3、OpenSearch 或私有模型端点，而是让 Dashboard 只调用统一 Knowledge Source API；该 API 通过 Configuration、Ingestion、Publication、Operations 四个应用服务协调权威与投影。详细设计见 `docs/superpowers/specs/2026-07-27-dashboard-hybrid-knowledge-source-unified-api-design.md`，实施顺序见 `docs/superpowers/plans/2026-07-27-dashboard-hybrid-knowledge-source-unified-api.md`。
+
+```mermaid
+flowchart TB
+    Dashboard["Dashboard / Knowledge Source API"] --> App["统一 Knowledge application boundary"]
+    App --> PG["PostgreSQL authority"]
+    App --> S3["S3-compatible artifact authority"]
+    App --> OS["OpenSearch derived projection"]
+    Worker["Knowledge Worker"] --> App
+    Worker --> Plane["Private Knowledge Model Serving Plane"]
+    Plane --> Services["Scheduler + Docling + PaddleOCR + Embedding + Reranker"]
+```
+
+[FRAME | HIGH] 这里不再使用含义模糊的 “Hybrid private services”。**Private Knowledge Model Serving Plane** 只包含调度器与 Docling、PaddleOCR、Embedding、Reranker；它不包含 PostgreSQL、S3、OpenSearch、Knowledge Worker、Run Executor、OIDC、Secret Provider、Egress Policy 或 Agent answer/planner/reviewer LLM。
+
+[KNOWN | HIGH] Dashboard 的 Hybrid 管理边界已收敛到显式 Source publication，并只提示 Agent binding upgrade opportunity；Phase F 证据、Agent publication 和 Active Agent Version 切换仍属于生产发布流程。该边界已有本地实现与 disposable 数据面测试，但没有候选绑定的生产部署证据，不能据此标记生产就绪。
+
+### 2.4 目录职责
 
 | 路径 | 主要职责 | 新手常见改动 |
 | --- | --- | --- |
@@ -349,6 +368,15 @@ uv sync \
 docker compose -f docker-compose.hybrid-test.yml up -d --wait
 ```
 
+只运行应用 PostgreSQL 集成测试时，在 Git 忽略的 `.env.test.local` 中保存本机测试配置：
+
+```dotenv
+PROOF_AGENT_TEST_POSTGRES_DSN=postgresql+psycopg://proof:proof-test-only@127.0.0.1:55432/proof
+PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1
+```
+
+`PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1` 会让缺失或不可用的 DSN 直接导致测试失败，避免测试被静默跳过。该地址和凭据只对应 `docker-compose.hybrid-test.yml` 中绑定 loopback 的一次性数据库，不能用于共享或生产环境。
+
 按照 `docs/deployment/hybrid-knowledge-closed-loop.md` 第 1 节配置本地测试 DSN、S3 和 OpenSearch 环境变量，然后执行：
 
 ```bash
@@ -362,8 +390,9 @@ uv run proof-agent database check
 运行一次性集成测试：
 
 ```bash
+uv run --env-file .env.test.local --extra dev --extra production \
+  pytest -m 'postgres_integration and not hybrid_integration' tests -q
 uv run pytest -m hybrid_integration tests/integration -q
-uv run pytest -m postgres_integration tests -q
 ```
 
 这些测试还需要文档部署指南中列出的 `HYBRID_TEST_*`、`PROOF_AGENT_TEST_*` 和 AWS 测试变量。
@@ -393,7 +422,42 @@ flowchart LR
     PhaseF --> Agent["Published Agent Version"]
 ```
 
-[KNOWN | HIGH] Source 发布在提交 PostgreSQL 当前指针前完成候选防漂移、fencing、精确 S3 manifest、真实 embedding、OpenSearch 写后读、受治理 smoke retrieval 和投影 attestation。任一步失败都会失败关闭。完整 API 与 Phase F 命令见 `docs/deployment/hybrid-knowledge-closed-loop.md`。
+[KNOWN | HIGH] `/api/config/knowledge-sources` 是 Development 与 Production 的唯一 V1 资源根。PDF 与工作簿只通过 multipart admission 进入 durable operation；Dashboard 不发送 Base64、不持有 S3 authority，也不配置 Private Knowledge Model Serving Plane。未注入统一 application services 的 Development API 会返回安全 503，而不会退回文件型 Knowledge Hub。
+
+[KNOWN | HIGH] 异步 publication preparation 在 authority commit 前完成候选防漂移、fencing、精确 S3 manifest、真实 embedding、OpenSearch 写后读、受治理 smoke retrieval 和投影 attestation。最终 Source publish 只执行幂等性、权限、新鲜度和短 PostgreSQL CAS，不调用私有模型、S3 或 OpenSearch。任一步失败都会失败关闭。完整 multipart/API 与 Phase F 命令见 `docs/deployment/hybrid-knowledge-closed-loop.md`。
+
+### 6.3 一次性迁移旧 Development Knowledge Hub
+
+[KNOWN | HIGH] 旧文件型 Development Knowledge Hub 只能通过显式一次性命令迁移；应用启动不会自动迁移，也不存在运行时双读、fallback 或兼容适配器。一次性 disposable 环境应直接初始化新的 PostgreSQL、S3-compatible 和 OpenSearch 依赖，无需迁移。
+
+先使用组织认可的备份工具，为旧 `runs/config` 创建位于不同且非嵌套目录的精确备份。迁移器会对源目录和备份目录的相对路径、文件大小和内容 SHA-256 做完整比对；不一致、符号链接或缺失原件都会在写入目标前失败。
+
+先执行 dry-run：
+
+```bash
+uv run proof-agent knowledge migrate-development-hub \
+  --source-dir /srv/proof-agent/runs/config \
+  --backup-dir /srv/proof-agent/backups/config-before-knowledge-v1 \
+  --manifest /srv/proof-agent/migration/knowledge-hub-dry-run.json \
+  --actor operator-subject
+```
+
+检查同目录生成的 `.json` 机器清单和 `.txt` 操作员报告。所有 Source 都必须明确为 `planned` 或可接受的 `skipped`；`source_id_conflict` 不会覆盖 PostgreSQL authority，必须先由操作员解决。确认目标环境已配置同一 PostgreSQL authority、启用版本控制的 S3 bucket，以及与 Knowledge Worker 一致的 parser revision、model digests 和 parser configuration SHA-256 后，再显式应用：
+
+```bash
+uv run proof-agent knowledge migrate-development-hub \
+  --source-dir /srv/proof-agent/runs/config \
+  --backup-dir /srv/proof-agent/backups/config-before-knowledge-v1 \
+  --manifest /srv/proof-agent/migration/knowledge-hub-applied.json \
+  --actor operator-subject \
+  --apply
+```
+
+[KNOWN | HIGH] `local_index` 只迁移经过文件身份校验的 PDF 原件和已验证路由元数据；原件通过统一 multipart/V1 intake 重新入队，旧缓存索引和 `artifact_path` 从不导入。`http_json` 只复制非秘密配置与 `*_env`/引用字段，并保持 unpublished、verification-required；部署必须先提供相应 adapter capability，再做 fresh verification 和 Source publication。静态 Authorization/API Key、Bearer 值、URL userinfo、私钥和类似凭据会按 item 拒绝，且不会写入迁移清单。
+
+[KNOWN | HIGH] 包内 Markdown 继续属于 Agent Package，不进入共享 Knowledge Hub。`hybrid_index` 等生产 authority 也不经过这个迁移器；它们只使用 expand-only PostgreSQL schema migration。若应用结果为 `partial_failure`，已经入队的 item 不会回滚；先核对 PostgreSQL/S3 审计和 operation，再处理失败项，禁止启动旧/新 authority 双读来掩盖失败。
+
+[COMPUTED | HIGH] 2026-07-27 的仓库验证使用全新 disposable PostgreSQL/S3/OpenSearch authority，因此没有旧 Development Knowledge Hub 可迁移，实际 operator dry-run 按适用范围明确跳过；迁移器的 backup-tree 校验、dry-run 零目标写入、Source ID 冲突、缺失原件、静态秘密拒绝、逐项失败与 JSON/TXT manifest 行为由 7 个 focused tests 覆盖。真实存量环境仍必须按上面的 backup + dry-run + 人工清单确认流程执行，不能把 disposable skip 当成生产迁移证据。
 
 ## 7. 类生产角色如何启动
 
@@ -403,7 +467,7 @@ flowchart LR
 
 ```bash
 export PROOF_AGENT_MODE=production
-export PROOF_AGENT_RELEASE_SCHEMA=0012_model_credential
+export PROOF_AGENT_RELEASE_SCHEMA=0018_publication_preparation
 uv run proof-agent database upgrade \
   --locked \
   --expand-only \
@@ -458,6 +522,7 @@ curl -fsS http://127.0.0.1:8002/readyz
 | Hybrid 模型 | `PA_KNOWLEDGE_*`、`HYBRID_EMBEDDING_*` | 模型平台 |
 | OpenSearch | `HYBRID_OPENSEARCH_*` | 搜索平台 |
 | Phase F | `PA_KNOWLEDGE_*DRIVER`、evaluator/verifier | 评估与发布负责人 |
+| Release Bundle | `PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR`、`PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON` | 发布与安全负责人 |
 
 配置只应保存 Secret Handle、变量名或无凭据 origin；真实 Secret 留在 Vault、workload identity 或部署 Secret 注入机制内。
 
@@ -481,7 +546,7 @@ uv run proof-agent deployment validate-compatibility \
 - Worker 租约丢失、heartbeat 失败和 `/readyz` 503 的告警与日志投递；
 - 审查内置 `docker-compose-v1` 驱动，并在一次性真实依赖环境完成 standby、N/N-1、admission pause、drain、稳定源 smoke、30 分钟 soak 与两类回滚演练；
 - PostgreSQL PITR 与精确版本 S3 联合恢复演练；
-- Release Registry、证据下载和运维 Runbook；
+- 用真实候选完成 Release Registry 定稿、认证下载与审计 Evidence，并补齐运维 Runbook；
 - 同一候选绑定的 13 个 Gate 全部 `passed`。
 
 13 个正式 Gate 为：
@@ -515,6 +580,27 @@ uv run proof-agent release verify \
 
 [KNOWN | HIGH] nginx 原子切换和 `docker-compose-v1` 驱动已在本地 fake 命令边界验证：驱动覆盖双镜像/环境绑定、Compose 生命周期、双队列计数、原子 admission pause、同 epoch 排空恢复、认证稳定源 smoke、固定 soak 与回滚 fencing。实际 Gateway 候选 include 仍会先执行容器内 `nginx -t`，再原子替换、reload，并从五个入口核对相同 generation；混代会恢复旧 include。当前不可直接上线的剩余点是没有运行中 Docker/nginx、真实 OIDC cookie、真实候选镜像和一次性完整依赖环境的演练证据，不能把“驱动代码存在”解释为“已经可发布”。
 
+### 8.1 Release Registry 与精确下载
+
+[KNOWN | HIGH] schema `0013_release_registry` 提供 `PREPARING → FINALIZED` 单向状态机。`PREPARING` 只绑定候选摘要和精确 Release Gate Manifest，不能下载；一次条件事务会写入精确 Bundle Index、分离 attestation、信任身份和定稿时间。重复定稿，或 candidate、Manifest、owner、Index、attestation 任一不匹配都会失败关闭。
+
+API 容器必须配置 tmpfs 内的只读校验缓存和部署拥有的 Ed25519 公钥映射：
+
+```dotenv
+PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR=/var/lib/proofagent/release-bundle-cache
+PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON={"release-key-2026-07":"BASE64_OF_32_RAW_PUBLIC_KEY_BYTES"}
+```
+
+使用拥有 `audit.export` 权限的 OIDC 会话访问 Dashboard `/releases`。下载固定为：
+
+```text
+GET /api/releases/{release_id}/bundle/{artifact_name}
+```
+
+[KNOWN | HIGH] 服务先从 PostgreSQL 解析精确 S3 object version，完整物化并校验 Bundle Index 和分离 attestation，再由已验证 Index 授权 Manifest、HTML、Closure Audit、Evidence、SBOM 或 Provenance 的精确成员。响应来自只读缓存，支持单段 byte range，并带 attachment、`private, no-store` 和 `nosniff`；每次允许、拒绝或失败都会留下 operator/release/object/outcome 审计元数据。它不会读取仓库 `reports/`，HTML 也不是 GO/NO-GO authority。
+
+[KNOWN | HIGH] 当前只完成代码与本地测试前置条件，没有真实候选 Registry 行、S3 Bundle 或下载 Gate Evidence。不得手工伪造 `FINALIZED`，实际定稿只能在 S7B 得到同一候选 `GO` 后由已冻结的 S8B 工具执行。
+
 ## 9. 运维巡检与故障排查
 
 ### 9.1 建议巡检表
@@ -543,7 +629,7 @@ uv run proof-agent release verify \
 
 #### `/readyz` 返回 503
 
-[KNOWN | HIGH] 当前响应会把失败归类到 `artifact_store`、`hybrid_artifact_store`、`egress_policy`、`postgresql`、`published_agent`、`run_queue` 或 `secret_provider`。
+[KNOWN | HIGH] 当前响应会把失败归类到 `artifact_store`、`hybrid_artifact_store`、`egress_policy`、`postgresql`、`published_agent`、`release_registry`、`run_queue` 或 `secret_provider`。
 
 - `postgresql`：检查网络、凭据和 `database check`；
 - `artifact_store`：检查 bucket、endpoint、版本能力和工作负载身份；
@@ -551,6 +637,7 @@ uv run proof-agent release verify \
 - `egress_policy`：确认 active policy 已由受控 bootstrap 激活；
 - `published_agent`：确认只有目标 Agent 处于 active 且其 Secret Handle 可解析；
 - `run_queue`：检查队列表和数据库事务；
+- `release_registry`：检查 `0013_release_registry`、Registry 查询和 PostgreSQL 权限；
 - `secret_provider`：检查 Vault Agent token、handle locator 与 CSRF key。
 
 不要把 readiness 改成固定 200 来掩盖依赖故障。

@@ -383,6 +383,8 @@ class FakeLifecycle:
         self.integrity_failure: tuple[str, str] | None = None
         self.exhausted_failure: tuple[str, str] | None = None
         self.stale = False
+        self.cancel_requested = False
+        self.cancel_acknowledged = False
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
         assert worker_id == "worker_1"
@@ -402,6 +404,16 @@ class FakeLifecycle:
         return claim.model_copy(
             update={"lease_expires_at": claim.lease_expires_at + timedelta(seconds=lease_seconds)}
         )
+
+    def cancellation_requested(self, claim: HybridKnowledgeJobClaim) -> bool:
+        assert claim.job_id == self.claim.job_id
+        assert claim.fencing_token == self.claim.fencing_token
+        return self.cancel_requested
+
+    def acknowledge_cancellation(self, claim: HybridKnowledgeJobClaim) -> None:
+        assert claim.job_id == self.claim.job_id
+        assert claim.fencing_token == self.claim.fencing_token
+        self.cancel_acknowledged = True
 
     def commit_artifact_build(
         self, claim: HybridKnowledgeJobClaim, result: HybridArtifactBuildResult
@@ -473,6 +485,22 @@ def test_hybrid_worker_persists_and_commits_exact_build_artifacts(tmp_path) -> N
     assert result.preview_ref.media_type == "text/markdown"
     assert result.build_identity_ref.media_type == "application/json"
     assert result.insurance_metadata_ref.media_type == "application/json"
+
+
+def test_hybrid_worker_acknowledges_fenced_cancellation_before_provider_call(
+    tmp_path,
+) -> None:
+    worker, lifecycle, pipeline = _worker(tmp_path)
+    lifecycle.cancel_requested = True
+
+    outcome = worker.run_once()
+
+    assert outcome is not None
+    assert outcome.state == "cancelled"
+    assert outcome.error_code == "PA_HYBRID_CANCELLED"
+    assert lifecycle.cancel_acknowledged is True
+    assert lifecycle.committed is None
+    assert pipeline.calls == 0
 
 
 @pytest.mark.parametrize(

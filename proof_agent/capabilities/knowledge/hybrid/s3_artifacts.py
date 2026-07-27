@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
-from typing import Any
+import tempfile
+from typing import Any, BinaryIO
 from urllib.parse import quote, unquote, urlsplit
 
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
@@ -180,6 +181,112 @@ class S3ExactArtifactStore:
             raise S3ArtifactError("written artifact failed exact read-back verification")
         return ref
 
+    def put_immutable_stream(
+        self,
+        *,
+        key: str,
+        content: BinaryIO,
+        media_type: str,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> ExactArtifactRef:
+        """Upload exact content through a bounded spool and streaming S3 body."""
+
+        manifest_match = _MANIFEST_KEY.fullmatch(key)
+        release_evidence_match = _RELEASE_EVIDENCE_KEY.fullmatch(key)
+        if not _valid_system_key(key):
+            raise S3ArtifactError("artifact key is not a system-generated artifact key")
+        if not media_type or len(media_type) > 255:
+            raise S3ArtifactError("artifact media type is invalid")
+        if (
+            expected_size_bytes < 1
+            or len(expected_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected_sha256)
+        ):
+            raise S3ArtifactError("streaming artifact identity is invalid")
+        addressed_digest = (
+            manifest_match.group("digest")
+            if manifest_match is not None
+            else (
+                release_evidence_match.group("digest")
+                if release_evidence_match is not None
+                else None
+            )
+        )
+        if addressed_digest is not None and addressed_digest != expected_sha256:
+            raise S3ArtifactError("artifact key does not match exact content digest")
+
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as spool:
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = content.read(1024 * 1024)
+                if not isinstance(chunk, bytes):
+                    raise S3ArtifactError("streaming artifact body returned invalid bytes")
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > expected_size_bytes:
+                    raise S3ArtifactError("streaming artifact body exceeds expected length")
+                digest.update(chunk)
+                spool.write(chunk)
+            if total != expected_size_bytes:
+                raise S3ArtifactError("streaming artifact body length does not match")
+            if digest.hexdigest() != expected_sha256:
+                raise S3ArtifactError("streaming artifact body digest does not match")
+            spool.seek(0)
+            physical_key = self._physical_key(key)
+            existing = self._head_current(physical_key)
+            if existing is not None:
+                ref = self._ref_from_head(
+                    physical_key,
+                    existing,
+                    expected_media_type=media_type,
+                )
+                if ref.sha256 != expected_sha256 or ref.size_bytes != expected_size_bytes:
+                    raise S3ArtifactError(
+                        "immutable artifact key already contains different content"
+                    )
+                self._verify_exact_stream(ref)
+                return ref
+            try:
+                response = self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=physical_key,
+                    Body=spool,
+                    ContentLength=expected_size_bytes,
+                    ContentType=media_type,
+                    Metadata={"proofagent-sha256": expected_sha256},
+                    IfNoneMatch="*",
+                )
+            except Exception as exc:
+                existing = self._head_current(physical_key)
+                if existing is None:
+                    raise S3ArtifactError("immutable artifact streaming write failed") from exc
+                ref = self._ref_from_head(
+                    physical_key,
+                    existing,
+                    expected_media_type=media_type,
+                )
+                if ref.sha256 != expected_sha256 or ref.size_bytes != expected_size_bytes:
+                    raise S3ArtifactError("immutable artifact streaming conflict") from exc
+                self._verify_exact_stream(ref)
+                return ref
+            version_id = response.get("VersionId")
+            if type(version_id) is not str or not version_id:
+                raise S3ArtifactError(
+                    "versioned S3 streaming write did not return an opaque VersionId"
+                )
+            ref = ExactArtifactRef(
+                artifact_uri=self._uri(physical_key),
+                version_id=version_id,
+                sha256=expected_sha256,
+                size_bytes=expected_size_bytes,
+                media_type=media_type,
+            )
+            self._verify_exact_stream(ref)
+            return ref
+
     def get_exact(self, ref: ExactArtifactRef) -> bytes:
         key = self._key_from_ref(ref)
         try:
@@ -205,6 +312,52 @@ class S3ExactArtifactStore:
         if hashlib.sha256(body).hexdigest() != ref.sha256:
             raise S3ArtifactError("exact artifact bytes are corrupt")
         return body
+
+    def _verify_exact_stream(self, ref: ExactArtifactRef) -> None:
+        key = self._key_from_ref(ref)
+        body: Any | None = None
+        try:
+            response = self._client.get_object(
+                Bucket=self._bucket,
+                Key=key,
+                VersionId=ref.version_id,
+            )
+            body = response["Body"]
+            if response.get("ContentLength") != ref.size_bytes:
+                raise S3ArtifactError("exact artifact metadata length does not match")
+            if response.get("ContentType") != ref.media_type:
+                raise S3ArtifactError("exact artifact media type does not match")
+            if response.get("VersionId") != ref.version_id:
+                raise S3ArtifactError("exact artifact VersionId does not match")
+            metadata = response.get("Metadata")
+            if not isinstance(metadata, dict) or metadata.get(
+                "proofagent-sha256"
+            ) != ref.sha256:
+                raise S3ArtifactError("exact artifact digest metadata does not match")
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not isinstance(chunk, bytes):
+                    raise S3ArtifactError("exact artifact stream returned invalid bytes")
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > ref.size_bytes:
+                    raise S3ArtifactError("exact artifact stream exceeds authority length")
+                digest.update(chunk)
+            if total != ref.size_bytes:
+                raise S3ArtifactError("exact artifact stream length does not match")
+            if digest.hexdigest() != ref.sha256:
+                raise S3ArtifactError("exact artifact stream digest does not match")
+        except S3ArtifactError:
+            raise
+        except Exception as exc:
+            raise S3ArtifactError("exact artifact stream verification failed") from exc
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
 
     def check_ready(self) -> bool:
         """Verify the bucket remains reachable and exact-version capable."""

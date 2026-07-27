@@ -222,7 +222,13 @@ class HybridArtifactBuildResult(_HybridWorkerModel):
 class HybridWorkerOutcome(_HybridWorkerModel):
     job_id: NonBlankStr
     source_id: NonBlankStr
-    state: Literal["completed", "retry_scheduled", "review_required", "failed"]
+    state: Literal[
+        "completed",
+        "retry_scheduled",
+        "review_required",
+        "failed",
+        "cancelled",
+    ]
     auto_retry_count: NonNegativeInt
     error_code: NonBlankStr | None = None
     artifacts: HybridArtifactBuildResult | None = None
@@ -331,6 +337,28 @@ class _HybridClaimOwnershipLost(RuntimeError):
         self.failure = failure
 
 
+class _HybridCancellationAcknowledged(RuntimeError):
+    pass
+
+
+def _acknowledge_requested_cancellation(
+    lifecycle: HybridKnowledgeArtifactLifecycle,
+    claim: HybridKnowledgeJobClaim,
+    cancellation: KnowledgeModelCancellation,
+) -> None:
+    checker = getattr(lifecycle, "cancellation_requested", None)
+    if not callable(checker) or not checker(claim):
+        return
+    cancellation.cancel()
+    acknowledger = getattr(lifecycle, "acknowledge_cancellation", None)
+    if not callable(acknowledger):
+        raise RuntimeError(
+            "Hybrid lifecycle exposes cancellation without acknowledgement"
+        )
+    acknowledger(claim)
+    raise _HybridCancellationAcknowledged("Hybrid ingestion cancellation acknowledged")
+
+
 class _HybridClaimHeartbeat:
     """Renew one exact fence and cancel its build immediately on ownership loss."""
 
@@ -380,6 +408,11 @@ class _HybridClaimHeartbeat:
             return self._claim
 
     def check(self) -> None:
+        _acknowledge_requested_cancellation(
+            self._lifecycle,
+            self.claim,
+            self._cancellation,
+        )
         with self._lock:
             failure = self._failure
         if failure is not None:
@@ -391,6 +424,11 @@ class _HybridClaimHeartbeat:
             try:
                 if not self._ownership_guard():
                     raise RuntimeError("Production worker role lease was lost")
+                _acknowledge_requested_cancellation(
+                    self._lifecycle,
+                    self.claim,
+                    self._cancellation,
+                )
                 renewed = self._lifecycle.renew_claim(
                     self.claim,
                     lease_seconds=self._lease_seconds,
@@ -521,6 +559,11 @@ class HybridKnowledgeWorker:
             request = self._lifecycle.load_build_request(claim)
             self._validate_claim_binding(claim, request)
             cancellation = KnowledgeModelCancellation()
+            _acknowledge_requested_cancellation(
+                self._lifecycle,
+                claim,
+                cancellation,
+            )
             try:
                 renewed = self._lifecycle.renew_claim(
                     claim,
@@ -557,7 +600,14 @@ class HybridKnowledgeWorker:
                 ownership.check()
                 claim = ownership.claim
         except _HybridClaimOwnershipLost as ownership_lost:
+            if isinstance(
+                ownership_lost.failure,
+                _HybridCancellationAcknowledged,
+            ):
+                return self._cancelled_outcome(claim, request=request)
             raise ownership_lost.failure
+        except _HybridCancellationAcknowledged:
+            return self._cancelled_outcome(claim, request=request)
         except (
             TransientKnowledgeServiceError,
             KnowledgeModelWorkCancelled,
@@ -593,6 +643,20 @@ class HybridKnowledgeWorker:
             state="completed",
             auto_retry_count=request.auto_retry_count,
             artifacts=result,
+        )
+
+    @staticmethod
+    def _cancelled_outcome(
+        claim: HybridKnowledgeJobClaim,
+        *,
+        request: HybridArtifactBuildRequest | None,
+    ) -> HybridWorkerOutcome:
+        return HybridWorkerOutcome(
+            job_id=claim.job_id,
+            source_id=request.source_id if request is not None else "unknown_source",
+            state="cancelled",
+            auto_retry_count=request.auto_retry_count if request is not None else 0,
+            error_code="PA_HYBRID_CANCELLED",
         )
 
     def _fail_integrity(

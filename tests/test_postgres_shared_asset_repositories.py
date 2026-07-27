@@ -190,3 +190,43 @@ def test_postgres_knowledge_and_tool_repositories_resolve_exact_versions(
         source.source_id, version_id=knowledge_ref.version_id
     ) == knowledge_ref
     assert tools.resolve_version(tool.source_id, version_id=tool_ref.version_id) == tool_ref
+
+
+def test_postgres_knowledge_source_record_exposes_revision_and_rejects_stale_cas(
+    postgres_engine: Engine,
+) -> None:
+    repository = PostgresKnowledgeAssetRepository(postgres_engine)
+    source = KnowledgeSource(
+        source_id="hybrid-cas",
+        name="Hybrid CAS",
+        provider="hybrid_index",
+        lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
+        params={},
+        created_at="2026-07-27T00:00:00Z",
+        updated_at="2026-07-27T00:00:00Z",
+    )
+    repository.save_source(source, expected_revision=0)
+    updated = source.model_copy(
+        update={
+            "name": "Hybrid CAS Updated",
+            "updated_at": "2026-07-27T00:01:00Z",
+        }
+    )
+    repository.save_source(updated, expected_revision=1)
+
+    record = repository.get_source_record(source.source_id)
+
+    assert record is not None
+    assert record.source == updated
+    assert record.revision == 2
+    with pytest.raises(PersistenceConflictError) as caught:
+        repository.save_source(
+            source.model_copy(
+                update={
+                    "name": "Stale write",
+                    "updated_at": "2026-07-27T00:02:00Z",
+                }
+            ),
+            expected_revision=1,
+        )
+    assert caught.value.actual_revision == 2

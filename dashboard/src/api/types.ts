@@ -973,6 +973,111 @@ export interface ModelConnectionsResponse {
   }
 }
 
+export type KnowledgeSourcePermission =
+  | 'knowledge_source.view'
+  | 'knowledge_source.edit'
+  | 'knowledge_source.review'
+  | 'knowledge_source.publish'
+  | 'knowledge_source.archive'
+
+export type KnowledgeSourceLifecycleState = 'ACTIVE' | 'ARCHIVED'
+
+export interface KnowledgeSourceIntakeCapability {
+  content_types: string[]
+  max_file_bytes: number
+  max_batch_files: number
+  max_source_documents: number
+}
+
+export interface KnowledgeSourceProviderReadiness {
+  state: 'ready' | 'degraded' | 'unavailable'
+  revision: string | null
+  blockers: string[]
+}
+
+export interface KnowledgeSourceProviderCapability {
+  provider: string
+  creation_supported: boolean
+  intake: KnowledgeSourceIntakeCapability
+  features: string[]
+  readiness: KnowledgeSourceProviderReadiness
+}
+
+export interface KnowledgeSourceCapabilityProjection {
+  schema_version: 'knowledge-source-api.v1'
+  providers: KnowledgeSourceProviderCapability[]
+}
+
+export interface KnowledgeSourceActionBlocker {
+  code: string
+  detail: string
+}
+
+export interface KnowledgeSourceActionCapability {
+  action: string
+  allowed: boolean
+  blockers: KnowledgeSourceActionBlocker[]
+}
+
+export interface KnowledgeSourceActionCapabilityProjection {
+  source_id: string
+  source_revision: number
+  actions: KnowledgeSourceActionCapability[]
+}
+
+export interface KnowledgeSourceOperationProgress {
+  current: number
+  total: number
+  unit: string
+}
+
+export interface KnowledgeSourceOperation {
+  operation_id: string
+  source_id: string
+  command: string
+  status: 'queued' | 'running' | 'cancel_requested' | 'succeeded' | 'failed' | 'cancelled'
+  stage: string
+  source_revision: number
+  poll_after_ms: number
+  progress: KnowledgeSourceOperationProgress | null
+  outcome_code: string | null
+  outcome_detail: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface KnowledgeSourceCursorPageInfo {
+  limit: number
+  next_cursor: string | null
+  has_more: boolean
+}
+
+export interface KnowledgeSourceCursorPage<T> {
+  data: T[]
+  page: KnowledgeSourceCursorPageInfo
+  summary: Record<string, number>
+}
+
+export interface KnowledgeSourceApiFieldError {
+  location: string[]
+  code: string
+  detail: string
+}
+
+export interface KnowledgeSourceApiProblem {
+  type: string
+  title: string
+  status: number
+  code: string
+  detail: string
+  trace_id: string
+  retryable: boolean
+  current_revision: number | null
+  field_errors: KnowledgeSourceApiFieldError[]
+  blockers: KnowledgeSourceActionBlocker[]
+}
+
 export interface KnowledgeSource {
   source_id: string
   name: string
@@ -989,349 +1094,78 @@ export interface KnowledgeSource {
   ready_document_count: number
 }
 
-export interface KnowledgeStageLatency {
-  stage: string
-  p95_ms: number
+export interface KnowledgeSourceDetailProjection {
+  schema_version: 'knowledge-source-api.v1'
+  source: KnowledgeSource
+  revision: number
+  summary: Record<string, number>
+  action_capabilities: KnowledgeSourceActionCapabilityProjection
 }
 
-export interface KnowledgeOperationsProjection {
-  source_id: string
-  telemetry_complete: boolean
-  queue_age_seconds: number
-  retry_backlog: number
-  review_backlog: number
-  parser_escalation_count: number
-  ingestion_throughput_documents_per_hour: number
-  gpu_queue_depth: number
-  gpu_utilization_percent: number
-  embedding_backlog: number
-  index_lag_seconds: number
-  orphan_count: number
-  publication_age_seconds: number | null
-  rebuild_state: 'idle' | 'queued' | 'running' | 'failed' | 'unavailable'
-  scheduler_queue_p95_ms: number
-  retrieval_service_p95_ms: number
-  retrieval_p95_ms: number
-  stage_latencies: KnowledgeStageLatency[]
-  no_evidence_rate: number
-  clarification_rate: number
-  conflict_rate: number
-  refusal_rate: number
-  degradation_rate: number
-  citation_failure_count: number
-  complete_evidence_slot_coverage_rate: number
-  unauthorized_candidate_exposure: number
-  wrong_version_or_precedence: number
-  unresolvable_formal_citation: number
-  advice_under_authority_uncertainty: number
-  high_severity_unsupported_claim: number
-  release_blocker_count: number
+export interface KnowledgeSourceListItemProjection {
+  source: KnowledgeSource
+  revision: number
 }
 
-export type KnowledgeSourceLifecycleState = 'ACTIVE' | 'ARCHIVED'
-
-export interface KnowledgeSourceReferenceSummary {
-  source_id: string
-  draft_agent_binding_count: number
-  published_agent_version_count: number
-  publication_count: number
-  snapshot_count: number
-  document_count: number
-  quarantined_upload_count: number
-  ingestion_job_count: number
-  audit_retention_blocked: boolean
-}
-
-export interface KnowledgeSourceDeletionEligibility {
-  source_id: string
-  eligible: boolean
-  lifecycle_state: KnowledgeSourceLifecycleState
-  reference_summary: KnowledgeSourceReferenceSummary
-  blockers: string[]
-}
-
-export interface KnowledgeSourceSnapshotDocument {
+export interface KnowledgeSourceDocumentProjection {
   document_id: string
   revision_id: string
   filename: string
   content_type: string
-  content_hash: string
-  artifact_path: string
-  routing_metadata: Record<string, unknown>
-}
-
-export interface CandidateKnowledgeSourceSnapshot {
-  source_id: string
-  source_draft_version_id: string
-  candidate_digest: string
-  included_documents: KnowledgeSourceSnapshotDocument[]
-  queued_document_count: number
-  processing_document_count: number
-  failed_document_count: number
-  archived_document_count: number
-  required_reingestion_count: number
-}
-
-export interface KnowledgeSourceSnapshotManifest {
-  schema_version: 'local_index.snapshot.v2'
-  snapshot_id: string
-  source_id: string
-  state: 'READY'
-  validation_level: 'foundation'
-  source_draft_version_id: string
-  candidate_digest: string
-  foundation_validation_id: string
-  documents: KnowledgeSourceSnapshotDocument[]
-  created_at: string
-  created_by: string
-}
-
-export interface FoundationKnowledgeSourceValidation {
-  validation_id: string
-  source_id: string
-  source_draft_version_id: string
-  candidate_digest: string
-  validation_level: 'foundation'
-  status: 'passed'
-  document_count: number
-  required_reingestion_count: number
-  created_at: string
-  created_by: string
-}
-
-export interface KnowledgeSourcePublicationValidation {
-  validation_id: string
-  source_id: string
-  resource_kind?: 'local_index_snapshot' | 'remote_config'
-  resource_id?: string | null
-  snapshot_id: string | null
-  source_draft_version_id: string
-  candidate_digest: string
-  status: 'passed'
-  smoke_query: string
-  candidate_count: number
-  citation_count: number
-  created_at: string
-  created_by: string
-}
-
-export interface KnowledgeSourcePublicationRecord {
-  publication_id: string
-  source_id: string
-  resource_kind?: 'local_index_snapshot' | 'remote_config'
-  resource_id?: string | null
-  snapshot_id: string | null
-  source_draft_version_id: string
-  validation_id: string
-  change_note: string
-  published_at: string
-  published_by: string
-  document_count: number
-  smoke_query: string
-  smoke_result_summary: Record<string, unknown>
-}
-
-export interface KnowledgeDocument {
-  document_id: string
-  source_id: string
-  revision_id: string
-  filename: string
-  content_type: string
-  content_hash: string
-  size_bytes: number
-  state: 'queued' | 'processing' | 'ready' | 'failed' | string
-  storage_path: string
-  provider_document_id: string | null
-  routing_metadata: Record<string, unknown>
-  error_code: string | null
-  error_message: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface QuarantinedKnowledgeUpload {
-  upload_id: string
-  source_id: string
-  filename: string
-  content_type: string
-  size_bytes: number
-  storage_path: string
   state: string
-  attempt_count?: number
-  claimed_at?: string | null
-  claim_token?: string | null
-  lease_expires_at?: string | null
-  completed_at?: string | null
-  error_code?: string | null
-  error_message?: string | null
-  promoted_document_id?: string | null
-  promoted_revision_id?: string | null
-  ingestion_job_id?: string | null
-  expires_at?: string | null
-  purged_at?: string | null
+  candidate_state: 'candidate' | 'pending' | 'superseded'
+  safe_reason: string | null
   created_at: string
   updated_at: string
 }
 
-export interface KnowledgeIngestionJob {
-  job_id: string
-  source_id: string
-  document_id: string
-  revision_id: string
-  state: string
-  attempt_count: number
-  auto_retry_count: number
-  max_auto_retries: number
-  ingestion_config_fingerprint: string
-  artifact_build_spec: Record<string, unknown>
-  artifact_path?: string | null
-  claimed_at?: string | null
-  claim_token?: string | null
-  lease_expires_at?: string | null
-  completed_at?: string | null
-  error_code?: string | null
-  error_message?: string | null
-  last_error_code?: string | null
-  last_error_message?: string | null
-  last_failure_classification?: string | null
-  next_attempt_at?: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface KnowledgeSourcesResponse {
-  data: KnowledgeSource[]
-  meta: {
-    total: number
-  }
-}
-
-export interface KnowledgeDocumentsResponse {
-  data: KnowledgeDocument[]
-  meta: {
-    total: number
-  }
-}
-
-export interface KnowledgeUploadsResponse {
-  data: QuarantinedKnowledgeUpload[]
-  meta: {
-    total: number
-  }
-}
-
-export interface KnowledgeIngestionJobsResponse {
-  data: KnowledgeIngestionJob[]
-  meta: {
-    total: number
-  }
-}
-
-export interface KnowledgeSourcePublicationsResponse {
-  data: KnowledgeSourcePublicationRecord[]
-  meta: {
-    total: number
-  }
-}
-
-export interface InsuranceMetadataDraftInput {
-  metadata_draft_id: string
-  origin: 'pdf' | 'workbook'
-  source_id: string
-  document_id: string
-  revision_id: string
-  canonical_anchor: string | null
-  authority: string | null
-  effective_from: string | null
-  effective_to: string | null
-  taxonomy_id: string | null
-  taxonomy_revision_id: string | null
-  precedence_policy_revision_id: string | null
-  precedence_authority_tier: string | null
-  precedence_order: number | null
-}
-
-export interface InsuranceMetadataConflict {
-  field: string
-  label: string
-  pdf_value: string | number | null
-  workbook_value: string | number | null
-}
-
-export interface InsuranceMetadataReview {
-  schema_version: 'insurance-metadata-review.v1'
+export interface KnowledgeSourceMetadataReviewProjection {
   review_id: string
   review_identity: string
   review_version: number
-  import_id: string
-  workbook_row_number: number
-  workbook_draft_id: string
-  original_ref: InsuranceMetadataWorkbookArtifactRef
-  normalized_ref: InsuranceMetadataWorkbookArtifactRef
-  source_id: string
   document_id: string
   revision_id: string
-  canonical_anchor: string | null
-  citation_uri: string
   state: 'review_required' | 'ready_for_review' | 'approved' | 'corrected' | 'rejected'
   publication_blocked: boolean
-  pdf_draft: InsuranceMetadataDraftInput | null
-  workbook_draft: InsuranceMetadataDraftInput
-  conflicts: InsuranceMetadataConflict[]
-  resolved_values: Record<string, string | number | null>
+  canonical_anchor: string | null
+  citation_uri: string
+  conflict_count: number
   resolution_reason: string | null
   resolved_by: string | null
-  approved_metadata_revision_id: string | null
-  decision_history: Array<{
-    sequence: number
-    prior_review_identity: string
-    prior_state: InsuranceMetadataReview['state']
-    action: 'approve' | 'correct' | 'reject'
-    actor: string
-    reason: string
-    corrections: Record<string, string | number | null>
-    resulting_state: InsuranceMetadataReview['state']
-  }>
 }
 
-export interface InsuranceMetadataReviewsResponse {
-  data: InsuranceMetadataReview[]
-  meta: {
-    total: number
-    unresolved: number
-    next_cursor: string | null
-    summary: InsuranceMetadataReviewSummary
-  }
+export interface KnowledgeSourcePublicationValidationProjection {
+  validation_id: string
+  state: 'queued' | 'running' | 'prepared' | 'failed' | 'consumed'
+  source_revision: number
+  fencing_token: number
+  source_draft_version_id: string
+  generation_id: string | null
+  safe_reason: string | null
+  created_at: string
+  updated_at: string
 }
 
-export interface InsuranceMetadataReviewSummary {
-  total: number
-  unresolved: number
-  review_required: number
-  ready_for_review: number
-  approved: number
-  corrected: number
-  rejected: number
-  all_approved: boolean
+export interface KnowledgeSourcePublicationProjection {
+  publication_id: string
+  source_publication_seq: number
+  source_draft_version_id: string
+  source_snapshot_id: string
+  generation_id: string
+  validation_id: string
+  published_at: string
+  published_by: string
 }
 
-export interface InsuranceMetadataWorkbookArtifactRef {
-  artifact_uri: string
-  version_id: string
-  sha256: string
-  media_type: string
-  size_bytes: number
-}
-
-export interface InsuranceMetadataWorkbookImportResponse {
-  import_id: string
-  template_revision: 'insurance-rule-metadata.v1'
-  row_count: number
-  replayed: boolean
-  original_ref: InsuranceMetadataWorkbookArtifactRef
-  normalized_ref: InsuranceMetadataWorkbookArtifactRef
-  reviews: InsuranceMetadataReview[]
-  meta: InsuranceMetadataReviewsResponse['meta']
+export interface KnowledgeSourceAuditProjection {
+  audit_id: string
+  event_type: string
+  outcome: string
+  actor_subject: string
+  occurred_at: string
+  target_type: string
+  target_id: string
+  metadata: Record<string, unknown>
 }
 
 export interface DraftValidationResponse {
@@ -1414,4 +1248,18 @@ export interface ChatRunResponse {
   conversation_id?: string
   turn_id?: string
   context_admission?: ContextAdmission
+}
+
+export interface ReleaseRegistrySummary {
+  release_id: string
+  state: 'PREPARING' | 'FINALIZED'
+  candidate_binding_sha256: string
+  created_at: string
+  finalized_at: string | null
+  bundle_available: boolean
+  artifact_names: string[]
+}
+
+export interface ReleasesResponse {
+  releases: ReleaseRegistrySummary[]
 }

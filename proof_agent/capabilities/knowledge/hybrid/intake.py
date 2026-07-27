@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 import hashlib
 from importlib import import_module
 import math
@@ -13,7 +16,8 @@ import re
 import stat
 import tempfile
 import unicodedata
-from typing import Any, IO
+from typing import Any, BinaryIO, IO
+from uuid import uuid4
 import zipfile
 import zlib
 
@@ -86,7 +90,73 @@ _PDF_REVISION_STRUCTURE_BYTES = 4 * 1024 * 1024
 _PDF_BOUNDARY_SCAN_BYTES = 4096
 _PDF_WHITESPACE = b"\x00\x09\x0a\x0c\x0d\x20"
 _SNAPSHOT_MEMORY_BYTES = 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 64 * 1024
 _FIX = "Upload a safe, unencrypted PDF within the configured Hybrid intake limits."
+
+
+@dataclass(frozen=True)
+class HybridQuarantinedUpload:
+    """Ephemeral server-generated upload staging identity."""
+
+    path: Path
+    sha256: str
+    size_bytes: int
+
+
+@contextmanager
+def quarantine_hybrid_upload(
+    stream: BinaryIO,
+    *,
+    max_file_bytes: int,
+    temporary_root: Path | None = None,
+) -> Iterator[HybridQuarantinedUpload]:
+    """Copy one request stream to bounded ephemeral quarantine while hashing."""
+
+    if max_file_bytes < 1:
+        raise ValueError("max_file_bytes must be positive")
+    if temporary_root is not None and not temporary_root.is_dir():
+        raise ValueError("temporary_root must be an existing directory")
+    digest = hashlib.sha256()
+    total = 0
+    with tempfile.TemporaryDirectory(
+        prefix="proof-agent-hybrid-upload-",
+        dir=temporary_root,
+    ) as directory:
+        path = Path(directory) / f"quarantine-{uuid4().hex}.upload"
+        try:
+            with path.open("xb") as target:
+                while True:
+                    chunk = stream.read(_UPLOAD_CHUNK_BYTES)
+                    if not isinstance(chunk, bytes):
+                        raise _hybrid_error(
+                            "PA_HYBRID_INTAKE_001",
+                            "Hybrid PDF upload stream returned invalid bytes.",
+                        )
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_file_bytes:
+                        raise _hybrid_error(
+                            "PA_HYBRID_INTAKE_002",
+                            f"Hybrid PDF upload exceeds {max_file_bytes} bytes.",
+                        )
+                    digest.update(chunk)
+                    target.write(chunk)
+            if total == 0:
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_001",
+                    "Hybrid PDF upload is empty.",
+                )
+            yield HybridQuarantinedUpload(
+                path=path,
+                sha256=digest.hexdigest(),
+                size_bytes=total,
+            )
+        except OSError as exc:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_001",
+                "Hybrid PDF upload could not be staged.",
+            ) from exc
 
 
 def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdfPreflight:

@@ -18,6 +18,7 @@ class Permission(StrEnum):
     AGENT_PUBLISH = "agent.publish"
     KNOWLEDGE_SOURCE_VIEW = "knowledge_source.view"
     KNOWLEDGE_SOURCE_EDIT = "knowledge_source.edit"
+    KNOWLEDGE_SOURCE_REVIEW = "knowledge_source.review"
     KNOWLEDGE_SOURCE_PUBLISH = "knowledge_source.publish"
     KNOWLEDGE_SOURCE_ARCHIVE = "knowledge_source.archive"
     MODEL_CONNECTION_VIEW = "model_connection.view"
