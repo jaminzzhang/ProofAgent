@@ -7,6 +7,9 @@ import type {
   KnowledgeSourceDocumentProjection,
   KnowledgeSourceListItemProjection,
   KnowledgeSourceMetadataReviewProjection,
+  KnowledgeSourceMetadataProfileProjection,
+  KnowledgeSourceMetadataWorkbookPreviewProjection,
+  KnowledgeSourceMetadataValuesProjection,
   KnowledgeSourceOperation,
   KnowledgeSourcePublicationProjection,
   KnowledgeSourcePublicationValidationProjection,
@@ -143,6 +146,24 @@ export function fetchKnowledgeMetadataReviewsPage(
   return fetchKnowledgeWorkspacePage(sourceId, 'metadata-reviews', options)
 }
 
+export async function fetchKnowledgeMetadataProfile(
+  sourceId: string,
+): Promise<KnowledgeSourceMetadataProfileProjection | null> {
+  try {
+    return await fetchJson(
+      `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-profile`,
+    )
+  } catch (error) {
+    if (
+      error instanceof ApiError
+      && error.problem?.code === 'metadata_profile_binding_required'
+    ) {
+      return null
+    }
+    throw error
+  }
+}
+
 export function fetchKnowledgePublicationValidationsPage(
   sourceId: string,
   options: { limit?: number; cursor?: string } = {},
@@ -176,25 +197,72 @@ function fetchKnowledgeWorkspacePage<T>(
   )
 }
 
-export function resolveKnowledgeMetadataReview(
+export function approveKnowledgeMetadataReview(
   sourceId: string,
   review: KnowledgeSourceMetadataReviewProjection,
-  action: 'approve' | 'correct' | 'reject',
   payload: {
     reason: string
-    corrections?: Record<string, string | number | null>
   },
 ): Promise<KnowledgeSourceMetadataReviewProjection> {
   return fetchJson(
-    `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-reviews/${encodeURIComponent(review.review_id)}/${action}`,
+    `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-reviews/${encodeURIComponent(review.review_id)}/approve`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        document_id: review.document_id,
+        revision_id: review.revision_id,
         expected_review_version: review.review_version,
         expected_review_identity: review.review_identity,
         reason: payload.reason,
-        corrections: payload.corrections ?? {},
+      }),
+    },
+  )
+}
+
+export function rejectKnowledgeMetadataReview(
+  sourceId: string,
+  review: KnowledgeSourceMetadataReviewProjection,
+  payload: {
+    reason: string
+  },
+): Promise<KnowledgeSourceMetadataReviewProjection> {
+  return fetchJson(
+    `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-reviews/${encodeURIComponent(review.review_id)}/reject`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        document_id: review.document_id,
+        revision_id: review.revision_id,
+        expected_review_version: review.review_version,
+        expected_review_identity: review.review_identity,
+        reason: payload.reason,
+      }),
+    },
+  )
+}
+
+export function saveKnowledgeMetadataReviewDraft(
+  sourceId: string,
+  review: KnowledgeSourceMetadataReviewProjection,
+  payload: {
+    reason: string
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>
+  },
+): Promise<KnowledgeSourceMetadataReviewProjection> {
+  return fetchJson(
+    `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-reviews/${encodeURIComponent(review.review_id)}/draft`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        document_id: review.document_id,
+        revision_id: review.revision_id,
+        expected_review_version: review.review_version,
+        expected_review_identity: review.review_identity,
+        reason: payload.reason,
+        changes: payload.changes,
       }),
     },
   )
@@ -264,25 +332,87 @@ export function replaceKnowledgeDocument(
   )
 }
 
-export function importKnowledgeMetadataWorkbook(options: {
+export function generateKnowledgeMetadataWorkbookExport(options: {
   sourceId: string
   documentId: string
   revisionId: string
+  expectedRevision: number
+  idempotencyKey: string
+}): Promise<KnowledgeSourceOperation> {
+  return fetchJson(
+    `${BASE}/knowledge-sources/${encodeURIComponent(options.sourceId)}/documents/${encodeURIComponent(options.documentId)}/metadata-workbook-exports`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': options.idempotencyKey,
+      },
+      body: JSON.stringify({
+        revision_id: options.revisionId,
+        expected_revision: options.expectedRevision,
+      }),
+    },
+  )
+}
+
+export function knowledgeMetadataWorkbookExportDownloadUrl(
+  sourceId: string,
+  exportId: string,
+): string {
+  return `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-workbook-exports/${encodeURIComponent(exportId)}/content`
+}
+
+export function createKnowledgeMetadataWorkbookPreview(options: {
+  sourceId: string
+  exportId: string
   file: File
   expectedRevision: number
   idempotencyKey: string
 }): Promise<KnowledgeSourceOperation> {
   const form = new FormData()
   form.set('file', options.file)
-  form.set('document_id', options.documentId)
-  form.set('revision_id', options.revisionId)
+  form.set('export_id', options.exportId)
   form.set('expected_revision', String(options.expectedRevision))
   return fetchJson(
-    `${BASE}/knowledge-sources/${encodeURIComponent(options.sourceId)}/metadata-imports`,
+    `${BASE}/knowledge-sources/${encodeURIComponent(options.sourceId)}/metadata-workbook-import-previews`,
     {
       method: 'POST',
       headers: { 'Idempotency-Key': options.idempotencyKey },
       body: form,
+    },
+  )
+}
+
+export function fetchKnowledgeMetadataWorkbookPreview(
+  sourceId: string,
+  previewId: string,
+): Promise<KnowledgeSourceMetadataWorkbookPreviewProjection> {
+  return fetchJson(
+    `${BASE}/knowledge-sources/${encodeURIComponent(sourceId)}/metadata-workbook-import-previews/${encodeURIComponent(previewId)}`,
+  )
+}
+
+export function applyKnowledgeMetadataWorkbookPreview(options: {
+  sourceId: string
+  previewId: string
+  expectedPreviewIdentity: string
+  expectedRevision: number
+  reason: string
+  idempotencyKey: string
+}): Promise<KnowledgeSourceOperation> {
+  return fetchJson(
+    `${BASE}/knowledge-sources/${encodeURIComponent(options.sourceId)}/metadata-workbook-import-previews/${encodeURIComponent(options.previewId)}/apply`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': options.idempotencyKey,
+      },
+      body: JSON.stringify({
+        expected_preview_identity: options.expectedPreviewIdentity,
+        expected_revision: options.expectedRevision,
+        reason: options.reason,
+      }),
     },
   )
 }

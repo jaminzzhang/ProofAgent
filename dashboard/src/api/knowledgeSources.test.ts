@@ -6,10 +6,14 @@ import {
   executeKnowledgeSourceMutation,
   cancelKnowledgeIngestion,
   commitKnowledgePublication,
+  fetchKnowledgeMetadataProfile,
   fetchKnowledgeSourceCapabilities,
   fetchKnowledgeSourceDetail,
   fetchKnowledgeSourcesPage,
-  importKnowledgeMetadataWorkbook,
+  applyKnowledgeMetadataWorkbookPreview,
+  createKnowledgeMetadataWorkbookPreview,
+  generateKnowledgeMetadataWorkbookExport,
+  knowledgeMetadataWorkbookExportDownloadUrl,
   pollKnowledgeSourceOperation,
   prepareKnowledgePublication,
   replaceKnowledgeDocument,
@@ -112,6 +116,25 @@ describe('unified Knowledge Source API client', () => {
         trace_id: 'trace_1',
       },
     })
+  })
+
+  it('treats an unbound Metadata Profile as an actionable empty prerequisite', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        type: 'urn:proof-agent:problem:knowledge-source-prerequisite',
+        title: 'Metadata Profile binding required',
+        status: 409,
+        code: 'metadata_profile_binding_required',
+        detail: 'Bind a published Metadata Profile before reviewing this Knowledge Source.',
+        trace_id: 'trace_profile',
+        retryable: false,
+        current_revision: null,
+        field_errors: [],
+        blockers: [],
+      }, 409),
+    )
+
+    await expect(fetchKnowledgeMetadataProfile('ks_hybrid')).resolves.toBeNull()
   })
 
   it('restarts a cursor page once when the server rejects an expired cursor', async () => {
@@ -235,7 +258,7 @@ describe('unified Knowledge Source API client', () => {
     ])
   })
 
-  it('uses V1 revision and idempotency envelopes for replacement, workbook, retry, cancel, and publish', async () => {
+  it('uses exact V2 revision and idempotency envelopes for the Workbook round trip', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       async () => jsonResponse(operation('queued')),
     )
@@ -253,13 +276,27 @@ describe('unified Knowledge Source API client', () => {
       7,
       'replace-key',
     )
-    await importKnowledgeMetadataWorkbook({
+    await generateKnowledgeMetadataWorkbookExport({
       sourceId: 'ks_hybrid',
       documentId: '00000000-0000-4000-8000-000000000001',
       revisionId: '00000000-0000-4000-8000-000000000002',
+      expectedRevision: 8,
+      idempotencyKey: 'workbook-export-key',
+    })
+    await createKnowledgeMetadataWorkbookPreview({
+      sourceId: 'ks_hybrid',
+      exportId: 'export-1',
       file: workbook,
       expectedRevision: 8,
-      idempotencyKey: 'workbook-key',
+      idempotencyKey: 'workbook-preview-key',
+    })
+    await applyKnowledgeMetadataWorkbookPreview({
+      sourceId: 'ks_hybrid',
+      previewId: 'preview-1',
+      expectedPreviewIdentity: 'a'.repeat(64),
+      expectedRevision: 8,
+      reason: 'Apply reviewed bulk metadata changes.',
+      idempotencyKey: 'workbook-apply-key',
     })
     await retryKnowledgeIngestion('ks_hybrid', 'job-1', 9, 'retry-key')
     await cancelKnowledgeIngestion('ks_hybrid', 'job-1', 10, 'cancel-key')
@@ -284,25 +321,38 @@ describe('unified Knowledge Source API client', () => {
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       '/api/config/knowledge-sources/ks_hybrid/documents/00000000-0000-4000-8000-000000000001/revisions',
-      '/api/config/knowledge-sources/ks_hybrid/metadata-imports',
+      '/api/config/knowledge-sources/ks_hybrid/documents/00000000-0000-4000-8000-000000000001/metadata-workbook-exports',
+      '/api/config/knowledge-sources/ks_hybrid/metadata-workbook-import-previews',
+      '/api/config/knowledge-sources/ks_hybrid/metadata-workbook-import-previews/preview-1/apply',
       '/api/config/knowledge-sources/ks_hybrid/ingestion-jobs/job-1/retry',
       '/api/config/knowledge-sources/ks_hybrid/ingestion-jobs/job-1/cancel',
       '/api/config/knowledge-sources/ks_hybrid/publication-validations',
       '/api/config/knowledge-sources/ks_hybrid/publications',
     ])
-    const workbookBody = fetchMock.mock.calls[1][1]?.body as FormData
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({
+        revision_id: '00000000-0000-4000-8000-000000000002',
+        expected_revision: 8,
+      }),
+    })
+    const workbookBody = fetchMock.mock.calls[2][1]?.body as FormData
     expect(workbookBody.get('file')).toBe(workbook)
-    expect(workbookBody.get('document_id')).toBe(
-      '00000000-0000-4000-8000-000000000001',
-    )
-    expect(workbookBody.get('revision_id')).toBe(
-      '00000000-0000-4000-8000-000000000002',
-    )
-    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+    expect(workbookBody.get('export_id')).toBe('export-1')
+    expect(workbookBody.get('expected_revision')).toBe('8')
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({
+        expected_preview_identity: 'a'.repeat(64),
+        expected_revision: 8,
+        reason: 'Apply reviewed bulk metadata changes.',
+      }),
+    })
+    expect(fetchMock.mock.calls[4][1]).toMatchObject({
       method: 'POST',
       body: JSON.stringify({ expected_revision: 9 }),
     })
-    expect(fetchMock.mock.calls[5][1]).toMatchObject({
+    expect(fetchMock.mock.calls[7][1]).toMatchObject({
       method: 'POST',
       body: JSON.stringify({
         validation_id: 'validation-1',
@@ -311,6 +361,9 @@ describe('unified Knowledge Source API client', () => {
         expected_revision: 12,
       }),
     })
+    expect(knowledgeMetadataWorkbookExportDownloadUrl('ks_hybrid', 'export-1')).toBe(
+      '/api/config/knowledge-sources/ks_hybrid/metadata-workbook-exports/export-1/content',
+    )
   })
 
   it('pauses polling while hidden and reloads Source exactly once at terminal state', async () => {

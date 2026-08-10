@@ -9,7 +9,7 @@ import {
   SectionField,
 } from '@proofagent/ui'
 import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
-import { KnowledgeSource } from '../../api/types'
+import type { KnowledgeSource } from '../../api/types'
 import { DEFAULT_AGENTIC_RETRIEVAL_MAX_STEPS, KNOWLEDGE_FIELDS } from './module-configs/knowledge'
 import { EmptyState } from '../EmptyState'
 import { useLocale } from '../../i18n/locale'
@@ -31,7 +31,7 @@ function NativeSelect({
       id={id}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+      className="h-9 w-full appearance-none rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
       style={{
         backgroundImage:
           "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
@@ -51,6 +51,7 @@ interface KnowledgeModuleEditorProps {
   onSave: () => void
   onBindSource: (payload: {
     source_id: string
+    retrieval_profile_revision_id?: string
     alias: string
     failure_mode: 'required' | 'advisory'
     fusion_weight: number
@@ -79,8 +80,8 @@ export function KnowledgeModuleEditor({
     [knowledgeSources],
   )
   const unavailableCount = knowledgeSources.length - publishedSources.length
-  // Bind form state
   const [selectedSourceId, setSelectedSourceId] = useState<string>('')
+  const [bindingRetrievalProfileRevisionId, setBindingRetrievalProfileRevisionId] = useState('')
   const [bindingAlias, setBindingAlias] = useState('')
   const [bindingFailureMode, setBindingFailureMode] = useState<'required' | 'advisory'>('required')
   const [bindingFusionWeight, setBindingFusionWeight] = useState('1.0')
@@ -97,6 +98,10 @@ export function KnowledgeModuleEditor({
   }, [publishedSources, selectedSourceId])
 
   const parsedBindings = parseKnowledgeBindings(agentYaml)
+  const selectedSource = publishedSources.find(
+    (source) => source.source_id === selectedSourceId,
+  ) ?? publishedSources[0]
+  const selectedSourceIsHybrid = selectedSource?.provider === 'hybrid_index'
 
   async function handleBind() {
     const sourceId = selectedSourceId || publishedSources[0]?.source_id
@@ -109,15 +114,21 @@ export function KnowledgeModuleEditor({
       fusion_weight: Number(bindingFusionWeight) || 1,
     }
 
+    const source = publishedSources.find((item) => item.source_id === sourceId)
+    const profileRevisionId = bindingRetrievalProfileRevisionId.trim()
+    if (source?.provider === 'hybrid_index' && profileRevisionId) {
+      payload.retrieval_profile_revision_id = profileRevisionId
+    }
+
     const topK = Number(bindingTopK)
     if (bindingTopK.trim() && Number.isFinite(topK) && topK > 0) {
       payload.top_k = topK
     }
 
     await onBindSource(payload)
-    
-    // Reset form after bind
+
     setBindingAlias('')
+    setBindingRetrievalProfileRevisionId('')
     setBindingTopK('')
     setBindingFailureMode('required')
     setBindingFusionWeight('1.0')
@@ -153,7 +164,7 @@ export function KnowledgeModuleEditor({
               return (
                 <div
                   key={`${binding.source_id}-${idx}`}
-                  className="flex min-w-0 flex-col justify-between rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4 transition-colors hover:border-[var(--accent)]"
+                  className="flex min-w-0 flex-col justify-between rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-base)] p-4 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="min-w-0">
                     <div className="mb-1 flex items-center justify-between gap-2">
@@ -184,6 +195,11 @@ export function KnowledgeModuleEditor({
                       className="min-w-0 flex-1"
                       items={[
                         {
+                          label: t('knowledgeEditor.provider'),
+                          value: providerDisplayName(sourceInfo?.provider),
+                          kind: 'text',
+                        },
+                        {
                           label: t('knowledgeEditor.alias'),
                           value: binding.alias || '—',
                           kind: 'text',
@@ -193,6 +209,11 @@ export function KnowledgeModuleEditor({
                           value: binding.fusion_weight,
                           kind: 'number',
                         },
+                        ...(binding.retrieval_profile_revision_id ? [{
+                          label: t('knowledgeEditor.retrievalProfile'),
+                          value: binding.retrieval_profile_revision_id,
+                          kind: 'mono' as const,
+                        }] : []),
                       ]}
                     />
                     <Button
@@ -238,7 +259,7 @@ export function KnowledgeModuleEditor({
         {knowledgeSourceError && (
           <div
             role="alert"
-            className="mb-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]"
+            className="mb-4 rounded-[var(--radius-md)] border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]"
           >
             {knowledgeSourceError}
           </div>
@@ -255,15 +276,36 @@ export function KnowledgeModuleEditor({
               <NativeSelect
                 id="knowledge-bind-source"
                 value={selectedSourceId}
-                onChange={(value) => setSelectedSourceId(value)}
+                onChange={(value) => {
+                  setSelectedSourceId(value)
+                  setBindingRetrievalProfileRevisionId('')
+                }}
               >
                 {publishedSources.map((source) => (
                   <option key={source.source_id} value={source.source_id}>
-                    {source.name} ({source.provider})
+                    {source.name} ({providerDisplayName(source.provider)})
                   </option>
                 ))}
               </NativeSelect>
             </SectionField>
+
+            {selectedSourceIsHybrid ? (
+              <SectionField
+                htmlFor="knowledge-bind-retrieval-profile"
+                label={t('knowledgeEditor.retrievalProfileRevision')}
+                description={t('knowledgeEditor.retrievalProfileDescription')}
+              >
+                <Input
+                  id="knowledge-bind-retrieval-profile"
+                  translate="no"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={bindingRetrievalProfileRevisionId}
+                  onChange={(event) => setBindingRetrievalProfileRevisionId(event.target.value)}
+                  placeholder={t('knowledgeEditor.retrievalProfilePlaceholder')}
+                />
+              </SectionField>
+            ) : null}
 
             <SectionField
               htmlFor="knowledge-bind-alias"
@@ -395,6 +437,7 @@ interface ParsedKnowledgeBinding {
   alias: string
   failure_mode: string
   fusion_weight: string
+  retrieval_profile_revision_id: string
 }
 
 function parseKnowledgeBindings(agentYaml: string): ParsedKnowledgeBinding[] {
@@ -408,6 +451,7 @@ function parseKnowledgeBindings(agentYaml: string): ParsedKnowledgeBinding[] {
       const aliasMatch = block.match(/alias:\s*([^\s\n]+)/)
       const failureModeMatch = block.match(/failure_mode:\s*([^\s\n]+)/)
       const weightMatch = block.match(/fusion_weight:\s*([^\s\n]+)/)
+      const retrievalProfileMatch = block.match(/retrieval_profile_revision_id:\s*([^\s\n]+)/)
       if (!bindingIdMatch || !sourceRefMatch) return null
       return {
         binding_id: unquoteYamlScalar(bindingIdMatch[1]),
@@ -415,6 +459,9 @@ function parseKnowledgeBindings(agentYaml: string): ParsedKnowledgeBinding[] {
         alias: aliasMatch ? unquoteYamlScalar(aliasMatch[1]) : '',
         failure_mode: failureModeMatch ? unquoteYamlScalar(failureModeMatch[1]) : 'required',
         fusion_weight: weightMatch ? unquoteYamlScalar(weightMatch[1]) : '1.0',
+        retrieval_profile_revision_id: retrievalProfileMatch
+          ? unquoteYamlScalar(retrievalProfileMatch[1])
+          : '',
       }
     })
     .filter((binding): binding is ParsedKnowledgeBinding => Boolean(binding))
@@ -422,4 +469,13 @@ function parseKnowledgeBindings(agentYaml: string): ParsedKnowledgeBinding[] {
 
 function unquoteYamlScalar(value: string): string {
   return value.replace(/['"]/g, '')
+}
+
+function providerDisplayName(provider: string | undefined): string {
+  if (!provider) return '—'
+  return provider
+    .split('_')
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
 }

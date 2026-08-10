@@ -27,23 +27,32 @@ import {
   Textarea,
 } from '@proofagent/ui'
 import {
+  approveKnowledgeMetadataReview,
+  applyKnowledgeMetadataWorkbookPreview,
   changeKnowledgeSourceLifecycle,
   commitKnowledgePublication,
   executeKnowledgeSourceMutation,
+  createKnowledgeMetadataWorkbookPreview,
   fetchKnowledgeAuditPage,
   fetchKnowledgeDocumentsPage,
   fetchKnowledgeMetadataReviewsPage,
+  fetchKnowledgeMetadataProfile,
+  fetchKnowledgeMetadataWorkbookPreview,
   fetchKnowledgePublicationValidationsPage,
   fetchKnowledgePublicationsPage,
   fetchKnowledgeSourceCapabilities,
   fetchKnowledgeSourceDetail,
   fetchKnowledgeSourceOperationsPage,
-  importKnowledgeMetadataWorkbook,
+  generateKnowledgeMetadataWorkbookExport,
+  knowledgeMetadataWorkbookExportDownloadUrl,
   pollKnowledgeSourceOperation,
   prepareKnowledgePublication,
-  resolveKnowledgeMetadataReview,
+  replaceKnowledgeDocument,
+  rejectKnowledgeMetadataReview,
+  saveKnowledgeMetadataReviewDraft,
   uploadKnowledgeDocumentsBounded,
 } from '../api/knowledgeSources'
+import { ApiError } from '../api/client'
 import type {
   KnowledgeSourceActionCapability,
   KnowledgeSourceAuditProjection,
@@ -51,6 +60,9 @@ import type {
   KnowledgeSourceDetailProjection,
   KnowledgeSourceDocumentProjection,
   KnowledgeSourceMetadataReviewProjection,
+  KnowledgeSourceMetadataProfileProjection,
+  KnowledgeSourceMetadataWorkbookPreviewProjection,
+  KnowledgeSourceMetadataValuesProjection,
   KnowledgeSourceOperation,
   KnowledgeSourceProviderCapability,
   KnowledgeSourcePublicationProjection,
@@ -88,6 +100,19 @@ const tabs: readonly {
   { value: 'audit', label: 'Audit', icon: ScrollText },
 ]
 
+function preferredDocumentRevision(
+  documents: readonly KnowledgeSourceDocumentProjection[],
+  currentRevision: string,
+): string {
+  const current = documents.find((item) => item.revision_id === currentRevision)
+  if (current?.candidate_state === 'candidate' && current.state === 'COMPLETED') {
+    return currentRevision
+  }
+  return documents.find(
+    (item) => item.candidate_state === 'candidate' && item.state === 'COMPLETED',
+  )?.revision_id ?? documents[0]?.revision_id ?? ''
+}
+
 export function KnowledgeDetailPage() {
   const { sourceId } = useParams<{ sourceId: string }>()
   const [detail, setDetail] = useState<KnowledgeSourceDetailProjection | null>(null)
@@ -95,20 +120,24 @@ export function KnowledgeDetailPage() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview')
   const [documents, setDocuments] = useState<readonly KnowledgeSourceDocumentProjection[]>([])
   const [reviews, setReviews] = useState<readonly KnowledgeSourceMetadataReviewProjection[]>([])
+  const [metadataProfile, setMetadataProfile] = useState<KnowledgeSourceMetadataProfileProjection | null>(null)
   const [validations, setValidations] = useState<readonly KnowledgeSourcePublicationValidationProjection[]>([])
   const [publications, setPublications] = useState<readonly KnowledgeSourcePublicationProjection[]>([])
   const [operations, setOperations] = useState<readonly KnowledgeSourceOperation[]>([])
   const [audit, setAudit] = useState<readonly KnowledgeSourceAuditProjection[]>([])
   const [uploadDisplays, setUploadDisplays] = useState<readonly UploadDisplay[]>([])
   const [reviewReason, setReviewReason] = useState('')
-  const [reviewCorrections, setReviewCorrections] = useState('{}')
   const [selectedRevision, setSelectedRevision] = useState('')
+  const [workbookExportId, setWorkbookExportId] = useState<string | null>(null)
+  const [workbookPreview, setWorkbookPreview] = useState<KnowledgeSourceMetadataWorkbookPreviewProjection | null>(null)
+  const [workbookApplyReason, setWorkbookApplyReason] = useState('')
   const [lifecycleReason, setLifecycleReason] = useState('')
   const [smokeQuery, setSmokeQuery] = useState('')
   const [changeNote, setChangeNote] = useState('')
   const [loading, setLoading] = useState(true)
   const [tabLoading, setTabLoading] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const activePolls = useRef<AbortController | null>(null)
@@ -130,10 +159,12 @@ export function KnowledgeDetailPage() {
         if (cancelled) return
         setDetail(projection)
         setCapabilities(providerCapabilities)
-        setError(null)
+        setLoadError(null)
       })
       .catch((caught: unknown) => {
-        if (!cancelled) setError(errorMessage(caught, 'Unable to load Knowledge Source.'))
+        if (!cancelled) {
+          setLoadError(errorMessage(caught, 'Unable to load Knowledge Source.'))
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -161,19 +192,17 @@ export function KnowledgeDetailPage() {
         if (activeTab === 'documents') {
           setDocuments((await fetchKnowledgeDocumentsPage(sourceId)).data)
         } else if (activeTab === 'reviews') {
-          const [documentPage, reviewPage] = await Promise.all([
+          const [documentPage, reviewPage, profile] = await Promise.all([
             fetchKnowledgeDocumentsPage(sourceId),
             fetchKnowledgeMetadataReviewsPage(sourceId),
+            fetchKnowledgeMetadataProfile(sourceId),
           ])
           if (!cancelled) {
             setDocuments(documentPage.data)
             setReviews(reviewPage.data)
+            setMetadataProfile(profile)
             setSelectedRevision((current) => (
-              documentPage.data.some((item) => item.revision_id === current)
-                ? current
-                : documentPage.data.find((item) => item.candidate_state === 'candidate')?.revision_id
-                  ?? documentPage.data[0]?.revision_id
-                  ?? ''
+              preferredDocumentRevision(documentPage.data, current)
             ))
           }
         } else if (activeTab === 'versions') {
@@ -190,9 +219,11 @@ export function KnowledgeDetailPage() {
         } else if (activeTab === 'audit' && actionByName.get('view_audit')?.allowed) {
           setAudit((await fetchKnowledgeAuditPage(sourceId)).data)
         }
-        if (!cancelled) setError(null)
+        if (!cancelled) setLoadError(null)
       } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught, `Unable to load ${activeTab}.`))
+        if (!cancelled) {
+          setLoadError(errorMessage(caught, `Unable to load ${activeTab}.`))
+        }
       } finally {
         if (!cancelled) setTabLoading(false)
       }
@@ -248,7 +279,16 @@ export function KnowledgeDetailPage() {
       }
       setUploadDisplays(terminalDisplays)
       setDocuments((await fetchKnowledgeDocumentsPage(sourceId)).data)
-      setStatus('Document intake completed. Source state was reloaded.')
+      const failedCount = terminalDisplays.filter((item) => item.status === 'Failed').length
+      if (failedCount > 0) {
+        setError(
+          failedCount === terminalDisplays.length
+            ? `Document intake failed for ${failedCount} file${failedCount === 1 ? '' : 's'}. Source state was reloaded.`
+            : `Document intake completed with ${failedCount} failed file${failedCount === 1 ? '' : 's'}. Source state was reloaded.`,
+        )
+      } else {
+        setStatus('Document intake completed. Source state was reloaded.')
+      }
     } catch (caught) {
       if (!(caught instanceof DOMException && caught.name === 'AbortError')) {
         setError(errorMessage(caught, 'Unable to upload documents.'))
@@ -258,64 +298,240 @@ export function KnowledgeDetailPage() {
     }
   }
 
-  async function importWorkbook(event: ChangeEvent<HTMLInputElement>) {
+  async function replaceDocument(
+    document: KnowledgeSourceDocumentProjection,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
     const file = event.target.files?.[0]
     event.target.value = ''
-    const target = documents.find((document) => document.revision_id === selectedRevision)
-    if (!file || !sourceId || !detail || !target) return
-    setBusy('workbook')
+    if (!file || !sourceId || !detail) return
+    setBusy(`replace:${document.document_id}`)
     setError(null)
+    setStatus(null)
     try {
       const operation = await executeKnowledgeSourceMutation((key) => (
-        importKnowledgeMetadataWorkbook({
+        replaceKnowledgeDocument(
           sourceId,
-          documentId: target.document_id,
-          revisionId: target.revision_id,
+          document.document_id,
           file,
-          expectedRevision: detail.revision,
-          idempotencyKey: key,
-        })
+          detail.revision,
+          key,
+        )
       ))
-      await pollKnowledgeSourceOperation({
+      const terminal = await pollKnowledgeSourceOperation({
         sourceId,
         operationId: operation.operation_id,
         reloadSource: reloadDetail,
       })
-      setReviews((await fetchKnowledgeMetadataReviewsPage(sourceId)).data)
-      setStatus('Workbook import completed and review projections were reloaded.')
+      requireSucceededOperation(terminal, 'Replacement intake did not complete.')
+      const documentPage = await fetchKnowledgeDocumentsPage(sourceId)
+      setDocuments(documentPage.data)
+      setSelectedRevision((current) => (
+        preferredDocumentRevision(documentPage.data, current)
+      ))
+      setStatus(
+        'Replacement intake completed. The current document revision was reloaded.',
+      )
     } catch (caught) {
-      setError(errorMessage(caught, 'Unable to import workbook.'))
+      setError(errorMessage(caught, 'Unable to replace document.'))
     } finally {
       setBusy(null)
     }
   }
 
-  async function resolveReview(
+  async function generateWorkbook() {
+    const target = documents.find((document) => document.revision_id === selectedRevision)
+    if (!sourceId || !detail || !target) return
+    setBusy('workbook:export')
+    setError(null)
+    setStatus(null)
+    try {
+      const operation = await executeKnowledgeSourceMutation((key) => (
+        generateKnowledgeMetadataWorkbookExport({
+          sourceId,
+          documentId: target.document_id,
+          revisionId: target.revision_id,
+          expectedRevision: detail.revision,
+          idempotencyKey: key,
+        })
+      ))
+      const terminal = await pollKnowledgeSourceOperation({
+        sourceId,
+        operationId: operation.operation_id,
+        reloadSource: reloadDetail,
+      })
+      requireSucceededOperation(terminal, 'Workbook export did not complete.')
+      setWorkbookExportId(operation.operation_id)
+      setWorkbookPreview(null)
+      setStatus('Metadata Workbook V2 is ready to download.')
+    } catch (caught) {
+      setError(errorMessage(caught, 'Unable to generate Metadata Workbook.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function previewWorkbook(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !sourceId || !detail || !workbookExportId) return
+    setBusy('workbook:preview')
+    setError(null)
+    setStatus(null)
+    try {
+      const operation = await executeKnowledgeSourceMutation((key) => (
+        createKnowledgeMetadataWorkbookPreview({
+          sourceId,
+          exportId: workbookExportId,
+          file,
+          expectedRevision: detail.revision,
+          idempotencyKey: key,
+        })
+      ))
+      const terminal = await pollKnowledgeSourceOperation({
+        sourceId,
+        operationId: operation.operation_id,
+        reloadSource: reloadDetail,
+      })
+      const hasSafeValidationReport = (
+        terminal.status === 'failed'
+        && terminal.outcome_code === 'metadata_workbook_preview_validation_failed'
+      )
+      if (!hasSafeValidationReport) {
+        requireSucceededOperation(terminal, 'Workbook Preview did not complete.')
+      }
+      const preview = await fetchKnowledgeMetadataWorkbookPreview(
+        sourceId,
+        operation.operation_id,
+      )
+      setWorkbookPreview(preview)
+      setStatus(
+        preview.state === 'ready_to_apply'
+          ? 'Workbook Preview is ready to apply.'
+          : preview.state === 'conflicts'
+            ? 'Workbook Preview contains conflicts that must be resolved in a new export.'
+            : 'Workbook validation completed. Review the safe validation report.',
+      )
+    } catch (caught) {
+      setError(errorMessage(caught, 'Unable to create Workbook Preview.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function applyWorkbook() {
+    if (
+      !sourceId
+      || !detail
+      || !workbookPreview?.preview_identity
+      || workbookPreview.state !== 'ready_to_apply'
+      || !workbookApplyReason.trim()
+    ) return
+    setBusy('workbook:apply')
+    setError(null)
+    setStatus(null)
+    try {
+      const operation = await executeKnowledgeSourceMutation((key) => (
+        applyKnowledgeMetadataWorkbookPreview({
+          sourceId,
+          previewId: workbookPreview.preview_id,
+          expectedPreviewIdentity: workbookPreview.preview_identity!,
+          expectedRevision: detail.revision,
+          reason: workbookApplyReason.trim(),
+          idempotencyKey: key,
+        })
+      ))
+      const terminal = await pollKnowledgeSourceOperation({
+        sourceId,
+        operationId: operation.operation_id,
+        reloadSource: reloadDetail,
+      })
+      requireSucceededOperation(terminal, 'Workbook Apply did not complete.')
+      const [reviewPage, appliedPreview] = await Promise.all([
+        fetchKnowledgeMetadataReviewsPage(sourceId),
+        fetchKnowledgeMetadataWorkbookPreview(sourceId, workbookPreview.preview_id),
+      ])
+      setReviews(reviewPage.data)
+      setWorkbookPreview(appliedPreview)
+      setWorkbookApplyReason('')
+      setStatus('Workbook changes were applied atomically. Reviews were reloaded.')
+    } catch (caught) {
+      setError(errorMessage(caught, 'Unable to apply Workbook Preview.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function approveReview(
     review: KnowledgeSourceMetadataReviewProjection,
-    action: 'approve' | 'correct' | 'reject',
   ) {
     if (!sourceId || !reviewReason.trim()) return
     setBusy(`review:${review.review_id}`)
     setError(null)
     try {
-      const corrections = action === 'correct'
-        ? parseCorrections(reviewCorrections)
-        : {}
-      const resolved = await resolveKnowledgeMetadataReview(
+      const resolved = await approveKnowledgeMetadataReview(
         sourceId,
         review,
-        action,
-        { reason: reviewReason.trim(), corrections },
+        { reason: reviewReason.trim() },
       )
       setReviews((current) => current.map(
         (item) => item.review_id === resolved.review_id ? resolved : item,
       ))
       setReviewReason('')
-      setReviewCorrections('{}')
       await reloadDetail()
-      setStatus(`Review ${review.review_id} was ${action}d.`)
+      setStatus(`Review ${review.review_id} was approved.`)
     } catch (caught) {
       setError(errorMessage(caught, 'Unable to resolve metadata review.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function saveReviewDraft(
+    review: KnowledgeSourceMetadataReviewProjection,
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
+  ) {
+    if (!sourceId || !reviewReason.trim() || Object.keys(changes).length === 0) return
+    setBusy(`review:${review.review_id}`)
+    setError(null)
+    try {
+      const saved = await saveKnowledgeMetadataReviewDraft(sourceId, review, {
+        reason: reviewReason.trim(),
+        changes,
+      })
+      setReviews((current) => current.map(
+        (item) => item.review_id === saved.review_id ? saved : item,
+      ))
+      setReviewReason('')
+      await reloadDetail()
+      setStatus(`Draft ${review.review_id} was saved.`)
+    } catch (caught) {
+      setError(errorMessage(caught, 'Unable to save metadata review draft.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function rejectReview(
+    review: KnowledgeSourceMetadataReviewProjection,
+  ) {
+    if (!sourceId || !reviewReason.trim()) return
+    setBusy(`review:${review.review_id}`)
+    setError(null)
+    try {
+      const rejected = await rejectKnowledgeMetadataReview(
+        sourceId,
+        review,
+        { reason: reviewReason.trim() },
+      )
+      setReviews((current) => current.map(
+        (item) => item.review_id === rejected.review_id ? rejected : item,
+      ))
+      setReviewReason('')
+      await reloadDetail()
+      setStatus(`Review ${review.review_id} was rejected.`)
+    } catch (caught) {
+      setError(errorMessage(caught, 'Unable to reject metadata review.'))
     } finally {
       setBusy(null)
     }
@@ -344,6 +560,7 @@ export function KnowledgeDetailPage() {
     if (!sourceId || !detail || !smokeQuery.trim()) return
     setBusy('prepare')
     setError(null)
+    setStatus(null)
     try {
       const operation = await executeKnowledgeSourceMutation((key) => (
         prepareKnowledgePublication(
@@ -355,11 +572,12 @@ export function KnowledgeDetailPage() {
           key,
         )
       ))
-      await pollKnowledgeSourceOperation({
+      const terminal = await pollKnowledgeSourceOperation({
         sourceId,
         operationId: operation.operation_id,
         reloadSource: reloadDetail,
       })
+      requireSucceededOperation(terminal, 'Publication preparation did not complete.')
       setValidations((await fetchKnowledgePublicationValidationsPage(sourceId)).data)
       setStatus('Publication preparation completed. Review the prepared validation before publishing.')
     } catch (caught) {
@@ -373,6 +591,7 @@ export function KnowledgeDetailPage() {
     if (!sourceId || !detail || !changeNote.trim()) return
     setBusy(`publish:${validation.validation_id}`)
     setError(null)
+    setStatus(null)
     try {
       const operation = await executeKnowledgeSourceMutation((key) => (
         commitKnowledgePublication(
@@ -386,11 +605,12 @@ export function KnowledgeDetailPage() {
           key,
         )
       ))
-      await pollKnowledgeSourceOperation({
+      const terminal = await pollKnowledgeSourceOperation({
         sourceId,
         operationId: operation.operation_id,
         reloadSource: reloadDetail,
       })
+      requireSucceededOperation(terminal, 'Source publication did not complete.')
       const [validationPage, publicationPage] = await Promise.all([
         fetchKnowledgePublicationValidationsPage(sourceId),
         fetchKnowledgePublicationsPage(sourceId),
@@ -412,6 +632,7 @@ export function KnowledgeDetailPage() {
   }
 
   const nextAction = nextAvailableAction(actionByName)
+  const visibleError = error ?? loadError
 
   return (
     <div className="max-w-7xl space-y-6">
@@ -453,7 +674,7 @@ export function KnowledgeDetailPage() {
       </header>
 
       {status ? <Notice kind="success">{status}</Notice> : null}
-      {error ? <Notice kind="danger">{error}</Notice> : null}
+      {visibleError ? <Notice kind="danger">{visibleError}</Notice> : null}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as WorkspaceTab)}>
         <div className="overflow-x-auto">
@@ -485,30 +706,40 @@ export function KnowledgeDetailPage() {
         <TabsContent value="documents">
           <DocumentsTab
             action={actionByName.get('upload_document')}
-            busy={busy === 'upload'}
+            replaceAction={actionByName.get('replace_document')}
+            busy={busy}
             documents={documents}
             intake={providerCapability}
             loading={tabLoading}
             uploadDisplays={uploadDisplays}
             onUpload={uploadDocuments}
+            onReplace={replaceDocument}
           />
         </TabsContent>
         <TabsContent value="reviews">
           <ReviewsTab
-            canImport={actionByName.get('import_metadata')}
+            sourceId={sourceId}
+            canImport={actionByName.get('edit_metadata_workbook')}
             canReview={actionByName.get('review_metadata')}
             documents={documents}
             reviews={reviews}
+            profile={metadataProfile}
             reason={reviewReason}
-            corrections={reviewCorrections}
             selectedRevision={selectedRevision}
             busy={busy}
             loading={tabLoading}
             onReasonChange={setReviewReason}
-            onCorrectionsChange={setReviewCorrections}
             onRevisionChange={setSelectedRevision}
-            onImport={importWorkbook}
-            onResolve={resolveReview}
+            workbookExportId={workbookExportId}
+            workbookPreview={workbookPreview}
+            workbookApplyReason={workbookApplyReason}
+            onWorkbookApplyReasonChange={setWorkbookApplyReason}
+            onGenerateWorkbook={generateWorkbook}
+            onPreviewWorkbook={previewWorkbook}
+            onApplyWorkbook={applyWorkbook}
+            onApprove={approveReview}
+            onReject={rejectReview}
+            onSaveDraft={saveReviewDraft}
           />
         </TabsContent>
         <TabsContent value="versions">
@@ -649,22 +880,30 @@ function OverviewTab({
 
 function DocumentsTab({
   action,
+  replaceAction,
   busy,
   documents,
   intake,
   loading,
   uploadDisplays,
   onUpload,
+  onReplace,
 }: {
   action: KnowledgeSourceActionCapability | undefined
-  busy: boolean
+  replaceAction: KnowledgeSourceActionCapability | undefined
+  busy: string | null
   documents: readonly KnowledgeSourceDocumentProjection[]
   intake: KnowledgeSourceProviderCapability | undefined
   loading: boolean
   uploadDisplays: readonly UploadDisplay[]
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void
+  onReplace: (
+    document: KnowledgeSourceDocumentProjection,
+    event: ChangeEvent<HTMLInputElement>,
+  ) => void
 }) {
   const allowed = action?.allowed === true
+  const replaceAllowed = replaceAction?.allowed === true
   return (
     <div className="space-y-6">
       <Card className="p-6">
@@ -679,20 +918,20 @@ function DocumentsTab({
               multiple
               accept={intake?.intake.content_types.join(',')}
               aria-label="Upload documents"
-              disabled={!allowed || busy}
+              disabled={!allowed || busy !== null}
               onChange={(event) => void onUpload(event)}
               className="sr-only"
             />
             <span
               aria-hidden="true"
               className={`inline-flex h-9 items-center gap-2 rounded-[var(--radius-md)] px-4 text-sm font-semibold ${
-                allowed && !busy
+                allowed && busy === null
                   ? 'cursor-pointer bg-accent text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]'
                   : 'cursor-not-allowed bg-hover text-muted'
               }`}
             >
               <Upload className="size-4" />
-              {busy ? 'Uploading…' : 'Upload files'}
+              {busy === 'upload' ? 'Uploading…' : 'Upload files'}
             </span>
           </label>
         </div>
@@ -707,8 +946,15 @@ function DocumentsTab({
       {uploadDisplays.length ? (
         <div aria-live="polite" className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface">
           {uploadDisplays.map((item, index) => (
-            <div key={`${item.filename}-${index}`} className="flex items-center justify-between gap-4 border-b border-border px-5 py-3 last:border-b-0">
-              <span className="truncate text-sm text-foreground">{item.filename}</span>
+            <div key={`${item.filename}-${index}`} className="flex items-start justify-between gap-4 border-b border-border px-5 py-3 last:border-b-0">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-foreground">{item.filename}</p>
+                {item.detail ? (
+                  <p className="mt-1 break-words text-xs leading-5 text-danger-foreground">
+                    {item.detail}
+                  </p>
+                ) : null}
+              </div>
               <Badge variant={item.status === 'Completed' ? 'success' : item.status === 'Failed' ? 'danger' : 'warning'}>
                 {item.status}
               </Badge>
@@ -723,15 +969,39 @@ function DocumentsTab({
         emptyDescription="Upload an accepted file to begin governed ingestion."
       >
         {documents.map((document) => (
-          <div key={`${document.document_id}:${document.revision_id}`} className="grid gap-3 border-b border-border px-5 py-4 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <div key={`${document.document_id}:${document.revision_id}`} className="grid gap-3 border-b border-border px-5 py-4 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">{document.filename}</p>
               <p className="mt-1 truncate font-mono text-xs text-muted">{document.revision_id}</p>
             </div>
-            <Badge variant={document.candidate_state === 'candidate' ? 'success' : 'neutral'}>
-              {document.candidate_state}
-            </Badge>
+            {document.candidate_state === 'unselected' ? <span /> : (
+              <Badge variant={document.candidate_state === 'candidate' ? 'success' : 'neutral'}>
+                {document.candidate_state}
+              </Badge>
+            )}
             <span className="self-center font-mono text-xs text-secondary">{document.state}</span>
+            {document.candidate_state === 'candidate' && document.state === 'COMPLETED' ? (
+              <label className="relative self-center">
+                <input
+                  type="file"
+                  accept={intake?.intake.content_types.join(',')}
+                  aria-label={`Replace ${document.filename}`}
+                  disabled={!replaceAllowed || busy !== null}
+                  onChange={(event) => void onReplace(document, event)}
+                  className="sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className={`inline-flex h-8 items-center rounded-[var(--radius-md)] border border-border-strong px-3 text-xs font-semibold ${
+                    replaceAllowed && busy === null
+                      ? 'cursor-pointer bg-surface text-foreground hover:bg-hover'
+                      : 'cursor-not-allowed bg-hover text-muted'
+                  }`}
+                >
+                  {busy === `replace:${document.document_id}` ? 'Replacing…' : 'Replace'}
+                </span>
+              </label>
+            ) : <span />}
           </div>
         ))}
       </ResourceList>
@@ -740,59 +1010,104 @@ function DocumentsTab({
 }
 
 function ReviewsTab({
+  sourceId,
   canImport,
   canReview,
   documents,
   reviews,
+  profile,
   reason,
-  corrections,
   selectedRevision,
   busy,
   loading,
   onReasonChange,
-  onCorrectionsChange,
   onRevisionChange,
-  onImport,
-  onResolve,
+  workbookExportId,
+  workbookPreview,
+  workbookApplyReason,
+  onWorkbookApplyReasonChange,
+  onGenerateWorkbook,
+  onPreviewWorkbook,
+  onApplyWorkbook,
+  onApprove,
+  onReject,
+  onSaveDraft,
 }: {
+  sourceId: string
   canImport: KnowledgeSourceActionCapability | undefined
   canReview: KnowledgeSourceActionCapability | undefined
   documents: readonly KnowledgeSourceDocumentProjection[]
   reviews: readonly KnowledgeSourceMetadataReviewProjection[]
+  profile: KnowledgeSourceMetadataProfileProjection | null
   reason: string
-  corrections: string
   selectedRevision: string
   busy: string | null
   loading: boolean
   onReasonChange: (value: string) => void
-  onCorrectionsChange: (value: string) => void
   onRevisionChange: (value: string) => void
-  onImport: (event: ChangeEvent<HTMLInputElement>) => void
-  onResolve: (
+  workbookExportId: string | null
+  workbookPreview: KnowledgeSourceMetadataWorkbookPreviewProjection | null
+  workbookApplyReason: string
+  onWorkbookApplyReasonChange: (value: string) => void
+  onGenerateWorkbook: () => void
+  onPreviewWorkbook: (event: ChangeEvent<HTMLInputElement>) => void
+  onApplyWorkbook: () => void
+  onApprove: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onReject: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onSaveDraft: (
     review: KnowledgeSourceMetadataReviewProjection,
-    action: 'approve' | 'correct' | 'reject',
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
   ) => void
 }) {
+  const counts = reviews.reduce(
+    (current, review) => ({ ...current, [review.state]: current[review.state] + 1 }),
+    { needs_input: 0, ready_for_approval: 0, approved: 0, rejected: 0 },
+  )
+
   return (
     <div className="space-y-6">
       <Card className="p-6">
         <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(240px,auto)]">
           <div>
             <SectionHeading
-              title="Business metadata review"
-              description="Import an exact-revision workbook, then resolve conflicts under the dedicated review permission."
+              title="Metadata review workspace"
+              description="Review parser proposals, save Profile-valid drafts, and approve the exact current revision."
             />
+            {profile ? (
+              <p className="mt-3 text-xs text-muted">
+                Profile <span className="font-mono text-foreground">{profile.profile_revision_id}</span>
+                {' · '}{profile.metadata_scheme}
+              </p>
+            ) : null}
             <ActionBlockers action={canImport} />
           </div>
-          <div className="space-y-3">
+          <div className="rounded-[var(--radius-md)] border border-border bg-subtle p-4 text-xs leading-5 text-secondary">
+            Use the structured editors below for focused work. Metadata Workbook V2 is
+            available as a source-bound offline bulk-edit workflow.
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <details open>
+          <summary className="cursor-pointer text-sm font-semibold text-foreground">
+            Bulk edit with Metadata Workbook V2
+          </summary>
+          <p className="mt-2 text-xs leading-5 text-muted">
+            Generate from the current Review Set, edit only unlocked cells, return the
+            same file for a three-way Preview, then apply once with a reason.
+          </p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
             <div>
               <Label htmlFor="workbook-revision">Target document revision</Label>
               <select
                 id="workbook-revision"
                 className="mt-2 h-9 w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 text-sm text-foreground"
                 value={selectedRevision}
-                disabled={documents.length === 0}
-                onChange={(event) => onRevisionChange(event.target.value)}
+                disabled={documents.length === 0 || busy?.startsWith('workbook:') === true}
+                onChange={(event) => {
+                  onRevisionChange(event.target.value)
+                }}
               >
                 {documents.map((document) => (
                   <option key={document.revision_id} value={document.revision_id}>
@@ -801,88 +1116,417 @@ function ReviewsTab({
                 ))}
               </select>
             </div>
-            <label>
-              <input
-                className="sr-only"
-                type="file"
-                accept="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                aria-label="Import metadata workbook"
-                disabled={!canImport?.allowed || !selectedRevision || busy === 'workbook'}
-                onChange={(event) => void onImport(event)}
-              />
-              <span
-                aria-hidden="true"
-                className="inline-flex h-9 cursor-pointer items-center rounded-[var(--radius-md)] border border-border-strong bg-surface px-4 text-sm font-semibold text-foreground hover:bg-hover"
-              >
-                {busy === 'workbook' ? 'Importing…' : 'Import workbook'}
-              </span>
-            </label>
+            <Button
+              type="button"
+              className="self-end"
+              disabled={!profile || !canImport?.allowed || !selectedRevision || busy !== null}
+              onClick={() => void onGenerateWorkbook()}
+            >
+              {busy === 'workbook:export' ? 'Generating…' : 'Generate workbook'}
+            </Button>
           </div>
-        </div>
+
+          {workbookExportId ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-border bg-surface p-4">
+              <a
+                className="text-sm font-semibold text-accent hover:underline"
+                href={knowledgeMetadataWorkbookExportDownloadUrl(sourceId, workbookExportId)}
+              >
+                Download workbook
+              </a>
+              <label className="relative">
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  aria-label="Return edited workbook"
+                  disabled={!canImport?.allowed || busy !== null}
+                  onChange={(event) => void onPreviewWorkbook(event)}
+                />
+                <span
+                  aria-hidden="true"
+                  className="inline-flex h-9 cursor-pointer items-center rounded-[var(--radius-md)] border border-border-strong bg-surface px-4 text-sm font-semibold text-foreground hover:bg-hover"
+                >
+                  {busy === 'workbook:preview' ? 'Validating…' : 'Return edited workbook'}
+                </span>
+              </label>
+            </div>
+          ) : null}
+
+          {workbookPreview ? (
+            <div className="mt-4 space-y-4 rounded-[var(--radius-md)] border border-border bg-surface p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-foreground">Workbook Preview</p>
+                <Badge variant={workbookPreview.state === 'ready_to_apply' ? 'success' : workbookPreview.state === 'conflicts' ? 'warning' : 'danger'}>
+                  {workbookPreview.state === 'ready_to_apply'
+                    ? 'Ready to apply'
+                    : workbookPreview.state.replaceAll('_', ' ')}
+                </Badge>
+              </div>
+              {workbookPreview.validation_report ? (
+                <ul className="space-y-2 text-xs text-danger-foreground">
+                  {workbookPreview.validation_report.errors.map((issue, index) => (
+                    <li key={`${issue.code}:${index}`}>
+                      <span className="font-mono">{issue.code}</span>
+                      {' · '}{issue.sheet ?? 'Workbook'}
+                      {issue.row ? ` row ${issue.row}` : ''}
+                      {issue.field ? ` · ${issue.field}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="text-muted">
+                      <tr><th className="pb-2">Field</th><th className="pb-2">Merge</th><th className="pb-2">Proposed</th></tr>
+                    </thead>
+                    <tbody>
+                      {workbookPreview.field_merges
+                        .filter((merge) => merge.classification !== 'unchanged')
+                        .slice(0, 100)
+                        .map((merge) => (
+                          <tr key={`${merge.scope}:${merge.canonical_anchor ?? 'default'}:${merge.field}`} className="border-t border-border">
+                            <td className="py-2 font-mono text-foreground">{merge.field}</td>
+                            <td className="py-2 text-secondary">{merge.classification.replaceAll('_', ' ')}</td>
+                            <td className="py-2 font-mono text-foreground">{String(merge.proposed_value ?? '—')}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div>
+                <Label htmlFor="workbook-apply-reason">Workbook apply reason</Label>
+                <Input
+                  id="workbook-apply-reason"
+                  className="mt-2"
+                  value={workbookApplyReason}
+                  onChange={(event) => onWorkbookApplyReasonChange(event.target.value)}
+                  placeholder="Required for atomic Apply"
+                />
+              </div>
+              <Button
+                type="button"
+                disabled={
+                  workbookPreview.state !== 'ready_to_apply'
+                  || !workbookPreview.preview_identity
+                  || !workbookApplyReason.trim()
+                  || busy !== null
+                }
+                onClick={() => void onApplyWorkbook()}
+              >
+                {busy === 'workbook:apply' ? 'Applying…' : 'Apply workbook changes'}
+              </Button>
+            </div>
+          ) : null}
+        </details>
       </Card>
 
       {reviews.length ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div>
+        <Card className="p-5">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Metadata review summary">
+              <ReviewCount label="Needs input" value={counts.needs_input} />
+              <ReviewCount label="Ready" value={counts.ready_for_approval} />
+              <ReviewCount label="Approved" value={counts.approved} />
+              <ReviewCount label="Rejected" value={counts.rejected} />
+            </div>
+            <div className="w-full max-w-xl">
           <Label htmlFor="review-reason">Decision reason</Label>
           <Input
             id="review-reason"
-            className="mt-2 max-w-2xl"
+                className="mt-2"
             value={reason}
             onChange={(event) => onReasonChange(event.target.value)}
-            placeholder="Required trace-safe reason"
+                placeholder="Required for every saved draft or approval"
           />
+            </div>
           </div>
-          <div>
-            <Label htmlFor="review-corrections">Corrections JSON</Label>
-            <Textarea
-              id="review-corrections"
-              className="mt-2 min-h-20 font-mono text-xs"
-              value={corrections}
-              onChange={(event) => onCorrectionsChange(event.target.value)}
-              placeholder='{"canonical_anchor":"section-4"}'
-            />
-          </div>
-        </div>
+        </Card>
       ) : null}
       <ActionBlockers action={canReview} />
-      <ResourceList
-        loading={loading}
-        emptyTitle="No metadata reviews"
-        emptyDescription="Import a validated workbook when business curation is required."
-      >
-        {reviews.map((review) => (
-          <div key={review.review_id} className="border-b border-border px-5 py-4 last:border-b-0">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="font-mono text-sm text-foreground">{review.review_id}</p>
-                <p className="mt-1 text-xs text-muted">
-                  Revision {review.review_version} · {review.conflict_count} conflicts
-                </p>
-              </div>
-              <Badge variant={review.publication_blocked ? 'warning' : 'success'}>{review.state}</Badge>
-            </div>
-            {canReview?.allowed ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {(['approve', 'correct', 'reject'] as const).map((action) => (
-                  <Button
-                    key={action}
-                    type="button"
-                    size="sm"
-                    variant={action === 'approve' ? 'default' : action === 'correct' ? 'outline' : 'destructive-outline'}
-                    disabled={!reason.trim() || busy === `review:${review.review_id}`}
-                    onClick={() => void onResolve(review, action)}
-                  >
-                    {action === 'approve' ? 'Approve' : action === 'correct' ? 'Apply corrections' : 'Reject'}
-                  </Button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </ResourceList>
+      {!loading && counts.ready_for_approval > 0 ? (
+        <Notice kind="success">
+          AI review prepared {counts.ready_for_approval}{' '}
+          {counts.ready_for_approval === 1 ? 'suggestion' : 'suggestions'} for confirmation.
+          {' '}Review the governed values before approving.
+        </Notice>
+      ) : null}
+      {loading ? <LoadingSpinner label="Loading metadata reviews" /> : !profile ? (
+        <Notice kind="danger">
+          No Metadata Profile is bound. Bind a published Profile before reviewing documents.
+        </Notice>
+      ) : reviews.length === 0 ? (
+        <EmptyState message="No metadata reviews. A Review Set is created from the parser proposal after governed document intake." />
+      ) : (
+        <div className="space-y-4">
+          {reviews.map((review) => (
+            <MetadataReviewEditor
+              key={review.review_id}
+              review={review}
+              profile={profile}
+              reason={reason}
+              permitted={canReview?.allowed === true}
+              busy={busy === `review:${review.review_id}`}
+              onApprove={onApprove}
+              onReject={onReject}
+              onSaveDraft={onSaveDraft}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
+}
+
+function ReviewCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-24 rounded-[var(--radius-md)] border border-border bg-subtle px-3 py-2">
+      <p className="text-xs text-muted">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function MetadataReviewEditor({
+  review,
+  profile,
+  reason,
+  permitted,
+  busy,
+  onApprove,
+  onReject,
+  onSaveDraft,
+}: {
+  review: KnowledgeSourceMetadataReviewProjection
+  profile: KnowledgeSourceMetadataProfileProjection
+  reason: string
+  permitted: boolean
+  busy: boolean
+  onApprove: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onReject: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onSaveDraft: (
+    review: KnowledgeSourceMetadataReviewProjection,
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
+  ) => void
+}) {
+  const [draft, setDraft] = useState(review.current_draft)
+
+  useEffect(() => {
+    setDraft(review.current_draft)
+  }, [review.review_identity, review.current_draft])
+
+  const changes = metadataChanges(review.current_draft, draft)
+  const dirty = Object.keys(changes).length > 0
+  const isApproved = review.state === 'approved'
+  const fieldPrefix = `${review.review_id}-metadata`
+
+  function update<K extends keyof KnowledgeSourceMetadataValuesProjection>(
+    field: K,
+    value: KnowledgeSourceMetadataValuesProjection[K],
+  ) {
+    setDraft((current) => ({ ...current, [field]: value }))
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-foreground">
+            {review.scope === 'document_default'
+              ? 'Document Default'
+              : `Rule Unit Override · ${review.canonical_anchor}`}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-xs text-muted">
+            <span>{review.review_id}</span>
+            <span>version {review.review_version}</span>
+          </div>
+        </div>
+        <Badge variant={reviewStateVariant(review.state)}>{review.state}</Badge>
+      </div>
+
+      <details className="mt-4 rounded-[var(--radius-md)] border border-border bg-subtle px-4 py-3">
+        <summary className="cursor-pointer text-xs font-semibold text-secondary">Compare AI suggestion</summary>
+        <dl className="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+          {metadataFieldEntries(review.parser_proposal).map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-3 border-b border-border pb-2">
+              <dt className="text-muted">{label}</dt>
+              <dd className="text-right font-mono text-foreground">{formatMetadataValue(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <Label htmlFor={`${fieldPrefix}-authority`}>Authority</Label>
+          <select
+            id={`${fieldPrefix}-authority`}
+            className="mt-2 h-9 w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 text-sm text-foreground disabled:opacity-60"
+            value={draft.authority ?? ''}
+            disabled={!permitted || isApproved || busy}
+            onChange={(event) => update('authority', event.target.value || null)}
+          >
+            <option value="">Select authority</option>
+            {profile.authority_values.map((value) => (
+              <option key={value.code} value={value.code}>{value.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label htmlFor={`${fieldPrefix}-tier`}>Precedence tier</Label>
+          <select
+            id={`${fieldPrefix}-tier`}
+            className="mt-2 h-9 w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 text-sm text-foreground disabled:opacity-60"
+            value={draft.precedence_authority_tier ?? ''}
+            disabled={!permitted || isApproved || busy}
+            onChange={(event) => update('precedence_authority_tier', event.target.value || null)}
+          >
+            <option value="">Select tier</option>
+            {profile.precedence_authority_tier_values.map((value) => (
+              <option key={value.code} value={value.code}>{value.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label htmlFor={`${fieldPrefix}-effective-from`}>Effective from</Label>
+          <Input
+            id={`${fieldPrefix}-effective-from`}
+            className="mt-2"
+            type="date"
+            value={draft.effective_from ?? ''}
+            disabled={!permitted || isApproved || busy}
+            onChange={(event) => update('effective_from', event.target.value || null)}
+          />
+        </div>
+        <div>
+          <Label htmlFor={`${fieldPrefix}-effective-to`}>Effective to</Label>
+          <Input
+            id={`${fieldPrefix}-effective-to`}
+            className="mt-2"
+            type="date"
+            value={draft.effective_to ?? ''}
+            disabled={!permitted || isApproved || busy}
+            onChange={(event) => update('effective_to', event.target.value || null)}
+          />
+        </div>
+        <div>
+          <Label htmlFor={`${fieldPrefix}-precedence-order`}>Precedence order</Label>
+          <Input
+            id={`${fieldPrefix}-precedence-order`}
+            className="mt-2"
+            type="number"
+            min={0}
+            value={draft.precedence_order ?? ''}
+            disabled={!permitted || isApproved || busy}
+            onChange={(event) => update(
+              'precedence_order',
+              event.target.value === '' ? null : Number(event.target.value),
+            )}
+          />
+        </div>
+        <LockedMetadataField label="Taxonomy" value={`${profile.taxonomy_id} · ${profile.taxonomy_revision_id}`} />
+        <LockedMetadataField label="Precedence policy" value={profile.precedence_policy_revision_id} />
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!permitted || isApproved || !dirty || !reason.trim() || busy}
+          onClick={() => void onSaveDraft(review, changes)}
+        >
+          {busy ? 'Saving…' : 'Save draft'}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={
+            !permitted
+            || review.state !== 'ready_for_approval'
+            || dirty
+            || !reason.trim()
+            || busy
+          }
+          onClick={() => void onApprove(review)}
+        >
+          {busy ? 'Applying…' : 'Confirm & approve'}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive-outline"
+          disabled={
+            !permitted
+            || isApproved
+            || review.state === 'rejected'
+            || dirty
+            || !reason.trim()
+            || busy
+          }
+          onClick={() => void onReject(review)}
+        >
+          {busy ? 'Applying…' : 'Reject'}
+        </Button>
+        {dirty ? (
+          <p className="text-xs text-warning-foreground">Save the draft before approval.</p>
+        ) : null}
+      </div>
+    </Card>
+  )
+}
+
+function LockedMetadataField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-secondary">{label}</p>
+      <p className="mt-2 min-h-9 rounded-[var(--radius-md)] border border-border bg-subtle px-3 py-2 font-mono text-xs text-muted">
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function metadataChanges(
+  base: KnowledgeSourceMetadataValuesProjection,
+  draft: KnowledgeSourceMetadataValuesProjection,
+): Partial<KnowledgeSourceMetadataValuesProjection> {
+  const changes: Partial<KnowledgeSourceMetadataValuesProjection> = {}
+  for (const key of Object.keys(base) as (keyof KnowledgeSourceMetadataValuesProjection)[]) {
+    if (base[key] !== draft[key]) {
+      Object.assign(changes, { [key]: draft[key] })
+    }
+  }
+  return changes
+}
+
+function metadataFieldEntries(
+  values: KnowledgeSourceMetadataValuesProjection,
+): readonly [string, string | number | null][] {
+  return [
+    ['Authority', values.authority],
+    ['Effective from', values.effective_from],
+    ['Effective to', values.effective_to],
+    ['Taxonomy', values.taxonomy_id],
+    ['Taxonomy revision', values.taxonomy_revision_id],
+    ['Precedence policy', values.precedence_policy_revision_id],
+    ['Precedence tier', values.precedence_authority_tier],
+    ['Precedence order', values.precedence_order],
+  ]
+}
+
+function formatMetadataValue(value: string | number | null): string {
+  return value === null ? 'Not set' : String(value)
+}
+
+function reviewStateVariant(
+  state: KnowledgeSourceMetadataReviewProjection['state'],
+): 'success' | 'danger' | 'warning' | 'neutral' {
+  if (state === 'approved') return 'success'
+  if (state === 'rejected') return 'danger'
+  if (state === 'ready_for_approval') return 'warning'
+  return 'neutral'
 }
 
 function VersionsTab({
@@ -1239,24 +1883,26 @@ function formatTimestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function parseCorrections(value: string): Record<string, string | number | null> {
-  const parsed: unknown = JSON.parse(value)
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error('Corrections must be a JSON object.')
-  }
-  const corrections: Record<string, string | number | null> = {}
-  for (const [key, item] of Object.entries(parsed)) {
-    if (item !== null && typeof item !== 'string' && typeof item !== 'number') {
-      throw new Error(`Correction ${key} must be a string, number, or null.`)
+function errorMessage(caught: unknown, fallback: string): string {
+  if (caught instanceof ApiError) {
+    if (caught.problem) {
+      const code = caught.problem.code.startsWith('pa_')
+        ? caught.problem.code.toUpperCase()
+        : caught.problem.code
+      return `${code}: ${caught.problem.detail}`
     }
-    corrections[key] = item
+    if (typeof caught.detail === 'string' && caught.detail) return caught.detail
   }
-  if (Object.keys(corrections).length === 0) {
-    throw new Error('Correct requires at least one correction field.')
-  }
-  return corrections
+  return caught instanceof Error ? caught.message : fallback
 }
 
-function errorMessage(caught: unknown, fallback: string): string {
-  return caught instanceof Error ? caught.message : fallback
+function requireSucceededOperation(
+  operation: KnowledgeSourceOperation,
+  fallback: string,
+): void {
+  if (operation.status === 'succeeded') return
+  const code = operation.outcome_code?.trim()
+  const detail = operation.outcome_detail?.trim()
+  const outcome = [code, detail].filter(Boolean).join(': ')
+  throw new Error(outcome || fallback)
 }

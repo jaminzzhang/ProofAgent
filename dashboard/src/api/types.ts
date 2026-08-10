@@ -1113,7 +1113,7 @@ export interface KnowledgeSourceDocumentProjection {
   filename: string
   content_type: string
   state: string
-  candidate_state: 'candidate' | 'pending' | 'superseded'
+  candidate_state: 'candidate' | 'pending' | 'superseded' | 'unselected'
   safe_reason: string | null
   created_at: string
   updated_at: string
@@ -1125,13 +1125,83 @@ export interface KnowledgeSourceMetadataReviewProjection {
   review_version: number
   document_id: string
   revision_id: string
-  state: 'review_required' | 'ready_for_review' | 'approved' | 'corrected' | 'rejected'
-  publication_blocked: boolean
+  structured_build_id: string
+  profile_revision_id: string
+  scope: 'document_default' | 'rule_unit_override'
+  state: 'needs_input' | 'ready_for_approval' | 'approved' | 'rejected'
+  current: boolean
   canonical_anchor: string | null
-  citation_uri: string
+  approved_metadata_revision_id: string | null
+  parser_proposal: KnowledgeSourceMetadataValuesProjection
+  current_draft: KnowledgeSourceMetadataValuesProjection
+}
+
+export interface KnowledgeSourceMetadataValuesProjection {
+  authority: string | null
+  effective_from: string | null
+  effective_to: string | null
+  taxonomy_id: string | null
+  taxonomy_revision_id: string | null
+  precedence_policy_revision_id: string | null
+  precedence_authority_tier: string | null
+  precedence_order: number | null
+}
+
+export interface KnowledgeSourceMetadataProfileProjection {
+  metadata_scheme: 'insurance_rule.v2'
+  profile_id: string
+  profile_revision_id: string
+  reference_only: boolean
+  authority_values: readonly { code: string; label: string }[]
+  taxonomy_id: string
+  taxonomy_revision_id: string
+  precedence_policy_revision_id: string
+  precedence_authority_tier_values: readonly { code: string; label: string }[]
+}
+
+export interface KnowledgeSourceMetadataWorkbookFieldMergeProjection {
+  scope: 'document_default' | 'rule_unit_override'
+  canonical_anchor: string | null
+  field: string
+  classification: 'unchanged' | 'workbook_only' | 'server_only' | 'matching_change' | 'conflict'
+  base_value: string | number | null
+  server_value: string | number | null
+  workbook_value: string | number | null
+  proposed_value: string | number | null
+}
+
+export interface KnowledgeSourceMetadataWorkbookOverrideMergeProjection {
+  canonical_anchor: string
+  base_mode: 'inherit' | 'override'
+  server_mode: 'inherit' | 'override'
+  workbook_mode: 'inherit' | 'override'
+  classification: 'unchanged' | 'workbook_only' | 'server_only' | 'matching_change' | 'conflict'
+  proposed_mode: 'inherit' | 'override' | null
+  override_reason: string | null
+}
+
+export interface KnowledgeSourceMetadataWorkbookValidationIssueProjection {
+  sheet: string | null
+  row: number | null
+  field: string | null
+  code: string
+  suggested_action_key: string
+}
+
+export interface KnowledgeSourceMetadataWorkbookPreviewProjection {
+  preview_id: string
+  export_id: string
+  state: 'validation_failed' | 'conflicts' | 'ready_to_apply' | 'applied' | 'expired' | 'stale'
+  preview_identity: string | null
   conflict_count: number
-  resolution_reason: string | null
-  resolved_by: string | null
+  field_merges: KnowledgeSourceMetadataWorkbookFieldMergeProjection[]
+  override_modes: KnowledgeSourceMetadataWorkbookOverrideMergeProjection[]
+  validation_report: {
+    total_error_count: number
+    errors: KnowledgeSourceMetadataWorkbookValidationIssueProjection[]
+  } | null
+  created_at: string
+  expires_at: string
 }
 
 export interface KnowledgeSourcePublicationValidationProjection {

@@ -458,6 +458,7 @@ export function bindKnowledgeSourceToDraft(
   payload: {
     source_id: string
     binding_id?: string | null
+    retrieval_profile_revision_id?: string | null
     alias?: string | null
     failure_mode?: 'required' | 'advisory'
     fusion_weight?: number

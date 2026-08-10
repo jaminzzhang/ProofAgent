@@ -568,7 +568,7 @@ test('model connection client methods use shared model endpoints', async () => {
   )
 })
 
-test('bindKnowledgeSourceToDraft posts a shared source binding request', async () => {
+test('bindKnowledgeSourceToDraft posts a Hybrid shared source binding request', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({ agent_yaml: 'name: enterprise_qa' }), {
       status: 200,
@@ -577,7 +577,8 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
   )
 
   await bindKnowledgeSourceToDraft('enterprise_qa', 'draft_1', {
-    source_id: 'ks_local_index',
+    source_id: 'ks_hybrid_index',
+    retrieval_profile_revision_id: 'insurance-profile-v1',
     alias: 'policies',
     failure_mode: 'advisory',
     fusion_weight: 0.75,
@@ -589,7 +590,8 @@ test('bindKnowledgeSourceToDraft posts a shared source binding request', async (
     sameOriginRequest({
       method: 'POST',
       body: JSON.stringify({
-        source_id: 'ks_local_index',
+        source_id: 'ks_hybrid_index',
+        retrieval_profile_revision_id: 'insurance-profile-v1',
         alias: 'policies',
         failure_mode: 'advisory',
         fusion_weight: 0.75,

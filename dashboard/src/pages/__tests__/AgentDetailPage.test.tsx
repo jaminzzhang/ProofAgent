@@ -1373,7 +1373,7 @@ workflow:
         {
           source_id: 'ks_published',
           name: 'Shared Published Policies',
-          provider: 'local_index',
+          provider: 'hybrid_index',
           lifecycle_state: 'ACTIVE',
           params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
           created_at: '2026-05-31T00:00:00Z',
@@ -1401,6 +1401,21 @@ workflow:
           ready_document_count: 1,
         },
         {
+          source_id: 'ks_local_published',
+          name: 'Shared Local Reference',
+          provider: 'local_index',
+          lifecycle_state: 'ACTIVE',
+          params: {},
+          created_at: '2026-05-31T00:00:00Z',
+          updated_at: '2026-05-31T00:00:00Z',
+          source_draft_version_id: 'ksdraft_local',
+          latest_snapshot_id: 'kssnapshot_local',
+          published_snapshot_id: 'kssnapshot_local',
+          publication_count: 1,
+          document_count: 1,
+          ready_document_count: 1,
+        },
+        {
           source_id: 'ks_archived_published',
           name: 'Archived Published Policies',
           provider: 'local_index',
@@ -1416,7 +1431,7 @@ workflow:
           ready_document_count: 1,
         },
       ],
-      meta: { total: 3 },
+      meta: { total: 4 },
     })
     vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
       ...mockContract,
@@ -1428,6 +1443,7 @@ workflow:
         '  source_ref:',
         '    scope: shared',
         '    source_id: ks_published',
+        '  retrieval_profile_revision_id: insurance-profile-v1',
         '  failure_mode: required',
         '  fusion_weight: 1',
         '',
@@ -1439,17 +1455,29 @@ workflow:
     expect(await screen.findByText(/Shared Published Policies/)).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /Draft Policies/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /Archived Published Policies/ })).not.toBeInTheDocument()
-    expect(screen.getByText('1 published available')).toBeInTheDocument()
+    expect(screen.getByText('2 published available')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Knowledge Source'), {
+      target: { value: 'ks_local_published' },
+    })
+    expect(screen.queryByLabelText('Knowledge Retrieval Profile Revision')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Knowledge Source'), {
+      target: { value: 'ks_published' },
+    })
+    fireEvent.change(screen.getByLabelText('Knowledge Retrieval Profile Revision'), {
+      target: { value: 'insurance-profile-v1' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
 
     await waitFor(() => {
       expect(bindKnowledgeSourceToDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
         source_id: 'ks_published',
+        retrieval_profile_revision_id: 'insurance-profile-v1',
         alias: '',
         failure_mode: 'required',
         fusion_weight: 1,
       })
     })
+    expect(await screen.findByText('insurance-profile-v1')).toBeInTheDocument()
     expect(refreshDraft).toHaveBeenCalled()
   })
 
