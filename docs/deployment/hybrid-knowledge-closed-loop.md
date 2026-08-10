@@ -117,7 +117,7 @@ uv run proof-agent run-executor --slot 1 --concurrency 5
 1. 先读取 `GET /api/config/knowledge-source-capabilities`，再创建 `source_id=insurance-rules`、`provider=hybrid_index` 的 Source。该 ID 必须与生产候选包一致；Dashboard 不配置私有服务 endpoint、凭据或模型 digest。
 2. 调用 `POST /api/config/knowledge-sources/{source_id}/documents`，使用 `multipart/form-data` 传递原始 `file` 和当前 `expected_revision`，并提供 `Idempotency-Key`。浏览器不上传 Base64，也不持有 S3 authority。
 3. 通过响应中的 `operation_id` 轮询 `/operations/{operation_id}`，再读取 cursor document projection；`review_required`、`failed` 或未完成文档会阻止候选发布。
-4. 按 `insurance-rule-metadata.v1` 工作簿格式调用 `/metadata-imports`，同样使用 multipart、精确 `document_id`/`revision_id`、Source revision 与幂等键。操作完成后逐条读取 metadata review 的 `review_version` 与 `review_identity`，再 approve/correct。未批准、冲突或多重不同 authority 会失败关闭。
+4. 读取 `/metadata-reviews`，通过 `/draft` 保存当前 Review V2 草稿，再使用精确的 `review_version` 和 `review_identity` 调用 `/approve` 或 `/reject`。未批准、状态冲突或 Profile 不匹配时，系统阻止候选发布。需要离线批量编辑时，使用可选的 Workbook V2 流程：先从 `/documents/{document_id}/metadata-workbook-exports` 生成 Export，下载服务端生成的五页签 XLSX，再将编辑后的文件上传到 `/metadata-workbook-import-previews`。读取安全 Preview 并确认无冲突后，使用 `expected_preview_identity`、当前 Source revision 和原因调用 `/metadata-workbook-import-previews/{preview_id}/apply`。不要调用已删除的 V1 `/metadata-imports`。
 5. 调用 `/publication-validations` 创建异步 preparation operation；轮询成功后读取 `prepared` validation 的 `validation_id` 与 `fencing_token`，最后调用 `/publications` 做短 PostgreSQL CAS。
 
 ```bash

@@ -802,6 +802,8 @@ class PrivateParserClient(Protocol):
 
 
 class ParserServiceRequest(FrozenModel):
+    document_id: str
+    revision_id: str
     original_ref: ExactArtifactRef
     page_numbers: tuple[int, ...]
     parser_revision: str

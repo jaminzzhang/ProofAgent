@@ -120,21 +120,33 @@ _Avoid_: Arbitrary external link, javascript URL, secret-bearing URL
 The Source Draft-version-bound precondition for Knowledge Source Publication. Any relevant Draft configuration change invalidates the prior result and requires validation again before publication. For a Hybrid Source, validation is an asynchronous preparation operation that completes manifest construction, staged index projection, exact read-back, projection attestation, and smoke retrieval before issuing a one-use validation identity.
 _Avoid_: Agent Validation Run, one-time Source validation, configuration-drift publication
 
+**System Retrieval Smoke Check**:
+The mandatory provider-executed technical retrieval check generated from current candidate authority during Knowledge Source Publication Validation. For Hybrid Knowledge it selects one exact candidate Rule Unit and validates embedding, staged projection, authorization filtering, retrieval, and citation read-back without requiring an operator-authored query at publication time.
+_Avoid_: Ad hoc Prepare input, business acceptance suite, query-only health check, warning-only retrieval failure
+
+**Source Verification Query Set**:
+The versioned reusable set of operator-managed blocking Source Verification Cases executed automatically during Source publication preparation when configured or required by deployment policy. It supplements the System Retrieval Smoke Check without becoming Agent behavior evaluation, exploratory retrieval, or a per-publication free-text field.
+_Avoid_: Temporary smoke-query textbox, warning-only query list, Agent Evaluation Suite, unversioned prompt list, automatic metadata approval
+
+**Source Verification Case**:
+A deterministic `must_retrieve` or `must_not_retrieve` business retrieval obligation containing query text, expected current Source evidence target or explicit absence, authorization context, as-of date, and maintenance rationale. Every enabled Case blocks preparation on failure or when its expected target can no longer resolve.
+_Avoid_: Any-result smoke query, model-scored answer, exploratory preview, stale anchor expectation
+
 **Prepared Hybrid Knowledge Publication**:
-The one-use, non-visible Hybrid publication candidate produced after asynchronous Knowledge Source Publication Validation completes all S3, private-model, and OpenSearch work. It binds the exact Source Draft version, candidate and generation digests, manifest, attempt-scoped staged projection, attestation, and smoke result so explicit Knowledge Source Publication can perform only a short PostgreSQL compare-and-swap; failed or stale preparation never changes runtime authority.
-_Avoid_: Published Knowledge Source Snapshot, API-held transaction, visible staged projection, reusable validation
+The one-use, non-visible Hybrid publication candidate produced after asynchronous Knowledge Source Publication Validation completes all S3, private-model, and OpenSearch work. It binds the exact Source Draft version, candidate and generation digests, manifest, attempt-scoped staged projection, attestation, smoke result, and a default twenty-four-hour expiry so explicit Knowledge Source Publication can perform only a short PostgreSQL compare-and-swap; failed, stale, expired, or consumed preparation never changes runtime authority.
+_Avoid_: Published Knowledge Source Snapshot, API-held transaction, visible staged projection, reusable or permanent validation
 
 **Foundation Knowledge Source Publication Validation**:
 The incremental local-index publication check that binds one Knowledge Source Draft Version and proves at least one READY revision, compatible artifacts for every candidate revision, and no pending required reingestion. It may freeze a development-stage READY snapshot for subsequent routing work, but it does not claim production readiness before routing-model tests, smoke retrieval, and citation resolution validation are added.
 _Avoid_: Production-ready validation, upload-success publication, unversioned partial check, routing smoke test
 
 **Local Index Source Publication Validation**:
-The local index publication check that requires at least one READY Knowledge Document Revision, no pending required reingestion, compatible artifacts for every revision included in the Candidate Knowledge Source Snapshot, successful ingestion and routing model configuration tests, and one editable smoke query proving routing, retrieval, and citation resolution.
-_Avoid_: Upload-success publication, partial required rebuild, citation-free smoke test
+The local index publication check that requires at least one READY Knowledge Document Revision, no pending required reingestion, compatible artifacts for every revision included in the Candidate Knowledge Source Snapshot, successful ingestion and routing model configuration tests, and automatic retrieval verification plus any configured Source Verification Query Set proving routing, retrieval, and citation resolution.
+_Avoid_: Upload-success publication, partial required rebuild, citation-free smoke test, per-publication query textbox
 
 **Remote Knowledge Source Publication Validation**:
-The remote Source publication check that binds one Source Draft Version to a validated remote configuration. It requires adapter-supported health-check verification when available, successful authentication, target index or namespace validation when declared, response normalization validation, and one smoke query proving normalized candidate evidence plus citation or adequate Structured Remote Source Reference. Generic adapters such as `http_json` may publish a mutable external `remote_config` after smoke retrieval validation; adapters that cannot prove retrieval normalization remain preview-only.
-_Avoid_: Stale health check, mapping-only validation, pretending remote config is a local snapshot
+The remote Source publication check that binds one Source Draft Version to a validated remote configuration. It requires adapter-supported health-check verification when available, successful authentication, target index or namespace validation when declared, response normalization validation, and reusable verification queries when the adapter cannot derive a deterministic system probe, proving normalized candidate evidence plus citation or adequate Structured Remote Source Reference. Generic adapters such as `http_json` may publish a mutable external `remote_config` after retrieval validation; adapters that cannot prove retrieval normalization remain preview-only.
+_Avoid_: Stale health check, mapping-only validation, pretending remote config is a local snapshot, per-publication query textbox
 
 **Knowledge Source Publication Confirmation**:
 The operator confirmation shown immediately before Knowledge Source Publication. It identifies the Source Draft and prior published version, summarizes local document additions, replacements, archives, and READY count or remote adapter, target, consistency mode, and verification time, shows smoke-query validation result and referencing Agent count, requires a `change_note`, and states that publication creates Draft Agent upgrade availability without mutating existing Published Agent Versions.
@@ -608,9 +620,37 @@ _Avoid_: Knowledge Source Index State, Knowledge Ingestion Job status, silent om
 The business-visible review condition kept separate from Knowledge Document Ingestion State when parsing quality, table reconstruction, Rule Unit boundaries, or Insurance Rule Metadata Draft values require human confirmation before publication readiness.
 _Avoid_: Recoverable infrastructure failure, automatic approval, ingestion retry counter, silent exclusion
 
+**Metadata-Reviewable Hybrid Build**:
+A completed Hybrid document build whose original, structured artifact, canonical Rule Unit anchors, citations, and integrity checks are valid even though one or more Insurance Rule Metadata Draft values are missing, uncertain, or conflicting. It enters Metadata Review as needs input rather than failing document ingestion.
+_Avoid_: Published revision, parser-approved metadata, failed artifact build, metadata-complete claim
+
+**Metadata-Ready Document Commit**:
+The fenced authority transition for a Scheme-governed Document Revision that atomically makes its exact completed build, parser proposal lineage, complete current Review Set, review summary, Ready state, candidate membership, Source revision, and durable operation result visible. Missing business values become needs-input reviews; incomplete review materialization never exposes a Ready document.
+_Avoid_: Ready-before-review gap, asynchronous review backfill after candidate selection, S3 artifact visibility as Source authority, partial Review Set
+
+**Hybrid Metadata Review Capacity**:
+The product admission boundary that permits at most ten thousand canonical Rule Units in one Document Revision and one atomic Metadata Workbook review round trip. A structurally valid document above that boundary requires splitting or restructuring before metadata review and publication rather than automatic Workbook sharding.
+_Avoid_: Parser defense limit, Source-wide document limit, multi-Workbook atomic review, silent Rule Unit omission
+
+**Hybrid Structural Review Required**:
+The Documents-stage action-required condition where a Hybrid build cannot establish trustworthy Rule Unit boundaries, table structure, or citation lineage and therefore cannot create a Metadata-Reviewable Hybrid Build until reviewed, reparsed, or replaced.
+_Avoid_: Missing business metadata, transient parser failure, workbook correction, publication warning
+
 **Knowledge Revision Publication Readiness**:
 The condition where one Knowledge Document Revision has compatible validated parsing artifacts, approved immutable Insurance Rule Unit Revisions, required embeddings and search projections, resolvable citations, candidate Rule Unit Publication Manifest membership, and no blocking review or integrity failure, making it eligible for candidate publication membership.
 _Avoid_: Upload success, parser completion only, index write acknowledgement, Knowledge Source Publication
+
+**Knowledge Source Publication Readiness**:
+The server-authoritative aggregate of one Source candidate's Documents, Metadata Review, Publication Preparation, and Publication stages, including complete blocker counts, stable reasons, current prepared-validation freshness, and the next permitted action. It is independent of Dashboard pagination and does not imply Agent publication or activation.
+_Avoid_: Frontend-inferred readiness, next-action guess, successful upload, Knowledge Binding activation
+
+**Knowledge Metadata Scheme**:
+The immutable Source-level domain contract selected from server-advertised provider capabilities at Source creation, determining whether governed metadata review is required and which profile, review, Workbook, validation, and publication rules apply. A Source may use no Scheme only when deployment capability explicitly permits it, and changing Scheme requires a new Source.
+_Avoid_: Frontend template selector, mutable Source mode, insurance fields on every Hybrid Source, arbitrary client schema
+
+**Insurance Rule Metadata Scheme V2**:
+The `insurance_rule.v2` Knowledge Metadata Scheme requiring an exact Insurance Metadata Profile Revision, Document Default plus Rule Unit Override review, and Insurance Rule Metadata Workbook V2 behavior for insurance-rule Knowledge Sources.
+_Avoid_: Generic Hybrid metadata, provider type, Profile revision, all-Source requirement
 
 **Prevalidated Retrieval Degradation**:
 An explicit Source- and query-type-scoped fallback such as BM25-only or Source-local RRF without a reranker that may run only after Sealed Knowledge Acceptance Evaluation proves its declared quality, authority, authorization, citation, latency, and failure thresholds and the pinned Knowledge Retrieval Profile Revision enables it.

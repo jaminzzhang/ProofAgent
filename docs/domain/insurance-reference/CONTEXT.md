@@ -181,15 +181,115 @@ The business-approved deterministic order used to resolve multiple applicable pr
 _Avoid_: LLM arbitration, retrieval-rank priority, latest-file-wins, silent conflict resolution
 
 **Insurance Rule Metadata Draft**:
-A non-authoritative proposal of rule scope, effective period, authority, precedence, or supersession facts extracted from insurance documents or supporting spreadsheets for business review.
-_Avoid_: Published rule authority, model-approved metadata, retrieval metadata, automatic activation
+A non-authoritative current working proposal of rule scope, effective period, authority, precedence, or supersession facts for business review. It may be initialized from a parser proposal and changed through Dashboard or Workbook, but only approval creates business authority.
+_Avoid_: Parallel PDF and workbook drafts, published rule authority, model-approved metadata, retrieval metadata, automatic activation
+
+**Insurance Rule Metadata Parser Proposal**:
+The immutable, non-authoritative machine suggestion retained as the comparison baseline for one Current Insurance Rule Metadata Review Draft. Missing values create needs-input work, and differences from later human edits remain visible without becoming conflicts by themselves.
+_Avoid_: PDF authority, current working draft, automatic approval, competing workbook proposal
+
+**AI Metadata Review Suggestion**:
+One Profile-shaped, non-authoritative Document Default plus exact Rule Unit proposals produced during private Hybrid parsing. Matching Rule Units inherit the default so operators confirm one governed suggestion; differences, uncertainty, conflicts, and missing values remain explicit override work. The suggestion cannot approve itself.
+_Avoid_: AI approval, hidden approve-all, model-owned lineage, silently inferred business authority
+
+**Current Insurance Rule Metadata Review Draft**:
+The one editable metadata proposal attached to a Current Insurance Rule Metadata Review Revision, initialized from available parser suggestions and updated through audited Dashboard edits or Metadata Workbook Import. Its complete values, differences, reasons, and exact identity are the subject of approval.
+_Avoid_: Separate Dashboard draft, separate Workbook draft, approved metadata, mutable historical review
+
+**Metadata Review Draft Change**:
+One explicitly saved, reasoned set of governed field differences applied against the exact current Review version and identity. Unsaved form input has no Source authority, and changing an approved result first creates a new current Review revision.
+_Avoid_: Autosave, per-keystroke Source mutation, unreasoned correction, in-place approved-record edit
+
+**Metadata Review Draft Conflict**:
+A field-level divergence produced when the server review draft and a returned offline workbook both changed the same exact export-base value differently. Parser-to-human differences and unilateral edits are audited differences, not conflicts.
+_Avoid_: Parser disagreement, intentional correction, missing proposal, automatic precedence
+
+**Insurance Metadata Profile**:
+The reusable Knowledge Hub governance asset that owns the lifecycle and immutable revision history of insurance metadata vocabularies and validation rules shared by Knowledge Sources. A Source binds an exact published revision rather than copying or mutating profile values locally.
+_Avoid_: Source-inline code list, global mutable configuration, Workbook reference sheet, parser vocabulary
+
+**Insurance Metadata Profile Revision**:
+The immutable published vocabulary and validation contract for insurance authority values, taxonomy identity, precedence policy and tiers, ordering constraints, and governed date rules used by one Source candidate's metadata reviews and publication. Reviews and Workbook exports bind its exact revision, and new business codes require a new Profile revision rather than free-text invention.
+_Avoid_: Mutable global dropdown, Source-local spelling convention, Workbook-authored code, parser-owned taxonomy
+
+**Reference-Only Insurance Metadata Profile**:
+A checked-in, published local-environment Profile used to exercise the complete insurance metadata review and publication workflow without claiming production business authority. It is explicitly marked `reference_only`, contains only declared reference codes rather than values inferred from uploaded documents or parser output, and may be bound automatically only to designated local fixtures such as `ks_insurance`.
+_Avoid_: Production default, inferred business vocabulary, hidden bootstrap authority, mutable demo code list
+
+**Production Insurance Metadata Profile Precondition**:
+The direct-cutover requirement that an authorized, published, non-reference Insurance Metadata Profile Revision be selected for every production insurance Source before Metadata Review V2 migration may run. Production deployment never auto-creates or auto-binds a Reference-Only Insurance Metadata Profile.
+_Avoid_: Reference Profile promotion, fallback binding, post-cutover profile selection, parser-generated profile
+
+**Metadata Profile Upgrade Preview**:
+The non-authoritative comparison between one Source's current Profile binding and a selected published replacement revision, classifying exact carry-forward values, label-only changes, suggested replacement mappings, removed values, and incompatible constraints before any Source or Review mutation.
+_Avoid_: Automatic Profile upgrade, mutable global rollout, implicit code replacement, approval inheritance
+
+**Insurance Rule Metadata Review**:
+The mandatory business decision set for one exact Hybrid document revision and canonical anchor set, created when its build completes and resolved through one Document Metadata Default Review plus any required Rule Unit Metadata Override Reviews before its rules may enter a published Knowledge version. Its business state is needs input, ready for approval, approved, or rejected; review currency is tracked separately, and parser proposals, direct corrections, or imported workbook drafts never approve themselves.
+_Avoid_: Workbook-only workflow, automatic parser approval, repeated identical approval per anchor, publication warning
+
+**Current Insurance Rule Metadata Review Revision**:
+The one review revision for an exact document-default or Rule Unit override scope that belongs to the current candidate and may contribute to publication readiness. Earlier review revisions retain their decision result and history but cannot authorize the current candidate.
+_Avoid_: Mutable approval record, superseded-as-business-result, latest timestamp guess, historical approval reuse
+
+**Insurance Rule Metadata Review Decision**:
+An immutable history fact recording a draft correction, workbook application, approval, or rejection against one exact review revision and identity. A correction may change readiness but is not itself a durable review state.
+_Avoid_: Corrected state, mutable audit note, approval without review identity, workbook self-approval
+
+**Rule Unit Metadata Batch Approval**:
+One atomic business decision over an explicitly selected set of current, ready-for-approval Rule Unit Metadata Override Reviews from the same document revision. It preserves each exact review identity and does not include the Document Metadata Default Review or hidden, unresolved, stale, or unselected reviews.
+_Avoid_: Source-wide approve all, partial batch success, workbook approval, implicit filtered-row approval
+
+**Document Metadata Default Review**:
+The mandatory approval of the insurance rule metadata inherited by Rule Units in one exact document revision, bound to that revision and its complete canonical anchor-set identity so changed content or structure requires renewed review.
+_Avoid_: Source-wide mutable default, unbound document setting, approval reused after anchor changes, runtime-inferred scope
+
+**Rule Unit Metadata Override Review**:
+The anchor-specific review required when one Insurance Rule Unit differs from the approved document default, has an unresolved parser uncertainty or conflict, or is explicitly marked by an operator as an exception.
+_Avoid_: Duplicate default approval, retrieval-time override, unreviewed parser exception, isolated spreadsheet row authority
+
+**Insurance Rule Metadata Workbook Export**:
+The server-generated, source-bound XLSX snapshot of one exact document revision, canonical anchor set, metadata-review generation, and Insurance Metadata Profile Revision that operators or external automation may edit and return through Insurance Rule Metadata Workbook Import. Its export identity and server-known row identities establish freshness and provenance but do not make editable metadata authoritative.
+_Avoid_: Blank template, client-generated anchor identity, cross-environment workbook, approval artifact, mutable latest-revision export
+
+**Registered Workbook Validation Range**:
+A static internal `Reference Values` cell range or named range recorded in one Workbook Export manifest and permitted solely for spreadsheet Data Validation. It contains no function, dynamic reference, external location, or execution authority, and imported literal values remain subject to Profile validation.
+_Avoid_: Cell formula, client-added name, external Workbook link, service-side trust in Excel validation
+
+**Structurally Stale Metadata Workbook**:
+An exported metadata workbook whose template, environment, Source, document revision, or complete canonical anchor-set identity no longer matches current authority and therefore cannot enter review merging or draft application.
+_Avoid_: Best-effort anchor remapping, filename reconciliation, partial structural import, warning-only staleness
+
+**Metadata Workbook Import Preview**:
+The non-authoritative comparison of a returned workbook against its exact export base and the current metadata-review generation, classifying unchanged, workbook-only, server-only, matching, and conflicting field changes before one confirmed atomic draft application.
+_Avoid_: Direct workbook overwrite, partial silent apply, business approval, publication validation
+
+**Metadata Workbook Validation Report**:
+The durable content-safe diagnosis of one returned Workbook that failed controlled template, identity, package, limit, or governed-value validation. It reports bounded sheet, row, field, stable code, and suggested-action facts without echoing cell values, source content, storage locators, or parser exceptions.
+_Avoid_: Generic invalid-workbook message, raw exception, merge-conflict preview, corrected Workbook copy
+
+**Metadata Workbook Export Validity Window**:
+The bounded period, defaulting to thirty days, during which one unconsumed Insurance Rule Metadata Workbook Export may be returned for validation and preview. Expiration, structural staleness, or successful application closes the window and requires a new export.
+_Avoid_: Permanent editable workbook, reusable applied export, audit-retention period, silent expiry extension
+
+**Applied Metadata Workbook Import Record**:
+The audit-retained identity and immutable artifact lineage for one confirmed Workbook draft application, including original input, normalized changes, merge result, exact review identities, and actor decision. It follows Knowledge configuration audit retention rather than temporary export validity.
+_Avoid_: Temporary preview, business approval, raw values in audit projection, direct S3 link
+
+**Legacy Metadata Workbook History**:
+The read-only V1 workbook, parallel-draft review, and decision lineage retained for audit after the V2 cutover. It cannot become current review authority, accept new imports, or authorize publication.
+_Avoid_: V1 compatibility write path, current Review Draft, migrated approval, runtime dual read
+
+**Metadata Review V2 Migration**:
+The explicit repeatable conversion of one current unpublished Hybrid candidate into a Profile-bound V2 Review Set from its completed build, canonical anchors, parser proposals, and eligible legacy draft values. It preserves origin lineage but requires renewed business approval and never rewrites an existing published Knowledge version.
+_Avoid_: Automatic startup migration, inherited V1 approval, PDF re-upload, published-version rewrite
 
 **Insurance Rule Metadata Workbook Import**:
-The audited template-bound XLSX curation input submitted as one multipart asynchronous Knowledge Source command and mapped to an exact persisted document revision plus reviewed section, clause, table-row, or row-group anchors. A worker verifies the completed Hybrid build and template, rejects executable macros and external links, stores original and normalized artifacts, and atomically creates the complete review set or none of it. The import creates Insurance Rule Metadata Draft values without becoming evidence or automatically overwriting approved metadata.
-_Avoid_: Base64 JSON workbook, synchronous API parsing, partial review creation, Knowledge Document intake, filename join, spreadsheet as rule evidence, formula execution, direct publication
+The optional audited return of one Insurance Rule Metadata Workbook Export for bulk editing existing Current Insurance Rule Metadata Review Drafts. Import revalidates the server-recorded export, exact document revision, anchor set, and review generation, then proposes audited changes without becoming evidence, creating review authority, approving itself, or automatically overwriting approved metadata.
+_Avoid_: Required publication stage, blank client-authored workbook, review-task creation mechanism, Base64 JSON workbook, synchronous API parsing, partial review update, Knowledge Document intake, filename join, spreadsheet as rule evidence, formula execution, direct publication
 
 **Approved Insurance Rule Metadata**:
-The business-confirmed rule scope, effective period, authority, precedence, and supersession facts that may determine Insurance Rule Applicability and Insurance Rule Precedence Order for a published Knowledge version.
+The business-confirmed and publication-materialized rule scope, effective period, authority, precedence, and supersession facts for one Insurance Rule Unit, produced from its approved document default and any approved anchor override and permitted to determine Insurance Rule Applicability and Insurance Rule Precedence Order.
 _Avoid_: Machine extraction output, filename inference, routing hint, mutable unpublished guess
 
 **Insurance Rule Unit**:

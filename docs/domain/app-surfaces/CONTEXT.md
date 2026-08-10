@@ -153,8 +153,12 @@ The Validate & Test interface combining quick test, test suite, and validation h
 _Avoid_: Single-shot test runner, detached monitoring view, production run execution
 
 **Shared Asset Library**:
-The reusable asset collections for Knowledge Sources, Tool Sources, and Policy Rule Configurations that multiple Agents can bind to. Agents reference shared assets through Agent Knowledge Bindings, Agent Tool Bindings, and Policy Rule Configuration rather than duplicating definitions.
+The reusable asset collections for Knowledge Sources, Insurance Metadata Profiles, Tool Sources, and Policy Rule Configurations that multiple governed configurations can bind to. Agents reference shared assets through Agent Knowledge Bindings, Agent Tool Bindings, and Policy Rule Configuration, while insurance Knowledge Sources bind exact published Insurance Metadata Profile Revisions rather than duplicating definitions.
 _Avoid_: Agent-scoped asset definition, inline-only configuration, duplicated policy rules
+
+**Insurance Metadata Profile Library**:
+The Knowledge Hub surface for listing, inspecting, versioning, and publishing reusable Insurance Metadata Profiles independently of one Knowledge Source. Source creation and detail link to published Profile revisions and show upgrade impact without editing the shared asset inline.
+_Avoid_: Source-local dropdown editor, mutable global settings, Workbook-managed vocabulary, deployment secret configuration
 
 **Knowledge Hub**:
 The product-facing name for the Shared Asset Library capabilities that administer reusable Knowledge Sources and their Agent Knowledge Bindings. It is a configuration and governance surface, not a separate Agent runtime or evidence-admission path.
@@ -169,8 +173,16 @@ The Dashboard detail surface at `/knowledge/:sourceId` for administering one reu
 _Avoid_: Agent-embedded file manager, Source detail modal, provider-only settings page
 
 **Hybrid Knowledge Source Overview Tab**:
-The Source summary surface for identity, lifecycle, published and candidate versions, authoritative document and review aggregates, sanitized dependency readiness, current action blockers, Agent reference impact, and Knowledge Binding Upgrade Available state.
+The Source summary surface for identity, lifecycle, published and candidate versions, authoritative document and review aggregates, sanitized dependency readiness, current action blockers, Agent reference impact, Knowledge Source Publication Readiness, and Knowledge Binding Upgrade Available state.
 _Avoid_: Full document table, raw dependency diagnostics, inferred publication readiness, Agent activation action
+
+**Knowledge Source Publication Readiness Stepper**:
+The persistent Dashboard guide over the server-authoritative Documents, Metadata Review, Publication Preparation, and Publication stages. It shows one bounded state per stage, actionable blocker counts and deep links, durable failures, prepared-validation staleness or expiry, and the next permitted command while leaving detailed work in the existing Source tabs.
+_Avoid_: Tab replacement, frontend-derived readiness, optimistic next-action card, Agent activation step
+
+**Metadata Review Workspace**:
+The task-oriented Reviews tab for one Knowledge Source, combining authoritative review summary, document selection, structured Document Default editing, filterable Rule Unit Overrides, source-linked Review Inspector, explicit approval actions, and a secondary Workbook bulk-edit panel. Current work is separated from collapsed historical and Legacy V1 records, and no raw correction JSON is exposed.
+_Avoid_: Workbook-first workflow, raw API form, current/history mixed list, Corrections JSON textarea
 
 **Knowledge Source Workspace List Projection**:
 The operational list projection at `/knowledge` that shows Source name, description, tags, provider type, lifecycle state, local index or remote verification availability, current published snapshot or configuration version, local READY and total document counts or remote target index or namespace, referencing Agent count, and warning indicators for unpublished changes, failed ingestion, or stale remote verification. It supports filtering by name, tag, provider, lifecycle, and warning state.

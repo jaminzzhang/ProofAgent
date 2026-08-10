@@ -33,10 +33,14 @@ From the repository root:
 ./scripts/production-local-up.sh
 ```
 
-The prepare step creates `.env.production-local`, a model-credential keyring, and a
-local CA under `docker/production-local/runtime/`. These paths are ignored by Git. It also uses an
-anonymous deployment-local Docker CLI configuration so a broken desktop credential
-helper cannot block public image pulls; the host Docker login is not modified.
+The prepare step creates `.env.production-local`, a model-credential keyring, a local
+CA, and a short-lived deployment-compatibility fixture under
+`docker/production-local/runtime/`. These paths are ignored by Git. The fixture exists
+only to exercise the production composition's strict startup and freshness checks; its
+`Local Harness` identities are not candidate-bound compatibility evidence and cannot
+authorize a release. The prepare step also uses an anonymous deployment-local Docker
+CLI configuration so a broken desktop credential helper cannot block public image
+pulls; the host Docker login is not modified.
 
 Open `https://proof-agent.localhost:8443`. The certificate is issued by the generated
 local CA, so a browser will warn until
@@ -52,6 +56,14 @@ sed -n 's/^PROOF_AGENT_ADMIN_PASSWORD=//p' .env.production-local
 This is a Keycloak test identity inside the local OIDC realm, not a ProofAgent local
 account or a production identity source.
 
+[KNOWN | HIGH] Startup also publishes the checked-in reference-only Metadata Profile
+and binds it only to the designated local fixture Source `ks_insurance` when that
+Source exists. The Knowledge Worker allowlist is exact and defaults to empty outside
+this harness; production deployments must publish and bind an authority-owned Profile
+instead. The security bootstrap appends an immutable Permission Mapping revision when
+new permissions are introduced. Existing operator sessions are invalidated by that
+permission epoch change and must sign in again to receive refreshed claims.
+
 After login, create `model_production_primary` on the Models page and enter the real
 provider API Key once. The browser sends it only on create or replacement; API
 responses show only `PostgreSQL encrypted`. The value is encrypted before the same
@@ -66,6 +78,11 @@ transaction commits the model connection and is never stored in the connection J
 The verifier checks the external TLS liveness endpoint, exact OIDC issuer, all six
 private-model TLS routes, TLS OpenSearch access, PostgreSQL migration/security state,
 and S3 bucket versioning.
+
+After a Hybrid document completes, the `Reviews` tab should show
+`proofagent-insurance-reference.v1`, the current Review Set, and the generated review
+tasks. `Prepare publication` remains disabled until those tasks satisfy the governed
+metadata review policy.
 
 [KNOWN | HIGH] Before the sole Agent is published, `/livez` returns HTTP 200 while
 `/readyz` returns HTTP 503 with only `published_agent=not_ready`. Run Executor remains

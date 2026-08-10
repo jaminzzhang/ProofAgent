@@ -101,6 +101,8 @@ flowchart TB
 
 [KNOWN | HIGH] Dashboard 的 Hybrid 管理边界已收敛到显式 Source publication，并只提示 Agent binding upgrade opportunity；Phase F 证据、Agent publication 和 Active Agent Version 切换仍属于生产发布流程。该边界已有本地实现与 disposable 数据面测试，但没有候选绑定的生产部署证据，不能据此标记生产就绪。
 
+[KNOWN | HIGH] Dashboard 的 Agent Knowledge 配置会识别已发布的 `hybrid_index` Source，并可选固定 `retrieval_profile_revision_id`；留空时由后端在 Agent validation 中解析部署默认版本。已绑定卡片回显 provider 与固定的 profile，但页面仍不接受 PostgreSQL、S3、OpenSearch、私有模型服务 endpoint 或凭据，也不会因此获得 Agent activation 权限。
+
 ### 2.4 目录职责
 
 | 路径 | 主要职责 | 新手常见改动 |
@@ -467,7 +469,7 @@ uv run proof-agent knowledge migrate-development-hub \
 
 ```bash
 export PROOF_AGENT_MODE=production
-export PROOF_AGENT_RELEASE_SCHEMA=0018_publication_preparation
+export PROOF_AGENT_RELEASE_SCHEMA=0021_metadata_workbook_v2
 uv run proof-agent database upgrade \
   --locked \
   --expand-only \
