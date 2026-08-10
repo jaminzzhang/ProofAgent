@@ -21,6 +21,8 @@ def _post(url: str, payload: dict[str, object]) -> None:
 
 def main() -> None:
     parser_common: dict[str, object] = {
+        "document_id": "deployment-smoke-document",
+        "revision_id": "deployment-smoke-revision",
         "original_ref": {"sha256": "a" * 64},
         "page_numbers": [1],
         "configuration_sha256": "a" * 64,

@@ -21,7 +21,8 @@ from proof_agent.contracts import (
 )
 
 
-PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000001"
+LEGACY_PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000001"
+PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000004"
 EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000003"
 
 
@@ -39,9 +40,14 @@ def main() -> None:
 def _bootstrap_permissions(bundle: PostgresPersistenceBundle) -> None:
     existing = bundle.security.get_permission_mapping(PERMISSION_VERSION_ID)
     if existing is None:
+        versions = bundle.security.list_permission_mappings()
+        expected_revision = max(
+            (version.revision for version in versions),
+            default=0,
+        )
         version = PermissionMappingVersion(
             version_id=PERMISSION_VERSION_ID,
-            revision=1,
+            revision=expected_revision + 1,
             rules=(
                 PermissionClaimRule(
                     claim_path="roles",
@@ -60,14 +66,17 @@ def _bootstrap_permissions(bundle: PostgresPersistenceBundle) -> None:
             created_at=_now(),
             created_by="local-production-bootstrap",
         )
-        bundle.security.append_permission_mapping(version, expected_revision=0)
+        bundle.security.append_permission_mapping(
+            version,
+            expected_revision=expected_revision,
+        )
         existing = version
     active = bundle.security.get_active_permission_mapping()
-    if active is None:
+    if active is None or active.version_id == LEGACY_PERMISSION_VERSION_ID:
         bundle.security.activate_permission_mapping(
             existing.version_id,
             audit_event=_audit(
-                audit_id="019ba100-0000-7000-8000-000000000011",
+                audit_id="019ba100-0000-7000-8000-000000000014",
                 event_type="permission_mapping.activated",
                 target_type="permission_mapping_version",
                 target_id=existing.version_id,

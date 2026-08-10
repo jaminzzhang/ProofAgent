@@ -7,6 +7,7 @@ TLS_DIR="$RUNTIME_DIR/tls"
 DOCKER_CONFIG_DIR="$RUNTIME_DIR/docker-cli"
 SECRETS_DIR="$RUNTIME_DIR/secrets"
 MODEL_CREDENTIAL_KEYRING="$SECRETS_DIR/model-credential-keyring.json"
+DEPLOYMENT_COMPATIBILITY_MANIFEST="$RUNTIME_DIR/deployment-compatibility-manifest.json"
 ENV_FILE="$ROOT_DIR/.env.production-local"
 
 umask 077
@@ -60,6 +61,13 @@ if [ ! -f "$MODEL_CREDENTIAL_KEYRING" ]; then
   chmod 0600 "$MODEL_CREDENTIAL_KEYRING"
 fi
 
+# This is a short-lived local harness fixture, regenerated on every prepare so
+# the production composition can exercise its freshness checks. It is never a
+# formal candidate-bound compatibility artifact or release Gate evidence.
+python3 "$ROOT_DIR/docker/production-local/generate_deployment_compatibility_manifest.py" \
+  "$DEPLOYMENT_COMPATIBILITY_MANIFEST"
+chmod 0644 "$DEPLOYMENT_COMPATIBILITY_MANIFEST"
+
 if [ ! -f "$TLS_DIR/ca.crt" ] || [ ! -f "$TLS_DIR/server.crt" ] || [ ! -f "$TLS_DIR/server.key" ]; then
   openssl genrsa -out "$TLS_DIR/ca.key" 3072 >/dev/null 2>&1
   openssl req -x509 -new -sha256 -days 825 \
@@ -91,3 +99,4 @@ printf 'Prepared local production secrets and TLS assets.\n'
 printf 'Environment: %s\n' "$ENV_FILE"
 printf 'CA certificate: %s\n' "$TLS_DIR/ca.crt"
 printf 'Model credential keyring: %s\n' "$MODEL_CREDENTIAL_KEYRING"
+printf 'Local compatibility fixture: %s\n' "$DEPLOYMENT_COMPATIBILITY_MANIFEST"

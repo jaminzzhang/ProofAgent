@@ -6,8 +6,14 @@ x-proof-agent-environment: &proof-agent-environment
   HYBRID_POSTGRES_DSN: postgresql://proof:${POSTGRES_PASSWORD}@postgres:5432/proof
   PROOF_AGENT_STABLE_ORIGIN: https://proof-agent.localhost:8443
   PROOF_AGENT_RELEASE_ID: local-production-candidate
-  PROOF_AGENT_IMAGE_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  PROOF_AGENT_IMAGE_DIGEST: ${PROOF_AGENT_IMAGE_DIGEST:-1111111111111111111111111111111111111111111111111111111111111111}
+  PROOF_AGENT_DEPLOYMENT_SLOT: blue
+  PROOF_AGENT_ACTIVATION_STATE: active
+  PROOF_AGENT_DEPLOYMENT_COMPATIBILITY_MANIFEST: /run/proof-agent-config/deployment-compatibility-manifest.json
   PROOF_AGENT_PUBLISHED_AGENT_CACHE_DIR: /var/lib/proof-agent/cache
+  PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR: /var/lib/proof-agent/release-bundle-cache
+  PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON: >-
+    {"local-test-rfc8032-key":"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="}
   PROOF_AGENT_EXECUTOR_WORK_DIR: /var/lib/proof-agent/executor
   PROOF_AGENT_RELEASE_WORK_DIR: /var/lib/proof-agent/release
   PROOF_AGENT_EXECUTOR_ID: executor-local-production-1
@@ -22,6 +28,7 @@ x-proof-agent-environment: &proof-agent-environment
   PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE: /run/proof-agent-secrets/model-credential-keyring.json
   PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON: >-
     {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"}}
+  PROOF_AGENT_SECRET_PROBE_HANDLE: session-key-v1
   PROOF_AGENT_VAULT_AGENT_TOKEN_FILE: /run/vault-agent/token
   PROOF_AGENT_OPENSEARCH_SECRET_HANDLE: knowledge/opensearch/proof-agent
   PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE: evaluation/proof-agent/release
@@ -41,6 +48,7 @@ x-proof-agent-environment: &proof-agent-environment
   PA_HYBRID_KNOWLEDGE_MODELS_ENABLED: "1"
   PA_HYBRID_PRODUCTION_RUNTIME_ENABLED: "1"
   PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS: "1"
+  PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS: ks_insurance
   PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT: https://models.internal:9443
   PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE: proof-agent-local-production
   PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS: models.internal
@@ -80,6 +88,7 @@ x-proof-agent-environment: &proof-agent-environment
 
 x-proof-agent-volumes: &proof-agent-volumes
   - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+  - ./docker/production-local/runtime/deployment-compatibility-manifest.json:/run/proof-agent-config/deployment-compatibility-manifest.json:ro
   - vault-agent-token:/run/vault-agent:ro
 
 services:
@@ -281,7 +290,13 @@ services:
         condition: service_healthy
     environment: *proof-agent-environment
     volumes: *proof-agent-volumes
-    command: ["database", "upgrade"]
+    command:
+      - database
+      - upgrade
+      - --locked
+      - --expand-only
+      - --target
+      - 0021_metadata_workbook_v2
     restart: "no"
     networks: [production]
 
@@ -293,6 +308,20 @@ services:
     environment: *proof-agent-environment
     volumes: *proof-agent-volumes
     command: ["hybrid-migrate"]
+    restart: "no"
+    networks: [production]
+
+  reference-metadata-bootstrap:
+    image: proof-agent:production-local
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      hybrid-migrate:
+        condition: service_completed_successfully
+    environment: *proof-agent-environment
+    volumes: *proof-agent-volumes
+    entrypoint: ["python"]
+    command: ["/opt/proof-agent-local/bootstrap_reference_metadata.py"]
     restart: "no"
     networks: [production]
 
@@ -319,6 +348,8 @@ services:
         condition: service_completed_successfully
       security-bootstrap:
         condition: service_completed_successfully
+      reference-metadata-bootstrap:
+        condition: service_completed_successfully
       model-credential-key-init:
         condition: service_completed_successfully
       vault-init:
@@ -326,9 +357,12 @@ services:
     environment: *proof-agent-environment
     volumes:
       - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+      - ./docker/production-local/runtime/deployment-compatibility-manifest.json:/run/proof-agent-config/deployment-compatibility-manifest.json:ro
       - vault-agent-token:/run/vault-agent:ro
       - model-credential-secrets:/run/proof-agent-secrets:ro
       - published-agent-cache:/var/lib/proof-agent/cache
+    tmpfs:
+      - /var/lib/proof-agent/release-bundle-cache:size=64m,mode=0700,uid=10001,gid=10001
     entrypoint: ["uvicorn"]
     command:
       - proof_agent.bootstrap.production_roles:create_production_api_application
@@ -369,6 +403,7 @@ services:
       PROOF_AGENT_EXECUTOR_CONCURRENCY: "5"
     volumes:
       - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+      - ./docker/production-local/runtime/deployment-compatibility-manifest.json:/run/proof-agent-config/deployment-compatibility-manifest.json:ro
       - vault-agent-token:/run/vault-agent:ro
       - model-credential-secrets:/run/proof-agent-secrets:ro
       - executor-work:/var/lib/proof-agent/executor

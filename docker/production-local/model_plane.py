@@ -167,6 +167,8 @@ def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, obje
     _require_fields(
         payload,
         {
+            "document_id",
+            "revision_id",
             "original_ref",
             "page_numbers",
             "parser_revision",
@@ -175,10 +177,16 @@ def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, obje
             "allow_runtime_downloads",
         },
     )
+    document_id = payload["document_id"]
+    revision_id = payload["revision_id"]
     original_ref = payload["original_ref"]
     page_numbers = payload["page_numbers"]
     if (
-        not isinstance(original_ref, dict)
+        not isinstance(document_id, str)
+        or not document_id
+        or not isinstance(revision_id, str)
+        or not revision_id
+        or not isinstance(original_ref, dict)
         or not isinstance(original_ref.get("sha256"), str)
         or not isinstance(page_numbers, list)
         or not page_numbers
@@ -188,9 +196,14 @@ def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, obje
     if adapter == "paddle" and len(page_numbers) != 1:
         raise HTTPException(status_code=422, detail="paddle accepts one page")
     vendor = (
-        _docling_vendor(original_ref["sha256"], page_numbers)
+        _docling_vendor(document_id, revision_id, original_ref["sha256"], page_numbers)
         if adapter == "docling"
-        else _paddle_vendor(original_ref["sha256"], int(page_numbers[0]))
+        else _paddle_vendor(
+            document_id,
+            revision_id,
+            original_ref["sha256"],
+            int(page_numbers[0]),
+        )
     )
     vendor_bytes = json.dumps(
         vendor,
@@ -211,9 +224,25 @@ def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, obje
     }
 
 
-def _docling_vendor(source_sha256: str, page_numbers: list[object]) -> dict[str, object]:
+def _docling_vendor(
+    document_id: str,
+    revision_id: str,
+    source_sha256: str,
+    page_numbers: list[object],
+) -> dict[str, object]:
     pages: list[dict[str, object]] = []
     proposals: list[dict[str, object]] = []
+    ai_default: dict[str, object] = {
+        "canonical_anchor": None,
+        "authority": "national",
+        "effective_from": None,
+        "effective_to": None,
+        "taxonomy_id": "insurance-product-applicability",
+        "taxonomy_revision_id": "taxonomy-2026-01",
+        "precedence_policy_revision_id": "precedence-2026-01",
+        "precedence_authority_tier": "policy_terms",
+        "precedence_order": 0,
+    }
     for value in page_numbers:
         page_number = int(value)
         heading = f"Local Production Rule Page {page_number}"
@@ -245,33 +274,47 @@ def _docling_vendor(source_sha256: str, page_numbers: list[object]) -> dict[str,
                 "tables": [],
             }
         )
-        proposals.append(
-            {
-                "canonical_anchor": heading,
-                "authority": "local-compatibility-parser",
-                "effective_from": None,
-                "effective_to": None,
-                "taxonomy_id": "insurance",
-                "taxonomy_revision_id": "insurance-local-v1",
-                "precedence_policy_revision_id": "local-precedence-v1",
-                "precedence_authority_tier": "LOCAL_COMPATIBILITY",
-                "precedence_order": page_number,
-            }
-        )
+        for canonical_anchor in (
+            f"heading-{page_number}",
+            f"paragraph-{page_number}",
+        ):
+            proposals.append(
+                {
+                    "canonical_anchor": canonical_anchor,
+                    "authority": ai_default["authority"],
+                    "effective_from": None,
+                    "effective_to": None,
+                    "taxonomy_id": ai_default["taxonomy_id"],
+                    "taxonomy_revision_id": ai_default["taxonomy_revision_id"],
+                    "precedence_policy_revision_id": ai_default[
+                        "precedence_policy_revision_id"
+                    ],
+                    "precedence_authority_tier": ai_default[
+                        "precedence_authority_tier"
+                    ],
+                    "precedence_order": ai_default["precedence_order"],
+                }
+            )
     return {
-        "document_id": f"local-{source_sha256[:16]}",
-        "revision_id": f"local-{source_sha256[16:32]}",
+        "document_id": document_id,
+        "revision_id": revision_id,
         "source_sha256": source_sha256,
         "pages": pages,
-        "warnings": ["local compatibility parser; not real model evidence"],
+        "warnings": [],
+        "insurance_metadata_default": ai_default,
         "insurance_metadata_drafts": proposals,
     }
 
 
-def _paddle_vendor(source_sha256: str, page_number: int) -> dict[str, object]:
+def _paddle_vendor(
+    document_id: str,
+    revision_id: str,
+    source_sha256: str,
+    page_number: int,
+) -> dict[str, object]:
     return {
-        "document_id": f"local-{source_sha256[:16]}",
-        "revision_id": f"local-{source_sha256[16:32]}",
+        "document_id": document_id,
+        "revision_id": revision_id,
         "source_sha256": source_sha256,
         "page": {
             "page_number": page_number,
@@ -289,7 +332,7 @@ def _paddle_vendor(source_sha256: str, page_number: int) -> dict[str, object]:
             ],
             "tables": [],
         },
-        "warnings": ["local compatibility OCR; not real model evidence"],
+        "warnings": [],
     }
 
 
