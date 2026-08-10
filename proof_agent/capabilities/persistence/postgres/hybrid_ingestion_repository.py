@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -26,9 +27,15 @@ from proof_agent.capabilities.knowledge.hybrid.ports import (
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
+    HybridInsuranceMetadataArtifact,
     hybrid_build_request_sha256,
     validate_hybrid_artifact_build_result,
 )
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    InsuranceMetadataReviewSet,
+    create_insurance_metadata_review_set,
+)
+from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_units
 from proof_agent.capabilities.persistence.postgres.schema import (
     hybrid_document_candidates,
     hybrid_ingestion_jobs,
@@ -40,10 +47,18 @@ from proof_agent.capabilities.persistence.postgres.knowledge_repository import (
 from proof_agent.capabilities.persistence.postgres.knowledge_ingestion_attempt_repository import (
     PostgresKnowledgeIngestionAttemptRepository,
 )
+from proof_agent.capabilities.persistence.postgres.knowledge_source_operation_repository import (
+    PostgresKnowledgeSourceOperationRepository,
+)
+from proof_agent.capabilities.persistence.postgres.metadata_review_repository import (
+    PostgresInsuranceMetadataReviewRepository,
+)
 from proof_agent.contracts.agent_configuration import (
     KnowledgeSource,
     KnowledgeSourceLifecycleState,
 )
+from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
+from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.contracts.knowledge_operations import KnowledgeIngestionAttempt
 
 
@@ -61,6 +76,10 @@ class HybridIngestionCancellationRejectedError(RuntimeError):
 
 class HybridIngestionRetryRejectedError(RuntimeError):
     pass
+
+
+class ExactHybridReviewArtifactReader(Protocol):
+    def get_exact(self, ref: ExactArtifactRef) -> bytes: ...
 
 
 @dataclass(frozen=True)
@@ -88,14 +107,47 @@ class PostgresHybridIngestionRepository:
         connection_source: ConnectionSource,
         *,
         clock: Callable[[], datetime] | None = None,
+        artifact_store: ExactHybridReviewArtifactReader | None = None,
     ) -> None:
         self._connection_source = connection_source
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._artifact_store = artifact_store
+        self._reference_profile_source_ids: frozenset[str] = frozenset()
+        self._reference_profile_source_ids_configured = False
+
+    def configure_artifact_store(
+        self, artifact_store: ExactHybridReviewArtifactReader
+    ) -> None:
+        """Bind the exact reader once when composing the production worker."""
+
+        if self._artifact_store is not None and self._artifact_store is not artifact_store:
+            raise ValueError("Hybrid ingestion artifact reader is already configured")
+        self._artifact_store = artifact_store
+
+    def configure_reference_profile_source_ids(
+        self, source_ids: tuple[str, ...]
+    ) -> None:
+        """Allow reference-only Profiles for an explicit local-environment allowlist."""
+
+        if any(not source_id.strip() for source_id in source_ids):
+            raise ValueError("Reference Profile Source IDs must be non-empty")
+        resolved = frozenset(source_id.strip() for source_id in source_ids)
+        if (
+            self._reference_profile_source_ids_configured
+            and resolved != self._reference_profile_source_ids
+        ):
+            raise ValueError("Reference Profile Source IDs are already configured")
+        self._reference_profile_source_ids = resolved
+        self._reference_profile_source_ids_configured = True
+
+    def _metadata_profile_requires_production(self, source_id: str) -> bool:
+        return source_id not in self._reference_profile_source_ids
 
     def enqueue(
         self,
         request: HybridArtifactBuildRequest,
         *,
+        operation_id: str | None = None,
         filename: str = "document.pdf",
         uploaded_by: str = "system",
         replacement: bool = False,
@@ -113,6 +165,7 @@ class PostgresHybridIngestionRepository:
         now = self._now()
         values = {
             "job_id": UUID(request.job_id),
+            "operation_id": operation_id,
             "idempotency_key": request.job_id,
             "source_id": request.source_id,
             "document_id": UUID(request.document_id),
@@ -374,6 +427,35 @@ class PostgresHybridIngestionRepository:
                     source_id=str(row["source_id"]),
                     now=now,
                 )
+            self._sync_operation(
+                connection,
+                operation_id=(
+                    None if row["operation_id"] is None else str(row["operation_id"])
+                ),
+                source_id=str(row["source_id"]),
+                status=(
+                    "cancelled"
+                    if values["state"] == "CANCELLED"
+                    else "cancel_requested"
+                ),
+                stage=(
+                    "ingestion_cancelled"
+                    if values["state"] == "CANCELLED"
+                    else "ingestion_cancellation_requested"
+                ),
+                outcome_code=(
+                    "hybrid_ingestion_cancelled"
+                    if values["state"] == "CANCELLED"
+                    else None
+                ),
+                outcome_detail=(
+                    "Hybrid document ingestion was cancelled."
+                    if values["state"] == "CANCELLED"
+                    else None
+                ),
+                now=now,
+                terminal=values["state"] == "CANCELLED",
+            )
         cancelled = self.get(job_id)
         if cancelled is None:
             raise RuntimeError("Hybrid ingestion job disappeared after cancellation")
@@ -457,6 +539,19 @@ class PostgresHybridIngestionRepository:
                 source_id=str(row["source_id"]),
                 now=now,
             )
+            self._sync_operation(
+                connection,
+                operation_id=(
+                    None if row["operation_id"] is None else str(row["operation_id"])
+                ),
+                source_id=str(row["source_id"]),
+                status="cancelled",
+                stage="ingestion_cancelled",
+                outcome_code="hybrid_ingestion_cancelled",
+                outcome_detail="Hybrid document ingestion was cancelled.",
+                now=now,
+                terminal=True,
+            )
         cancelled = self.get(claim.job_id)
         if cancelled is None:
             raise RuntimeError("Hybrid ingestion job disappeared after cancellation")
@@ -467,6 +562,7 @@ class PostgresHybridIngestionRepository:
         *,
         job_id: str,
         requested_by: str,
+        operation_id: str | None = None,
         touch_source: bool = True,
     ) -> HybridKnowledgeJob:
         if not requested_by.strip() or len(requested_by) > 512:
@@ -530,6 +626,7 @@ class PostgresHybridIngestionRepository:
                     hybrid_ingestion_jobs.c.fencing_token == row["fencing_token"],
                 )
                 .values(
+                    operation_id=operation_id or row["operation_id"],
                     state="READY",
                     worker_id=None,
                     claimed_at=None,
@@ -666,6 +763,19 @@ class PostgresHybridIngestionRepository:
                 source_id=str(row["source_id"]),
                 now=now,
             )
+            self._sync_operation(
+                connection,
+                operation_id=(
+                    None if row["operation_id"] is None else str(row["operation_id"])
+                ),
+                source_id=str(row["source_id"]),
+                status="running",
+                stage="ingestion_processing",
+                outcome_code=None,
+                outcome_detail=None,
+                now=now,
+                terminal=False,
+            )
         request = _build_request(row["request_json"], int(row["auto_retry_count"]))
         return HybridKnowledgeJobClaim(
             job_id=str(row["job_id"]),
@@ -718,6 +828,7 @@ class PostgresHybridIngestionRepository:
     ) -> HybridKnowledgeJob:
         request = self.load_build_request(claim)
         validate_hybrid_artifact_build_result(request, result)
+        review_set = self._materialize_review_set(result)
         now = self._now()
         with write_connection(self._connection_source) as connection:
             changed = connection.execute(
@@ -765,16 +876,89 @@ class PostgresHybridIngestionRepository:
                 raise HybridIngestionClaimRejectedError(
                     "Hybrid ingestion candidate selection is stale"
                 )
+            PostgresInsuranceMetadataReviewRepository(
+                connection,
+                clock=lambda: now,
+            ).put_review_set(review_set)
             self._touch_source_revision(
                 connection,
                 source_id=request.source_id,
                 now=now,
                 advance_draft=True,
             )
+            self._sync_operation(
+                connection,
+                operation_id=self._operation_id_for_job(connection, claim.job_id),
+                source_id=request.source_id,
+                status="succeeded",
+                stage="ingestion_completed",
+                outcome_code="hybrid_ingestion_completed",
+                outcome_detail="Hybrid document ingestion completed.",
+                now=now,
+                terminal=True,
+            )
         completed = self.get(claim.job_id)
         if completed is None:
             raise RuntimeError("Hybrid ingestion job disappeared after completion")
         return completed
+
+    def _materialize_review_set(
+        self,
+        result: HybridArtifactBuildResult,
+    ) -> InsuranceMetadataReviewSet:
+        if self._artifact_store is None:
+            raise ValueError(
+                "Hybrid ingestion requires an exact artifact reader for Metadata Review V2"
+            )
+        canonical = StructuredKnowledgeDocumentArtifact.model_validate_json(
+            self._exact_json(result.canonical_ref)
+        )
+        metadata = HybridInsuranceMetadataArtifact.model_validate_json(
+            self._exact_json(result.insurance_metadata_ref)
+        )
+        if (
+            canonical.document_id != result.document_id
+            or canonical.revision_id != result.revision_id
+            or canonical.build_identity != result.build_identity
+            or metadata.source_id != result.source_id
+            or metadata.document_id != result.document_id
+            or metadata.revision_id != result.revision_id
+            or metadata.structured_build_id != result.build_id
+            or metadata.original_sha256 != result.original_ref.sha256
+        ):
+            raise ValueError("Hybrid review artifacts do not match the committed build")
+        profile = PostgresInsuranceMetadataReviewRepository(
+            self._connection_source,
+            clock=self._clock,
+        ).get_bound_profile(
+            result.source_id,
+            production=self._metadata_profile_requires_production(result.source_id),
+        )
+        rule_units = project_rule_units(
+            canonical,
+            document_defaults=metadata.document_defaults,
+            source_id=result.source_id,
+        )
+        return create_insurance_metadata_review_set(
+            source_id=result.source_id,
+            structured_build_id=result.build_id,
+            profile=profile,
+            document_default=metadata.document_defaults,
+            parser_proposals=metadata.pdf_drafts,
+            canonical_anchors=(unit.canonical_anchor for unit in rule_units),
+        )
+
+    def _exact_json(self, ref: ExactArtifactRef) -> bytes:
+        if ref.media_type != "application/json":
+            raise ValueError("Hybrid review artifact must be application/json")
+        assert self._artifact_store is not None
+        content = self._artifact_store.get_exact(ref)
+        if (
+            len(content) != ref.size_bytes
+            or hashlib.sha256(content).hexdigest() != ref.sha256
+        ):
+            raise ValueError("Hybrid review artifact failed exact read-back validation")
+        return content
 
     def schedule_retry(
         self,
@@ -865,6 +1049,7 @@ class PostgresHybridIngestionRepository:
                 )
                 .values(**update_values)
                 .returning(
+                    hybrid_ingestion_jobs.c.operation_id,
                     hybrid_ingestion_jobs.c.source_id,
                     hybrid_ingestion_jobs.c.document_id,
                     hybrid_ingestion_jobs.c.revision_id,
@@ -935,6 +1120,29 @@ class PostgresHybridIngestionRepository:
                 source_id=str(changed["source_id"]),
                 now=now,
             )
+            self._sync_operation(
+                connection,
+                operation_id=(
+                    None
+                    if changed["operation_id"] is None
+                    else str(changed["operation_id"])
+                ),
+                source_id=str(changed["source_id"]),
+                now=now,
+                **_operation_projection_for_job_state(
+                    state=state,
+                    safe_reason=(
+                        None
+                        if values.get("safe_reason") is None
+                        else str(values["safe_reason"])
+                    ),
+                    failure_code=(
+                        None
+                        if values.get("failure_code") is None
+                        else str(values["failure_code"])
+                    ),
+                ),
+            )
         job = self.get(claim.job_id)
         if job is None:
             raise RuntimeError("Hybrid ingestion job disappeared after transition")
@@ -961,6 +1169,63 @@ class PostgresHybridIngestionRepository:
         if value.utcoffset() is None:
             raise ValueError("Hybrid ingestion clock must be timezone-aware")
         return value
+
+    @staticmethod
+    def _operation_id_for_job(connection: Any, job_id: str) -> str | None:
+        value = connection.execute(
+            select(hybrid_ingestion_jobs.c.operation_id).where(
+                hybrid_ingestion_jobs.c.job_id == UUID(job_id)
+            )
+        ).scalar_one()
+        return None if value is None else str(value)
+
+    @staticmethod
+    def _sync_operation(
+        connection: Any,
+        *,
+        operation_id: str | None,
+        source_id: str,
+        status: Literal[
+            "queued",
+            "running",
+            "cancel_requested",
+            "succeeded",
+            "failed",
+            "cancelled",
+        ],
+        stage: str,
+        outcome_code: str | None,
+        outcome_detail: str | None,
+        now: datetime,
+        terminal: bool,
+    ) -> None:
+        if operation_id is None:
+            return
+        operations = PostgresKnowledgeSourceOperationRepository(connection)
+        operation = operations.get(operation_id)
+        if operation is None or operation.source_id != source_id:
+            raise HybridIngestionClaimRejectedError(
+                "Hybrid ingestion operation authority is missing or mismatched"
+            )
+        source_record = PostgresKnowledgeAssetRepository(connection).get_source_record(source_id)
+        if source_record is None:
+            raise HybridIngestionClaimRejectedError(
+                "Hybrid ingestion source disappeared"
+            )
+        timestamp = _timestamp(now)
+        operations.save(
+            operation.model_copy(
+                update={
+                    "status": status,
+                    "stage": stage,
+                    "source_revision": source_record.revision,
+                    "outcome_code": outcome_code,
+                    "outcome_detail": outcome_detail,
+                    "updated_at": timestamp,
+                    "completed_at": timestamp if terminal else None,
+                }
+            )
+        )
 
     @staticmethod
     def _touch_source_revision(
@@ -1035,6 +1300,46 @@ def _build_request(payload: Any, retry_count: int) -> HybridArtifactBuildRequest
     ).model_copy(
         update={"auto_retry_count": retry_count}
     )
+
+
+def _operation_projection_for_job_state(
+    *,
+    state: str,
+    safe_reason: str | None,
+    failure_code: str | None,
+) -> dict[str, Any]:
+    if state == "RETRY_SCHEDULED":
+        return {
+            "status": "queued",
+            "stage": "ingestion_retry_scheduled",
+            "outcome_code": None,
+            "outcome_detail": safe_reason,
+            "terminal": False,
+        }
+    if state == "REVIEW_REQUIRED":
+        return {
+            "status": "succeeded",
+            "stage": "ingestion_review_required",
+            "outcome_code": "hybrid_ingestion_review_required",
+            "outcome_detail": safe_reason,
+            "terminal": True,
+        }
+    if state == "FAILED":
+        codes = {
+            "PA_HYBRID_WORKER_INTEGRITY": "hybrid_ingestion_integrity_failed",
+            "PA_HYBRID_RETRY_EXHAUSTED": "hybrid_ingestion_retries_exhausted",
+        }
+        return {
+            "status": "failed",
+            "stage": "ingestion_failed",
+            "outcome_code": codes.get(
+                failure_code or "",
+                "hybrid_ingestion_failed",
+            ),
+            "outcome_detail": safe_reason,
+            "terminal": True,
+        }
+    raise RuntimeError("Hybrid ingestion operation projection state is invalid")
 
 
 def _timestamp(value: datetime) -> str:

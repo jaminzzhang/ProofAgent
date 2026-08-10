@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from datetime import date
+from typing import Any, Protocol
 
-from proof_agent.capabilities.knowledge.hybrid.workbook import (
-    InsuranceMetadataReview,
-    InsuranceMetadataReviewPage,
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    InsuranceMetadataReviewV2,
 )
 from proof_agent.control.knowledge.application import (
     KnowledgeSourceCommandContext,
@@ -18,6 +18,9 @@ from proof_agent.contracts import (
     KnowledgeSourceCursorPageInfo,
     KnowledgeSourceDocumentProjection,
     KnowledgeSourceMetadataReviewProjection,
+    KnowledgeSourceMetadataProfileProjection,
+    KnowledgeSourceMetadataProfileValueProjection,
+    KnowledgeSourceMetadataValuesProjection,
     KnowledgeSourcePublicationProjection,
     KnowledgeSourcePublicationValidationProjection,
     Permission,
@@ -71,20 +74,49 @@ class MetadataReviewAuthority(Protocol):
         cursor: str | None,
         state: str | None = None,
         import_id: str | None = None,
-    ) -> InsuranceMetadataReviewPage: ...
+    ) -> Any: ...
 
-    def resolve(
+    def approve(
         self,
         *,
         source_id: str,
+        document_id: str,
+        revision_id: str,
         review_id: str,
         expected_review_version: int,
         expected_review_identity: str,
-        action: Literal["approve", "correct", "reject"],
         actor: str,
         reason: str,
-        corrections: dict[str, str | int | None] | None = None,
-    ) -> InsuranceMetadataReview: ...
+    ) -> Any: ...
+
+    def save_draft(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
+        changes: dict[str, str | int | date | None],
+    ) -> Any: ...
+
+    def reject(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
+    ) -> Any: ...
+
+    def get_bound_profile(self, source_id: str, *, production: bool = False) -> Any: ...
 
 
 class KnowledgeSourceWorkspaceService:
@@ -141,40 +173,125 @@ class KnowledgeSourceWorkspaceService:
             summary={
                 "total": page.summary.total,
                 "unresolved": page.summary.unresolved,
-                "review_required": page.summary.review_required,
-                "ready_for_review": page.summary.ready_for_review,
+                "needs_input": page.summary.needs_input,
+                "ready_for_approval": page.summary.ready_for_approval,
                 "approved": page.summary.approved,
-                "corrected": page.summary.corrected,
                 "rejected": page.summary.rejected,
             },
         )
 
-    def resolve_review(
+    def metadata_profile(
         self,
         *,
         source_id: str,
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataProfileProjection:
+        self._require_source(source_id, context=context)
+        profile = self._reviews.get_bound_profile(source_id, production=False)
+        return KnowledgeSourceMetadataProfileProjection(
+            profile_id=profile.profile_id,
+            profile_revision_id=profile.profile_revision_id,
+            reference_only=profile.reference_only,
+            authority_values=tuple(
+                KnowledgeSourceMetadataProfileValueProjection(
+                    code=value.code,
+                    label=value.label,
+                )
+                for value in profile.authority_values
+            ),
+            taxonomy_id=profile.taxonomy_id,
+            taxonomy_revision_id=profile.taxonomy_revision_id,
+            precedence_policy_revision_id=profile.precedence_policy_revision_id,
+            precedence_authority_tier_values=tuple(
+                KnowledgeSourceMetadataProfileValueProjection(
+                    code=value.code,
+                    label=value.label,
+                )
+                for value in profile.precedence_authority_tier_values
+            ),
+        )
+    def approve_review(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
         review_id: str,
         expected_review_version: int,
         expected_review_identity: str,
-        action: Literal["approve", "correct", "reject"],
         actor: str,
         reason: str,
-        corrections: dict[str, str | int | None],
         context: KnowledgeSourceCommandContext,
     ) -> KnowledgeSourceMetadataReviewProjection:
         self._require_source(source_id, context=context)
         self._require_permission(context, Permission.KNOWLEDGE_SOURCE_REVIEW)
-        review = self._reviews.resolve(
+        result = self._reviews.approve(
             source_id=source_id,
+            document_id=document_id,
+            revision_id=revision_id,
             review_id=review_id,
             expected_review_version=expected_review_version,
             expected_review_identity=expected_review_identity,
-            action=action,
             actor=actor,
             reason=reason,
-            corrections=corrections,
         )
-        return _review_projection(review)
+        return _review_projection(result.review)
+
+    def save_review_draft(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
+        changes: dict[str, str | int | date | None],
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataReviewProjection:
+        self._require_source(source_id, context=context)
+        self._require_permission(context, Permission.KNOWLEDGE_SOURCE_EDIT)
+        result = self._reviews.save_draft(
+            source_id=source_id,
+            document_id=document_id,
+            revision_id=revision_id,
+            review_id=review_id,
+            expected_review_version=expected_review_version,
+            expected_review_identity=expected_review_identity,
+            actor=actor,
+            reason=reason,
+            changes=changes,
+        )
+        return _review_projection(result.review)
+
+    def reject_review(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataReviewProjection:
+        self._require_source(source_id, context=context)
+        self._require_permission(context, Permission.KNOWLEDGE_SOURCE_REVIEW)
+        result = self._reviews.reject(
+            source_id=source_id,
+            document_id=document_id,
+            revision_id=revision_id,
+            review_id=review_id,
+            expected_review_version=expected_review_version,
+            expected_review_identity=expected_review_identity,
+            actor=actor,
+            reason=reason,
+        )
+        return _review_projection(result.review)
 
     def publication_validations(
         self,
@@ -248,7 +365,7 @@ class KnowledgeSourceWorkspaceService:
 
 
 def _review_projection(
-    review: InsuranceMetadataReview,
+    review: InsuranceMetadataReviewV2,
 ) -> KnowledgeSourceMetadataReviewProjection:
     return KnowledgeSourceMetadataReviewProjection(
         review_id=review.review_id,
@@ -256,13 +373,40 @@ def _review_projection(
         review_version=review.review_version,
         document_id=review.document_id,
         revision_id=review.revision_id,
+        structured_build_id=review.structured_build_id,
+        profile_revision_id=review.profile_revision_id,
+        scope=review.scope,
         state=review.state,
-        publication_blocked=review.publication_blocked,
+        current=review.current,
         canonical_anchor=review.canonical_anchor,
-        citation_uri=review.citation_uri,
-        conflict_count=len(review.conflicts),
-        resolution_reason=review.resolution_reason,
-        resolved_by=review.resolved_by,
+        approved_metadata_revision_id=review.approved_metadata_revision_id,
+        parser_proposal=_metadata_values_projection(review.parser_proposal),
+        current_draft=_metadata_values_projection(review.current_draft),
+    )
+
+
+def _metadata_values_projection(review: Any) -> KnowledgeSourceMetadataValuesProjection:
+    applicability = review.applicability
+    precedence = review.precedence
+    return KnowledgeSourceMetadataValuesProjection(
+        authority=review.authority,
+        effective_from=(
+            None if review.effective_from is None else review.effective_from.isoformat()
+        ),
+        effective_to=(
+            None if review.effective_to is None else review.effective_to.isoformat()
+        ),
+        taxonomy_id=None if applicability is None else applicability.taxonomy_id,
+        taxonomy_revision_id=(
+            None if applicability is None else applicability.taxonomy_revision_id
+        ),
+        precedence_policy_revision_id=(
+            None if precedence is None else precedence.policy_revision_id
+        ),
+        precedence_authority_tier=(
+            None if precedence is None else precedence.authority_tier
+        ),
+        precedence_order=None if precedence is None else precedence.order,
     )
 
 

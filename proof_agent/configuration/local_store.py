@@ -2693,6 +2693,13 @@ class LocalAgentConfigurationStore:
         """Project exact Hybrid output, persist registries, and complete the fenced job."""
 
         from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_units
+        from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+            FilesystemInsuranceMetadataReviewV2Repository,
+            MetadataReviewConflictError,
+            MetadataReviewValidationError,
+            create_insurance_metadata_review_set,
+            proofagent_insurance_reference_profile,
+        )
         from proof_agent.capabilities.knowledge.hybrid.workbook import (
             InsuranceMetadataAuthorityRecord,
             InsuranceMetadataPdfDraftRecord,
@@ -2824,9 +2831,27 @@ class LocalAgentConfigurationStore:
                     authority_records=authority_records,
                     pdf_draft_records=pdf_draft_records,
                 )
+                if source_id == "ks_insurance":
+                    review_set = create_insurance_metadata_review_set(
+                        source_id=source_id,
+                        structured_build_id=result.build_id,
+                        profile=proofagent_insurance_reference_profile(),
+                        document_default=metadata.document_defaults,
+                        parser_proposals=metadata.pdf_drafts,
+                        canonical_anchors=tuple(
+                            record.canonical_anchor
+                            for record in authority_records
+                            if record.canonical_anchor is not None
+                        ),
+                    )
+                    FilesystemInsuranceMetadataReviewV2Repository(
+                        self._root_dir
+                    ).put_current(review_set)
             except (
                 OSError,
                 ValidationError,
+                MetadataReviewConflictError,
+                MetadataReviewValidationError,
                 WorkbookReviewConflictError,
                 WorkbookValidationError,
             ) as exc:

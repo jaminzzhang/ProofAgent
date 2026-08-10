@@ -34,9 +34,10 @@ from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorker,
     HybridWorkerOutcome,
 )
-from proof_agent.capabilities.knowledge.ingestion.metadata_import_worker import (
-    MetadataImportWorkerOutcome,
-    MetadataWorkbookImportWorker,
+from proof_agent.capabilities.knowledge.ingestion.metadata_workbook_worker import (
+    MetadataWorkbookV2Worker,
+    MetadataWorkbookWorkerOutcomeV2,
+    ProductionMetadataWorkbookInventoryReader,
 )
 from proof_agent.capabilities.knowledge.ingestion.publication_preparation_worker import (
     HybridPublicationPreparer,
@@ -91,6 +92,9 @@ from proof_agent.control.knowledge.configuration_service import (
 )
 from proof_agent.control.knowledge.operations_service import (
     KnowledgeSourceOperationsService,
+)
+from proof_agent.control.knowledge.metadata_workbook_service import (
+    KnowledgeSourceMetadataWorkbookService,
 )
 from proof_agent.control.knowledge.ingestion_service import (
     KnowledgeSourceCommandUnitOfWork,
@@ -307,7 +311,7 @@ class ProductionKnowledgeWorker:
         self,
         *,
         hybrid_worker: HybridKnowledgeWorker,
-        metadata_worker: MetadataWorkbookImportWorker,
+        metadata_worker: MetadataWorkbookV2Worker,
         publication_worker: PublicationPreparationWorker | None = None,
     ) -> None:
         self._workers = tuple(
@@ -325,7 +329,7 @@ class ProductionKnowledgeWorker:
         self,
     ) -> (
         HybridWorkerOutcome
-        | MetadataImportWorkerOutcome
+        | MetadataWorkbookWorkerOutcomeV2
         | PublicationPreparationWorkerOutcome
         | None
     ):
@@ -499,6 +503,18 @@ def create_production_api_application(
             ),
             reviews=persistence.metadata_reviews,
         )
+        metadata_workbook_application = KnowledgeSourceMetadataWorkbookService(
+            unit_of_work_factory=cast(
+                Callable[[], KnowledgeSourceCommandUnitOfWork],
+                lambda: persistence.configuration_uow(),
+            ),
+            provider_capability=provider_capability,
+            summary_reader=summary_reader,
+            knowledge=persistence.knowledge,
+            metadata_reviews=persistence.metadata_reviews,
+            workbooks=persistence.metadata_workbooks,
+            artifact_store=hybrid_runtime.artifact_store,
+        )
         publication_preparation_application = (
             KnowledgeSourcePublicationPreparationService(
                 unit_of_work_factory=cast(
@@ -558,6 +574,9 @@ def create_production_api_application(
             ),
             knowledge_source_publication_application=publication_application,
             knowledge_source_workspace_application=workspace_application,
+            knowledge_source_metadata_workbook_application=(
+                metadata_workbook_application
+            ),
             release_registry_repository=persistence.releases,
             release_bundle_materializer=release_bundle_materializer,
             release_bundle_attestation_verifier=release_bundle_attestation_verifier,
@@ -746,6 +765,12 @@ def compose_production_knowledge_worker(
         if hybrid_runtime is None:
             raise ValueError("production Knowledge Worker requires the Hybrid runtime")
         resources.append(hybrid_runtime)
+        persistence.hybrid_ingestion.configure_artifact_store(
+            hybrid_runtime.artifact_store
+        )
+        persistence.hybrid_ingestion.configure_reference_profile_source_ids(
+            _reference_profile_source_ids(values)
+        )
         role_controller = WorkerRoleLeaseController(
             repository=persistence.worker_roles,
             role=ProductionWorkerRole.KNOWLEDGE_WORKER,
@@ -763,11 +788,20 @@ def compose_production_knowledge_worker(
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             ownership_guard=role_controller.can_claim,
         )
-        metadata_worker = MetadataWorkbookImportWorker(
-            jobs=persistence.metadata_imports,
-            ingestion=persistence.hybrid_ingestion,
+        metadata_worker = MetadataWorkbookV2Worker(
+            jobs=persistence.metadata_workbooks,
+            reviews=persistence.metadata_reviews,
+            workbooks=persistence.metadata_workbooks,
+            inventory=ProductionMetadataWorkbookInventoryReader(
+                ingestion=persistence.hybrid_ingestion,
+                artifact_store=hybrid_runtime.artifact_store,
+            ),
             unit_of_work_factory=persistence.configuration_uow,
             artifact_store=hybrid_runtime.artifact_store,
+            environment_id=(
+                f"{_required(values, 'PROOF_AGENT_RELEASE_ID')}:"
+                f"{_required(values, 'PROOF_AGENT_DEPLOYMENT_SLOT')}"
+            ),
             worker_id=_required(values, "PROOF_AGENT_KNOWLEDGE_WORKER_ID"),
             lease_seconds=lease_seconds,
             ownership_guard=role_controller.can_claim,
@@ -1069,6 +1103,17 @@ def _environment(environment: Mapping[str, str] | None) -> Mapping[str, str]:
     if values.get("PROOF_AGENT_MODE", "").strip() != "production":
         raise ValueError("production role composition requires PROOF_AGENT_MODE=production")
     return values
+
+
+def _reference_profile_source_ids(values: Mapping[str, str]) -> tuple[str, ...]:
+    """Parse the exact local-only reference Profile Source allowlist."""
+
+    resolved: list[str] = []
+    for value in values.get("PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS", "").split(","):
+        source_id = value.strip()
+        if source_id and source_id not in resolved:
+            resolved.append(source_id)
+    return tuple(resolved)
 
 
 def _required(values: Mapping[str, str], key: str) -> str:

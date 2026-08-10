@@ -144,6 +144,54 @@ def test_documents_are_keyset_bounded_and_strip_private_result_artifacts(
         )
 
 
+def test_failed_revision_that_was_never_selected_is_not_superseded(
+    postgres_engine: Any,
+) -> None:
+    now = datetime(2026, 7, 28, 4, 0, tzinfo=UTC)
+    _seed_source(postgres_engine, now=now)
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            hybrid_ingestion_jobs.insert().values(
+                job_id=uuid4(),
+                idempotency_key="failed-upload",
+                source_id="ks_hybrid",
+                document_id=uuid4(),
+                revision_id=uuid4(),
+                request_identity="failed-request",
+                request_sha256="f" * 64,
+                request_json={"content_type": "application/pdf"},
+                filename="failed.pdf",
+                uploaded_by="operator-1",
+                state="FAILED",
+                fencing_token=1,
+                worker_id=None,
+                auto_retry_count=0,
+                max_auto_retries=2,
+                next_attempt_initiation="automatic",
+                next_attempt_at=None,
+                claimed_at=None,
+                lease_expires_at=None,
+                safe_reason="safe failure",
+                failure_code="PA_HYBRID_WORKER_INTEGRITY",
+                failure_classification="non_recoverable",
+                created_at=now,
+                updated_at=now,
+                completed_at=now,
+                cancel_requested_at=None,
+                cancel_requested_by=None,
+                cancelled_at=None,
+            ).values(result_json=sa.null())
+        )
+
+    page = PostgresKnowledgeSourceWorkspaceQuery(
+        postgres_engine,
+        cursor_secret=b"w" * 32,
+        clock=lambda: now + timedelta(minutes=1),
+    ).list_documents(source_id="ks_hybrid")
+
+    assert page.data[0].candidate_state == "unselected"
+
+
 def test_publication_preparation_page_exposes_only_final_cas_authority(
     postgres_engine: Any,
 ) -> None:

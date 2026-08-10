@@ -13,6 +13,11 @@ from proof_agent.bootstrap.production_hybrid_runtime import (
     ProductionHybridDeploymentSettings,
 )
 from proof_agent.capabilities.knowledge.hybrid.manifest import ManifestRuleUnitMembership
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    InsuranceMetadataReviewSet,
+    MetadataReviewConflictError,
+    approved_insurance_metadata_for_anchor,
+)
 from proof_agent.capabilities.knowledge.hybrid.opensearch import rrf_pipeline_name
 from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
 from proof_agent.capabilities.knowledge.hybrid.publication import (
@@ -27,10 +32,6 @@ from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_un
 from proof_agent.capabilities.knowledge.hybrid.versioning import (
     materialize_rule_unit_revision,
     stable_digest,
-)
-from proof_agent.capabilities.knowledge.hybrid.workbook import (
-    InsuranceMetadataReview,
-    approved_metadata_revision,
 )
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildResult,
@@ -278,7 +279,13 @@ class PostgresHybridPublicationConfigurationStore:
 
 
 class HybridMetadataReviewReader(Protocol):
-    def list(self, source_id: str) -> Sequence[InsuranceMetadataReview]: ...
+    def get_current_review_set(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+    ) -> InsuranceMetadataReviewSet | None: ...
 
 
 class HybridPublicationAssemblyRepository(Protocol):
@@ -337,7 +344,6 @@ class ProductionHybridPublicationCandidateAssembler:
         active = self._repository.load_active_publication(source_id)
         next_sequence = 1 if active is None else active.source_publication_seq + 1
         retained = self._retained_active_projection_by_rule(active, generation.generation_id)
-        reviews = tuple(self._review_repository.list(source_id))
         materialized: list[tuple[Any, Any]] = []
         build_material: list[dict[str, Any]] = []
         for document in ready:
@@ -353,13 +359,32 @@ class ProductionHybridPublicationCandidateAssembler:
                 self._artifact_store.get_exact(result.insurance_metadata_ref)
             )
             _validate_build_projection(result, canonical, metadata)
+            review_set = self._review_repository.get_current_review_set(
+                source_id=source_id,
+                document_id=document.document_id,
+                revision_id=document.revision_id,
+            )
+            if (
+                review_set is None
+                or review_set.source_id != result.source_id
+                or review_set.document_id != result.document_id
+                or review_set.revision_id != result.revision_id
+                or review_set.structured_build_id != result.build_id
+            ):
+                raise PublicationConflict("METADATA_REVIEW_REQUIRED")
             drafts = project_rule_units(
                 canonical,
                 document_defaults=metadata.document_defaults,
                 source_id=source_id,
             )
             for draft in drafts:
-                approved = _approved_review_for_draft(reviews, draft)
+                try:
+                    approved = approved_insurance_metadata_for_anchor(
+                        review_set,
+                        draft.canonical_anchor,
+                    )
+                except MetadataReviewConflictError as exc:
+                    raise PublicationConflict("METADATA_REVIEW_REQUIRED") from exc
                 rule = materialize_rule_unit_revision(
                     draft,
                     approved_metadata=approved,
@@ -481,29 +506,6 @@ class ProductionHybridPublicationCandidateAssembler:
                 or item.manifest_entry.publication_seq_to >= active.source_publication_seq
             )
         }
-
-
-def _approved_review_for_draft(
-    reviews: Sequence[InsuranceMetadataReview],
-    draft: Any,
-) -> Any:
-    related = tuple(
-        review
-        for review in reviews
-        if review.document_id == draft.document_id
-        and review.revision_id == draft.revision_id
-        and review.canonical_anchor == draft.canonical_anchor
-    )
-    if not related or any(
-        review.state != "approved" or review.publication_blocked for review in related
-    ):
-        raise PublicationConflict("METADATA_REVIEW_REQUIRED")
-    approved_by_id = {
-        item.metadata_revision_id: item for item in (approved_metadata_revision(r) for r in related)
-    }
-    if len(approved_by_id) != 1:
-        raise PublicationConflict("METADATA_AUTHORITY_AMBIGUOUS")
-    return next(iter(approved_by_id.values()))
 
 
 def _validate_build_projection(

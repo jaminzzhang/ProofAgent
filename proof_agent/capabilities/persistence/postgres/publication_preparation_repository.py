@@ -233,6 +233,40 @@ class PostgresPublicationPreparationRepository:
             safe_reason=safe_reason,
         )
 
+    def invalidate_source(
+        self,
+        source_id: str,
+        *,
+        invalidated_at: datetime,
+    ) -> int:
+        """Fence queued, claimed, or prepared work after Source authority changes."""
+
+        timestamp = invalidated_at.astimezone(UTC)
+        with write_connection(self._connection_source) as connection:
+            changed = connection.execute(
+                sa.update(hybrid_publication_preparation_jobs)
+                .where(
+                    hybrid_publication_preparation_jobs.c.source_id == source_id,
+                    hybrid_publication_preparation_jobs.c.state.in_(
+                        ("READY", "CLAIMED", "PREPARED")
+                    ),
+                )
+                .values(
+                    state="FAILED",
+                    worker_id=None,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    prepared_commit_json=sa.null(),
+                    failure_code="publication_source_changed",
+                    safe_reason=(
+                        "Source metadata changed after publication preparation."
+                    ),
+                    updated_at=timestamp,
+                    completed_at=timestamp,
+                )
+            )
+        return int(changed.rowcount or 0)
+
     def _transition(
         self,
         claim: PublicationPreparationClaim,

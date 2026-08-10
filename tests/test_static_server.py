@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proof_agent.delivery.static_server import create_static_application
+from proof_agent.observability.api.app import create_app
 
 
 def _assets(tmp_path: Path) -> Path:
@@ -72,3 +73,35 @@ def test_static_server_rejects_missing_or_symlinked_asset_root(tmp_path: Path) -
     linked.symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError, match="cannot be a symlink"):
         create_static_application(surface="operator-chat", root=linked)
+
+
+def test_combined_api_serves_dashboard_deep_links_without_masking_api_404(
+    tmp_path: Path,
+) -> None:
+    root = _assets(tmp_path)
+    client = TestClient(
+        create_app(
+            history_dir=tmp_path / "history",
+            evaluations_dir=tmp_path / "evaluations",
+            evaluation_campaigns_dir=tmp_path / "campaigns",
+            evaluation_curation_dir=tmp_path / "curation",
+            runs_dir=tmp_path / "runs",
+            conversations_dir=tmp_path / "conversations",
+            published_agents={},
+            static_dir=root,
+            agent_configuration_dir=tmp_path / "configuration",
+        )
+    )
+
+    deep_link = client.get(
+        "/knowledge/ks_insurance",
+        headers={"Accept": "text/html"},
+    )
+    missing_api = client.get("/api/does-not-exist")
+
+    assert deep_link.status_code == 200
+    assert deep_link.text == "<html>dashboard</html>"
+    assert deep_link.headers["cache-control"] == "no-store"
+    assert missing_api.status_code == 404
+    assert missing_api.headers["content-type"].startswith("application/json")
+    assert missing_api.json() == {"detail": "Not Found"}

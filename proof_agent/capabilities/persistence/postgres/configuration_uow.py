@@ -24,6 +24,9 @@ from proof_agent.capabilities.persistence.postgres.metadata_review_repository im
 from proof_agent.capabilities.persistence.postgres.metadata_import_repository import (
     PostgresMetadataImportRepository,
 )
+from proof_agent.capabilities.persistence.postgres.metadata_workbook_repository import (
+    PostgresMetadataWorkbookV2Repository,
+)
 from proof_agent.capabilities.persistence.postgres.knowledge_source_operation_repository import (
     PostgresKnowledgeSourceOperationRepository,
 )
@@ -75,6 +78,7 @@ class PostgresConfigurationUnitOfWork:
         self.hybrid_ingestion: PostgresHybridIngestionRepository
         self.metadata_reviews: PostgresInsuranceMetadataReviewRepository
         self.metadata_imports: PostgresMetadataImportRepository
+        self.metadata_workbooks: PostgresMetadataWorkbookV2Repository
         self.operations: PostgresKnowledgeSourceOperationRepository
         self.prepared_publications: PostgresPreparedKnowledgePublicationRepository
         self.publication_preparations: PostgresPublicationPreparationRepository
@@ -105,6 +109,7 @@ class PostgresConfigurationUnitOfWork:
         self.hybrid_ingestion = PostgresHybridIngestionRepository(connection)
         self.metadata_reviews = PostgresInsuranceMetadataReviewRepository(connection)
         self.metadata_imports = PostgresMetadataImportRepository(connection)
+        self.metadata_workbooks = PostgresMetadataWorkbookV2Repository(connection)
         self.operations = PostgresKnowledgeSourceOperationRepository(connection)
         self.prepared_publications = PostgresPreparedKnowledgePublicationRepository(
             connection

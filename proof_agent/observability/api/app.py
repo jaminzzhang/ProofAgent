@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.run_queue_api import router as run_queue_router
@@ -23,6 +22,7 @@ from proof_agent.delivery.production_model_connections import (
     router as production_model_connections_router,
 )
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
+from proof_agent.delivery.static_server import create_static_application
 from proof_agent.contracts import KnowledgeOperationsHealthSources
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
@@ -103,6 +103,7 @@ def create_app(
     knowledge_source_publication_preparation_application: object | None = None,
     knowledge_source_publication_application: object | None = None,
     knowledge_source_workspace_application: object | None = None,
+    knowledge_source_metadata_workbook_application: object | None = None,
     release_registry_repository: object | None = None,
     release_bundle_materializer: object | None = None,
     release_bundle_attestation_verifier: object | None = None,
@@ -194,6 +195,10 @@ def create_app(
                     "Knowledge Source workspace application",
                     knowledge_source_workspace_application,
                 ),
+                (
+                    "Knowledge Source Metadata Workbook application",
+                    knowledge_source_metadata_workbook_application,
+                ),
                 ("PostgreSQL Release Registry", release_registry_repository),
                 ("release bundle verified cache", release_bundle_materializer),
                 ("release bundle attestation verifier", release_bundle_attestation_verifier),
@@ -248,6 +253,9 @@ def create_app(
     )
     application.state.knowledge_source_workspace_application = (
         knowledge_source_workspace_application
+    )
+    application.state.knowledge_source_metadata_workbook_application = (
+        knowledge_source_metadata_workbook_application
     )
     application.state.release_registry_repository = release_registry_repository
     application.state.release_bundle_materializer = release_bundle_materializer
@@ -380,6 +388,22 @@ def create_app(
     else:
         application.include_router(production_model_connections_router, prefix="/api")
 
+    # Keep unknown API paths inside the JSON API boundary. The Dashboard SPA mounted
+    # below owns browser routes only and must never turn an API typo into index.html.
+    @application.api_route(
+        "/api",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @application.api_route(
+        "/api/{requested_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    def api_not_found(requested_path: str = "") -> JSONResponse:
+        del requested_path
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     # Mount the built frontend SPA as a catch-all fallback.
     resolved_static = (
         static_dir or Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
@@ -387,7 +411,7 @@ def create_app(
     if resolved_static.is_dir():
         application.mount(
             "/",
-            StaticFiles(directory=str(resolved_static), html=True),
+            create_static_application(surface="dashboard", root=resolved_static),
             name="spa",
         )
 

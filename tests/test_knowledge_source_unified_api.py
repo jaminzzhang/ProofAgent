@@ -9,6 +9,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    MetadataProfileBindingRequiredError,
+    MetadataReviewConflictError,
+)
 from proof_agent.control.knowledge.application import (
     KnowledgeSourceCommandContext,
     KnowledgeSourceRevisionConflictError,
@@ -225,6 +229,22 @@ class _WorkspaceApplication:
     def reviews(self, **kwargs: Any) -> KnowledgeSourceCursorPage[KnowledgeSourceMetadataReviewProjection]:
         return self._empty(kwargs["limit"])
 
+    def metadata_profile(self, **kwargs: Any) -> Any:
+        del kwargs
+        return {
+            "metadata_scheme": "insurance_rule.v2",
+            "profile_id": "insurance-authority",
+            "profile_revision_id": "insurance-authority.v1",
+            "reference_only": False,
+            "authority_values": [{"code": "national", "label": "National"}],
+            "taxonomy_id": "insurance-product-applicability",
+            "taxonomy_revision_id": "taxonomy-2026-01",
+            "precedence_policy_revision_id": "precedence-2026-01",
+            "precedence_authority_tier_values": [
+                {"code": "policy_terms", "label": "Policy terms"}
+            ],
+        }
+
     def publication_validations(
         self,
         **kwargs: Any,
@@ -243,8 +263,9 @@ class _WorkspaceApplication:
     ) -> KnowledgeSourceCursorPage[KnowledgeSourceAuditProjection]:
         return self._empty(kwargs["limit"])
 
-    def resolve_review(self, **kwargs: Any) -> KnowledgeSourceMetadataReviewProjection:
-        assert kwargs["action"] == "approve"
+    def approve_review(self, **kwargs: Any) -> KnowledgeSourceMetadataReviewProjection:
+        assert kwargs["document_id"] == "document-1"
+        assert kwargs["revision_id"] == "revision-1"
         assert kwargs["context"].operator_subject == "operator-1"
         return KnowledgeSourceMetadataReviewProjection(
             review_id=kwargs["review_id"],
@@ -252,12 +273,55 @@ class _WorkspaceApplication:
             review_version=kwargs["expected_review_version"] + 1,
             document_id="document-1",
             revision_id="revision-1",
+            structured_build_id="build-1",
+            profile_revision_id="insurance-authority.v1",
+            scope="document_default",
             state="approved",
-            publication_blocked=False,
-            citation_uri="proof://knowledge/ks_hybrid/document-1",
-            conflict_count=0,
-            resolution_reason=kwargs["reason"],
-            resolved_by=kwargs["actor"],
+            current=True,
+            approved_metadata_revision_id="approved-metadata-1",
+            parser_proposal={},
+            current_draft={},
+        )
+
+    def save_review_draft(
+        self, **kwargs: Any
+    ) -> KnowledgeSourceMetadataReviewProjection:
+        assert kwargs["document_id"] == "document-1"
+        assert kwargs["revision_id"] == "revision-1"
+        assert kwargs["changes"] == {"authority": "national"}
+        assert kwargs["context"].operator_subject == "operator-1"
+        return KnowledgeSourceMetadataReviewProjection(
+            review_id=kwargs["review_id"],
+            review_identity=kwargs["expected_review_identity"],
+            review_version=kwargs["expected_review_version"] + 1,
+            document_id="document-1",
+            revision_id="revision-1",
+            structured_build_id="build-1",
+            profile_revision_id="insurance-authority.v1",
+            scope="document_default",
+            state="needs_input",
+            current=True,
+            parser_proposal={},
+            current_draft={"authority": "national"},
+        )
+
+    def reject_review(self, **kwargs: Any) -> KnowledgeSourceMetadataReviewProjection:
+        assert kwargs["document_id"] == "document-1"
+        assert kwargs["revision_id"] == "revision-1"
+        assert kwargs["context"].operator_subject == "operator-1"
+        return KnowledgeSourceMetadataReviewProjection(
+            review_id=kwargs["review_id"],
+            review_identity=kwargs["expected_review_identity"],
+            review_version=kwargs["expected_review_version"] + 1,
+            document_id="document-1",
+            revision_id="revision-1",
+            structured_build_id="build-1",
+            profile_revision_id="insurance-authority.v1",
+            scope="document_default",
+            state="rejected",
+            current=True,
+            parser_proposal={},
+            current_draft={},
         )
 
 
@@ -282,6 +346,55 @@ class _PublicationApplication:
         return _operation(command="publish"), True
 
 
+class _MetadataWorkbookApplication:
+    def generate_export(self, **kwargs: Any) -> KnowledgeSourceOperation:
+        assert kwargs["source_id"] == "ks_hybrid"
+        assert kwargs["document_id"] == "document-1"
+        assert kwargs["revision_id"] == "revision-1"
+        assert kwargs["expected_revision"] == 7
+        assert kwargs["idempotency_key"] == "workbook-export-key"
+        return _operation(command="generate_metadata_workbook_export")
+
+    def download_export(self, **kwargs: Any) -> tuple[bytes, str]:
+        assert kwargs["source_id"] == "ks_hybrid"
+        assert kwargs["export_id"] == "export-1"
+        return b"xlsx-content", "insurance-metadata.xlsx"
+
+    def create_import_preview(self, **kwargs: Any) -> KnowledgeSourceOperation:
+        assert kwargs["source_id"] == "ks_hybrid"
+        assert kwargs["export_id"] == "export-1"
+        assert kwargs["expected_revision"] == 7
+        assert kwargs["idempotency_key"] == "workbook-preview-key"
+        assert kwargs["filename"] == "returned.xlsx"
+        assert kwargs["content"].read() == b"returned-xlsx"
+        return _operation(command="create_metadata_workbook_import_preview")
+
+    def get_import_preview(self, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["source_id"] == "ks_hybrid"
+        assert kwargs["preview_id"] == "preview-1"
+        return {
+            "preview_id": "preview-1",
+            "export_id": "export-1",
+            "state": "ready_to_apply",
+            "preview_identity": "b" * 64,
+            "conflict_count": 0,
+            "field_merges": [],
+            "override_modes": [],
+            "validation_report": None,
+            "created_at": "2026-08-08T00:00:00Z",
+            "expires_at": "2026-09-07T00:00:00Z",
+        }
+
+    def apply_import_preview(self, **kwargs: Any) -> KnowledgeSourceOperation:
+        assert kwargs["source_id"] == "ks_hybrid"
+        assert kwargs["preview_id"] == "preview-1"
+        assert kwargs["expected_preview_identity"] == "b" * 64
+        assert kwargs["expected_revision"] == 7
+        assert kwargs["reason"] == "Apply reviewed bulk changes."
+        assert kwargs["idempotency_key"] == "workbook-apply-key"
+        return _operation(command="apply_metadata_workbook_import_preview")
+
+
 def _client(*, deployment_revision: str) -> tuple[TestClient, _PublicationApplication]:
     application = FastAPI()
     application.include_router(router, prefix="/api")
@@ -302,6 +415,9 @@ def _client(*, deployment_revision: str) -> tuple[TestClient, _PublicationApplic
     publication = _PublicationApplication()
     application.state.knowledge_source_publication_application = publication
     application.state.knowledge_source_workspace_application = _WorkspaceApplication()
+    application.state.knowledge_source_metadata_workbook_application = (
+        _MetadataWorkbookApplication()
+    )
     return TestClient(application), publication
 
 
@@ -415,10 +531,11 @@ def test_business_review_route_uses_exact_review_cas_and_review_permission() -> 
     response = client.post(
         "/api/config/knowledge-sources/ks_hybrid/metadata-reviews/review-1/approve",
         json={
+            "document_id": "document-1",
+            "revision_id": "revision-1",
             "expected_review_version": 3,
             "expected_review_identity": "a" * 64,
             "reason": "Verified against the signed workbook.",
-            "corrections": {},
         },
     )
 
@@ -426,6 +543,157 @@ def test_business_review_route_uses_exact_review_cas_and_review_permission() -> 
     assert response.json()["state"] == "approved"
     assert response.json()["review_version"] == 4
     assert "original_ref" not in response.text
+
+
+def test_business_review_conflict_is_safe_problem_details() -> None:
+    class _ConflictWorkspace(_WorkspaceApplication):
+        def approve_review(
+            self, **kwargs: Any
+        ) -> KnowledgeSourceMetadataReviewProjection:
+            del kwargs
+            raise MetadataReviewConflictError("stale review identity")
+
+    client, _publication = _client(
+        deployment_revision="production-private-plane.v1"
+    )
+    client.app.state.knowledge_source_workspace_application = _ConflictWorkspace()
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-reviews/review-1/approve",
+        json={
+            "document_id": "document-1",
+            "revision_id": "revision-1",
+            "expected_review_version": 3,
+            "expected_review_identity": "a" * 64,
+            "reason": "Verified against the signed workbook.",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "knowledge_source_review_conflict"
+    assert "stale review identity" not in response.text
+
+
+def test_missing_metadata_profile_binding_is_an_actionable_conflict() -> None:
+    class _UnboundWorkspace(_WorkspaceApplication):
+        def metadata_profile(self, **kwargs: Any) -> Any:
+            del kwargs
+            raise MetadataProfileBindingRequiredError("internal binding detail")
+
+    client, _publication = _client(
+        deployment_revision="production-private-plane.v1"
+    )
+    client.app.state.knowledge_source_workspace_application = _UnboundWorkspace()
+
+    response = client.get(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-profile"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "metadata_profile_binding_required"
+    assert response.json()["detail"] == (
+        "Bind a published Metadata Profile before reviewing this Knowledge Source."
+    )
+    assert "internal binding detail" not in response.text
+
+
+def test_business_review_draft_route_is_an_explicit_edit_command() -> None:
+    client, _publication = _client(
+        deployment_revision="production-private-plane.v1"
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-reviews/review-1/draft",
+        json={
+            "document_id": "document-1",
+            "revision_id": "revision-1",
+            "expected_review_version": 3,
+            "expected_review_identity": "a" * 64,
+            "reason": "Set the governing authority.",
+            "changes": {"authority": "national"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "needs_input"
+    assert response.json()["review_version"] == 4
+
+
+def test_business_review_reject_route_is_an_explicit_exact_review_command() -> None:
+    client, _publication = _client(
+        deployment_revision="production-private-plane.v1"
+    )
+
+    response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-reviews/review-1/reject",
+        json={
+            "document_id": "document-1",
+            "revision_id": "revision-1",
+            "expected_review_version": 3,
+            "expected_review_identity": "a" * 64,
+            "reason": "The source does not establish a supported authority.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "rejected"
+    assert response.json()["review_version"] == 4
+
+
+def test_workbook_v2_routes_are_async_and_stream_content_through_the_api() -> None:
+    client, _publication = _client(
+        deployment_revision="production-private-plane.v1"
+    )
+
+    export_response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/documents/document-1/metadata-workbook-exports",
+        headers={"Idempotency-Key": "workbook-export-key"},
+        json={"revision_id": "revision-1", "expected_revision": 7},
+    )
+    assert export_response.status_code == 202
+    assert export_response.json()["command"] == "generate_metadata_workbook_export"
+
+    content_response = client.get(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-workbook-exports/export-1/content"
+    )
+    assert content_response.status_code == 200
+    assert content_response.content == b"xlsx-content"
+    assert "attachment" in content_response.headers["content-disposition"]
+    assert "artifact_uri" not in content_response.text
+
+    preview_response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-workbook-import-previews",
+        headers={"Idempotency-Key": "workbook-preview-key"},
+        data={"export_id": "export-1", "expected_revision": "7"},
+        files={
+            "file": (
+                "returned.xlsx",
+                b"returned-xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert preview_response.status_code == 202
+    assert preview_response.json()["command"] == "create_metadata_workbook_import_preview"
+
+    projection_response = client.get(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-workbook-import-previews/preview-1"
+    )
+    assert projection_response.status_code == 200
+    assert projection_response.json()["state"] == "ready_to_apply"
+    assert projection_response.json()["preview_identity"] == "b" * 64
+
+    apply_response = client.post(
+        "/api/config/knowledge-sources/ks_hybrid/metadata-workbook-import-previews/preview-1/apply",
+        headers={"Idempotency-Key": "workbook-apply-key"},
+        json={
+            "expected_preview_identity": "b" * 64,
+            "expected_revision": 7,
+            "reason": "Apply reviewed bulk changes.",
+        },
+    )
+    assert apply_response.status_code == 202
+    assert apply_response.json()["command"] == "apply_metadata_workbook_import_preview"
 
 
 def test_revision_conflict_is_safe_problem_details() -> None:

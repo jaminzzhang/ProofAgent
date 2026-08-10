@@ -240,10 +240,14 @@ def test_workspace_resources_remove_private_artifact_locators() -> None:
         review_version=2,
         document_id=document.document_id,
         revision_id=document.revision_id,
+        structured_build_id="build_1",
+        profile_revision_id="insurance-authority.v1",
+        scope="document_default",
         state="approved",
-        publication_blocked=False,
-        citation_uri="proof://knowledge/ks_hybrid/policy",
-        conflict_count=0,
+        current=True,
+        approved_metadata_revision_id="approved_metadata_1",
+        parser_proposal={},
+        current_draft={},
     )
     validation = KnowledgeSourcePublicationValidationProjection(
         validation_id="validation_1",

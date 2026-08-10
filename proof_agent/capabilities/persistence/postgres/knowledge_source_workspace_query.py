@@ -95,6 +95,10 @@ class PostgresKnowledgeSourceWorkspaceQuery:
                 == hybrid_ingestion_jobs.c.revision_id,
                 "pending",
             ),
+            (
+                hybrid_ingestion_jobs.c.state.in_(("FAILED", "CANCELLED")),
+                "unselected",
+            ),
             else_="superseded",
         ).label("candidate_state")
         statement = (
@@ -157,7 +161,7 @@ class PostgresKnowledgeSourceWorkspaceQuery:
                 ),
                 state=str(row["state"]),
                 candidate_state=cast(
-                    Literal["candidate", "pending", "superseded"],
+                    Literal["candidate", "pending", "superseded", "unselected"],
                     str(row["candidate_state"]),
                 ),
                 safe_reason=(

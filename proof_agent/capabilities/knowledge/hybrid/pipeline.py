@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 import hashlib
 import json
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_validator
 
@@ -54,7 +55,11 @@ from proof_agent.contracts.hybrid_documents import (
     StructuredQualitySignal,
     StructuredTable,
 )
-from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
+from proof_agent.contracts.insurance_rules import (
+    InsuranceRuleApplicability,
+    InsuranceRuleMetadataDraft,
+    InsuranceRulePrecedence,
+)
 
 
 NonBlankStr = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -131,6 +136,8 @@ class PrivateHybridParserPipeline:
 
         cancellation.raise_if_cancelled()
         parser_request = ParserServiceRequest(
+            document_id=request.document_id,
+            revision_id=request.revision_id,
             original_ref=request.original_ref,
             page_numbers=request.page_numbers,
             parser_revision=request.parser_revision,
@@ -251,6 +258,10 @@ class PrivateHybridParserPipeline:
             required=self.require_insurance_metadata_drafts,
         )
         cancellation.raise_if_cancelled()
+        document_default = _insurance_metadata_default(
+            request=request,
+            vendor_payload=docling_response.vendor_json,
+        )
         return HybridParserBuildOutput(
             artifact=artifact,
             vendor_artifacts=tuple(vendor_artifacts),
@@ -260,14 +271,80 @@ class PrivateHybridParserPipeline:
                 revision_id=request.revision_id,
                 structured_build_id=final_build.build_id,
                 original_sha256=request.original_ref.sha256,
-                document_defaults=InsuranceRuleMetadataDraft(
-                    metadata_draft_id=f"metadata-draft-{metadata_id}",
-                    document_id=request.document_id,
-                    revision_id=request.revision_id,
+                document_defaults=(
+                    document_default
+                    if document_default is not None
+                    else InsuranceRuleMetadataDraft(
+                        metadata_draft_id=f"metadata-draft-{metadata_id}",
+                        document_id=request.document_id,
+                        revision_id=request.revision_id,
+                    )
                 ),
                 pdf_drafts=pdf_drafts,
             ),
         )
+
+
+def _insurance_metadata_default(
+    *,
+    request: HybridArtifactBuildRequest,
+    vendor_payload: Mapping[str, object],
+) -> InsuranceRuleMetadataDraft | None:
+    """Bind one model-proposed document default to server-owned lineage."""
+
+    raw = vendor_payload.get("insurance_metadata_default")
+    if raw is None:
+        return None
+    try:
+        proposal = PrivateInsuranceMetadataProposal.model_validate(raw)
+    except ValueError as exc:
+        raise ReviewRequiredError(
+            "private parser insurance metadata default failed strict validation"
+        ) from exc
+    if proposal.canonical_anchor is not None:
+        raise ReviewRequiredError(
+            "private parser insurance metadata default cannot target a Rule Unit"
+        )
+    material = {
+        "source_id": request.source_id,
+        "document_id": request.document_id,
+        "revision_id": request.revision_id,
+        "proposal": proposal.model_dump(mode="json"),
+    }
+    return InsuranceRuleMetadataDraft(
+        metadata_draft_id=f"ai-metadata-default-{_sha256_json(material)[:24]}",
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        authority=proposal.authority,
+        applicability=InsuranceRuleApplicability(
+            taxonomy_id=proposal.taxonomy_id,
+            taxonomy_revision_id=proposal.taxonomy_revision_id,
+        ),
+        effective_from=_optional_iso_date(
+            proposal.effective_from,
+            field="effective_from",
+        ),
+        effective_to=_optional_iso_date(
+            proposal.effective_to,
+            field="effective_to",
+        ),
+        precedence=InsuranceRulePrecedence(
+            policy_revision_id=proposal.precedence_policy_revision_id,
+            authority_tier=proposal.precedence_authority_tier,
+            order=proposal.precedence_order,
+        ),
+    )
+
+
+def _optional_iso_date(value: str | None, *, field: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ReviewRequiredError(
+            f"private parser insurance metadata default {field} is not an ISO date"
+        ) from exc
 
 
 def _insurance_metadata_drafts(
@@ -278,20 +355,8 @@ def _insurance_metadata_drafts(
     required: bool,
 ) -> tuple[InsuranceMetadataDraftInput, ...]:
     raw = vendor_payload.get("insurance_metadata_drafts")
-    if raw is None:
-        if required:
-            raise ReviewRequiredError(
-                "private parser omitted required insurance metadata proposals"
-            )
+    if raw is None and not required:
         return ()
-    if not isinstance(raw, list) or not raw or len(raw) > 100_000:
-        raise ReviewRequiredError("private parser insurance metadata proposals are invalid")
-    try:
-        proposals = tuple(PrivateInsuranceMetadataProposal.model_validate(item) for item in raw)
-    except ValueError as exc:
-        raise ReviewRequiredError(
-            "private parser insurance metadata proposals failed strict validation"
-        ) from exc
     try:
         rule_units = project_rule_units(
             artifact,
@@ -304,7 +369,38 @@ def _insurance_metadata_drafts(
         )
     except RuleUnitProjectionReviewRequired as exc:
         raise ReviewRequiredError("insurance metadata Rule Unit projection requires review") from exc
-    expected_anchors = {unit.canonical_anchor for unit in rule_units}
+    expected_anchor_order = tuple(unit.canonical_anchor for unit in rule_units)
+    expected_anchors = set(expected_anchor_order)
+    if raw is None:
+        missing: list[InsuranceMetadataDraftInput] = []
+        for anchor in expected_anchor_order:
+            material = {
+                "source_id": request.source_id,
+                "document_id": request.document_id,
+                "revision_id": request.revision_id,
+                "build_id": artifact.build_identity.build_id,
+                "canonical_anchor": anchor,
+                "proposal": "missing",
+            }
+            missing.append(
+                InsuranceMetadataDraftInput(
+                    metadata_draft_id=f"pdf-metadata-{_sha256_json(material)[:24]}",
+                    origin="pdf",
+                    source_id=request.source_id,
+                    document_id=request.document_id,
+                    revision_id=request.revision_id,
+                    canonical_anchor=anchor,
+                )
+            )
+        return tuple(missing)
+    if not isinstance(raw, list) or not raw or len(raw) > 100_000:
+        raise ReviewRequiredError("private parser insurance metadata proposals are invalid")
+    try:
+        proposals = tuple(PrivateInsuranceMetadataProposal.model_validate(item) for item in raw)
+    except ValueError as exc:
+        raise ReviewRequiredError(
+            "private parser insurance metadata proposals failed strict validation"
+        ) from exc
     actual_anchors = [proposal.canonical_anchor for proposal in proposals]
     if len(actual_anchors) != len(set(actual_anchors)) or set(actual_anchors) != expected_anchors:
         raise ReviewRequiredError(
@@ -312,14 +408,14 @@ def _insurance_metadata_drafts(
         )
     drafts: list[InsuranceMetadataDraftInput] = []
     for proposal in proposals:
-        material = {
+        proposal_material: dict[str, Any] = {
             "source_id": request.source_id,
             "document_id": request.document_id,
             "revision_id": request.revision_id,
             "build_id": artifact.build_identity.build_id,
             "proposal": proposal.model_dump(mode="json"),
         }
-        metadata_draft_id = f"pdf-metadata-{_sha256_json(material)[:24]}"
+        metadata_draft_id = f"pdf-metadata-{_sha256_json(proposal_material)[:24]}"
         try:
             drafts.append(
                 InsuranceMetadataDraftInput(

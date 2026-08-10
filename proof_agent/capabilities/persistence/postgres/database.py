@@ -27,6 +27,7 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0008_run_receipt_outcome",
         "0009_hybrid_ingestion_jobs",
         "0010_hybrid_knowledge_workflow",
+        "0011_model_credential",
         "0011_worker_role_leases",
         "0012_model_credential",
         "0013_release_registry",
@@ -35,6 +36,9 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0016_hybrid_attempt_lifecycle",
         "0017_metadata_import_jobs",
         "0018_publication_preparation",
+        "0019_ingestion_operation_link",
+        "0020_metadata_review_v2",
+        "0021_metadata_workbook_v2",
     }
 )
 

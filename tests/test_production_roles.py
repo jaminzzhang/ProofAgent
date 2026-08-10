@@ -122,6 +122,7 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
         hybrid_ingestion = object()
         knowledge_source_operations = object()
         metadata_reviews = object()
+        metadata_workbooks = object()
         configuration_uow = object()
         security = object()
         run_queue = object()
@@ -231,3 +232,10 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
 
     assert isinstance(application, FastAPI)
     assert captured["hybrid_runtime"] is hybrid_runtime
+
+
+def test_reference_profile_source_ids_are_explicit_exact_and_deduplicated() -> None:
+    assert production_roles._reference_profile_source_ids({}) == ()
+    assert production_roles._reference_profile_source_ids(
+        {"PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS": " ks_insurance,ks_other,ks_insurance "}
+    ) == ("ks_insurance", "ks_other")

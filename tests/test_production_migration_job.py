@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import json
 import inspect
 from pathlib import Path
+import subprocess
+import sys
+from datetime import UTC, datetime
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -11,10 +16,12 @@ import yaml  # type: ignore[import-untyped]
 from proof_agent.bootstrap import production_roles
 from proof_agent.capabilities.persistence.postgres import database
 from proof_agent.delivery.cli import app
+from proof_agent.deployment import load_deployment_compatibility_manifest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SLOT_COMPOSE = PROJECT_ROOT / "deploy/production/slot/compose.yaml"
+LOCAL_PRODUCTION_COMPOSE = PROJECT_ROOT / "docker-compose.production-local.yml"
 
 
 def _compose() -> dict[str, object]:
@@ -37,6 +44,106 @@ def test_candidate_image_exposes_one_nonrestarting_explicit_migration_job() -> N
         "--target",
         "${PROOF_AGENT_RELEASE_SCHEMA:?set the exact candidate schema revision}",
     ]
+
+
+def test_local_production_uses_the_same_locked_expand_only_migration_contract() -> None:
+    services = yaml.safe_load(
+        LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    )["services"]
+
+    assert services["database-migrate"]["command"] == [
+        "database",
+        "upgrade",
+        "--locked",
+        "--expand-only",
+        "--target",
+        database.head_revision(),
+    ]
+
+
+def test_local_production_bootstraps_only_the_designated_reference_profile_source() -> None:
+    services = yaml.safe_load(
+        LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    )["services"]
+    bootstrap = services["reference-metadata-bootstrap"]
+
+    assert bootstrap["restart"] == "no"
+    assert bootstrap["entrypoint"] == ["python"]
+    assert bootstrap["command"] == [
+        "/opt/proof-agent-local/bootstrap_reference_metadata.py"
+    ]
+    assert bootstrap["depends_on"]["database-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert bootstrap["depends_on"]["hybrid-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert services["api"]["depends_on"]["reference-metadata-bootstrap"][
+        "condition"
+    ] == "service_completed_successfully"
+    assert services["knowledge-worker"]["environment"][
+        "PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS"
+    ] == "ks_insurance"
+
+
+def test_local_production_supplies_current_api_startup_contract() -> None:
+    services = yaml.safe_load(
+        LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    )["services"]
+    environment = services["api"]["environment"]
+
+    assert environment["PROOF_AGENT_IMAGE_DIGEST"].startswith(
+        "${PROOF_AGENT_IMAGE_DIGEST:-"
+    )
+    assert environment["PROOF_AGENT_DEPLOYMENT_SLOT"] == "blue"
+    assert environment["PROOF_AGENT_ACTIVATION_STATE"] == "active"
+    assert environment["PROOF_AGENT_DEPLOYMENT_COMPATIBILITY_MANIFEST"] == (
+        "/run/proof-agent-config/deployment-compatibility-manifest.json"
+    )
+    assert environment["PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR"] == (
+        "/var/lib/proof-agent/release-bundle-cache"
+    )
+    assert environment["PROOF_AGENT_SECRET_PROBE_HANDLE"] in json.loads(
+        environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"]
+    )
+    trusted_keys = json.loads(
+        environment["PROOF_AGENT_RELEASE_TRUSTED_ED25519_KEYS_JSON"]
+    )
+    assert all(len(base64.b64decode(value, validate=True)) == 32 for value in trusted_keys.values())
+    assert any(
+        str(entry).startswith("/var/lib/proof-agent/release-bundle-cache:")
+        for entry in services["api"]["tmpfs"]
+    )
+    assert any(
+        str(entry).endswith(
+            ":/run/proof-agent-config/deployment-compatibility-manifest.json:ro"
+        )
+        for entry in services["api"]["volumes"]
+    )
+
+
+def test_local_production_compatibility_fixture_is_fresh_and_explicitly_local(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "deployment-compatibility-manifest.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(
+                PROJECT_ROOT
+                / "docker/production-local/generate_deployment_compatibility_manifest.py"
+            ),
+            str(output),
+        ],
+        check=True,
+    )
+
+    manifest = load_deployment_compatibility_manifest(
+        output,
+        checked_at=datetime.now(UTC),
+    )
+
+    assert all("Local Harness" in component.product for component in manifest.components)
 
 
 def test_production_upgrade_cli_requires_explicit_safety_contract() -> None:

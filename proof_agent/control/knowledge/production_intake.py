@@ -17,14 +17,7 @@ from proof_agent.capabilities.knowledge.hybrid.intake import (
     preflight_hybrid_pdf,
     quarantine_hybrid_upload,
 )
-from proof_agent.capabilities.knowledge.hybrid.metadata_import_jobs import (
-    MetadataImportJob,
-)
 from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
-from proof_agent.capabilities.knowledge.hybrid.workbook import (
-    DEFAULT_WORKBOOK_IMPORT_LIMITS,
-    WORKBOOK_MEDIA_TYPE,
-)
 from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
@@ -62,6 +55,7 @@ class HybridIntakeIngestionRepository(Protocol):
         self,
         request: HybridArtifactBuildRequest,
         *,
+        operation_id: str | None = None,
         filename: str = "document.pdf",
         uploaded_by: str = "system",
         replacement: bool = False,
@@ -85,6 +79,7 @@ class HybridIntakeIngestionRepository(Protocol):
         *,
         job_id: str,
         requested_by: str,
+        operation_id: str | None = None,
         touch_source: bool = True,
     ) -> Any: ...
 
@@ -189,7 +184,7 @@ def hybrid_knowledge_source_provider_capability(
         features=(
             "documents",
             "document_revisions",
-            "metadata_imports",
+            "metadata_workbook_v2",
             "metadata_reviews",
             "publication",
             "operations",
@@ -451,142 +446,6 @@ class ProductionHybridKnowledgeIntakeService:
             actor=actor,
         )
 
-    def import_metadata(
-        self,
-        *,
-        source_id: str,
-        document_id: str,
-        revision_id: str,
-        filename: str,
-        content_type: str,
-        content: BinaryIO,
-        expected_revision: int,
-        idempotency_key: str,
-        actor: AuditActorFacts,
-    ) -> KnowledgeSourceOperation:
-        """Stage one exact XLSX and queue validation in the Knowledge Worker."""
-
-        source = self._knowledge.get_knowledge_source(source_id)
-        if (
-            source is None
-            or source.provider != "hybrid_index"
-            or source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE
-        ):
-            raise KeyError(source_id)
-        normalized_document_id = str(UUID(document_id))
-        normalized_revision_id = str(UUID(revision_id))
-        normalized_filename = _workbook_filename(filename)
-        normalized_content_type = content_type.partition(";")[0].strip().lower()
-        if normalized_content_type != WORKBOOK_MEDIA_TYPE:
-            raise ValueError(
-                "Hybrid metadata imports require the official XLSX content type"
-            )
-        normalized_idempotency_key = _nonblank(
-            idempotency_key,
-            "idempotency_key",
-            maximum=255,
-        )
-        with quarantine_hybrid_upload(
-            content,
-            max_file_bytes=DEFAULT_WORKBOOK_IMPORT_LIMITS.max_file_bytes,
-        ) as quarantined:
-            request_sha256 = hashlib.sha256(
-                _canonical_json(
-                    {
-                        "schema_version": "hybrid-metadata-import-command.v1",
-                        "command": "import_metadata",
-                        "source_id": source_id,
-                        "document_id": normalized_document_id,
-                        "revision_id": normalized_revision_id,
-                        "filename": normalized_filename,
-                        "content_type": normalized_content_type,
-                        "content_sha256": quarantined.sha256,
-                        "size_bytes": quarantined.size_bytes,
-                        "expected_revision": expected_revision,
-                    }
-                )
-            ).hexdigest()
-            with quarantined.path.open("rb") as exact_stream:
-                original_ref = self._artifact_store.put_immutable_stream(
-                    key=(
-                        f"metadata-workbooks/{quarantined.sha256}/original.xlsx"
-                    ),
-                    content=exact_stream,
-                    media_type=WORKBOOK_MEDIA_TYPE,
-                    expected_sha256=quarantined.sha256,
-                    expected_size_bytes=quarantined.size_bytes,
-                )
-
-        import_job_id = str(uuid4())
-
-        def persist_import(
-            unit_of_work: Any,
-            source_record: Any,
-            operation: KnowledgeSourceOperation,
-            admitted_at: datetime,
-        ) -> None:
-            del source_record
-            _require_completed_candidate(
-                unit_of_work.hybrid_ingestion,
-                source_id=source_id,
-                document_id=normalized_document_id,
-                revision_id=normalized_revision_id,
-            )
-            now = admitted_at.astimezone(UTC)
-            unit_of_work.metadata_imports.enqueue(
-                MetadataImportJob(
-                    import_job_id=import_job_id,
-                    operation_id=operation.operation_id,
-                    source_id=source_id,
-                    document_id=normalized_document_id,
-                    revision_id=normalized_revision_id,
-                    source_revision=operation.source_revision,
-                    request_sha256=request_sha256,
-                    filename=normalized_filename,
-                    original_ref=original_ref,
-                    content_sha256=quarantined.sha256,
-                    state="READY",
-                    fencing_token=0,
-                    created_by=actor.subject,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            unit_of_work.audit.append(
-                _audit_event(
-                    actor=actor,
-                    event_type="hybrid_metadata_workbook.import_admitted",
-                    target_type="metadata_import_job",
-                    target_id=import_job_id,
-                    occurred_at=_timestamp(now),
-                    metadata={
-                        "source_id": source_id,
-                        "document_id": normalized_document_id,
-                        "revision_id": normalized_revision_id,
-                        "operation_id": operation.operation_id,
-                        "size_bytes": original_ref.size_bytes,
-                        "content_sha256": original_ref.sha256,
-                    },
-                )
-            )
-
-        admission_effect: KnowledgeSourceAdmissionEffect = persist_import
-        operation, _created = self._commands.admit_async_command(
-            source_id=source_id,
-            action="import_metadata",
-            command="import_metadata",
-            expected_revision=expected_revision,
-            idempotency_key=normalized_idempotency_key,
-            request_sha256=request_sha256,
-            context=KnowledgeSourceCommandContext(
-                operator_subject=actor.subject,
-                permissions=tuple(Permission(value) for value in actor.permissions),
-            ),
-            stage="metadata_import_queued",
-            admission_effect=admission_effect,
-        )
-        return operation
-
     def _admit_pdf_command(
         self,
         *,
@@ -690,6 +549,7 @@ class ProductionHybridKnowledgeIntakeService:
             del source_record
             unit_of_work.hybrid_ingestion.enqueue(
                 build_request,
+                operation_id=operation.operation_id,
                 filename=normalized_filename,
                 uploaded_by=actor.subject,
                 replacement=document_id is not None,
@@ -802,6 +662,7 @@ class ProductionHybridKnowledgeIntakeService:
                 unit_of_work.hybrid_ingestion.manual_retry(
                     job_id=job_id,
                     requested_by=actor.subject,
+                    operation_id=operation.operation_id,
                     touch_source=False,
                 )
             else:
@@ -809,6 +670,20 @@ class ProductionHybridKnowledgeIntakeService:
                     job_id=job_id,
                     requested_by=actor.subject,
                     touch_source=False,
+                )
+                unit_of_work.operations.save(
+                    operation.model_copy(
+                        update={
+                            "status": "succeeded",
+                            "stage": "cancellation_requested",
+                            "outcome_code": "cancellation_requested",
+                            "outcome_detail": (
+                                "The ingestion cancellation request was accepted."
+                            ),
+                            "updated_at": _timestamp(admitted_at),
+                            "completed_at": _timestamp(admitted_at),
+                        }
+                    )
                 )
             unit_of_work.audit.append(
                 _audit_event(
@@ -882,50 +757,6 @@ def _pdf_filename(value: str) -> str:
     if Path(normalized).name != normalized or not normalized.lower().endswith(".pdf"):
         raise ValueError("Hybrid Index uploads require one safe .pdf filename")
     return normalized
-
-
-def _workbook_filename(value: str) -> str:
-    normalized = _nonblank(value, "filename", maximum=255)
-    if (
-        Path(normalized).name != normalized
-        or not normalized.lower().endswith(".xlsx")
-    ):
-        raise ValueError(
-            "Hybrid metadata imports require one safe .xlsx filename"
-        )
-    return normalized
-
-
-def _require_completed_candidate(
-    ingestion: Any,
-    *,
-    source_id: str,
-    document_id: str,
-    revision_id: str,
-) -> Any:
-    candidate = ingestion.get_document_candidate(
-        source_id=source_id,
-        document_id=document_id,
-    )
-    if (
-        candidate is None
-        or candidate.candidate_revision_id != revision_id
-        or candidate.pending_revision_id is not None
-    ):
-        raise LookupError("Hybrid metadata import revision is not the selected candidate")
-    matches = tuple(
-        record
-        for record in ingestion.list_records_for_source(source_id)
-        if record.build_request.document_id == document_id
-        and record.build_request.revision_id == revision_id
-        and record.job.state == "COMPLETED"
-    )
-    if len(matches) != 1:
-        raise LookupError("Hybrid metadata import completed build was not found")
-    result = ingestion.get_result(matches[0].build_request.job_id)
-    if result is None:
-        raise LookupError("Hybrid metadata import build result was not found")
-    return result
 
 
 def _nonblank(value: str, field: str, *, maximum: int) -> str:

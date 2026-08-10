@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pypdf import PdfWriter
 import pytest
+import sqlalchemy as sa
 
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
@@ -29,11 +30,19 @@ from proof_agent.control.knowledge.application import (
 )
 from proof_agent.control.knowledge.production_intake import (
     ProductionHybridKnowledgeIntakeService,
+    hybrid_knowledge_source_provider_capability,
 )
 
 
 pytestmark = pytest.mark.postgres_integration
 pytest_plugins = ("postgres_fixtures",)
+
+
+def test_v1_metadata_import_command_is_absent_after_v2_cutover() -> None:
+    assert not hasattr(ProductionHybridKnowledgeIntakeService, "import_metadata")
+    features = hybrid_knowledge_source_provider_capability().features
+    assert "metadata_workbook_v2" in features
+    assert "metadata_imports" not in features
 
 
 class _ExactArtifactStore:
@@ -139,103 +148,6 @@ def _build_result(
             "application/json",
         ),
     )
-
-
-def test_v1_metadata_workbook_is_staged_and_queued_for_exact_candidate(
-    postgres_dsn: str,
-) -> None:
-    upgrade_database(postgres_dsn)
-    bundle = PostgresPersistenceBundle.create(postgres_dsn)
-    store = _ExactArtifactStore()
-    now = datetime(2026, 7, 27, 10, tzinfo=UTC)
-    service = ProductionHybridKnowledgeIntakeService(
-        knowledge=bundle.knowledge,
-        ingestion=bundle.hybrid_ingestion,
-        unit_of_work_factory=bundle.configuration_uow,
-        artifact_store=store,
-        build_config=HybridPrivateParserBuildConfig(
-            parser_revision="private-parser-v1",
-            model_digests=("sha256:model-v1",),
-            configuration_sha256="b" * 64,
-        ),
-        clock=lambda: now,
-    )
-    actor = AuditActorFacts(
-        subject="operator-1",
-        identity_provider="enterprise-oidc",
-        session_id=str(uuid4()),
-        permissions=("knowledge_source.edit",),
-    )
-    source_id = f"ks_{uuid4().hex}"
-    try:
-        service.create_source(
-            source_id=source_id,
-            name="Insurance terms",
-            params={},
-            actor=actor,
-        )
-        service.upload_document(
-            source_id=source_id,
-            filename="terms.pdf",
-            content_type="application/pdf",
-            content=BytesIO(_pdf(width=612)),
-            expected_revision=1,
-            idempotency_key="upload-request-1",
-            actor=actor,
-        )
-        record = bundle.hybrid_ingestion.list_records_for_source(source_id)[0]
-        claim = bundle.hybrid_ingestion.claim_next(
-            worker_id="knowledge-worker-1",
-            lease_seconds=30,
-        )
-        assert claim is not None
-        bundle.hybrid_ingestion.commit_artifact_build(
-            claim,
-            _build_result(record.build_request),
-        )
-        expected_revision = bundle.knowledge.get_source_record(source_id).revision
-        workbook = b"PK\x03\x04controlled-workbook-is-validated-by-worker"
-
-        operation = service.import_metadata(
-            source_id=source_id,
-            document_id=record.build_request.document_id,
-            revision_id=record.build_request.revision_id,
-            filename="metadata.xlsx",
-            content_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
-            content=BytesIO(workbook),
-            expected_revision=expected_revision,
-            idempotency_key="metadata-import-1",
-            actor=actor,
-        )
-        replay = service.import_metadata(
-            source_id=source_id,
-            document_id=record.build_request.document_id,
-            revision_id=record.build_request.revision_id,
-            filename="metadata.xlsx",
-            content_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
-            content=BytesIO(workbook),
-            expected_revision=expected_revision,
-            idempotency_key="metadata-import-1",
-            actor=actor,
-        )
-
-        assert operation.command == "import_metadata"
-        assert operation.stage == "metadata_import_queued"
-        assert replay == operation
-        job = bundle.metadata_imports.get_for_operation(operation.operation_id)
-        assert job is not None
-        assert job.state == "READY"
-        assert job.document_id == record.build_request.document_id
-        assert job.revision_id == record.build_request.revision_id
-        assert store.by_key[
-            f"metadata-workbooks/{hashlib.sha256(workbook).hexdigest()}/original.xlsx"
-        ][0] == workbook
-    finally:
-        bundle.close()
 
 
 def test_v1_upload_replays_before_cas_and_rejects_mismatch_and_stale_revision(
@@ -407,5 +319,79 @@ def test_v1_upload_replays_before_cas_and_rejects_mismatch_and_stale_revision(
             item.state
             for item in bundle.knowledge_ingestion_attempts.list_for_job(job_id)
         ] == ["cancelled"]
+    finally:
+        bundle.close()
+
+
+def test_v1_upload_operation_tracks_worker_failure_to_terminal_state(
+    postgres_dsn: str,
+) -> None:
+    upgrade_database(postgres_dsn)
+    bundle = PostgresPersistenceBundle.create(postgres_dsn)
+    now = datetime(2026, 7, 28, 2, tzinfo=UTC)
+    service = ProductionHybridKnowledgeIntakeService(
+        knowledge=bundle.knowledge,
+        ingestion=bundle.hybrid_ingestion,
+        unit_of_work_factory=bundle.configuration_uow,
+        artifact_store=_ExactArtifactStore(),
+        build_config=HybridPrivateParserBuildConfig(
+            parser_revision="private-parser-v1",
+            model_digests=("sha256:model-v1",),
+            configuration_sha256="b" * 64,
+        ),
+        clock=lambda: now,
+    )
+    actor = AuditActorFacts(
+        subject="operator-1",
+        identity_provider="enterprise-oidc",
+        session_id=str(uuid4()),
+        permissions=("knowledge_source.edit",),
+    )
+    source_id = f"ks_{uuid4().hex}"
+    try:
+        service.create_source(
+            source_id=source_id,
+            name="Insurance terms",
+            params={},
+            actor=actor,
+        )
+        operation = service.upload_document(
+            source_id=source_id,
+            filename="terms.pdf",
+            content_type="application/pdf",
+            content=BytesIO(_pdf(width=612)),
+            expected_revision=1,
+            idempotency_key="upload-terminal-1",
+            actor=actor,
+        )
+        record = bundle.hybrid_ingestion.list_records_for_source(source_id)[0]
+        with bundle.engine.connect() as connection:
+            linked_operation_id = connection.execute(
+                sa.text(
+                    "SELECT operation_id FROM hybrid_ingestion_jobs WHERE job_id=:job_id"
+                ),
+                {"job_id": record.build_request.job_id},
+            ).scalar_one()
+        assert linked_operation_id == operation.operation_id
+
+        claim = bundle.hybrid_ingestion.claim_next(
+            worker_id="worker-1",
+            lease_seconds=30,
+        )
+        assert claim is not None
+        assert bundle.knowledge_source_operations.get(operation.operation_id).status == "running"
+
+        bundle.hybrid_ingestion.fail_integrity(
+            claim,
+            failure_code="PA_HYBRID_WORKER_INTEGRITY",
+            safe_reason="Hybrid artifact build failed deterministic integrity validation.",
+        )
+
+        failed = bundle.knowledge_source_operations.get(operation.operation_id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.stage == "ingestion_failed"
+        assert failed.outcome_code == "hybrid_ingestion_integrity_failed"
+        assert failed.completed_at is not None
     finally:
         bundle.close()

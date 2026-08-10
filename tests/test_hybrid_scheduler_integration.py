@@ -126,6 +126,8 @@ def _parser_request_and_attestation() -> tuple[ParserServiceRequest, ParserServi
         media_type="application/pdf",
     )
     request = ParserServiceRequest(
+        document_id="doc-1",
+        revision_id="rev-1",
         original_ref=original,
         page_numbers=(1,),
         parser_revision="paddle@sha256:model",

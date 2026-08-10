@@ -57,6 +57,8 @@ class _ParserServiceModel(FrozenModel):
 class ParserServiceRequest(_ParserServiceModel):
     """Exact, replayable input envelope for one private parser invocation."""
 
+    document_id: NonBlankStr
+    revision_id: NonBlankStr
     original_ref: ExactArtifactRef
     page_numbers: tuple[PositiveInt, ...] = Field(min_length=1, max_length=MAX_PARSER_PAGES)
     parser_revision: NonBlankStr
@@ -284,6 +286,31 @@ def canonical_vendor_json_bytes(payload: dict[str, JsonValue]) -> bytes:
     ).encode("utf-8")
 
 
+def decode_parser_service_attestation(response: object) -> ParserServiceAttestation:
+    """Decode one JSON response without weakening strict field validation.
+
+    JSON arrays have no tuple representation. Normalize only the two tuple-shaped
+    wire fields before applying the strict attestation contract; every item and all
+    remaining fields still use strict validation.
+    """
+
+    if not isinstance(response, dict):
+        raise ValueError("private parser response root must be a JSON object")
+    raw: dict[str, object] = dict(response)
+    vendor_json = raw.pop("vendor_json", None)
+    if not isinstance(vendor_json, dict):
+        raise ValueError("private parser response requires a vendor_json object")
+    for field in ("page_numbers", "model_digests"):
+        value = raw.get(field)
+        if not isinstance(value, list):
+            raise ValueError(f"private parser response {field} must be a JSON array")
+        raw[field] = tuple(value)
+    raw["vendor_json_bytes"] = canonical_vendor_json_bytes(
+        cast(dict[str, JsonValue], vendor_json)
+    )
+    return ParserServiceAttestation.model_validate(raw)
+
+
 def _decode_attested_vendor_json(
     attestation: ParserServiceAttestation,
 ) -> dict[str, JsonValue]:
@@ -401,11 +428,4 @@ class HttpParserTransport(_HttpJsonTransport):
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
         )
-        if not isinstance(raw, dict):
-            raise ValueError("private parser response root must be a JSON object")
-        vendor_json = raw.pop("vendor_json", None)
-        if not isinstance(vendor_json, dict):
-            raise ValueError("private parser response requires a vendor_json object")
-        vendor_bytes = canonical_vendor_json_bytes(cast(dict[str, JsonValue], vendor_json))
-        raw["vendor_json_bytes"] = vendor_bytes
-        return ParserServiceAttestation.model_validate(raw)
+        return decode_parser_service_attestation(raw)

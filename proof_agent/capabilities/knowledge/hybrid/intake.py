@@ -35,6 +35,9 @@ _MIN_NATIVE_TEXT_QUALITY_RATIO = 0.5
 _MAX_NATIVE_TEXT_SAMPLE_CHARS = 4096
 _MAX_NATIVE_TEXT_CALLBACKS = 4096
 _MAX_PAGE_CONTENT_DECODED_BYTES = 2 * 1024 * 1024
+_MAX_PDF_FONT_RESOURCE_DECODED_BYTES = 32 * 1024 * 1024
+_MAX_FONT_STREAM_EXPANSION_RATIO = 64
+_FONT_STREAM_EXPANSION_SLACK_BYTES = 256 * 1024
 _MAX_STRUCTURAL_STREAM_DECODED_BYTES = 2 * 1024 * 1024
 _MAX_STRUCTURAL_STREAM_DICTIONARY_BYTES = 64 * 1024
 _MAX_STRUCTURAL_STREAM_CANDIDATES = 256
@@ -101,6 +104,12 @@ class HybridQuarantinedUpload:
     path: Path
     sha256: str
     size_bytes: int
+
+
+@dataclass
+class _PdfResourceValidationState:
+    remaining_font_decoded_bytes: int
+    seen_font_streams: set[tuple[int, int] | int]
 
 
 @contextmanager
@@ -201,7 +210,14 @@ def preflight_hybrid_pdf(path: Path, *, limits: HybridIntakeLimits) -> HybridPdf
             )
         _reject_unsafe_pdf_objects(reader)
         _reject_unsafe_historical_revisions(snapshot, PdfReader)
-        profiles = tuple(_profile_page(page, number) for number, page in enumerate(reader.pages, 1))
+        resource_validation = _PdfResourceValidationState(
+            remaining_font_decoded_bytes=_MAX_PDF_FONT_RESOURCE_DECODED_BYTES,
+            seen_font_streams=set(),
+        )
+        profiles = tuple(
+            _profile_page(page, number, resource_validation=resource_validation)
+            for number, page in enumerate(reader.pages, 1)
+        )
     except ProofAgentError:
         raise
     except Exception as exc:
@@ -288,14 +304,22 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, int]:
     return metadata.st_dev, metadata.st_ino
 
 
-def _profile_page(page: Any, page_number: int) -> HybridPdfPageProfile:
+def _profile_page(
+    page: Any,
+    page_number: int,
+    *,
+    resource_validation: _PdfResourceValidationState | None = None,
+) -> HybridPdfPageProfile:
     width = float(page.mediabox.width)
     height = float(page.mediabox.height)
     if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
         raise _hybrid_error(
             "PA_HYBRID_INTAKE_006", "Hybrid PDF upload contains invalid page dimensions."
         )
-    extracted = unicodedata.normalize("NFC", _sample_native_page_text(page))
+    extracted = unicodedata.normalize(
+        "NFC",
+        _sample_native_page_text(page, resource_validation=resource_validation),
+    )
     non_whitespace_count = sum(not character.isspace() for character in extracted)
     meaningful_count = sum(
         not character.isspace() and unicodedata.category(character)[0] in {"L", "N"}
@@ -323,8 +347,15 @@ class _NativeTextExtractionLimit(Exception):
     pass
 
 
-def _sample_native_page_text(page: Any) -> str:
-    if not _validate_bounded_page_content(page):
+def _sample_native_page_text(
+    page: Any,
+    *,
+    resource_validation: _PdfResourceValidationState | None = None,
+) -> str:
+    if not _validate_bounded_page_content(
+        page,
+        resource_validation=resource_validation,
+    ):
         return ""
     chunks: list[str] = []
     sampled_characters = 0
@@ -355,7 +386,11 @@ def _sample_native_page_text(page: Any) -> str:
     return "".join(chunks)
 
 
-def _validate_bounded_page_content(page: Any) -> bool:
+def _validate_bounded_page_content(
+    page: Any,
+    *,
+    resource_validation: _PdfResourceValidationState | None = None,
+) -> bool:
     from pypdf.generic import ArrayObject, IndirectObject, NameObject
 
     decoded_page_content: list[bytes] = []
@@ -382,7 +417,15 @@ def _validate_bounded_page_content(page: Any) -> bool:
 
     resources = page.get_inherited(key="/Resources", default=None)
     if resources is not None:
-        _remaining, form_lookup = _validate_bounded_resources(resources, remaining)
+        validation_state = resource_validation or _PdfResourceValidationState(
+            remaining_font_decoded_bytes=_MAX_PDF_FONT_RESOURCE_DECODED_BYTES,
+            seen_font_streams=set(),
+        )
+        _remaining, form_lookup = _validate_bounded_resources(
+            resources,
+            remaining,
+            validation_state,
+        )
         _validate_form_do_work(decoded_page_content, resources, form_lookup)
     return any(decoded_page_content)
 
@@ -554,13 +597,13 @@ def _decoded_content_limit() -> ProofAgentError:
 def _validate_bounded_resources(
     resources: Any,
     remaining: int,
+    resource_validation: _PdfResourceValidationState,
 ) -> tuple[int, dict[tuple[int, str], tuple[tuple[int, int] | int, bytes, Any | None]]]:
     from pypdf.generic import DictionaryObject, IndirectObject, NameObject, StreamObject
 
     pending: list[tuple[Any, int]] = [(resources, 0)]
     seen_forms: set[tuple[int, int] | int] = set()
     seen_resources: set[int] = set()
-    seen_font_streams: set[tuple[int, int] | int] = set()
     form_count = 0
     resource_entry_count = 0
     font_entry_count = 0
@@ -603,10 +646,9 @@ def _validate_bounded_resources(
                     raise _hybrid_error(
                         "PA_HYBRID_INTAKE_006", "Hybrid PDF Font resource is invalid."
                     )
-                remaining = _charge_bounded_font_streams(
+                _charge_bounded_font_streams(
                     font,
-                    remaining,
-                    seen_font_streams,
+                    resource_validation,
                 )
 
         xobjects = current_resources.get(NameObject("/XObject"))
@@ -671,10 +713,15 @@ def _validate_bounded_resources(
 
 def _charge_bounded_font_streams(
     font: Any,
-    remaining: int,
-    seen_streams: set[tuple[int, int] | int],
-) -> int:
-    from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
+    resource_validation: _PdfResourceValidationState,
+) -> None:
+    from pypdf.generic import (
+        ArrayObject,
+        DictionaryObject,
+        IndirectObject,
+        NameObject,
+        StreamObject,
+    )
 
     font_dictionaries = [font]
     seen_font_dictionaries: set[tuple[int, int] | int] = {id(font)}
@@ -728,11 +775,37 @@ def _charge_bounded_font_streams(
         else:
             identity = id(candidate)
             stream = candidate
-        if identity in seen_streams:
+        if identity in resource_validation.seen_font_streams:
             continue
-        seen_streams.add(identity)
-        remaining, _decoded = _charge_bounded_content_stream(stream, remaining)
-    return remaining
+        resource_validation.seen_font_streams.add(identity)
+        if not isinstance(stream, StreamObject):
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF Font resource stream is invalid.",
+            )
+        encoded_size = len(stream._data)
+        try:
+            remaining, decoded = _charge_bounded_content_stream(
+                stream,
+                resource_validation.remaining_font_decoded_bytes,
+            )
+        except ProofAgentError as exc:
+            if exc.message == "Hybrid PDF decoded page content exceeds safety limits.":
+                raise _hybrid_error(
+                    "PA_HYBRID_INTAKE_006",
+                    "Hybrid PDF decoded font resources exceed safety limits.",
+                ) from exc
+            raise
+        maximum_expansion = max(
+            _FONT_STREAM_EXPANSION_SLACK_BYTES,
+            encoded_size * _MAX_FONT_STREAM_EXPANSION_RATIO,
+        )
+        if len(decoded) > maximum_expansion:
+            raise _hybrid_error(
+                "PA_HYBRID_INTAKE_006",
+                "Hybrid PDF font resource expansion exceeds safety limits.",
+            )
+        resource_validation.remaining_font_decoded_bytes = remaining
 
 
 def _validate_form_do_work(

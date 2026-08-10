@@ -1142,6 +1142,23 @@ def test_preflight_accepts_bounded_compressed_type1_fontfile(tmp_path: Path) -> 
     assert result.page_count == 1
 
 
+def test_preflight_accepts_large_low_expansion_font_resource(tmp_path: Path) -> None:
+    font_program = (
+        b"%!PS\n/Encoding\ndup 65 /A put\neexec\n"
+        + hashlib.shake_256(b"proof-agent-large-font").digest(3 * 1024 * 1024)
+    )
+
+    result = preflight_hybrid_pdf(
+        _write_pdf_with_compressed_type1_fontfile(
+            tmp_path / "large-low-expansion-type1.pdf",
+            font_program,
+        ),
+        limits=HybridIntakeLimits(),
+    )
+
+    assert result.page_count == 1
+
+
 def test_preflight_rejects_type1_fontfile_bomb_before_text_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1164,6 +1181,7 @@ def test_preflight_rejects_type1_fontfile_bomb_before_text_extraction(
     with pytest.raises(ProofAgentError) as exc:
         preflight_hybrid_pdf(path, limits=HybridIntakeLimits())
     assert exc.value.code == "PA_HYBRID_INTAKE_006"
+    assert exc.value.message == "Hybrid PDF font resource expansion exceeds safety limits."
     assert extraction_called is False
 
 

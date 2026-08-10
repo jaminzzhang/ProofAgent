@@ -24,6 +24,10 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     PrivateKnowledgeModelWorkSchedulerClient,
     SchedulerLease,
 )
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    FilesystemInsuranceMetadataReviewV2Repository,
+    MetadataProfileBindingRequiredError,
+)
 from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     PrivateDoclingClient,
     PrivatePaddleClient,
@@ -385,6 +389,7 @@ class FakeLifecycle:
         self.stale = False
         self.cancel_requested = False
         self.cancel_acknowledged = False
+        self.commit_failure: Exception | None = None
 
     def claim_next(self, *, worker_id: str, lease_seconds: int) -> HybridKnowledgeJobClaim | None:
         assert worker_id == "worker_1"
@@ -420,6 +425,8 @@ class FakeLifecycle:
     ) -> None:
         if self.stale:
             raise HybridKnowledgeLeaseError("stale")
+        if self.commit_failure is not None:
+            raise self.commit_failure
         self.committed = result
 
     def schedule_retry(
@@ -660,6 +667,24 @@ def test_hybrid_worker_rechecks_resource_envelope_immediately_before_persistence
     assert outcome is not None and outcome.state == "failed"
     assert lifecycle.integrity_failure is not None
     assert artifacts.put_calls == []
+
+
+def test_hybrid_worker_fails_claim_safely_when_metadata_profile_binding_is_missing(
+    tmp_path,
+) -> None:
+    worker, lifecycle, _pipeline = _worker(tmp_path)
+    lifecycle.commit_failure = MetadataProfileBindingRequiredError(
+        "missing governed binding"
+    )
+
+    outcome = worker.run_once()
+
+    assert outcome is not None and outcome.state == "failed"
+    assert outcome.error_code == "PA_HYBRID_METADATA_PROFILE_REQUIRED"
+    assert lifecycle.integrity_failure == (
+        "PA_HYBRID_METADATA_PROFILE_REQUIRED",
+        "Bind a published Metadata Profile before retrying ingestion.",
+    )
 
 
 def test_hybrid_parser_resource_envelope_accepts_exact_documented_boundaries() -> None:
@@ -1314,9 +1339,10 @@ def test_exact_result_validator_accepts_opaque_s3_version_ids() -> None:
 
 
 def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -> None:
+    source_id = "ks_insurance"
     store = LocalAgentConfigurationStore(tmp_path / "config")
     store.create_knowledge_source(
-        source_id="source_1",
+        source_id=source_id,
         name="Hybrid",
         provider="hybrid_index",
         params={},
@@ -1328,7 +1354,7 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     with pdf_path.open("wb") as stream:
         writer.write(stream)
     store.stage_quarantined_knowledge_upload(
-        source_id="source_1",
+        source_id=source_id,
         filename="policy.pdf",
         content_type="application/pdf",
         content=pdf_path.read_bytes(),
@@ -1351,43 +1377,57 @@ def test_localstore_adapter_uses_one_claim_and_persists_exact_result(tmp_path) -
     promoted = unified.run_once()
     assert promoted is not None and promoted.outcome is not None
     assert promoted.outcome.state == "accepted"
-    queued_job = store.list_knowledge_ingestion_jobs("source_1")[0]
+    queued_job = store.list_knowledge_ingestion_jobs(source_id)[0]
     partial_result_path = store._knowledge_ingestion_job_path(  # noqa: SLF001
-        "source_1", queued_job.job_id
+        source_id, queued_job.job_id
     ).with_name("hybrid-artifact-result.json")
     partial_result_path.write_bytes(b'{"schema_version":"partial-after-crash"')
     result = unified.run_once()
 
     assert result is not None and result.outcome is not None
     assert result.outcome.state == "ready"
-    jobs = store.list_knowledge_ingestion_jobs("source_1")
+    jobs = store.list_knowledge_ingestion_jobs(source_id)
     assert len(jobs) == 1 and jobs[0].state == "ready"
     assert jobs[0].attempt_count == 1
     result_files = tuple((tmp_path / "config").rglob("hybrid-artifact-result.json"))
     assert len(result_files) == 1
     assert tuple(partial_result_path.parent.glob("hybrid-artifact-result.json.invalid-*"))
     completed = store.get_completed_hybrid_artifact_build_result(
-        source_id="source_1",
+        source_id=source_id,
         document_id=jobs[0].document_id,
         revision_id=jobs[0].revision_id,
     )
     authority = FilesystemInsuranceMetadataReviewRepository(
         tmp_path / "config"
     ).list_authority_records(
-        source_id="source_1",
+        source_id=source_id,
         document_id=jobs[0].document_id,
         revision_id=jobs[0].revision_id,
     )
     assert len(authority) == 1
     assert authority[0].structured_build_id == completed.build_id
     assert authority[0].original_ref == completed.persisted_original_ref
+    review_set = FilesystemInsuranceMetadataReviewV2Repository(
+        tmp_path / "config"
+    ).get_current(
+        source_id=source_id,
+        document_id=jobs[0].document_id,
+        revision_id=jobs[0].revision_id,
+    )
+    assert review_set is not None
+    assert review_set.structured_build_id == completed.build_id
+    assert tuple(review.scope for review in review_set.reviews) == (
+        "document_default",
+        "rule_unit_override",
+    )
+    assert {review.state for review in review_set.reviews} == {"needs_input"}
 
     # A replay without the live exact claim must fail before touching a partial
     # result, even when the payload itself is the previously completed result.
     partial_result_path.write_bytes(b'{"schema_version":"stale-claim-partial"')
     with pytest.raises(ProofAgentError):
         store.complete_hybrid_knowledge_ingestion_job(
-            source_id="source_1",
+            source_id=source_id,
             job_id=jobs[0].job_id,
             claim_token="stale-claim-token",
             artifact_path=completed.canonical_ref.artifact_uri,

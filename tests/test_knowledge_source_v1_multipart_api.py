@@ -9,6 +9,7 @@ import pytest
 
 from proof_agent.contracts import KnowledgeSourceOperation, Permission
 from proof_agent.delivery.knowledge_source_api import router
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
 
@@ -293,6 +294,37 @@ def test_upload_document_requires_multipart_command_fields_and_edit_permission()
     assert ingestion.calls == []
 
 
+def test_upload_document_returns_safe_hybrid_preflight_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, ingestion = _client()
+
+    def reject_upload(**_kwargs: object) -> KnowledgeSourceOperation:
+        raise ProofAgentError(
+            "PA_HYBRID_INTAKE_006",
+            "Hybrid PDF upload is malformed or could not be parsed.",
+            "Export a valid PDF and upload it again.",
+        )
+
+    monkeypatch.setattr(ingestion, "upload_document", reject_upload)
+
+    response = client.post(
+        "/api/config/knowledge-sources/source-1/documents",
+        files={"file": ("terms.pdf", b"%PDF-1.7\ninvalid", "application/pdf")},
+        data={"expected_revision": "7"},
+        headers={"Idempotency-Key": "upload-request-rejected-1"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "pa_hybrid_intake_006"
+    assert response.json()["detail"] == (
+        "Hybrid PDF upload is malformed or could not be parsed."
+    )
+    assert "Fix:" not in response.text
+    assert "/tmp" not in response.text
+
+
 def test_replace_document_targets_one_stable_document_with_multipart_revision() -> None:
     client, ingestion = _client()
 
@@ -354,7 +386,7 @@ def test_ingestion_job_commands_require_json_revision_and_idempotency(
     ]
 
 
-def test_metadata_import_is_one_multipart_xlsx_bound_to_exact_revision() -> None:
+def test_legacy_metadata_import_route_is_removed_after_v2_direct_cutover() -> None:
     client, ingestion = _client()
 
     response = client.post(
@@ -377,21 +409,5 @@ def test_metadata_import_is_one_multipart_xlsx_bound_to_exact_revision() -> None
         headers={"Idempotency-Key": "metadata-import-1"},
     )
 
-    assert response.status_code == 202
-    assert response.json()["command"] == "import_metadata"
-    assert ingestion.calls == [
-        {
-            "source_id": "source-1",
-            "document_id": "81e04fdb-3538-4684-93b9-531632ddc101",
-            "revision_id": "7bc3a487-a477-44d1-9310-432d5212be37",
-            "filename": "metadata.xlsx",
-            "content_type": (
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            "body": b"PK\x03\x04workbook",
-            "expected_revision": 10,
-            "idempotency_key": "metadata-import-1",
-            "operator_id": "operator-1",
-        }
-    ]
+    assert response.status_code == 404
+    assert ingestion.calls == []

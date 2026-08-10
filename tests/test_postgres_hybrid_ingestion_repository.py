@@ -10,6 +10,7 @@ import pytest
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
     HybridArtifactBuildResult,
+    HybridInsuranceMetadataArtifact,
     HybridVendorArtifactRef,
     hybrid_build_request_sha256,
 )
@@ -20,8 +21,20 @@ from proof_agent.capabilities.persistence.postgres.hybrid_ingestion_repository i
     HybridIngestionRetryRejectedError,
     PostgresHybridIngestionRepository,
 )
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    MetadataReviewConflictError,
+    create_insurance_metadata_review_set,
+    proofagent_insurance_reference_profile,
+)
 from proof_agent.contracts import KnowledgeSource, KnowledgeSourceLifecycleState
-from proof_agent.contracts.hybrid_documents import StructuredArtifactBuildIdentity
+from proof_agent.contracts.hybrid_documents import (
+    BoundingBox,
+    StructuredArtifactBuildIdentity,
+    StructuredBlock,
+    StructuredKnowledgeDocumentArtifact,
+    StructuredPage,
+)
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 
 
@@ -116,6 +129,82 @@ def _result(request: HybridArtifactBuildRequest) -> HybridArtifactBuildResult:
             "insurance-metadata",
             "application/json",
         ),
+    )
+
+
+class _ExactArtifactReader:
+    def __init__(self) -> None:
+        self._content: dict[str, bytes] = {}
+
+    def add(self, *, label: str, content: bytes) -> ExactArtifactRef:
+        ref = _artifact_ref(label, "application/json").model_copy(
+            update={
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            }
+        )
+        self._content[ref.artifact_uri] = content
+        return ref
+
+    def get_exact(self, ref: ExactArtifactRef) -> bytes:
+        return self._content[ref.artifact_uri]
+
+
+def _result_with_review_artifacts(
+    request: HybridArtifactBuildRequest,
+    store: _ExactArtifactReader,
+) -> HybridArtifactBuildResult:
+    result = _result(request)
+    canonical = StructuredKnowledgeDocumentArtifact(
+        schema_version="structured-knowledge.v1",
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        original_sha256=request.original_ref.sha256,
+        build_identity=result.build_identity,
+        pages=(
+            StructuredPage(
+                page_number=1,
+                width=612,
+                height=792,
+                native_text_ratio=1,
+                blocks=(
+                    StructuredBlock(
+                        block_id="coverage-1",
+                        kind="paragraph",
+                        text="Coverage follows the signed policy terms.",
+                        bbox=BoundingBox(x0=1, y0=1, x1=300, y1=30),
+                        reading_order=0,
+                    ),
+                ),
+            ),
+        ),
+    )
+    metadata = HybridInsuranceMetadataArtifact(
+        source_id=request.source_id,
+        document_id=request.document_id,
+        revision_id=request.revision_id,
+        structured_build_id=result.build_id,
+        original_sha256=request.original_ref.sha256,
+        document_defaults=InsuranceRuleMetadataDraft(
+            metadata_draft_id="document-default-1",
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        ),
+        pdf_drafts=(),
+    )
+    canonical_ref = store.add(
+        label=f"canonical-{request.revision_id}",
+        content=canonical.model_dump_json(by_alias=True).encode(),
+    )
+    metadata_ref = store.add(
+        label=f"insurance-metadata-{request.revision_id}",
+        content=metadata.model_dump_json().encode(),
+    )
+    return result.model_copy(
+        update={
+            "canonical_ref": canonical_ref,
+            "insurance_metadata_ref": metadata_ref,
+        }
     )
 
 
@@ -374,9 +463,11 @@ def test_pg_replacement_preserves_candidate_until_new_revision_completes(
     bundle = PostgresPersistenceBundle.create(postgres_dsn)
     source_id = f"hybrid-{uuid4()}"
     now = datetime(2026, 7, 27, tzinfo=UTC)
+    artifact_store = _ExactArtifactReader()
     repository = PostgresHybridIngestionRepository(
         bundle.engine,
         clock=lambda: now,
+        artifact_store=artifact_store,
     )
     initial_draft_id = str(uuid4())
     try:
@@ -393,6 +484,26 @@ def test_pg_replacement_preserves_candidate_until_new_revision_completes(
             ),
             expected_revision=0,
         )
+        profile = proofagent_insurance_reference_profile().model_copy(
+            update={
+                "profile_id": "production-insurance",
+                "profile_revision_id": "production-insurance.v1",
+                "reference_only": False,
+            }
+        )
+        bundle.metadata_reviews.publish_profile(
+            profile,
+            display_name="Production insurance metadata",
+            actor="operator-1",
+            published_at=now,
+        )
+        bundle.metadata_reviews.bind_source_profile(
+            source_id=source_id,
+            profile_revision_id=profile.profile_revision_id,
+            actor="operator-1",
+            bound_at=now,
+            production=True,
+        )
         first = _request(source_id)
         repository.enqueue(first)
 
@@ -406,7 +517,19 @@ def test_pg_replacement_preserves_candidate_until_new_revision_completes(
 
         first_claim = repository.claim_next(worker_id="worker-1", lease_seconds=30)
         assert first_claim is not None
-        repository.commit_artifact_build(first_claim, _result(first))
+        repository.commit_artifact_build(
+            first_claim,
+            _result_with_review_artifacts(first, artifact_store),
+        )
+
+        review_set = bundle.metadata_reviews.get_current_review_set(
+            source_id=source_id,
+            document_id=first.document_id,
+            revision_id=first.revision_id,
+        )
+        assert review_set is not None
+        assert review_set.profile_revision_id == profile.profile_revision_id
+        assert review_set.reviews[0].scope == "document_default"
 
         selected_first = repository.get_document_candidate(
             source_id=source_id,
@@ -439,6 +562,33 @@ def test_pg_replacement_preserves_candidate_until_new_revision_completes(
             lease_seconds=30,
         )
         assert replacement_claim is not None
+        conflicting_review_set = create_insurance_metadata_review_set(
+            source_id=source_id,
+            structured_build_id="conflicting-build",
+            profile=profile,
+            document_default=InsuranceRuleMetadataDraft(
+                metadata_draft_id="conflicting-default",
+                document_id=replacement.document_id,
+                revision_id=replacement.revision_id,
+            ),
+            parser_proposals=(),
+            canonical_anchors=(),
+        )
+        bundle.metadata_reviews.put_review_set(conflicting_review_set)
+        with pytest.raises(MetadataReviewConflictError):
+            repository.commit_artifact_build(
+                replacement_claim,
+                _result_with_review_artifacts(replacement, artifact_store),
+            )
+        rolled_back = repository.get_document_candidate(
+            source_id=source_id,
+            document_id=first.document_id,
+        )
+        assert rolled_back is not None
+        assert rolled_back.candidate_revision_id == first.revision_id
+        assert rolled_back.pending_revision_id == replacement.revision_id
+        assert repository.get(replacement.job_id).state == "LEASED"
+
         repository.fail_integrity(
             replacement_claim,
             failure_code="PA_HYBRID_INTEGRITY_001",

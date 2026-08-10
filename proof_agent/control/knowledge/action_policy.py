@@ -21,7 +21,7 @@ from proof_agent.contracts.security import Permission
 _ACTION_PERMISSIONS = {
     "upload_document": Permission.KNOWLEDGE_SOURCE_EDIT,
     "replace_document": Permission.KNOWLEDGE_SOURCE_EDIT,
-    "import_metadata": Permission.KNOWLEDGE_SOURCE_EDIT,
+    "edit_metadata_workbook": Permission.KNOWLEDGE_SOURCE_EDIT,
     "retry_ingestion": Permission.KNOWLEDGE_SOURCE_EDIT,
     "cancel_ingestion": Permission.KNOWLEDGE_SOURCE_EDIT,
     "review_metadata": Permission.KNOWLEDGE_SOURCE_REVIEW,
@@ -35,7 +35,7 @@ _ACTIVE_ACTIONS = frozenset(
     {
         "upload_document",
         "replace_document",
-        "import_metadata",
+        "edit_metadata_workbook",
         "retry_ingestion",
         "cancel_ingestion",
         "review_metadata",
@@ -48,7 +48,7 @@ _PROVIDER_ACTIONS = frozenset(
     {
         "upload_document",
         "replace_document",
-        "import_metadata",
+        "edit_metadata_workbook",
         "retry_ingestion",
         "prepare_publication",
         "publish",

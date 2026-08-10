@@ -73,6 +73,7 @@ def _production_app(tmp_path: Path):
         knowledge_source_publication_preparation_application=object(),
         knowledge_source_publication_application=object(),
         knowledge_source_workspace_application=object(),
+        knowledge_source_metadata_workbook_application=object(),
         release_registry_repository=object(),
         release_bundle_materializer=object(),
         release_bundle_attestation_verifier=object(),

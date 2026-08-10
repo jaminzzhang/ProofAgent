@@ -250,33 +250,134 @@ class KnowledgeSourceDocumentProjection(StrictFrozenModel):
     filename: str = Field(min_length=1, max_length=1_000)
     content_type: str = Field(min_length=1, max_length=255)
     state: str = Field(min_length=1, max_length=128)
-    candidate_state: Literal["candidate", "pending", "superseded"]
+    candidate_state: Literal["candidate", "pending", "superseded", "unselected"]
     safe_reason: str | None = Field(default=None, max_length=1_000)
     created_at: str
     updated_at: str
 
 
 class KnowledgeSourceMetadataReviewProjection(StrictFrozenModel):
-    """Business-review identity and outcome with artifact references removed."""
+    """Current Metadata Review V2 task projection without artifact references."""
 
     review_id: str = Field(min_length=1, max_length=512)
     review_identity: str = Field(min_length=64, max_length=64)
     review_version: int = Field(ge=1)
     document_id: str = Field(min_length=1, max_length=255)
     revision_id: str = Field(min_length=1, max_length=255)
-    state: Literal[
-        "review_required",
-        "ready_for_review",
-        "approved",
-        "corrected",
-        "rejected",
-    ]
-    publication_blocked: bool
+    structured_build_id: str = Field(min_length=1, max_length=512)
+    profile_revision_id: str = Field(min_length=1, max_length=512)
+    scope: Literal["document_default", "rule_unit_override"]
+    state: Literal["needs_input", "ready_for_approval", "approved", "rejected"]
+    current: bool
     canonical_anchor: str | None = Field(default=None, max_length=1_000)
-    citation_uri: str = Field(min_length=1, max_length=2_000)
+    approved_metadata_revision_id: str | None = Field(default=None, max_length=512)
+    parser_proposal: "KnowledgeSourceMetadataValuesProjection"
+    current_draft: "KnowledgeSourceMetadataValuesProjection"
+
+
+class KnowledgeSourceMetadataValuesProjection(StrictFrozenModel):
+    """Safe structured business metadata shown and edited by Dashboard."""
+
+    authority: str | None = Field(default=None, max_length=255)
+    effective_from: str | None = Field(default=None, max_length=10)
+    effective_to: str | None = Field(default=None, max_length=10)
+    taxonomy_id: str | None = Field(default=None, max_length=255)
+    taxonomy_revision_id: str | None = Field(default=None, max_length=255)
+    precedence_policy_revision_id: str | None = Field(default=None, max_length=255)
+    precedence_authority_tier: str | None = Field(default=None, max_length=255)
+    precedence_order: int | None = Field(default=None, ge=0)
+
+
+class KnowledgeSourceMetadataProfileValueProjection(StrictFrozenModel):
+    code: str = Field(min_length=1, max_length=255)
+    label: str = Field(min_length=1, max_length=255)
+
+
+class KnowledgeSourceMetadataProfileProjection(StrictFrozenModel):
+    metadata_scheme: Literal["insurance_rule.v2"] = "insurance_rule.v2"
+    profile_id: str = Field(min_length=1, max_length=255)
+    profile_revision_id: str = Field(min_length=1, max_length=512)
+    reference_only: bool
+    authority_values: tuple[KnowledgeSourceMetadataProfileValueProjection, ...]
+    taxonomy_id: str = Field(min_length=1, max_length=255)
+    taxonomy_revision_id: str = Field(min_length=1, max_length=255)
+    precedence_policy_revision_id: str = Field(min_length=1, max_length=255)
+    precedence_authority_tier_values: tuple[
+        KnowledgeSourceMetadataProfileValueProjection, ...
+    ]
+
+
+class KnowledgeSourceMetadataWorkbookFieldMergeProjection(StrictFrozenModel):
+    scope: Literal["document_default", "rule_unit_override"]
+    canonical_anchor: str | None = Field(default=None, max_length=4_096)
+    field: str = Field(min_length=1, max_length=128)
+    classification: Literal[
+        "unchanged",
+        "workbook_only",
+        "server_only",
+        "matching_change",
+        "conflict",
+    ]
+    base_value: str | int | None = None
+    server_value: str | int | None = None
+    workbook_value: str | int | None = None
+    proposed_value: str | int | None = None
+
+
+class KnowledgeSourceMetadataWorkbookOverrideMergeProjection(StrictFrozenModel):
+    canonical_anchor: str = Field(min_length=1, max_length=4_096)
+    base_mode: Literal["inherit", "override"]
+    server_mode: Literal["inherit", "override"]
+    workbook_mode: Literal["inherit", "override"]
+    classification: Literal[
+        "unchanged",
+        "workbook_only",
+        "server_only",
+        "matching_change",
+        "conflict",
+    ]
+    proposed_mode: Literal["inherit", "override"] | None = None
+    override_reason: str | None = Field(default=None, max_length=2_000)
+
+
+class KnowledgeSourceMetadataWorkbookValidationIssueProjection(StrictFrozenModel):
+    sheet: str | None = Field(default=None, max_length=255)
+    row: int | None = Field(default=None, ge=1)
+    field: str | None = Field(default=None, max_length=255)
+    code: str = Field(min_length=1, max_length=128)
+    suggested_action_key: str = Field(min_length=1, max_length=255)
+
+
+class KnowledgeSourceMetadataWorkbookValidationReportProjection(StrictFrozenModel):
+    total_error_count: int = Field(ge=1)
+    errors: tuple[KnowledgeSourceMetadataWorkbookValidationIssueProjection, ...] = (
+        Field(min_length=1, max_length=100)
+    )
+
+
+class KnowledgeSourceMetadataWorkbookPreviewProjection(StrictFrozenModel):
+    preview_id: str = Field(min_length=1, max_length=512)
+    export_id: str = Field(min_length=1, max_length=512)
+    state: Literal[
+        "validation_failed",
+        "conflicts",
+        "ready_to_apply",
+        "applied",
+        "expired",
+        "stale",
+    ]
+    preview_identity: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     conflict_count: int = Field(ge=0)
-    resolution_reason: str | None = Field(default=None, max_length=2_000)
-    resolved_by: str | None = Field(default=None, max_length=512)
+    field_merges: tuple[KnowledgeSourceMetadataWorkbookFieldMergeProjection, ...]
+    override_modes: tuple[KnowledgeSourceMetadataWorkbookOverrideMergeProjection, ...]
+    validation_report: KnowledgeSourceMetadataWorkbookValidationReportProjection | None
+    created_at: str
+    expires_at: str
 
 
 class KnowledgeSourcePublicationValidationProjection(StrictFrozenModel):
@@ -372,6 +473,14 @@ __all__ = [
     "KnowledgeSourceIntakeCapability",
     "KnowledgeSourceListItemProjection",
     "KnowledgeSourceMetadataReviewProjection",
+    "KnowledgeSourceMetadataProfileProjection",
+    "KnowledgeSourceMetadataProfileValueProjection",
+    "KnowledgeSourceMetadataWorkbookFieldMergeProjection",
+    "KnowledgeSourceMetadataWorkbookOverrideMergeProjection",
+    "KnowledgeSourceMetadataWorkbookPreviewProjection",
+    "KnowledgeSourceMetadataWorkbookValidationIssueProjection",
+    "KnowledgeSourceMetadataWorkbookValidationReportProjection",
+    "KnowledgeSourceMetadataValuesProjection",
     "KnowledgeSourceOperation",
     "KnowledgeSourceOperationProgress",
     "KnowledgeSourcePublicationProjection",

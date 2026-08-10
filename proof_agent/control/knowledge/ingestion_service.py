@@ -95,6 +95,7 @@ class KnowledgeSourceIngestionService:
         stage: str = "queued",
         poll_after_ms: int = 1_000,
         admission_effect: KnowledgeSourceAdmissionEffect | None = None,
+        advance_source_revision: bool = True,
     ) -> tuple[KnowledgeSourceOperation, bool]:
         if expected_revision < 1:
             raise ValueError("expected_revision must be positive")
@@ -142,20 +143,28 @@ class KnowledgeSourceIngestionService:
                     current_revision=record.revision,
                 )
             now = self._now()
-            updated_source = record.source.model_copy(
-                update={"updated_at": _next_source_timestamp(record.source.updated_at, now)}
-            )
-            source_version = uow.knowledge.save_source(
-                updated_source,
-                expected_revision=expected_revision,
-            )
+            source_revision = record.revision
+            if advance_source_revision:
+                updated_source = record.source.model_copy(
+                    update={
+                        "updated_at": _next_source_timestamp(
+                            record.source.updated_at,
+                            now,
+                        )
+                    }
+                )
+                source_version = uow.knowledge.save_source(
+                    updated_source,
+                    expected_revision=expected_revision,
+                )
+                source_revision = source_version.revision
             operation = KnowledgeSourceOperation(
                 operation_id=self._operation_id_factory(),
                 source_id=source_id,
                 command=command,
                 status="queued",
                 stage=stage,
-                source_revision=source_version.revision,
+                source_revision=source_revision,
                 poll_after_ms=poll_after_ms,
                 created_at=_timestamp(now),
                 updated_at=_timestamp(now),

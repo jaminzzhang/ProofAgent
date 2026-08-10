@@ -7,7 +7,9 @@ from typing import Any
 
 import pytest
 
-from proof_agent.capabilities.knowledge.hybrid.workbook import InsuranceMetadataReview
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    InsuranceMetadataReviewV2,
+)
 from proof_agent.control.knowledge.application import (
     KnowledgeSourceCommandContext,
     KnowledgeSourceCommandRejectedError,
@@ -16,6 +18,7 @@ from proof_agent.control.knowledge.workspace_service import (
     KnowledgeSourceWorkspaceService,
 )
 from proof_agent.contracts import Permission
+from proof_agent.contracts.insurance_rules import InsuranceRuleMetadataDraft
 
 
 class _Knowledge:
@@ -31,6 +34,8 @@ class _Query:
 class _Reviews:
     def __init__(self) -> None:
         self.resolved = False
+        self.saved = False
+        self.rejected = False
 
     def list_page(
         self,
@@ -48,45 +53,73 @@ class _Reviews:
             summary=SimpleNamespace(
                 total=1,
                 unresolved=1,
-                review_required=1,
-                ready_for_review=0,
+                needs_input=1,
+                ready_for_approval=0,
                 approved=0,
-                corrected=0,
                 rejected=0,
             ),
         )
 
-    def resolve(self, **kwargs: Any) -> InsuranceMetadataReview:
-        assert kwargs["action"] == "approve"
+    def approve(self, **kwargs: Any) -> Any:
+        assert kwargs["document_id"] == "doc_1"
+        assert kwargs["revision_id"] == "rev_1"
         self.resolved = True
-        return _review(state="approved", publication_blocked=False)
+        return SimpleNamespace(review=_review(state="approved"))
+
+    def save_draft(self, **kwargs: Any) -> Any:
+        assert kwargs["changes"] == {"authority": "national"}
+        self.saved = True
+        return SimpleNamespace(review=_review(state="ready_for_approval"))
+
+    def reject(self, **kwargs: Any) -> Any:
+        assert kwargs["document_id"] == "doc_1"
+        assert kwargs["revision_id"] == "rev_1"
+        self.rejected = True
+        return SimpleNamespace(review=_review(state="rejected"))
+
+    def get_bound_profile(self, source_id: str, *, production: bool = False) -> Any:
+        del source_id, production
+        return SimpleNamespace(
+            profile_id="insurance-authority",
+            profile_revision_id="insurance-authority.v1",
+            reference_only=False,
+            authority_values=(
+                SimpleNamespace(code="national", label="National authority"),
+            ),
+            taxonomy_id="insurance-product-applicability",
+            taxonomy_revision_id="taxonomy-2026-01",
+            precedence_policy_revision_id="precedence-2026-01",
+            precedence_authority_tier_values=(
+                SimpleNamespace(code="policy_terms", label="Policy terms"),
+            ),
+        )
 
 
 def _review(
     *,
-    state: str = "review_required",
-    publication_blocked: bool = True,
-) -> InsuranceMetadataReview:
-    return InsuranceMetadataReview.model_construct(
+    state: str = "needs_input",
+) -> InsuranceMetadataReviewV2:
+    draft = InsuranceRuleMetadataDraft(
+        metadata_draft_id="draft-1",
+        document_id="doc_1",
+        revision_id="rev_1",
+    )
+    return InsuranceMetadataReviewV2(
         review_id="review_1",
         review_identity="a" * 64,
         review_version=1,
-        import_id="import_1",
-        workbook_row_number=2,
-        workbook_draft_id="draft_1",
         source_id="ks_hybrid",
         document_id="doc_1",
         revision_id="rev_1",
-        canonical_anchor="anchor_1",
-        citation_uri="proof://knowledge/ks_hybrid/doc_1",
+        structured_build_id="build_1",
+        profile_revision_id="insurance-authority.v1",
+        scope="document_default",
+        canonical_anchor=None,
         state=state,
-        publication_blocked=publication_blocked,
-        conflicts=(),
-        resolved_values={},
-        resolution_reason=None,
-        resolved_by=None,
+        current=True,
+        parser_proposal=draft,
+        current_draft=draft,
         approved_metadata_revision_id=None,
-        decision_history=(),
     )
 
 
@@ -112,6 +145,10 @@ def test_review_page_is_safe_and_requires_source_view() -> None:
     )
 
     assert page.data[0].review_id == "review_1"
+    assert page.data[0].scope == "document_default"
+    assert page.data[0].profile_revision_id == "insurance-authority.v1"
+    assert page.data[0].current is True
+    assert page.data[0].state == "needs_input"
     assert page.summary["unresolved"] == 1
     assert "original_ref" not in str(page.model_dump(mode="json"))
     with pytest.raises(KnowledgeSourceCommandRejectedError, match="view"):
@@ -123,7 +160,7 @@ def test_review_page_is_safe_and_requires_source_view() -> None:
         )
 
 
-def test_review_resolution_uses_distinct_review_permission() -> None:
+def test_review_approval_uses_distinct_review_permission() -> None:
     reviews = _Reviews()
     service = KnowledgeSourceWorkspaceService(
         knowledge=_Knowledge(),
@@ -132,15 +169,15 @@ def test_review_resolution_uses_distinct_review_permission() -> None:
     )
 
     with pytest.raises(KnowledgeSourceCommandRejectedError, match="review"):
-        service.resolve_review(
+        service.approve_review(
             source_id="ks_hybrid",
+            document_id="doc_1",
+            revision_id="rev_1",
             review_id="review_1",
             expected_review_version=1,
             expected_review_identity="a" * 64,
-            action="approve",
             actor="operator-1",
             reason="Reviewed against policy.",
-            corrections={},
             context=_context(
                 Permission.KNOWLEDGE_SOURCE_VIEW,
                 Permission.KNOWLEDGE_SOURCE_EDIT,
@@ -148,15 +185,15 @@ def test_review_resolution_uses_distinct_review_permission() -> None:
             ),
         )
 
-    projection = service.resolve_review(
+    projection = service.approve_review(
         source_id="ks_hybrid",
+        document_id="doc_1",
+        revision_id="rev_1",
         review_id="review_1",
         expected_review_version=1,
         expected_review_identity="a" * 64,
-        action="approve",
         actor="operator-1",
         reason="Reviewed against policy.",
-        corrections={},
         context=_context(
             Permission.KNOWLEDGE_SOURCE_VIEW,
             Permission.KNOWLEDGE_SOURCE_REVIEW,
@@ -164,3 +201,90 @@ def test_review_resolution_uses_distinct_review_permission() -> None:
     )
     assert reviews.resolved is True
     assert projection.state == "approved"
+
+
+def test_save_review_draft_uses_edit_permission() -> None:
+    reviews = _Reviews()
+    service = KnowledgeSourceWorkspaceService(
+        knowledge=_Knowledge(),
+        query=_Query(),
+        reviews=reviews,
+    )
+
+    with pytest.raises(KnowledgeSourceCommandRejectedError, match="edit"):
+        service.save_review_draft(
+            source_id="ks_hybrid",
+            document_id="doc_1",
+            revision_id="rev_1",
+            review_id="review_1",
+            expected_review_version=1,
+            expected_review_identity="a" * 64,
+            actor="operator-1",
+            reason="Confirmed authority.",
+            changes={"authority": "national"},
+            context=_context(
+                Permission.KNOWLEDGE_SOURCE_VIEW,
+                Permission.KNOWLEDGE_SOURCE_REVIEW,
+            ),
+        )
+
+    projection = service.save_review_draft(
+        source_id="ks_hybrid",
+        document_id="doc_1",
+        revision_id="rev_1",
+        review_id="review_1",
+        expected_review_version=1,
+        expected_review_identity="a" * 64,
+        actor="operator-1",
+        reason="Confirmed authority.",
+        changes={"authority": "national"},
+        context=_context(
+            Permission.KNOWLEDGE_SOURCE_VIEW,
+            Permission.KNOWLEDGE_SOURCE_EDIT,
+        ),
+    )
+    assert reviews.saved is True
+    assert projection.state == "ready_for_approval"
+
+
+def test_review_rejection_uses_distinct_review_permission_and_exact_revision() -> None:
+    reviews = _Reviews()
+    service = KnowledgeSourceWorkspaceService(
+        knowledge=_Knowledge(),
+        query=_Query(),
+        reviews=reviews,
+    )
+
+    with pytest.raises(KnowledgeSourceCommandRejectedError, match="review"):
+        service.reject_review(
+            source_id="ks_hybrid",
+            document_id="doc_1",
+            revision_id="rev_1",
+            review_id="review_1",
+            expected_review_version=1,
+            expected_review_identity="a" * 64,
+            actor="operator-1",
+            reason="Unsupported authority assertion.",
+            context=_context(
+                Permission.KNOWLEDGE_SOURCE_VIEW,
+                Permission.KNOWLEDGE_SOURCE_EDIT,
+            ),
+        )
+
+    projection = service.reject_review(
+        source_id="ks_hybrid",
+        document_id="doc_1",
+        revision_id="rev_1",
+        review_id="review_1",
+        expected_review_version=1,
+        expected_review_identity="a" * 64,
+        actor="operator-1",
+        reason="Unsupported authority assertion.",
+        context=_context(
+            Permission.KNOWLEDGE_SOURCE_VIEW,
+            Permission.KNOWLEDGE_SOURCE_REVIEW,
+        ),
+    )
+
+    assert reviews.rejected is True
+    assert projection.state == "rejected"

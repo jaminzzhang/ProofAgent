@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0011_worker_role_leases"
-down_revision: str | None = "0010_hybrid_knowledge_workflow"
+down_revision: str | None = "0011_model_credential"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

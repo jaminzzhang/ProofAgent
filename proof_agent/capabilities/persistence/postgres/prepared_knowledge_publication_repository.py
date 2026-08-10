@@ -112,6 +112,37 @@ class PostgresPreparedKnowledgePublicationRepository:
             )
         )
 
+    def invalidate_source(self, source_id: str) -> int:
+        """Invalidate every unconsumed prepared authority for one changed Source."""
+
+        with write_connection(self._connection_source) as connection:
+            rows = connection.execute(
+                sa.select(prepared_knowledge_publications)
+                .where(
+                    prepared_knowledge_publications.c.source_id == source_id,
+                    prepared_knowledge_publications.c.state == "prepared",
+                )
+                .with_for_update()
+            ).mappings().all()
+            for row in rows:
+                current = PreparedHybridKnowledgePublication.model_validate(
+                    row["prepared_json"]
+                )
+                invalidated = current.model_copy(update={"state": "invalidated"})
+                connection.execute(
+                    sa.update(prepared_knowledge_publications)
+                    .where(
+                        prepared_knowledge_publications.c.validation_id
+                        == row["validation_id"],
+                        prepared_knowledge_publications.c.state == "prepared",
+                    )
+                    .values(
+                        state="invalidated",
+                        prepared_json=model_json(invalidated),
+                    )
+                )
+        return len(rows)
+
     def consume(
         self,
         validation_id: str,

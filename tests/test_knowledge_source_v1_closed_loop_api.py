@@ -1,4 +1,4 @@
-"""Closed-loop integration test for the public Knowledge Source API V1."""
+"""Closed-loop integration test for the public Knowledge Source API."""
 
 from __future__ import annotations
 
@@ -124,11 +124,13 @@ class _ClosedLoopState:
                     review_version=1,
                     document_id=self.documents[0].document_id,
                     revision_id=self.documents[0].revision_id,
-                    state="review_required",
-                    publication_blocked=True,
-                    canonical_anchor="section:coverage",
-                    citation_uri="proof://knowledge/ks_closed_loop/policy",
-                    conflict_count=1,
+                    structured_build_id="build-1",
+                    profile_revision_id="insurance-authority.v1",
+                    scope="document_default",
+                    state="ready_for_approval",
+                    current=True,
+                    parser_proposal={},
+                    current_draft={},
                 )
             )
         elif operation.command == "prepare_publication":
@@ -265,6 +267,22 @@ class _WorkspaceApplication:
         del kwargs
         return _page(tuple(self._state.reviews))
 
+    def metadata_profile(self, **kwargs: Any) -> Any:
+        del kwargs
+        return {
+            "metadata_scheme": "insurance_rule.v2",
+            "profile_id": "insurance-authority",
+            "profile_revision_id": "insurance-authority.v1",
+            "reference_only": False,
+            "authority_values": [{"code": "national", "label": "National"}],
+            "taxonomy_id": "insurance-product-applicability",
+            "taxonomy_revision_id": "taxonomy-2026-01",
+            "precedence_policy_revision_id": "precedence-2026-01",
+            "precedence_authority_tier_values": [
+                {"code": "policy_terms", "label": "Policy terms"}
+            ],
+        }
+
     def publication_validations(self, **kwargs: Any) -> KnowledgeSourceCursorPage[Any]:
         del kwargs
         return _page(tuple(self._state.validations))
@@ -280,19 +298,18 @@ class _WorkspaceApplication:
         del kwargs
         return _page(())
 
-    def resolve_review(self, **kwargs: Any) -> KnowledgeSourceMetadataReviewProjection:
+    def approve_review(self, **kwargs: Any) -> KnowledgeSourceMetadataReviewProjection:
         current = self._state.reviews[0]
+        assert kwargs["document_id"] == current.document_id
+        assert kwargs["revision_id"] == current.revision_id
         assert kwargs["expected_review_version"] == current.review_version
         assert kwargs["expected_review_identity"] == current.review_identity
-        assert kwargs["action"] == "approve"
         resolved = current.model_copy(
             update={
                 "review_version": current.review_version + 1,
+                "review_identity": "b" * 64,
                 "state": "approved",
-                "publication_blocked": False,
-                "conflict_count": 0,
-                "resolution_reason": kwargs["reason"],
-                "resolved_by": kwargs["actor"],
+                "approved_metadata_revision_id": "approved-metadata-1",
             }
         )
         self._state.reviews[0] = resolved
@@ -396,10 +413,11 @@ def test_create_upload_review_prepare_publish_closes_at_source_authority() -> No
     approved = client.post(
         "/api/config/knowledge-sources/ks_closed_loop/metadata-reviews/review-1/approve",
         json={
+            "document_id": review["document_id"],
+            "revision_id": review["revision_id"],
             "expected_review_version": review["review_version"],
             "expected_review_identity": review["review_identity"],
             "reason": "Verified against signed authority.",
-            "corrections": {},
         },
     )
     prepared = client.post(

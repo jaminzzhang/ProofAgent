@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
+from datetime import date
 import hashlib
 import json
 import re
 from typing import Annotated, Any, BinaryIO, Literal, Protocol, cast
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -28,6 +30,11 @@ from fastapi.routing import APIRoute
 from pydantic import Field
 from starlette.responses import Response
 
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    MetadataProfileBindingRequiredError,
+    MetadataReviewConflictError,
+    MetadataReviewValidationError,
+)
 from proof_agent.capabilities.knowledge.hybrid.workbook import (
     WorkbookReviewConflictError,
     WorkbookValidationError,
@@ -50,6 +57,8 @@ from proof_agent.contracts import (
     KnowledgeSourceDocumentProjection,
     KnowledgeSourceListItemProjection,
     KnowledgeSourceMetadataReviewProjection,
+    KnowledgeSourceMetadataProfileProjection,
+    KnowledgeSourceMetadataWorkbookPreviewProjection,
     KnowledgeSourceOperation,
     KnowledgeSourcePublicationProjection,
     KnowledgeSourcePublicationValidationProjection,
@@ -60,6 +69,7 @@ from proof_agent.contracts._base import StrictFrozenModel
 from proof_agent.contracts.ports.knowledge_source_operations import (
     KnowledgeSourceIdempotencyConflictError,
 )
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
@@ -158,21 +168,6 @@ class KnowledgeSourceIngestionApplication(Protocol):
         actor: AuditActorFacts,
     ) -> KnowledgeSourceOperation: ...
 
-    def import_metadata(
-        self,
-        *,
-        source_id: str,
-        document_id: str,
-        revision_id: str,
-        filename: str,
-        content_type: str,
-        content: BinaryIO,
-        expected_revision: int,
-        idempotency_key: str,
-        actor: AuditActorFacts,
-    ) -> KnowledgeSourceOperation: ...
-
-
 class KnowledgeSourceOperationsApplication(Protocol):
     """Durable operation read boundary used by polling clients."""
 
@@ -242,17 +237,53 @@ class KnowledgeSourceWorkspaceApplication(Protocol):
         cursor: str | None,
     ) -> KnowledgeSourceCursorPage[KnowledgeSourceMetadataReviewProjection]: ...
 
-    def resolve_review(
+    def metadata_profile(
         self,
         *,
         source_id: str,
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataProfileProjection: ...
+
+    def approve_review(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
         review_id: str,
         expected_review_version: int,
         expected_review_identity: str,
-        action: Literal["approve", "correct", "reject"],
         actor: str,
         reason: str,
-        corrections: dict[str, str | int | None],
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataReviewProjection: ...
+
+    def save_review_draft(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
+        changes: dict[str, str | int | date | None],
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataReviewProjection: ...
+
+    def reject_review(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        review_id: str,
+        expected_review_version: int,
+        expected_review_identity: str,
+        actor: str,
+        reason: str,
         context: KnowledgeSourceCommandContext,
     ) -> KnowledgeSourceMetadataReviewProjection: ...
 
@@ -284,6 +315,60 @@ class KnowledgeSourceWorkspaceApplication(Protocol):
     ) -> KnowledgeSourceCursorPage[KnowledgeSourceAuditProjection]: ...
 
 
+class KnowledgeSourceMetadataWorkbookApplication(Protocol):
+    def generate_export(
+        self,
+        *,
+        source_id: str,
+        document_id: str,
+        revision_id: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation: ...
+
+    def download_export(
+        self,
+        *,
+        source_id: str,
+        export_id: str,
+        context: KnowledgeSourceCommandContext,
+    ) -> tuple[bytes, str]: ...
+
+    def create_import_preview(
+        self,
+        *,
+        source_id: str,
+        export_id: str,
+        filename: str,
+        content_type: str,
+        content: BinaryIO,
+        expected_revision: int,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation: ...
+
+    def get_import_preview(
+        self,
+        *,
+        source_id: str,
+        preview_id: str,
+        context: KnowledgeSourceCommandContext,
+    ) -> KnowledgeSourceMetadataWorkbookPreviewProjection: ...
+
+    def apply_import_preview(
+        self,
+        *,
+        source_id: str,
+        preview_id: str,
+        expected_preview_identity: str,
+        expected_revision: int,
+        reason: str,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> KnowledgeSourceOperation: ...
+
+
 class KnowledgeSourcePublicationPreparationRequest(StrictFrozenModel):
     """Asynchronous publication preparation command."""
 
@@ -309,9 +394,11 @@ class KnowledgeSourcePublicationRequest(StrictFrozenModel):
     expected_revision: int = Field(ge=1)
 
 
-class KnowledgeSourceReviewResolutionRequest(StrictFrozenModel):
-    """Exact review CAS and trace-safe decision reason."""
+class KnowledgeSourceReviewApprovalRequest(StrictFrozenModel):
+    """Exact Metadata Review V2 approval CAS command."""
 
+    document_id: str = Field(min_length=1, max_length=255)
+    revision_id: str = Field(min_length=1, max_length=255)
     expected_review_version: int = Field(ge=1)
     expected_review_identity: str = Field(
         min_length=64,
@@ -319,7 +406,46 @@ class KnowledgeSourceReviewResolutionRequest(StrictFrozenModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     reason: str = Field(min_length=1, max_length=2_000)
-    corrections: dict[str, str | int | None] = Field(default_factory=dict)
+
+
+class KnowledgeSourceReviewDraftChanges(StrictFrozenModel):
+    """Typed partial business metadata fields accepted by Save Draft."""
+
+    authority: str | None = Field(default=None, min_length=1, max_length=255)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    taxonomy_id: str | None = Field(default=None, min_length=1, max_length=255)
+    taxonomy_revision_id: str | None = Field(
+        default=None, min_length=1, max_length=255
+    )
+    precedence_policy_revision_id: str | None = Field(
+        default=None, min_length=1, max_length=255
+    )
+    precedence_authority_tier: str | None = Field(
+        default=None, min_length=1, max_length=255
+    )
+    precedence_order: int | None = Field(default=None, ge=0)
+
+
+class KnowledgeSourceReviewDraftRequest(KnowledgeSourceReviewApprovalRequest):
+    """Exact Metadata Review V2 Save Draft CAS command."""
+
+    changes: KnowledgeSourceReviewDraftChanges
+
+
+class KnowledgeSourceMetadataWorkbookExportRequest(StrictFrozenModel):
+    revision_id: str = Field(min_length=1, max_length=255)
+    expected_revision: int = Field(ge=1)
+
+
+class KnowledgeSourceMetadataWorkbookApplyRequest(StrictFrozenModel):
+    expected_preview_identity: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
 
 
 class KnowledgeSourceLifecycleRequest(StrictFrozenModel):
@@ -441,6 +567,22 @@ def _workspace_application(request: Request) -> KnowledgeSourceWorkspaceApplicat
             detail="Knowledge Source workspace resources are unavailable.",
         )
     return cast(KnowledgeSourceWorkspaceApplication, application)
+
+
+def _metadata_workbook_application(
+    request: Request,
+) -> KnowledgeSourceMetadataWorkbookApplication:
+    application = getattr(
+        request.app.state,
+        "knowledge_source_metadata_workbook_application",
+        None,
+    )
+    if application is None:
+        raise KnowledgeSourceCommandRejectedError(
+            code="knowledge_source_metadata_workbook_unavailable",
+            detail="Knowledge Source Metadata Workbook is unavailable.",
+        )
+    return cast(KnowledgeSourceMetadataWorkbookApplication, application)
 
 
 def _audit_actor(
@@ -629,29 +771,231 @@ def list_knowledge_source_metadata_reviews(
     )
 
 
+@router.get(
+    "/knowledge-sources/{source_id}/metadata-profile",
+    response_model=KnowledgeSourceMetadataProfileProjection,
+)
+def get_knowledge_source_metadata_profile(
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceMetadataProfileProjection:
+    return _workspace_application(request).metadata_profile(
+        source_id=source_id,
+        context=_command_context(identity),
+    )
+
+
 @router.post(
-    "/knowledge-sources/{source_id}/metadata-reviews/{review_id}/{action}",
+    "/knowledge-sources/{source_id}/metadata-reviews/{review_id}/approve",
     response_model=KnowledgeSourceMetadataReviewProjection,
 )
-def resolve_knowledge_source_metadata_review(
-    body: KnowledgeSourceReviewResolutionRequest,
+def approve_knowledge_source_metadata_review(
+    body: KnowledgeSourceReviewApprovalRequest,
     request: Request,
     source_id: Annotated[str, Path(min_length=1, max_length=255)],
     review_id: Annotated[str, Path(min_length=1, max_length=512)],
-    action: Annotated[Literal["approve", "correct", "reject"], Path()],
     identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
 ) -> KnowledgeSourceMetadataReviewProjection:
     require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_REVIEW)
-    return _workspace_application(request).resolve_review(
+    return _workspace_application(request).approve_review(
         source_id=source_id,
+        document_id=body.document_id,
+        revision_id=body.revision_id,
         review_id=review_id,
         expected_review_version=body.expected_review_version,
         expected_review_identity=body.expected_review_identity,
-        action=action,
         actor=identity.operator_id,
         reason=body.reason,
-        corrections=body.corrections,
         context=_command_context(identity),
+    )
+
+
+@router.post(
+    "/knowledge-sources/{source_id}/metadata-reviews/{review_id}/draft",
+    response_model=KnowledgeSourceMetadataReviewProjection,
+)
+def save_knowledge_source_metadata_review_draft(
+    body: KnowledgeSourceReviewDraftRequest,
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    review_id: Annotated[str, Path(min_length=1, max_length=512)],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceMetadataReviewProjection:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    changes = body.changes.model_dump(include=body.changes.model_fields_set)
+    return _workspace_application(request).save_review_draft(
+        source_id=source_id,
+        document_id=body.document_id,
+        revision_id=body.revision_id,
+        review_id=review_id,
+        expected_review_version=body.expected_review_version,
+        expected_review_identity=body.expected_review_identity,
+        actor=identity.operator_id,
+        reason=body.reason,
+        changes=changes,
+        context=_command_context(identity),
+    )
+
+
+@router.post(
+    "/knowledge-sources/{source_id}/metadata-reviews/{review_id}/reject",
+    response_model=KnowledgeSourceMetadataReviewProjection,
+)
+def reject_knowledge_source_metadata_review(
+    body: KnowledgeSourceReviewApprovalRequest,
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    review_id: Annotated[str, Path(min_length=1, max_length=512)],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceMetadataReviewProjection:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_REVIEW)
+    return _workspace_application(request).reject_review(
+        source_id=source_id,
+        document_id=body.document_id,
+        revision_id=body.revision_id,
+        review_id=review_id,
+        expected_review_version=body.expected_review_version,
+        expected_review_identity=body.expected_review_identity,
+        actor=identity.operator_id,
+        reason=body.reason,
+        context=_command_context(identity),
+    )
+
+
+@router.post(
+    "/knowledge-sources/{source_id}/documents/{document_id}/metadata-workbook-exports",
+    response_model=KnowledgeSourceOperation,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def generate_knowledge_source_metadata_workbook_export(
+    body: KnowledgeSourceMetadataWorkbookExportRequest,
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    document_id: Annotated[str, Path(min_length=1, max_length=255)],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceOperation:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    return _metadata_workbook_application(request).generate_export(
+        source_id=source_id,
+        document_id=document_id,
+        revision_id=body.revision_id,
+        expected_revision=body.expected_revision,
+        idempotency_key=idempotency_key,
+        actor=_audit_actor(request, identity),
+    )
+
+
+@router.get(
+    "/knowledge-sources/{source_id}/metadata-workbook-exports/{export_id}/content",
+)
+def download_knowledge_source_metadata_workbook_export(
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    export_id: Annotated[str, Path(min_length=1, max_length=512)],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> Response:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    content, filename = _metadata_workbook_application(request).download_export(
+        source_id=source_id,
+        export_id=export_id,
+        context=_command_context(identity),
+    )
+    safe_filename = quote(filename, safe="-._")
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/knowledge-sources/{source_id}/metadata-workbook-import-previews",
+    response_model=KnowledgeSourceOperation,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_knowledge_source_metadata_workbook_import_preview(
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    export_id: Annotated[str, Form(min_length=1, max_length=512)],
+    expected_revision: Annotated[int, Form(ge=1)],
+    file: Annotated[UploadFile, File()],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceOperation:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="metadata_workbook_filename_required",
+        )
+    return _metadata_workbook_application(request).create_import_preview(
+        source_id=source_id,
+        export_id=export_id,
+        filename=file.filename,
+        content_type=file.content_type or "application/octet-stream",
+        content=file.file,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        actor=_audit_actor(request, identity),
+    )
+
+
+@router.get(
+    "/knowledge-sources/{source_id}/metadata-workbook-import-previews/{preview_id}",
+    response_model=KnowledgeSourceMetadataWorkbookPreviewProjection,
+)
+def get_knowledge_source_metadata_workbook_import_preview(
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    preview_id: Annotated[str, Path(min_length=1, max_length=512)],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceMetadataWorkbookPreviewProjection:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
+    return _metadata_workbook_application(request).get_import_preview(
+        source_id=source_id,
+        preview_id=preview_id,
+        context=_command_context(identity),
+    )
+
+
+@router.post(
+    "/knowledge-sources/{source_id}/metadata-workbook-import-previews/{preview_id}/apply",
+    response_model=KnowledgeSourceOperation,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def apply_knowledge_source_metadata_workbook_import_preview(
+    body: KnowledgeSourceMetadataWorkbookApplyRequest,
+    request: Request,
+    source_id: Annotated[str, Path(min_length=1, max_length=255)],
+    preview_id: Annotated[str, Path(min_length=1, max_length=512)],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeSourceOperation:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    return _metadata_workbook_application(request).apply_import_preview(
+        source_id=source_id,
+        preview_id=preview_id,
+        expected_preview_identity=body.expected_preview_identity,
+        expected_revision=body.expected_revision,
+        reason=body.reason,
+        idempotency_key=idempotency_key,
+        actor=_audit_actor(request, identity),
     )
 
 
@@ -940,43 +1284,6 @@ def cancel_ingestion(
     )
 
 
-@router.post(
-    "/knowledge-sources/{source_id}/metadata-imports",
-    response_model=KnowledgeSourceOperation,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def import_metadata(
-    request: Request,
-    source_id: Annotated[str, Path(min_length=1, max_length=255)],
-    document_id: Annotated[UUID, Form()],
-    revision_id: Annotated[UUID, Form()],
-    file: Annotated[UploadFile, File()],
-    expected_revision: Annotated[int, Form(ge=1)],
-    idempotency_key: Annotated[
-        str,
-        Header(alias="Idempotency-Key", min_length=1, max_length=255),
-    ],
-    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
-) -> KnowledgeSourceOperation:
-    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="knowledge_workbook_filename_required",
-        )
-    return _ingestion_application(request).import_metadata(
-        source_id=source_id,
-        document_id=str(document_id),
-        revision_id=str(revision_id),
-        filename=file.filename,
-        content_type=file.content_type or "application/octet-stream",
-        content=file.file,
-        expected_revision=expected_revision,
-        idempotency_key=idempotency_key,
-        actor=_audit_actor(request, identity),
-    )
-
-
 def _problem_response(request: Request, exc: Exception) -> JSONResponse:
     status_code = 500
     code = "knowledge_source_internal_error"
@@ -1021,17 +1328,34 @@ def _problem_response(request: Request, exc: Exception) -> JSONResponse:
         title = "Knowledge Source cursor invalid"
         detail = "The cursor is invalid or expired; restart from the first page."
         problem_name = "knowledge-source-cursor"
-    elif isinstance(exc, WorkbookReviewConflictError):
+    elif isinstance(exc, WorkbookReviewConflictError | MetadataReviewConflictError):
         status_code = status.HTTP_409_CONFLICT
         code = "knowledge_source_review_conflict"
         title = "Knowledge Source review conflict"
         detail = "The metadata review changed after this view was loaded."
         problem_name = "knowledge-source-conflict"
-    elif isinstance(exc, WorkbookValidationError):
+    elif isinstance(exc, MetadataProfileBindingRequiredError):
+        status_code = status.HTTP_409_CONFLICT
+        code = "metadata_profile_binding_required"
+        title = "Metadata Profile binding required"
+        detail = (
+            "Bind a published Metadata Profile before reviewing this Knowledge Source."
+        )
+        problem_name = "knowledge-source-prerequisite"
+    elif isinstance(exc, WorkbookValidationError | MetadataReviewValidationError):
         status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
         code = "knowledge_source_review_invalid"
         title = "Knowledge Source review invalid"
         detail = "The metadata review request is invalid."
+        problem_name = "knowledge-source-validation"
+    elif (
+        isinstance(exc, ProofAgentError)
+        and exc.code.startswith("PA_HYBRID_INTAKE_")
+    ):
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+        code = _safe_error_code(exc.code)
+        title = "Hybrid Knowledge document rejected"
+        detail = exc.message
         problem_name = "knowledge-source-validation"
     elif isinstance(exc, KnowledgeSourceCommandRejectedError):
         code = exc.code
@@ -1128,6 +1452,7 @@ __all__ = [
     "KnowledgeSourceIngestionApplication",
     "KnowledgeSourceOperationsApplication",
     "KnowledgeSourceProblemRoute",
+    "KnowledgeSourceMetadataWorkbookApplication",
     "KnowledgeSourcePublicationApplication",
     "KnowledgeSourcePublicationPreparationApplication",
     "KnowledgeSourceWorkspaceApplication",

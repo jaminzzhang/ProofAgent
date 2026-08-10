@@ -34,6 +34,9 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     KnowledgeModelWorkCancelled,
     KnowledgeModelWorkScheduler,
 )
+from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
+    MetadataProfileBindingRequiredError,
+)
 from proof_agent.capabilities.knowledge.hybrid.rule_units import (
     RuleUnitProjectionReviewRequired,
     project_rule_units,
@@ -62,6 +65,7 @@ NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 _TRANSIENT_CODE = "PA_HYBRID_WORKER_TRANSIENT"
 _REVIEW_CODE = "PA_HYBRID_WORKER_REVIEW_REQUIRED"
 _RETRY_EXHAUSTED_CODE = "PA_HYBRID_WORKER_RETRY_EXHAUSTED"
+_METADATA_PROFILE_REQUIRED_CODE = "PA_HYBRID_METADATA_PROFILE_REQUIRED"
 
 # One vendor artifact matches Task 8's 64 MiB private-response ceiling. Aggregate and
 # derived limits bound a 500-page escalation without contradicting that upstream contract.
@@ -636,7 +640,21 @@ class HybridKnowledgeWorker:
 
         # This is the only state commit after immutable artifacts are finalized and read back.
         # A stale fencing token may therefore leave reusable orphan bytes, never committed state.
-        self._lifecycle.commit_artifact_build(claim, result)
+        try:
+            self._lifecycle.commit_artifact_build(claim, result)
+        except MetadataProfileBindingRequiredError:
+            self._lifecycle.fail_integrity(
+                claim,
+                failure_code=_METADATA_PROFILE_REQUIRED_CODE,
+                safe_reason="Bind a published Metadata Profile before retrying ingestion.",
+            )
+            return HybridWorkerOutcome(
+                job_id=request.job_id,
+                source_id=request.source_id,
+                state="failed",
+                auto_retry_count=request.auto_retry_count,
+                error_code=_METADATA_PROFILE_REQUIRED_CODE,
+            )
         return HybridWorkerOutcome(
             job_id=request.job_id,
             source_id=request.source_id,

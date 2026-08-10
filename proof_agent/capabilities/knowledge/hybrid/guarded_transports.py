@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 import json
-
-from pydantic import JsonValue
 
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     EmbeddingRequest,
@@ -19,7 +17,7 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
 from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
     ParserServiceAttestation,
     ParserServiceRequest,
-    canonical_vendor_json_bytes,
+    decode_parser_service_attestation,
 )
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 
@@ -174,16 +172,7 @@ class GuardedParserHttpTransport:
             max_response_bytes=64 * 1024 * 1024,
             cancellation=cancellation,
         )
-        if not isinstance(response, dict):
-            raise ValueError("private parser response root must be a JSON object")
-        raw = dict(response)
-        vendor_json = raw.pop("vendor_json", None)
-        if not isinstance(vendor_json, dict):
-            raise ValueError("private parser response requires a vendor_json object")
-        raw["vendor_json_bytes"] = canonical_vendor_json_bytes(
-            cast(dict[str, JsonValue], vendor_json)
-        )
-        return ParserServiceAttestation.model_validate(raw)
+        return decode_parser_service_attestation(response)
 
     def close(self) -> None:
         return None

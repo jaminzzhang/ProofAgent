@@ -1,4 +1,4 @@
-"""Add encrypted PostgreSQL model credentials."""
+"""Preserve the released encrypted model-credential revision identity."""
 
 from typing import Sequence
 
@@ -6,33 +6,13 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0012_model_credential"
-down_revision: str | None = "0011_worker_role_leases"
+revision: str = "0011_model_credential"
+down_revision: str | None = "0010_hybrid_knowledge_workflow"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    inspector = sa.inspect(op.get_bind())
-    if "model_connection_credentials" in inspector.get_table_names():
-        expected_columns = {
-            "connection_id",
-            "key_version",
-            "ciphertext",
-            "created_at",
-            "updated_at",
-        }
-        actual_columns = {
-            str(column["name"])
-            for column in inspector.get_columns("model_connection_credentials")
-        }
-        if not expected_columns <= actual_columns:
-            missing = ", ".join(sorted(expected_columns - actual_columns))
-            raise RuntimeError(
-                "released model credential table is incompatible; missing columns: "
-                f"{missing}"
-            )
-        return
     op.create_table(
         "model_connection_credentials",
         sa.Column("connection_id", sa.Text(), nullable=False),

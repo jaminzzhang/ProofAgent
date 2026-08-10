@@ -62,6 +62,9 @@ from proof_agent.capabilities.persistence.postgres.metadata_review_repository im
 from proof_agent.capabilities.persistence.postgres.metadata_import_repository import (
     PostgresMetadataImportRepository,
 )
+from proof_agent.capabilities.persistence.postgres.metadata_workbook_repository import (
+    PostgresMetadataWorkbookV2Repository,
+)
 from proof_agent.capabilities.persistence.postgres.worker_role_repository import (
     PostgresWorkerRoleRepository,
 )
@@ -98,6 +101,7 @@ class PostgresPersistenceBundle:
     hybrid_ingestion: PostgresHybridIngestionRepository
     metadata_reviews: PostgresInsuranceMetadataReviewRepository
     metadata_imports: PostgresMetadataImportRepository
+    metadata_workbooks: PostgresMetadataWorkbookV2Repository
     worker_roles: PostgresWorkerRoleRepository
     releases: PostgresReleaseRegistryRepository
     prepared_knowledge_publications: PostgresPreparedKnowledgePublicationRepository
@@ -130,6 +134,7 @@ class PostgresPersistenceBundle:
             hybrid_ingestion=PostgresHybridIngestionRepository(engine),
             metadata_reviews=PostgresInsuranceMetadataReviewRepository(engine),
             metadata_imports=PostgresMetadataImportRepository(engine),
+            metadata_workbooks=PostgresMetadataWorkbookV2Repository(engine),
             worker_roles=PostgresWorkerRoleRepository(engine),
             releases=PostgresReleaseRegistryRepository(engine),
             prepared_knowledge_publications=PostgresPreparedKnowledgePublicationRepository(

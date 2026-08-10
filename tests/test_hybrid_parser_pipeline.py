@@ -31,11 +31,11 @@ from proof_agent.capabilities.knowledge.hybrid.model_clients import (
 from proof_agent.capabilities.knowledge.hybrid.pipeline import (
     MergeSelection,
     PrivateHybridParserPipeline,
+    ReviewRequiredError,
     merge_selected_results,
 )
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
-    ReviewRequiredError,
     hybrid_build_request_sha256,
 )
 from proof_agent.capabilities.knowledge.hybrid.quality import (
@@ -110,6 +110,8 @@ def parser_response(
         page_numbers = (int(payload["page"]["page_number"]),)
     parser_revision = "2.112.0" if adapter == "docling" else "3.7.0"
     request = ParserServiceRequest(
+        document_id=str(payload["document_id"]),
+        revision_id=str(payload["revision_id"]),
         original_ref=original_ref(),
         page_numbers=page_numbers,
         parser_revision=parser_revision,
@@ -280,7 +282,55 @@ def test_private_pipeline_requires_exact_model_metadata_coverage_in_production()
     assert proposal.source_id == "source-1"
 
 
-def test_private_pipeline_blocks_when_required_model_metadata_is_missing() -> None:
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"canonical_anchor": "heading-1"}, "cannot target a Rule Unit"),
+        ({"effective_from": "not-a-date"}, "effective_from is not an ISO date"),
+    ),
+)
+def test_private_pipeline_rejects_unsafe_document_default(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    scheduler = ImmediateKnowledgeModelWorkScheduler()
+    response = parser_response("docling-simple.json")
+    payload = response.vendor_json
+    payload["insurance_metadata_default"] = {
+        "canonical_anchor": None,
+        "authority": "national",
+        "effective_from": None,
+        "effective_to": None,
+        "taxonomy_id": "insurance-product",
+        "taxonomy_revision_id": "taxonomy-v1",
+        "precedence_policy_revision_id": "precedence-v1",
+        "precedence_authority_tier": "terms",
+        "precedence_order": 10,
+        **changes,
+    }
+    response = with_vendor_payload(response, payload)
+
+    class Client:
+        def __init__(self) -> None:
+            self.scheduler = scheduler
+
+        def parse(self, *args, **kwargs):
+            del args, kwargs
+            return response
+
+    pipeline = PrivateHybridParserPipeline(
+        docling=Client(),  # type: ignore[arg-type]
+        paddle=Client(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ReviewRequiredError, match=message):
+        pipeline.build(
+            hybrid_build_request(),
+            cancellation=KnowledgeModelCancellation(),
+        )
+
+
+def test_private_pipeline_materializes_missing_metadata_for_business_review() -> None:
     scheduler = ImmediateKnowledgeModelWorkScheduler()
     response = parser_response("docling-simple.json")
 
@@ -298,11 +348,20 @@ def test_private_pipeline_blocks_when_required_model_metadata_is_missing() -> No
         require_insurance_metadata_drafts=True,
     )
 
-    with pytest.raises(ReviewRequiredError, match="omitted"):
-        pipeline.build(
-            hybrid_build_request(),
-            cancellation=KnowledgeModelCancellation(),
-        )
+    result = pipeline.build(
+        hybrid_build_request(),
+        cancellation=KnowledgeModelCancellation(),
+    )
+
+    assert tuple(
+        proposal.canonical_anchor for proposal in result.insurance_metadata.pdf_drafts
+    ) == ("heading-1", "paragraph-1")
+    assert all(
+        proposal.authority is None
+        and proposal.taxonomy_id is None
+        and proposal.precedence_authority_tier is None
+        for proposal in result.insurance_metadata.pdf_drafts
+    )
 
 
 def test_private_pipeline_never_auto_replaces_an_escalated_whole_page() -> None:
@@ -404,6 +463,8 @@ def test_attestation_rejects_noncanonical_and_deep_vendor_json_bytes() -> None:
 def test_parser_and_canonical_structure_bounds_are_enforced() -> None:
     with pytest.raises(ValidationError):
         ParserServiceRequest(
+            document_id="doc-simple",
+            revision_id="rev-simple",
             original_ref=original_ref(),
             page_numbers=tuple(range(1, 502)),
             parser_revision="2.112.0",
@@ -862,6 +923,8 @@ class RecordingTransport:
 
 def exact_request() -> ParserServiceRequest:
     return ParserServiceRequest(
+        document_id="doc-simple",
+        revision_id="rev-simple",
         original_ref=original_ref(),
         page_numbers=(1,),
         parser_revision="2.112.0",
@@ -1016,6 +1079,8 @@ def test_document_quality_reviews_unresolved_cross_page_table_continuation() -> 
 def test_parser_request_rejects_duplicate_pages_and_non_pdf_original() -> None:
     with pytest.raises(ValidationError):
         ParserServiceRequest(
+            document_id="doc-simple",
+            revision_id="rev-simple",
             original_ref=original_ref(),
             page_numbers=(1, 1),
             parser_revision="2.112.0",
@@ -1025,6 +1090,8 @@ def test_parser_request_rejects_duplicate_pages_and_non_pdf_original() -> None:
 
     with pytest.raises(ValidationError):
         ParserServiceRequest(
+            document_id="doc-simple",
+            revision_id="rev-simple",
             original_ref=original_ref().model_copy(update={"media_type": "text/plain"}),
             page_numbers=(1,),
             parser_revision="2.112.0",
