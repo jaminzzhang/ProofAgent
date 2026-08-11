@@ -318,6 +318,8 @@ services:
         condition: service_completed_successfully
       hybrid-migrate:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
     environment: *proof-agent-environment
     volumes: *proof-agent-volumes
     entrypoint: ["python"]

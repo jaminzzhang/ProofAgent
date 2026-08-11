@@ -1043,6 +1043,74 @@ def migrate_development_knowledge_hub_command(
         raise typer.Exit(code=1)
 
 
+@knowledge_app.command("withdraw-exact-duplicate-candidate")
+def withdraw_exact_duplicate_candidate_command(
+    source_id: str = typer.Option(..., "--source-id"),
+    duplicate_document_id: str = typer.Option(..., "--duplicate-document-id"),
+    duplicate_revision_id: str = typer.Option(..., "--duplicate-revision-id"),
+    retained_document_id: str = typer.Option(..., "--retained-document-id"),
+    retained_revision_id: str = typer.Option(..., "--retained-revision-id"),
+    expected_source_revision: int = typer.Option(
+        ...,
+        "--expected-source-revision",
+        min=1,
+    ),
+    actor: str = typer.Option(..., "--actor"),
+    reason: str = typer.Option(..., "--reason"),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the exact duplicate withdrawal; omission fails closed.",
+    ),
+    dsn_env: str = typer.Option(
+        "PROOF_AGENT_POSTGRES_DSN",
+        "--dsn-env",
+        help="Environment variable containing the application PostgreSQL DSN.",
+    ),
+) -> None:
+    """Withdraw one exact duplicate candidate while preserving history."""
+
+    if not apply:
+        typer.echo("Duplicate candidate withdrawal requires --apply.", err=True)
+        raise typer.Exit(code=2)
+
+    from proof_agent.capabilities.persistence.postgres.bundle import (
+        PostgresPersistenceBundle,
+    )
+    from proof_agent.contracts import AuditActorFacts, Permission
+
+    dsn = os.environ.get(dsn_env, "").strip()
+    if not dsn:
+        typer.echo(f"PostgreSQL DSN environment variable is empty: {dsn_env}", err=True)
+        raise typer.Exit(code=2)
+    bundle = PostgresPersistenceBundle.create(dsn)
+    try:
+        result = bundle.hybrid_ingestion.withdraw_exact_duplicate_candidate(
+            source_id=source_id,
+            duplicate_document_id=duplicate_document_id,
+            duplicate_revision_id=duplicate_revision_id,
+            retained_document_id=retained_document_id,
+            retained_revision_id=retained_revision_id,
+            expected_source_revision=expected_source_revision,
+            actor=AuditActorFacts(
+                subject=actor,
+                identity_provider="maintenance-cli",
+                session_id="duplicate-candidate-repair",
+                permissions=(Permission.KNOWLEDGE_SOURCE_EDIT.value,),
+            ),
+            reason=reason,
+        )
+    except Exception as exc:
+        typer.echo(f"Duplicate candidate withdrawal failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        bundle.close()
+    status = "withdrawn" if result.withdrawn else "already withdrawn"
+    typer.echo(f"Duplicate candidate: {status}")
+    typer.echo(f"Original SHA-256: {result.original_sha256}")
+    typer.echo(f"Knowledge Source revision: {result.source_revision}")
+
+
 @app.command("hybrid-seal-release-evidence")
 def hybrid_seal_release_evidence(
     shadow: str = typer.Option(..., "--shadow"),

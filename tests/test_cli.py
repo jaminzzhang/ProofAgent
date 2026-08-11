@@ -32,6 +32,35 @@ from proof_agent.evaluation.compare.result import RagResult
 
 
 runner = CliRunner()
+
+
+def test_duplicate_candidate_withdrawal_requires_explicit_apply() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "knowledge",
+            "withdraw-exact-duplicate-candidate",
+            "--source-id",
+            "ks_insurance",
+            "--duplicate-document-id",
+            "d61fa9c3-7e34-4956-be1a-9f0fdc4241d3",
+            "--duplicate-revision-id",
+            "6444c34f-0025-4e5e-aaf6-e64e4b98993f",
+            "--retained-document-id",
+            "d1e46a1c-4369-428f-9da4-39149559c7ac",
+            "--retained-revision-id",
+            "16722b9d-a6ec-46f7-8f16-84be1a92771b",
+            "--expected-source-revision",
+            "53",
+            "--actor",
+            "maintenance-operator",
+            "--reason",
+            "Withdraw exact duplicate.",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "requires --apply" in result.output
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_AGENT_ID = "agent_management_insurance_specialist"
 

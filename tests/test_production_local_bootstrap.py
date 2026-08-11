@@ -125,6 +125,29 @@ class _ReferenceMetadataAuthority:
         return self.published[0] if self.published is not None else object()
 
 
+class _ReferenceHybridIngestion:
+    def __init__(self) -> None:
+        self.artifact_store: object | None = None
+        self.reference_source_ids: tuple[str, ...] | None = None
+        self.materialized_source_id: str | None = None
+
+    def configure_artifact_store(self, artifact_store: object) -> None:
+        self.artifact_store = artifact_store
+
+    def configure_reference_profile_source_ids(
+        self,
+        source_ids: tuple[str, ...],
+    ) -> None:
+        self.reference_source_ids = source_ids
+
+    def materialize_missing_candidate_review_sets(
+        self,
+        source_id: str,
+    ) -> tuple[object, ...]:
+        self.materialized_source_id = source_id
+        return (object(),)
+
+
 def test_reference_metadata_bootstrap_binds_only_the_designated_local_fixture() -> None:
     bootstrap = _local_module("bootstrap_reference_metadata.py")
     metadata = _ReferenceMetadataAuthority()
@@ -151,6 +174,23 @@ def test_reference_metadata_bootstrap_binds_only_the_designated_local_fixture() 
         "actor": "local-production-bootstrap",
         "production": False,
     }
+
+
+def test_reference_metadata_bootstrap_materializes_missing_candidate_reviews() -> None:
+    bootstrap = _local_module("bootstrap_reference_metadata.py")
+    ingestion = _ReferenceHybridIngestion()
+    artifact_store = object()
+    bundle = SimpleNamespace(hybrid_ingestion=ingestion)
+
+    count = bootstrap.materialize_reference_candidate_reviews(
+        bundle,
+        artifact_store,
+    )
+
+    assert count == 1
+    assert ingestion.artifact_store is artifact_store
+    assert ingestion.reference_source_ids == ("ks_insurance",)
+    assert ingestion.materialized_source_id == "ks_insurance"
 
 
 def test_reference_profile_allowlist_is_exact_and_fail_closed() -> None:

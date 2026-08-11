@@ -61,7 +61,7 @@ class HybridIntakeIngestionRepository(Protocol):
         replacement: bool = False,
     ) -> Any: ...
 
-    def list_records_for_source(self, source_id: str) -> tuple[Any, ...]: ...
+    def list_active_records_for_source(self, source_id: str) -> tuple[Any, ...]: ...
 
     def get_record(self, job_id: str) -> Any | None: ...
 
@@ -137,7 +137,7 @@ class HybridKnowledgeSourceSummaryReader:
         self._ingestion = ingestion
 
     def summary_for_source(self, source_id: str) -> Mapping[str, int]:
-        records = self._ingestion.list_records_for_source(source_id)
+        records = self._ingestion.list_active_records_for_source(source_id)
         return {
             "documents": len({item.build_request.document_id for item in records}),
             "ready": sum(item.job.state == "COMPLETED" for item in records),

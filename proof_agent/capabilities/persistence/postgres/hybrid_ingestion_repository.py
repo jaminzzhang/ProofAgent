@@ -18,6 +18,9 @@ from proof_agent.capabilities.persistence.postgres._common import (
     read_connection,
     write_connection,
 )
+from proof_agent.capabilities.persistence.postgres.audit_repository import (
+    PostgresAuditRepository,
+)
 
 from proof_agent.capabilities.knowledge.hybrid.ports import (
     HybridKnowledgeJob,
@@ -39,6 +42,8 @@ from proof_agent.capabilities.knowledge.hybrid.rule_units import project_rule_un
 from proof_agent.capabilities.persistence.postgres.schema import (
     hybrid_document_candidates,
     hybrid_ingestion_jobs,
+    hybrid_metadata_review_sets,
+    hybrid_metadata_reviews,
     knowledge_sources,
 )
 from proof_agent.capabilities.persistence.postgres.knowledge_repository import (
@@ -60,6 +65,12 @@ from proof_agent.contracts.agent_configuration import (
 from proof_agent.contracts.hybrid_documents import StructuredKnowledgeDocumentArtifact
 from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.contracts.knowledge_operations import KnowledgeIngestionAttempt
+from proof_agent.contracts.persistence import (
+    AuditActorFacts,
+    AuditCategory,
+    AuditMetadataRecord,
+    AuditOutcome,
+)
 
 
 class HybridIngestionConflictError(RuntimeError):
@@ -97,6 +108,18 @@ class HybridDocumentCandidate:
     candidate_revision_id: str | None
     pending_revision_id: str | None
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class HybridDuplicateCandidateWithdrawal:
+    source_id: str
+    duplicate_document_id: str
+    duplicate_revision_id: str
+    retained_document_id: str
+    retained_revision_id: str
+    original_sha256: str
+    withdrawn: bool
+    source_revision: int
 
 
 class PostgresHybridIngestionRepository:
@@ -356,6 +379,344 @@ class PostgresHybridIngestionRepository:
                 .order_by(hybrid_document_candidates.c.document_id)
             ).mappings()
         return tuple(_record_from_row(row) for row in rows)
+
+    def list_active_records_for_source(
+        self,
+        source_id: str,
+    ) -> tuple[HybridIngestionRecord, ...]:
+        """Return only jobs represented by current candidate authority.
+
+        Completed candidate revisions and in-flight pending revisions contribute
+        to the current source summary. Historical jobs remain available through
+        ``list_records_for_source`` but must not block publication actions.
+        """
+
+        with read_connection(self._connection_source) as connection:
+            rows = connection.execute(
+                select(hybrid_ingestion_jobs)
+                .join(
+                    hybrid_document_candidates,
+                    sa.and_(
+                        hybrid_document_candidates.c.source_id
+                        == hybrid_ingestion_jobs.c.source_id,
+                        hybrid_document_candidates.c.document_id
+                        == hybrid_ingestion_jobs.c.document_id,
+                        or_(
+                            hybrid_document_candidates.c.candidate_revision_id
+                            == hybrid_ingestion_jobs.c.revision_id,
+                            hybrid_document_candidates.c.pending_revision_id
+                            == hybrid_ingestion_jobs.c.revision_id,
+                        ),
+                    ),
+                )
+                .where(hybrid_document_candidates.c.source_id == source_id)
+                .order_by(
+                    hybrid_document_candidates.c.document_id,
+                    hybrid_ingestion_jobs.c.created_at,
+                    hybrid_ingestion_jobs.c.job_id,
+                )
+            ).mappings()
+        return tuple(_record_from_row(row) for row in rows)
+
+    def materialize_missing_candidate_review_sets(
+        self,
+        source_id: str,
+    ) -> tuple[InsuranceMetadataReviewSet, ...]:
+        """Materialize V2 Review Sets for legacy current candidates, once.
+
+        This is an explicit deployment migration seam. It reconstructs only from
+        the exact artifacts of already completed candidate builds, never approves
+        a Review, and remains a no-op after coverage has been restored.
+        """
+
+        if not source_id.strip():
+            raise ValueError("Hybrid Knowledge Source ID must be non-empty")
+        candidates = self.list_candidate_records_for_source(source_id)
+        review_repository = PostgresInsuranceMetadataReviewRepository(
+            self._connection_source,
+            clock=self._clock,
+        )
+        planned: list[tuple[HybridArtifactBuildResult, InsuranceMetadataReviewSet]] = []
+        for candidate in candidates:
+            request = candidate.build_request
+            current = review_repository.get_current_review_set(
+                source_id=source_id,
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+            )
+            if current is not None:
+                continue
+            result = self.get_result(request.job_id)
+            if result is None:
+                raise HybridIngestionClaimRejectedError(
+                    "Hybrid candidate build result is unavailable"
+                )
+            planned.append((result, self._materialize_review_set(result)))
+
+        if not planned:
+            return ()
+
+        now = self._now()
+        materialized: list[InsuranceMetadataReviewSet] = []
+        with write_connection(self._connection_source) as connection:
+            transactional_reviews = PostgresInsuranceMetadataReviewRepository(
+                connection,
+                clock=lambda: now,
+            )
+            for result, review_set in planned:
+                candidate_revision_id = connection.execute(
+                    select(hybrid_document_candidates.c.candidate_revision_id)
+                    .where(
+                        hybrid_document_candidates.c.source_id == source_id,
+                        hybrid_document_candidates.c.document_id
+                        == UUID(result.document_id),
+                    )
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if candidate_revision_id != UUID(result.revision_id):
+                    continue
+                current = transactional_reviews.get_current_review_set(
+                    source_id=source_id,
+                    document_id=result.document_id,
+                    revision_id=result.revision_id,
+                )
+                if current is not None:
+                    continue
+                materialized.append(
+                    transactional_reviews.put_review_set(review_set)
+                )
+            if materialized:
+                self._touch_source_revision(
+                    connection,
+                    source_id=source_id,
+                    now=now,
+                    advance_draft=True,
+                )
+        return tuple(materialized)
+
+    def withdraw_exact_duplicate_candidate(
+        self,
+        *,
+        source_id: str,
+        duplicate_document_id: str,
+        duplicate_revision_id: str,
+        retained_document_id: str,
+        retained_revision_id: str,
+        expected_source_revision: int,
+        actor: AuditActorFacts,
+        reason: str,
+    ) -> HybridDuplicateCandidateWithdrawal:
+        """Withdraw one exact duplicate while preserving its immutable history."""
+
+        normalized_reason = reason.strip()
+        if not normalized_reason or len(normalized_reason) > 1024:
+            raise ValueError("Duplicate candidate withdrawal reason is invalid")
+        if type(expected_source_revision) is not int or expected_source_revision < 1:
+            raise ValueError("Expected Knowledge Source revision is invalid")
+        duplicate_document_uuid = UUID(duplicate_document_id)
+        duplicate_revision_uuid = UUID(duplicate_revision_id)
+        retained_document_uuid = UUID(retained_document_id)
+        retained_revision_uuid = UUID(retained_revision_id)
+        if duplicate_document_uuid == retained_document_uuid:
+            raise ValueError("Duplicate and retained documents must be different")
+
+        now = self._now()
+        with write_connection(self._connection_source) as connection:
+            results: list[HybridArtifactBuildResult] = []
+            for document_uuid, revision_uuid in (
+                (duplicate_document_uuid, duplicate_revision_uuid),
+                (retained_document_uuid, retained_revision_uuid),
+            ):
+                payloads = connection.execute(
+                    select(hybrid_ingestion_jobs.c.result_json)
+                    .where(
+                        hybrid_ingestion_jobs.c.source_id == source_id,
+                        hybrid_ingestion_jobs.c.document_id == document_uuid,
+                        hybrid_ingestion_jobs.c.revision_id == revision_uuid,
+                        hybrid_ingestion_jobs.c.state == "COMPLETED",
+                        hybrid_ingestion_jobs.c.result_json.is_not(None),
+                    )
+                    .order_by(hybrid_ingestion_jobs.c.completed_at.desc())
+                    .limit(2)
+                ).scalars().all()
+                if len(payloads) != 1:
+                    raise HybridIngestionConflictError(
+                        "Exact completed candidate build is not unique"
+                    )
+                results.append(
+                    HybridArtifactBuildResult.model_validate_json(
+                        json.dumps(
+                            payloads[0],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    )
+                )
+            duplicate_result, retained_result = results
+            if (
+                duplicate_result.source_id != source_id
+                or duplicate_result.document_id != duplicate_document_id
+                or duplicate_result.revision_id != duplicate_revision_id
+                or retained_result.source_id != source_id
+                or retained_result.document_id != retained_document_id
+                or retained_result.revision_id != retained_revision_id
+            ):
+                raise HybridIngestionConflictError(
+                    "Completed candidate build identity does not match the command"
+                )
+            if duplicate_result.original_ref.sha256 != retained_result.original_ref.sha256:
+                raise HybridIngestionConflictError(
+                    "Candidate documents are not exact content duplicates"
+                )
+
+            candidate_rows = connection.execute(
+                select(hybrid_document_candidates)
+                .where(
+                    hybrid_document_candidates.c.source_id == source_id,
+                    hybrid_document_candidates.c.document_id.in_(
+                        (duplicate_document_uuid, retained_document_uuid)
+                    ),
+                )
+                .with_for_update()
+            ).mappings().all()
+            candidates = {row["document_id"]: row for row in candidate_rows}
+            retained = candidates.get(retained_document_uuid)
+            if (
+                retained is None
+                or retained["candidate_revision_id"] != retained_revision_uuid
+                or retained["pending_revision_id"] is not None
+            ):
+                raise HybridIngestionConflictError(
+                    "Retained document is not the exact stable current candidate"
+                )
+            duplicate = candidates.get(duplicate_document_uuid)
+            source_record = PostgresKnowledgeAssetRepository(
+                connection
+            ).get_source_record(source_id)
+            if source_record is None:
+                raise HybridIngestionClaimRejectedError(
+                    "Hybrid ingestion source disappeared"
+                )
+            if duplicate is None:
+                current_review_count = int(
+                    connection.execute(
+                        select(func.count())
+                        .select_from(hybrid_metadata_review_sets)
+                        .where(
+                            hybrid_metadata_review_sets.c.source_id == source_id,
+                            hybrid_metadata_review_sets.c.document_id
+                            == duplicate_document_uuid,
+                            hybrid_metadata_review_sets.c.revision_id
+                            == duplicate_revision_uuid,
+                            hybrid_metadata_review_sets.c.current.is_(True),
+                        )
+                    ).scalar_one()
+                )
+                if current_review_count:
+                    raise HybridIngestionConflictError(
+                        "Withdrawn duplicate still has current Metadata Reviews"
+                    )
+                return HybridDuplicateCandidateWithdrawal(
+                    source_id=source_id,
+                    duplicate_document_id=duplicate_document_id,
+                    duplicate_revision_id=duplicate_revision_id,
+                    retained_document_id=retained_document_id,
+                    retained_revision_id=retained_revision_id,
+                    original_sha256=duplicate_result.original_ref.sha256,
+                    withdrawn=False,
+                    source_revision=source_record.revision,
+                )
+            if (
+                duplicate["candidate_revision_id"] != duplicate_revision_uuid
+                or duplicate["pending_revision_id"] is not None
+            ):
+                raise HybridIngestionConflictError(
+                    "Duplicate document is not the exact stable current candidate"
+                )
+            if source_record.revision != expected_source_revision:
+                raise HybridIngestionConflictError(
+                    "Knowledge Source revision changed before duplicate withdrawal"
+                )
+
+            connection.execute(
+                update(hybrid_metadata_reviews)
+                .where(
+                    hybrid_metadata_reviews.c.source_id == source_id,
+                    hybrid_metadata_reviews.c.document_id == duplicate_document_uuid,
+                    hybrid_metadata_reviews.c.revision_id == duplicate_revision_uuid,
+                    hybrid_metadata_reviews.c.current.is_(True),
+                )
+                .values(current=False, updated_at=now)
+            )
+            connection.execute(
+                update(hybrid_metadata_review_sets)
+                .where(
+                    hybrid_metadata_review_sets.c.source_id == source_id,
+                    hybrid_metadata_review_sets.c.document_id
+                    == duplicate_document_uuid,
+                    hybrid_metadata_review_sets.c.revision_id == duplicate_revision_uuid,
+                    hybrid_metadata_review_sets.c.current.is_(True),
+                )
+                .values(current=False, updated_at=now)
+            )
+            deleted = connection.execute(
+                sa.delete(hybrid_document_candidates).where(
+                    hybrid_document_candidates.c.source_id == source_id,
+                    hybrid_document_candidates.c.document_id
+                    == duplicate_document_uuid,
+                    hybrid_document_candidates.c.candidate_revision_id
+                    == duplicate_revision_uuid,
+                    hybrid_document_candidates.c.pending_revision_id.is_(None),
+                )
+            )
+            if deleted.rowcount != 1:
+                raise HybridIngestionConflictError(
+                    "Duplicate candidate withdrawal lost its row lock"
+                )
+            self._touch_source_revision(
+                connection,
+                source_id=source_id,
+                now=now,
+                advance_draft=True,
+            )
+            updated_source = PostgresKnowledgeAssetRepository(
+                connection
+            ).get_source_record(source_id)
+            if updated_source is None:
+                raise HybridIngestionClaimRejectedError(
+                    "Hybrid ingestion source disappeared"
+                )
+            PostgresAuditRepository(connection).append(
+                AuditMetadataRecord(
+                    audit_id=str(uuid4()),
+                    category=AuditCategory.CONFIGURATION,
+                    event_type="knowledge_source.duplicate_candidate_withdrawn",
+                    outcome=AuditOutcome.SUCCEEDED,
+                    actor=actor,
+                    occurred_at=updated_source.source.updated_at,
+                    target_type="knowledge_source",
+                    target_id=source_id,
+                    metadata={
+                        "duplicate_document_id": duplicate_document_id,
+                        "duplicate_revision_id": duplicate_revision_id,
+                        "retained_document_id": retained_document_id,
+                        "retained_revision_id": retained_revision_id,
+                        "original_sha256": duplicate_result.original_ref.sha256,
+                        "reason": normalized_reason,
+                        "previous_source_revision": source_record.revision,
+                    },
+                )
+            )
+            return HybridDuplicateCandidateWithdrawal(
+                source_id=source_id,
+                duplicate_document_id=duplicate_document_id,
+                duplicate_revision_id=duplicate_revision_id,
+                retained_document_id=retained_document_id,
+                retained_revision_id=retained_revision_id,
+                original_sha256=duplicate_result.original_ref.sha256,
+                withdrawn=True,
+                source_revision=updated_source.revision,
+            )
 
     def request_cancel(
         self,

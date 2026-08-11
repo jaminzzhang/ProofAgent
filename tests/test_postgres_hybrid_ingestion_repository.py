@@ -6,6 +6,7 @@ import json
 from uuid import uuid4
 
 import pytest
+import sqlalchemy as sa
 
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridArtifactBuildRequest,
@@ -18,8 +19,16 @@ from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersist
 from proof_agent.capabilities.persistence.postgres.database import upgrade_database
 from proof_agent.capabilities.persistence.postgres.hybrid_ingestion_repository import (
     HybridIngestionClaimRejectedError,
+    HybridIngestionConflictError,
     HybridIngestionRetryRejectedError,
     PostgresHybridIngestionRepository,
+)
+from proof_agent.capabilities.persistence.postgres.schema import (
+    hybrid_metadata_review_sets,
+    hybrid_metadata_reviews,
+)
+from proof_agent.control.knowledge.production_intake import (
+    HybridKnowledgeSourceSummaryReader,
 )
 from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
     MetadataReviewConflictError,
@@ -27,6 +36,7 @@ from proof_agent.capabilities.knowledge.hybrid.metadata_review import (
     proofagent_insurance_reference_profile,
 )
 from proof_agent.contracts import KnowledgeSource, KnowledgeSourceLifecycleState
+from proof_agent.contracts.persistence import AuditActorFacts
 from proof_agent.contracts.hybrid_documents import (
     BoundingBox,
     StructuredArtifactBuildIdentity,
@@ -46,6 +56,7 @@ def _request(
     source_id: str,
     *,
     document_id: str | None = None,
+    original_sha256: str = "a" * 64,
 ) -> HybridArtifactBuildRequest:
     request = HybridArtifactBuildRequest(
         job_id=str(uuid4()),
@@ -56,7 +67,7 @@ def _request(
         original_ref=ExactArtifactRef(
             artifact_uri="s3://proof-agent/hybrid/original.pdf",
             version_id="opaque-s3-version-id",
-            sha256="a" * 64,
+            sha256=original_sha256,
             size_bytes=1024,
             media_type="application/pdf",
         ),
@@ -260,6 +271,16 @@ def test_pg_hybrid_ingestion_claim_retry_and_fencing(postgres_dsn: str) -> None:
             safe_reason="Structured document requires operator review.",
         )
         assert reviewed.state == "REVIEW_REQUIRED"
+        assert HybridKnowledgeSourceSummaryReader(repository).summary_for_source(
+            source_id
+        ) == {
+            "documents": 1,
+            "ready": 0,
+            "review_required": 1,
+            "retryable_ingestion": 0,
+            "cancellable_ingestion": 0,
+            "replacement_required": 0,
+        }
     finally:
         bundle.close()
 
@@ -610,5 +631,356 @@ def test_pg_replacement_preserves_candidate_until_new_revision_completes(
             bundle.knowledge.get_knowledge_source(source_id).source_draft_version_id
             == selected_draft_id
         )
+    finally:
+        bundle.close()
+
+
+def test_pg_materializes_missing_current_candidate_review_set_without_reupload(
+    postgres_dsn: str,
+) -> None:
+    upgrade_database(postgres_dsn)
+    bundle = PostgresPersistenceBundle.create(postgres_dsn)
+    source_id = f"hybrid-{uuid4()}"
+    now = datetime(2026, 8, 11, tzinfo=UTC)
+    artifact_store = _ExactArtifactReader()
+    repository = PostgresHybridIngestionRepository(
+        bundle.engine,
+        clock=lambda: now,
+        artifact_store=artifact_store,
+    )
+    try:
+        bundle.knowledge.save_source(
+            KnowledgeSource(
+                source_id=source_id,
+                name="Legacy candidate review migration",
+                provider="hybrid_index",
+                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
+                params={},
+                source_draft_version_id=str(uuid4()),
+                created_at=now.isoformat(),
+                updated_at=now.isoformat(),
+            ),
+            expected_revision=0,
+        )
+        profile = proofagent_insurance_reference_profile().model_copy(
+            update={
+                "profile_id": "production-insurance",
+                "profile_revision_id": "production-insurance.v1",
+                "reference_only": False,
+            }
+        )
+        bundle.metadata_reviews.publish_profile(
+            profile,
+            display_name="Production insurance metadata",
+            actor="operator-1",
+            published_at=now,
+        )
+        bundle.metadata_reviews.bind_source_profile(
+            source_id=source_id,
+            profile_revision_id=profile.profile_revision_id,
+            actor="operator-1",
+            bound_at=now,
+            production=True,
+        )
+        request = _request(source_id)
+        repository.enqueue(request)
+        claim = repository.claim_next(worker_id="worker-1", lease_seconds=30)
+        assert claim is not None
+        repository.commit_artifact_build(
+            claim,
+            _result_with_review_artifacts(request, artifact_store),
+        )
+
+        with bundle.engine.begin() as connection:
+            connection.execute(
+                sa.delete(hybrid_metadata_reviews).where(
+                    hybrid_metadata_reviews.c.source_id == source_id,
+                    hybrid_metadata_reviews.c.document_id == request.document_id,
+                    hybrid_metadata_reviews.c.revision_id == request.revision_id,
+                )
+            )
+            connection.execute(
+                sa.delete(hybrid_metadata_review_sets).where(
+                    hybrid_metadata_review_sets.c.source_id == source_id,
+                    hybrid_metadata_review_sets.c.document_id == request.document_id,
+                    hybrid_metadata_review_sets.c.revision_id == request.revision_id,
+                )
+            )
+
+        assert repository.list_candidate_records_for_source(source_id)
+        assert (
+            bundle.metadata_reviews.get_current_review_set(
+                source_id=source_id,
+                document_id=request.document_id,
+                revision_id=request.revision_id,
+            )
+            is None
+        )
+        source_before = bundle.knowledge.get_source_record(source_id)
+        assert source_before is not None
+
+        migrated = repository.materialize_missing_candidate_review_sets(source_id)
+
+        assert len(migrated) == 1
+        assert migrated[0].document_id == request.document_id
+        assert migrated[0].revision_id == request.revision_id
+        restored = bundle.metadata_reviews.get_current_review_set(
+            source_id=source_id,
+            document_id=request.document_id,
+            revision_id=request.revision_id,
+        )
+        assert restored == migrated[0]
+        source_after = bundle.knowledge.get_source_record(source_id)
+        assert source_after is not None
+        assert source_after.revision == source_before.revision + 1
+        assert (
+            source_after.source.source_draft_version_id
+            != source_before.source.source_draft_version_id
+        )
+
+        assert repository.materialize_missing_candidate_review_sets(source_id) == ()
+        assert bundle.knowledge.get_source_record(source_id) == source_after
+    finally:
+        bundle.close()
+
+
+def test_pg_withdraws_only_an_exact_duplicate_candidate_and_preserves_history(
+    postgres_dsn: str,
+) -> None:
+    upgrade_database(postgres_dsn)
+    bundle = PostgresPersistenceBundle.create(postgres_dsn)
+    source_id = f"hybrid-{uuid4()}"
+    now = datetime(2026, 8, 11, 1, tzinfo=UTC)
+    artifact_store = _ExactArtifactReader()
+    repository = PostgresHybridIngestionRepository(
+        bundle.engine,
+        clock=lambda: now,
+        artifact_store=artifact_store,
+    )
+    actor = AuditActorFacts(
+        subject="maintenance-operator",
+        identity_provider="maintenance-cli",
+        session_id="duplicate-candidate-repair",
+        permissions=("knowledge_source.edit",),
+    )
+    try:
+        bundle.knowledge.save_source(
+            KnowledgeSource(
+                source_id=source_id,
+                name="Duplicate candidate repair",
+                provider="hybrid_index",
+                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
+                params={},
+                source_draft_version_id=str(uuid4()),
+                created_at=now.isoformat(),
+                updated_at=now.isoformat(),
+            ),
+            expected_revision=0,
+        )
+        profile = proofagent_insurance_reference_profile().model_copy(
+            update={
+                "profile_id": "production-insurance",
+                "profile_revision_id": "production-insurance.v1",
+                "reference_only": False,
+            }
+        )
+        bundle.metadata_reviews.publish_profile(
+            profile,
+            display_name="Production insurance metadata",
+            actor="operator-1",
+            published_at=now,
+        )
+        bundle.metadata_reviews.bind_source_profile(
+            source_id=source_id,
+            profile_revision_id=profile.profile_revision_id,
+            actor="operator-1",
+            bound_at=now,
+            production=True,
+        )
+        duplicate = _request(source_id)
+        retained = _request(source_id)
+        for worker_id, request in (("worker-1", duplicate), ("worker-2", retained)):
+            repository.enqueue(request)
+            claim = repository.claim_next(worker_id=worker_id, lease_seconds=30)
+            assert claim is not None
+            repository.commit_artifact_build(
+                claim,
+                _result_with_review_artifacts(request, artifact_store),
+            )
+
+        source_before = bundle.knowledge.get_source_record(source_id)
+        assert source_before is not None
+
+        withdrawal = repository.withdraw_exact_duplicate_candidate(
+            source_id=source_id,
+            duplicate_document_id=duplicate.document_id,
+            duplicate_revision_id=duplicate.revision_id,
+            retained_document_id=retained.document_id,
+            retained_revision_id=retained.revision_id,
+            expected_source_revision=source_before.revision,
+            actor=actor,
+            reason="Remove the superseded duplicate from publication scope.",
+        )
+
+        assert withdrawal.withdrawn is True
+        assert withdrawal.original_sha256 == duplicate.original_ref.sha256
+        assert withdrawal.source_revision == source_before.revision + 1
+        assert (
+            repository.get_document_candidate(
+                source_id=source_id,
+                document_id=duplicate.document_id,
+            )
+            is None
+        )
+        retained_candidate = repository.get_document_candidate(
+            source_id=source_id,
+            document_id=retained.document_id,
+        )
+        assert retained_candidate is not None
+        assert retained_candidate.candidate_revision_id == retained.revision_id
+        assert repository.get(duplicate.job_id) is not None
+        assert repository.get_result(duplicate.job_id) is not None
+        assert (
+            bundle.metadata_reviews.get_current_review_set(
+                source_id=source_id,
+                document_id=duplicate.document_id,
+                revision_id=duplicate.revision_id,
+            )
+            is None
+        )
+        audit = bundle.audit.list_for_target(
+            target_type="knowledge_source",
+            target_id=source_id,
+        )
+        assert audit[-1].event_type == "knowledge_source.duplicate_candidate_withdrawn"
+        assert audit[-1].metadata["duplicate_document_id"] == duplicate.document_id
+        assert HybridKnowledgeSourceSummaryReader(repository).summary_for_source(
+            source_id
+        ) == {
+            "documents": 1,
+            "ready": 1,
+            "review_required": 0,
+            "retryable_ingestion": 0,
+            "cancellable_ingestion": 0,
+            "replacement_required": 0,
+        }
+
+        replay = repository.withdraw_exact_duplicate_candidate(
+            source_id=source_id,
+            duplicate_document_id=duplicate.document_id,
+            duplicate_revision_id=duplicate.revision_id,
+            retained_document_id=retained.document_id,
+            retained_revision_id=retained.revision_id,
+            expected_source_revision=source_before.revision,
+            actor=actor,
+            reason="Remove the superseded duplicate from publication scope.",
+        )
+        assert replay.withdrawn is False
+        assert replay.source_revision == withdrawal.source_revision
+        assert (
+            bundle.audit.list_for_target(
+                target_type="knowledge_source",
+                target_id=source_id,
+            )
+            == audit
+        )
+    finally:
+        bundle.close()
+
+
+def test_pg_duplicate_candidate_withdrawal_fails_closed_for_different_content(
+    postgres_dsn: str,
+) -> None:
+    upgrade_database(postgres_dsn)
+    bundle = PostgresPersistenceBundle.create(postgres_dsn)
+    source_id = f"hybrid-{uuid4()}"
+    now = datetime(2026, 8, 11, 2, tzinfo=UTC)
+    artifact_store = _ExactArtifactReader()
+    repository = PostgresHybridIngestionRepository(
+        bundle.engine,
+        clock=lambda: now,
+        artifact_store=artifact_store,
+    )
+    actor = AuditActorFacts(
+        subject="maintenance-operator",
+        identity_provider="maintenance-cli",
+        session_id="duplicate-candidate-repair",
+        permissions=("knowledge_source.edit",),
+    )
+    try:
+        bundle.knowledge.save_source(
+            KnowledgeSource(
+                source_id=source_id,
+                name="Non-duplicate candidate protection",
+                provider="hybrid_index",
+                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
+                params={},
+                source_draft_version_id=str(uuid4()),
+                created_at=now.isoformat(),
+                updated_at=now.isoformat(),
+            ),
+            expected_revision=0,
+        )
+        profile = proofagent_insurance_reference_profile().model_copy(
+            update={
+                "profile_id": "production-insurance",
+                "profile_revision_id": "production-insurance.v1",
+                "reference_only": False,
+            }
+        )
+        bundle.metadata_reviews.publish_profile(
+            profile,
+            display_name="Production insurance metadata",
+            actor="operator-1",
+            published_at=now,
+        )
+        bundle.metadata_reviews.bind_source_profile(
+            source_id=source_id,
+            profile_revision_id=profile.profile_revision_id,
+            actor="operator-1",
+            bound_at=now,
+            production=True,
+        )
+        first = _request(source_id, original_sha256="a" * 64)
+        second = _request(source_id, original_sha256="b" * 64)
+        for worker_id, request in (("worker-1", first), ("worker-2", second)):
+            repository.enqueue(request)
+            claim = repository.claim_next(worker_id=worker_id, lease_seconds=30)
+            assert claim is not None
+            repository.commit_artifact_build(
+                claim,
+                _result_with_review_artifacts(request, artifact_store),
+            )
+        source_before = bundle.knowledge.get_source_record(source_id)
+        assert source_before is not None
+
+        with pytest.raises(
+            HybridIngestionConflictError,
+            match="not exact content duplicates",
+        ):
+            repository.withdraw_exact_duplicate_candidate(
+                source_id=source_id,
+                duplicate_document_id=first.document_id,
+                duplicate_revision_id=first.revision_id,
+                retained_document_id=second.document_id,
+                retained_revision_id=second.revision_id,
+                expected_source_revision=source_before.revision,
+                actor=actor,
+                reason="Must not withdraw different content.",
+            )
+
+        assert repository.get_document_candidate(
+            source_id=source_id,
+            document_id=first.document_id,
+        ) is not None
+        assert repository.get_document_candidate(
+            source_id=source_id,
+            document_id=second.document_id,
+        ) is not None
+        assert bundle.knowledge.get_source_record(source_id) == source_before
+        assert bundle.audit.list_for_target(
+            target_type="knowledge_source",
+            target_id=source_id,
+        ) == ()
     finally:
         bundle.close()
