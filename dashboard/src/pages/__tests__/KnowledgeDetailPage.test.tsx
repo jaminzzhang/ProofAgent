@@ -176,6 +176,7 @@ describe('KnowledgeDetailPage V1', () => {
       profile_revision_id: 'insurance-authority.v1',
       reference_only: false,
       authority_values: [
+        { code: 'institution', label: 'Institution authority' },
         { code: 'national', label: 'National authority' },
         { code: 'provincial', label: 'Provincial authority' },
       ],
@@ -183,6 +184,7 @@ describe('KnowledgeDetailPage V1', () => {
       taxonomy_revision_id: 'taxonomy-2026-01',
       precedence_policy_revision_id: 'precedence-2026-01',
       precedence_authority_tier_values: [
+        { code: 'institution_exception', label: 'Institution exception' },
         { code: 'policy_terms', label: 'Policy terms' },
       ],
     })
@@ -532,6 +534,119 @@ describe('KnowledgeDetailPage V1', () => {
       )
     })
     expect(await screen.findByText('approved')).toBeInTheDocument()
+  })
+
+  it('allows approval without saving an untouched AI-generated draft', async () => {
+    const aiGeneratedReview = {
+      ...metadataReviewV2,
+      current_draft: {
+        ...metadataReviewV2.current_draft,
+        authority: 'institution',
+        effective_from: '2026-08-03',
+        effective_to: '2030-08-10',
+        precedence_authority_tier: 'institution_exception',
+        precedence_order: 1,
+      },
+    }
+    vi.mocked(fetchKnowledgeMetadataReviewsPage).mockResolvedValue(page([aiGeneratedReview]))
+    vi.mocked(approveKnowledgeMetadataReview).mockResolvedValue({
+      ...aiGeneratedReview,
+      review_version: 4,
+      state: 'approved',
+      approved_metadata_revision_id: 'approved-metadata-1',
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Reviews' }))
+    await screen.findByText(aiGeneratedReview.review_id)
+
+    expect(screen.queryByText('Save the draft before approval.')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Decision reason', { selector: '#review-reason' }), {
+      target: { value: 'Confirmed the AI-generated metadata.' },
+    })
+    const approveButton = screen.getByRole('button', { name: 'Confirm & approve' })
+    expect(approveButton).toBeEnabled()
+    fireEvent.click(approveButton)
+
+    await waitFor(() => {
+      expect(approveKnowledgeMetadataReview).toHaveBeenCalledWith(
+        'ks_hybrid',
+        aiGeneratedReview,
+        { reason: 'Confirmed the AI-generated metadata.' },
+      )
+    })
+  })
+
+  it('saves changed metadata and approves the returned review in one confirmation', async () => {
+    const savedReview = {
+      ...metadataReviewV2,
+      review_identity: 'b'.repeat(64),
+      review_version: 4,
+      current_draft: {
+        ...metadataReviewV2.current_draft,
+        authority: 'institution',
+        effective_from: '2026-08-03',
+        effective_to: '2030-08-10',
+        precedence_authority_tier: 'institution_exception',
+        precedence_order: 1,
+      },
+    }
+    vi.mocked(fetchKnowledgeMetadataReviewsPage).mockResolvedValue(page([metadataReviewV2]))
+    vi.mocked(saveKnowledgeMetadataReviewDraft).mockResolvedValue(savedReview)
+    vi.mocked(approveKnowledgeMetadataReview).mockResolvedValue({
+      ...savedReview,
+      review_identity: 'c'.repeat(64),
+      review_version: 5,
+      state: 'approved',
+      approved_metadata_revision_id: 'approved-metadata-1',
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Reviews' }))
+    fireEvent.change(await screen.findByLabelText('Authority'), {
+      target: { value: 'institution' },
+    })
+    fireEvent.change(screen.getByLabelText('Precedence tier'), {
+      target: { value: 'institution_exception' },
+    })
+    fireEvent.change(screen.getByLabelText('Effective from'), {
+      target: { value: '2026-08-03' },
+    })
+    fireEvent.change(screen.getByLabelText('Effective to'), {
+      target: { value: '2030-08-10' },
+    })
+    fireEvent.change(screen.getByLabelText('Precedence order'), {
+      target: { value: '1' },
+    })
+    fireEvent.change(screen.getByLabelText('Decision reason', { selector: '#review-reason' }), {
+      target: { value: 'Confirmed corrected metadata.' },
+    })
+
+    const approveButton = screen.getByRole('button', { name: 'Confirm & approve' })
+    expect(approveButton).toBeEnabled()
+    fireEvent.click(approveButton)
+
+    await waitFor(() => {
+      expect(saveKnowledgeMetadataReviewDraft).toHaveBeenCalledWith(
+        'ks_hybrid',
+        metadataReviewV2,
+        {
+          reason: 'Confirmed corrected metadata.',
+          changes: {
+            authority: 'institution',
+            effective_from: '2026-08-03',
+            effective_to: '2030-08-10',
+            precedence_authority_tier: 'institution_exception',
+            precedence_order: 1,
+          },
+        },
+      )
+    })
+    expect(approveKnowledgeMetadataReview).toHaveBeenCalledWith(
+      'ks_hybrid',
+      savedReview,
+      { reason: 'Confirmed corrected metadata.' },
+    )
   })
 
   it('saves only changed Profile-backed fields before Metadata Review approval', async () => {

@@ -462,17 +462,29 @@ export function KnowledgeDetailPage() {
     }
   }
 
-  async function approveReview(
+  async function confirmReview(
     review: KnowledgeSourceMetadataReviewProjection,
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
   ) {
     if (!sourceId || !reviewReason.trim()) return
+    const reason = reviewReason.trim()
     setBusy(`review:${review.review_id}`)
     setError(null)
     try {
+      let reviewToApprove = review
+      if (Object.keys(changes).length > 0) {
+        reviewToApprove = await saveKnowledgeMetadataReviewDraft(sourceId, review, {
+          reason,
+          changes,
+        })
+        setReviews((current) => current.map(
+          (item) => item.review_id === reviewToApprove.review_id ? reviewToApprove : item,
+        ))
+      }
       const resolved = await approveKnowledgeMetadataReview(
         sourceId,
-        review,
-        { reason: reviewReason.trim() },
+        reviewToApprove,
+        { reason },
       )
       setReviews((current) => current.map(
         (item) => item.review_id === resolved.review_id ? resolved : item,
@@ -737,7 +749,7 @@ export function KnowledgeDetailPage() {
             onGenerateWorkbook={generateWorkbook}
             onPreviewWorkbook={previewWorkbook}
             onApplyWorkbook={applyWorkbook}
-            onApprove={approveReview}
+            onApprove={confirmReview}
             onReject={rejectReview}
             onSaveDraft={saveReviewDraft}
           />
@@ -1052,7 +1064,10 @@ function ReviewsTab({
   onGenerateWorkbook: () => void
   onPreviewWorkbook: (event: ChangeEvent<HTMLInputElement>) => void
   onApplyWorkbook: () => void
-  onApprove: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onApprove: (
+    review: KnowledgeSourceMetadataReviewProjection,
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
+  ) => void
   onReject: (review: KnowledgeSourceMetadataReviewProjection) => void
   onSaveDraft: (
     review: KnowledgeSourceMetadataReviewProjection,
@@ -1303,7 +1318,10 @@ function MetadataReviewEditor({
   reason: string
   permitted: boolean
   busy: boolean
-  onApprove: (review: KnowledgeSourceMetadataReviewProjection) => void
+  onApprove: (
+    review: KnowledgeSourceMetadataReviewProjection,
+    changes: Partial<KnowledgeSourceMetadataValuesProjection>,
+  ) => void
   onReject: (review: KnowledgeSourceMetadataReviewProjection) => void
   onSaveDraft: (
     review: KnowledgeSourceMetadataReviewProjection,
@@ -1445,11 +1463,10 @@ function MetadataReviewEditor({
           disabled={
             !permitted
             || review.state !== 'ready_for_approval'
-            || dirty
             || !reason.trim()
             || busy
           }
-          onClick={() => void onApprove(review)}
+          onClick={() => void onApprove(review, changes)}
         >
           {busy ? 'Applying…' : 'Confirm & approve'}
         </Button>
@@ -1469,8 +1486,10 @@ function MetadataReviewEditor({
         >
           {busy ? 'Applying…' : 'Reject'}
         </Button>
-        {dirty ? (
-          <p className="text-xs text-warning-foreground">Save the draft before approval.</p>
+        {!reason.trim() ? (
+          <p className="text-xs text-warning-foreground">Enter a decision reason to save or approve.</p>
+        ) : dirty ? (
+          <p className="text-xs text-warning-foreground">Changes will be saved before approval.</p>
         ) : null}
       </div>
     </Card>
