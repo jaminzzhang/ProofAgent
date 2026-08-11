@@ -1,12 +1,22 @@
 # Development Progress
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Current decision
 
 [KNOWN | HIGH] The Hybrid Knowledge happy path is code-complete and deployment-executable from PDF upload through controlled production Agent publication. S6 foundations now include compatibility binding, image/Compose definitions, deep API/Worker readiness, PostgreSQL-fenced Worker role leases, an explicit locked expand-only migration job, provider-neutral Blue/Green choreography, atomic multi-surface nginx switching, a first built-in `docker-compose-v1` operations driver, and a finalized Release Registry with authenticated exact bundle downloads. Formal production release remains **NO-GO**: no immutable candidate image has been built or scanned here, the driver has not run against disposable or real Docker/nginx infrastructure, no real release bundle has been finalized/downloaded, the workspace has no real private parser/embedding/reranker/answer-model/evaluator execution, S6 operational evidence is incomplete, and none of the 13 candidate-bound release Gates has a formal passing Evidence result.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-08-11 Metadata Review candidate repair
+
+- [KNOWN | HIGH] The explicit Metadata Review V2 migration now materializes missing Review Sets for completed current candidates from their exact canonical and insurance-metadata artifacts. It never approves a Review, advances the Source Draft only when coverage is restored, and is repeatable after success. The production-local reference bootstrap waits for versioned S3 readiness before applying this fixture-only repair.
+- [KNOWN | HIGH] The maintenance CLI can withdraw one duplicate current candidate only when the operator supplies both exact document/revision identities, a Source revision CAS, actor, reason and `--apply`, and both completed builds have the same original SHA-256. The transaction preserves ingestion jobs, artifacts and decisions, marks the duplicate Review Set historical, retains the selected candidate, advances the Source Draft and appends a trace-safe audit event. Different content or stale candidate authority fails closed.
+- [KNOWN | HIGH] Knowledge Source summary and next-action projection now count only revisions represented by current candidate authority: the completed candidate plus any in-flight pending replacement. Historical completed, failed or review-required ingestion jobs remain visible as retained history but no longer inflate current document counts or block publication preparation.
+- [KNOWN | HIGH] First publication preparation for a unified Hybrid Source now creates and locks its publication authority before inserting the foreign-keyed index generation in the same transaction. This removes the fresh-Source `hybrid_knowledge_generation_source_id_fkey` failure while preserving the live-attempt fence and generation identity checks.
+- [KNOWN | HIGH] Strict private-model embedding and reranker response contracts now accept canonical JSON arrays at the transport boundary and normalize them to immutable tuples before domain use. Shape, batch, dimension, exact model revision, candidate order and finite-number validation remain fail closed.
+- [KNOWN | HIGH] OpenSearch projection now canonicalizes embedding values to the backend's IEEE-754 float32 `knn_vector` precision before both storage and digest construction, then re-normalizes the backend's shorter JSON number representation during exact readback. Embedding and immutable-projection integrity remain recomputable without dropping or weakening vector tamper detection.
+- [COMPUTED | HIGH] The affected publication, OpenSearch and private-model slice passed **210** tests with **1** environment-dependent skip; the PostgreSQL publication/ingestion and adjacent CLI/bootstrap slice passed **36** tests. Ruff, focused mypy, Compose validation and `git diff --check` passed. The production-local application roles were rebuilt on image `078ab01c2f62662c8bd045ccafb6faa2a07da2d3db1e5c06c6fd21f5cd6122b4`; infrastructure verification passed and a real Dashboard preparation advanced `ks_insurance` to revision 60 with prepared authority fence 12. Final Source publication was intentionally not committed.
 
 ## 2026-08-10 AI-assisted metadata review
 
