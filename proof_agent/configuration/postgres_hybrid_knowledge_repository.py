@@ -155,6 +155,32 @@ class PostgresHybridKnowledgeRepository:
         generation_digest = stable_digest(generation.model_dump(mode="json"))
         now = datetime.now(UTC)
         with self._connection() as connection:
+            inserted_source = connection.execute(
+                """
+                INSERT INTO hybrid_knowledge_source_authority
+                  (source_id, draft_version_id, candidate_digest, updated_at)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (source_id) DO NOTHING
+                RETURNING source_id
+                """,
+                (source_id, source_draft_version_id, candidate_digest, now),
+            ).fetchone()
+            current = connection.execute(
+                """SELECT live_attempt_id FROM hybrid_knowledge_source_authority
+                    WHERE source_id=%s FOR UPDATE""",
+                (source_id,),
+            ).fetchone()
+            if current is None:
+                raise PublicationConflict("SOURCE_NOT_FOUND")
+            if inserted_source is None:
+                if current[0] is not None:
+                    raise PublicationConflict("CONCURRENT_ATTEMPT")
+                connection.execute(
+                    """UPDATE hybrid_knowledge_source_authority
+                          SET draft_version_id=%s, candidate_digest=%s, updated_at=%s
+                        WHERE source_id=%s""",
+                    (source_draft_version_id, candidate_digest, now, source_id),
+                )
             connection.execute(
                 """
                 INSERT INTO hybrid_knowledge_generation
@@ -184,29 +210,6 @@ class PostgresHybridKnowledgeRepository:
                 or _json_object(stored_generation[2]) != generation.model_dump(mode="json")
             ):
                 raise PublicationConflict("GENERATION_CONFLICT")
-            current = connection.execute(
-                """SELECT live_attempt_id FROM hybrid_knowledge_source_authority
-                    WHERE source_id=%s FOR UPDATE""",
-                (source_id,),
-            ).fetchone()
-            if current is None:
-                connection.execute(
-                    """
-                    INSERT INTO hybrid_knowledge_source_authority
-                      (source_id, draft_version_id, candidate_digest, updated_at)
-                    VALUES (%s,%s,%s,%s)
-                    """,
-                    (source_id, source_draft_version_id, candidate_digest, now),
-                )
-                return
-            if current[0] is not None:
-                raise PublicationConflict("CONCURRENT_ATTEMPT")
-            connection.execute(
-                """UPDATE hybrid_knowledge_source_authority
-                      SET draft_version_id=%s, candidate_digest=%s, updated_at=%s
-                    WHERE source_id=%s""",
-                (source_draft_version_id, candidate_digest, now, source_id),
-            )
 
     def list_publication_validations(
         self,

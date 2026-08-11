@@ -26,6 +26,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 
@@ -495,6 +496,16 @@ class EmbeddingTransportResponse(_PrivateModel):
     model_revision: PinnedModelRevision
     vectors: tuple[Vector, ...] = Field(min_length=1, max_length=128)
 
+    @field_validator("vectors", mode="before")
+    @classmethod
+    def canonicalize_json_vectors(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return tuple(
+                tuple(vector) if isinstance(vector, list) else vector
+                for vector in value
+            )
+        return value
+
 
 class EmbeddingResult(_PrivateModel):
     model_revision: PinnedModelRevision
@@ -530,6 +541,13 @@ class RerankerRequest(_PrivateModel):
 class RerankerTransportResponse(_PrivateModel):
     model_revision: PinnedModelRevision
     scores: tuple[tuple[CandidateId, StrictFloat], ...] = Field(min_length=1, max_length=128)
+
+    @field_validator("scores", mode="before")
+    @classmethod
+    def canonicalize_json_scores(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return tuple(tuple(score) if isinstance(score, list) else score for score in value)
+        return value
 
 
 class RerankerResult(_PrivateModel):

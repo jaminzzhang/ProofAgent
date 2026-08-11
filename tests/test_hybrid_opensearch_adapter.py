@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 import json
+import struct
 from typing import Any
 from urllib.parse import quote
 
@@ -691,11 +692,38 @@ def test_projection_contains_only_approved_query_safe_fields() -> None:
         for predicate in projected["applicability_predicates"]
     )
     assert "住院保险金" in projected["lexical_text"]
-    assert projected["dense_vector"] == [0.1, 0.2]
+    assert projected["dense_vector"] == [
+        struct.unpack(">f", struct.pack(">f", value))[0]
+        for value in (0.1, 0.2)
+    ]
     assert "approved_metadata" not in projected
     assert "approved_visibility" not in projected
     assert "vendor_payload" not in projected
     assert "metadata_draft" not in projected
+
+
+def test_projection_embedding_digest_survives_opensearch_float32_round_trip() -> None:
+    document = projection_document().model_copy(
+        update={"embedding": (0.123456789, -0.987654321)}
+    )
+    projected = project_rule_unit_document(
+        document,
+        identity=index_identity(),
+        publication_attempt_id="attempt-1",
+    )
+    stored_vector = [
+        struct.unpack(">f", struct.pack(">f", value))[0]
+        for value in document.embedding
+    ]
+    readback = {**projected, "dense_vector": stored_vector}
+
+    assert projected["dense_vector"] == stored_vector
+    assert projected["embedding_sha256"] == stable_digest(
+        {"embedding": stored_vector}
+    )
+    assert projected["immutable_projection_sha256"] == (
+        opensearch_module._immutable_projection_sha256(readback)
+    )
 
 
 def test_keyword_projection_validator_covers_every_mapped_keyword_field() -> None:
@@ -1054,6 +1082,52 @@ def test_created_rebuild_identity_supports_bulk_exact_readback_and_identity_veri
     assert ("POST", f"/{locator}/_bulk") in [
         (str(call["method"]), str(call["path"])) for call in transport.calls
     ]
+
+
+def test_exact_readback_normalizes_short_float32_json_numbers() -> None:
+    class ShortFloatReadbackTransport(RebuildLifecycleTransport):
+        def request(self, **kwargs: Any) -> OpenSearchTransportResponse:
+            response = super().request(**kwargs)
+            if str(kwargs["path"]).endswith("/_mget"):
+                raw = response.body["docs"][0]
+                source = dict(raw["_source"])
+                source["dense_vector"] = [
+                    round(value, 8) for value in source["dense_vector"]
+                ]
+                return OpenSearchTransportResponse(
+                    status_code=response.status_code,
+                    body={"docs": [{**raw, "_source": source}]},
+                )
+            return response
+
+    identity = rebuild_identity()
+    transport = ShortFloatReadbackTransport(identity)
+    adapter = OpenSearchHybridIndex(transport=transport)
+    document = projection_document().model_copy(
+        update={"embedding": (0.123456789, -0.987654321)}
+    )
+    adapter.bulk_upsert(
+        ProjectionBulkRequest(
+            identity=identity,
+            publication_attempt_id="rebuild-operation-1",
+            manifest_root_sha256=SHA_B,
+            documents=(document,),
+        )
+    )
+    authority = adapter.materialize_authority(
+        document,
+        identity=identity,
+        publication_attempt_id="rebuild-operation-1",
+    )
+
+    readback = adapter.validate_exact_projection(
+        identity=identity,
+        publication_attempt_id="rebuild-operation-1",
+        manifest_root_sha256=SHA_B,
+        documents=(authority,),
+    )
+
+    assert readback.validated_rule_unit_count == 1
 
 
 def test_rebuild_preserves_logical_attempt_while_changing_physical_owner() -> None:

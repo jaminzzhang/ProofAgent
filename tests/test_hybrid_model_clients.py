@@ -99,6 +99,24 @@ class RecordingEmbeddingTransport:
         )
 
 
+def test_private_model_transport_responses_accept_canonical_json_arrays() -> None:
+    embedding = EmbeddingTransportResponse.model_validate(
+        {
+            "model_revision": "embedding@sha256:model",
+            "vectors": [[0.1, 0.2]],
+        }
+    )
+    reranker = RerankerTransportResponse.model_validate(
+        {
+            "model_revision": "reranker@sha256:model",
+            "scores": [["rule-1", 0.9]],
+        }
+    )
+
+    assert embedding.vectors == ((0.1, 0.2),)
+    assert reranker.scores == (("rule-1", 0.9),)
+
+
 def test_embedding_request_pins_revision_instruction_and_dimension() -> None:
     transport = RecordingEmbeddingTransport()
     scheduler = ImmediateKnowledgeModelWorkScheduler()

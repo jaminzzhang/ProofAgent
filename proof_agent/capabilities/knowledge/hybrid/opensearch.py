@@ -10,6 +10,7 @@ import json
 import math
 import re
 import ssl
+import struct
 from typing import Any, Iterator, Protocol, cast
 from urllib.parse import urlencode, urlsplit
 
@@ -985,6 +986,7 @@ def project_rule_unit_document(
     )
     lexical_text = "\n".join(item for item in lexical_parts if item)
     _bounded_text(lexical_text, field_name="lexical_text", maximum=100_000)
+    dense_vector = _canonical_opensearch_vector(document.embedding)
     bounded_identifiers = {
         "projection_id": document.projection_id,
         "source_id": generation.source_id,
@@ -1026,8 +1028,8 @@ def project_rule_unit_document(
         "table_context": table_context,
         "rule_type": rule.unit_kind,
         "lexical_text": lexical_text,
-        "dense_vector": list(document.embedding),
-        "embedding_sha256": stable_digest({"embedding": list(document.embedding)}),
+        "dense_vector": dense_vector,
+        "embedding_sha256": stable_digest({"embedding": dense_vector}),
         "projection_revision": document.projection_revision,
         "last_publication_attempt_id": (
             document.last_publication_attempt_id or publication_attempt_id
@@ -1057,6 +1059,25 @@ def project_rule_unit_document(
     projected["response_integrity_sha256"] = _response_integrity_sha256(projected)
     _validate_projected_keyword_fields(projected)
     return projected
+
+
+def _canonical_opensearch_vector(
+    values: tuple[float, ...] | list[float],
+) -> list[float]:
+    """Normalize an embedding to OpenSearch ``knn_vector`` float32 precision."""
+
+    if not values or any(type(value) is not float for value in values):
+        raise ValueError("projection embedding must contain exact float values")
+    normalized: list[float] = []
+    for value in values:
+        try:
+            item = struct.unpack(">f", struct.pack(">f", value))[0]
+        except (OverflowError, struct.error) as exc:
+            raise ValueError("projection embedding exceeds float32 bounds") from exc
+        if not math.isfinite(item):
+            raise ValueError("projection embedding must remain finite at float32 precision")
+        normalized.append(item)
+    return normalized
 
 
 def _taxonomy_value(value: object) -> dict[str, object]:
@@ -2711,24 +2732,43 @@ class OpenSearchHybridIndex:
                 }
                 authority = authority_by_id[projection_id]
                 vector = source.get("dense_vector")
+                if (
+                    not isinstance(vector, list)
+                    or len(vector) != identity.generation.embedding_dimension
+                    or any(type(value) is not float for value in vector)
+                ):
+                    raise OpenSearchProjectionError(
+                        "projection readback embedding is invalid"
+                    )
+                try:
+                    normalized_vector = _canonical_opensearch_vector(
+                        cast(list[float], vector)
+                    )
+                except ValueError as exc:
+                    raise OpenSearchProjectionError(
+                        "projection readback embedding is invalid"
+                    ) from exc
+                normalized_source = {**source, "dense_vector": normalized_vector}
                 _exact_string(
                     source.get("projection_operation_id"),
                     field_name="projection operation id",
                 )
                 if (
                     semantic_source != expected[projection_id]
-                    or stable_digest({"embedding": vector}) != authority.embedding_sha256
+                    or stable_digest({"embedding": normalized_vector})
+                    != authority.embedding_sha256
                     or source.get("embedding_sha256") != authority.embedding_sha256
                     or source.get("projection_material_sha256")
                     != authority.projection_material_sha256
                     or source.get("immutable_projection_sha256")
                     != authority.immutable_projection_sha256
-                    or _immutable_projection_sha256(source) != authority.immutable_projection_sha256
+                    or _immutable_projection_sha256(normalized_source)
+                    != authority.immutable_projection_sha256
                     or source.get("projection_sha256") != _mutable_projection_sha256(source)
                     or source.get("response_integrity_sha256") != _response_integrity_sha256(source)
                 ):
                     raise OpenSearchProjectionError("projection readback authority mismatch")
-                actual[projection_id] = source
+                actual[projection_id] = normalized_source
         if set(actual) != set(expected):
             raise OpenSearchProjectionError("projection readback is incomplete")
         count = self._transport.request(
