@@ -20,6 +20,7 @@ from proof_agent.contracts.ports.run_queue import RunQueueRepository
 from proof_agent.contracts.ports.knowledge_source_operations import (
     KnowledgeSourceOperationRepository,
 )
+from proof_agent.contracts.ports.knowledge_candidates import KnowledgeCandidateService
 from proof_agent.contracts.ports.release_registry import ReleaseRegistryRepository
 from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionRepository
 from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
@@ -38,6 +39,7 @@ __all__ = [
     "ConfigurationUnitOfWork",
     "GuardedHttpClient",
     "KnowledgeAssetRepository",
+    "KnowledgeCandidateService",
     "KnowledgeSourceOperationRepository",
     "ModelAssetRepository",
     "ModelConnectionReader",

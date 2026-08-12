@@ -64,6 +64,30 @@ _Avoid_: Raw upload, index artifact, trace evidence content, parser-independent 
 The immutable provider-neutral parsing derivative for one Knowledge Document Revision, preserving pages, ordered blocks, headings, tables and cells, source coordinates, native-versus-OCR lineage, parser warnings, and stable projections used to build Insurance Rule Units and citations.
 _Avoid_: Vendor parser object, flat extracted text, Markdown as source of truth, retrieval index
 
+**Document Structure Graph**:
+The immutable provider-neutral hierarchy and ordered relationships reconstructed from one exact document Source Version, covering document, section, page or slide, heading, paragraph, list item, table region, figure caption, code block, and OCR region nodes as applicable. Every source-derived node retains native coordinates and a Citation Locator rather than relying on extracted-text offsets alone.
+_Avoid_: Flat chunk list, vendor parser tree, inferred mutable outline, retrieval index
+
+**Structured Knowledge Dataset Revision**:
+The immutable typed representation of one admitted structured-data version, preserving its schema, field types, stable record identities, source lineage, and queryable values without flattening the dataset into document text.
+_Avoid_: Text-only dataset chunk, mutable live table, schema-free row blob, retrieval index
+
+**Evidence Unit**:
+The smallest immutable, semantically coherent, independently citable normalized retrieval unit built from an exact Knowledge Source Version and its Document Structure Graph or Structured Knowledge Dataset Revision. Document units follow structural boundaries such as a paragraph, list item, table row or cell region, figure caption, code block, slide region, or OCR region; oversized units split deterministically at versioned sentence, list, or table boundaries. Identity combines Source Version, Citation Locator, and Content Hash so identical content at different source locations remains distinct. A query-selected Evidence Unit contributes to Candidate Evidence but is not itself an admission or truth decision.
+_Avoid_: Fixed-token chunk, location-free content hash, Candidate Evidence, Accepted Evidence, answer context, mutable index document
+
+**Evidence Unit Manifest**:
+The immutable Source Version artifact enumerating every Evidence Unit identity, type, structural relationships, Citation Locator, Content Hash, and parser, normalizer, or segmentation lineage. A parser or segmentation-rule change that alters the manifest produces a new Knowledge Source Version.
+_Avoid_: Mutable chunk table, retrieval-index document list, latest parser output, hash-only inventory
+
+**Citation Locator**:
+The provider-neutral version-bound locator that resolves an Evidence Unit to an exact original document region, table cell range, dataset record set, or aggregate input set without exposing a storage path.
+_Avoid_: Mutable URL, display-only citation text, filesystem path, inferred source location
+
+**Bounded Structured Knowledge Query**:
+A read-only typed query evaluated against exact Structured Knowledge Dataset Revisions through allowlisted projection, filtering, ordering, grouping, and aggregation operations. Its result identifies the exact records or aggregate inputs that support Candidate Evidence and never accepts arbitrary SQL from an Agent.
+_Avoid_: Agent-authored SQL, text similarity only, mutable-latest query, untraceable aggregate
+
 **Structured Knowledge Artifact Build Identity**:
 The immutable compatibility identity for one Structured Knowledge Document Artifact build, derived from the Knowledge Document Revision content hash, parser adapter and library revisions, exact model and weight digests, OCR and preprocessing configuration, and canonical artifact schema. One source-byte revision may have multiple build identities, and every Insurance Rule Unit lineage pins the selected identity.
 _Avoid_: Knowledge Document Revision id, mutable parser latest, filename identity, Index Generation
@@ -91,6 +115,10 @@ _Avoid_: Whole-file scanned-PDF assumption, empty page, layout-complex text page
 **Hybrid Knowledge Document Intake**:
 The provider-specific operator intake for a Hybrid Index Provider Source. It reuses system-generated quarantine paths, signature and MIME validation, encryption rejection, byte hashing, and request-envelope protection, but accepts native-text, layout-complex, scanned, and mixed PDF pages for structured parsing and OCR under Hybrid-specific document, file, page, and batch capacity limits. It does not change the text-only, 500-document V1 Operator Knowledge Document Intake used by Local Index Provider.
 _Avoid_: Local Index intake mutation, customer attachment upload, unlimited PDF, scan-only rejection
+
+**Knowledge Intake Format Profile V1**:
+The versioned admission capability profile defining the document formats, structured-data formats, snapshot connectors, and parser or normalizer identities accepted by Knowledge Source Service V1. Content absent from the allowlist is rejected before a Knowledge Source Version can be created.
+_Avoid_: Best-effort parser discovery, extension-only acceptance, arbitrary archive extraction, implicit connector support
 
 **Knowledge Document Original Download Audit**:
 The configuration-operation audit record written when an authorized operator downloads a Managed Knowledge Document Original. Download requires `knowledge_source.view`.
@@ -183,6 +211,118 @@ _Avoid_: Legacy dual-read path, automatic compatibility Source creation, mixed c
 **Knowledge Source**:
 A reusable knowledge asset or connection that owns its Knowledge Provider configuration and can be bound to one or more Agents.
 _Avoid_: Retrieval Strategy, Accepted Evidence, Agent-only knowledge setting, provider-free asset
+
+**Knowledge Source Version**:
+The immutable published identity of one Knowledge Source's exact admitted originals, normalized document or dataset artifacts, Evidence Unit manifest, and lineage. It is the Source-level version referenced by a Knowledge Base Version and Candidate Evidence.
+_Avoid_: Source Draft, mutable connector state, ingestion attempt, latest-only Source pointer
+
+**Knowledge Base**:
+A Knowledge Source Service-owned query aggregate that composes one or more independently governed Knowledge Sources without erasing their individual lifecycle, version, or provenance.
+_Avoid_: Knowledge Source, Agent Knowledge Binding Set, mutable Source list, retrieval index
+
+**Knowledge Base Version**:
+An immutable Knowledge Base composition boundary that pins the intended Knowledge Source Versions, Structured Knowledge Dataset Revisions where applicable, and retrieval-compatibility configuration. It becomes queryable only through a successfully published Knowledge Base Release that binds validated physical projections and runtime identities.
+_Avoid_: Query target by itself, Knowledge Source Publication, mutable Knowledge Base, runtime latest lookup, Agent policy
+
+**Knowledge Base Release**:
+The immutable service publication record that makes one exact Knowledge Base Version queryable and binds its Knowledge Source Versions, Evidence Unit manifests, retrieval-index generations, retrieval profile, and validation result. Candidate Evidence identifies the exact Release that served it.
+_Avoid_: Agent Release, mutable active pointer, Knowledge Source Version, deployment release
+
+**Prepared Knowledge Base Release**:
+The non-queryable publication candidate produced after asynchronous construction and validation binds one exact Knowledge Base Version to complete Source Versions, Evidence Unit Manifests, Structured Dataset Revisions, index generations, retrieval profile, projection attestations, and smoke results. It is immutable, expires if not published, and cannot be used as a partial runtime fallback.
+_Avoid_: Queryable Release, visible partial index, reusable stale validation, long database transaction
+
+**Atomic Knowledge Base Release Publication**:
+The short transactional compare-and-swap that verifies one still-valid Prepared Knowledge Base Release and creates the immutable queryable Knowledge Base Release all at once. Any missing, stale, or mismatched component blocks publication; no query can mix old and new Source Versions, manifests, profiles, or index generations.
+_Avoid_: Incremental activation, best-effort publication, mixed-generation query, API-held build transaction
+
+**Recommended Knowledge Base Release Pointer**:
+The mutable management-only pointer used to suggest a Release for new bindings or explicit Agent upgrades. It is never resolved by a runtime query and cannot alter an existing Agent binding or Published Agent Version.
+_Avoid_: Runtime latest lookup, automatic Agent upgrade, Release identity, mutable query target
+
+**Pinned Knowledge Base Release Query**:
+A query that names one exact `knowledge_base_release_id`, which implies its immutable Knowledge Base Version and all bound runtime identities. The service rejects missing, non-queryable, retired, or projection-mismatched Releases instead of substituting another Release.
+_Avoid_: Base-only query, latest lookup, silent failover, mixed Release
+
+**Knowledge Query**:
+The externally addressable durable resource representing one idempotent execution of a question against one exact Knowledge Base Release. It owns `knowledge_query_id`, immutable request fingerprint, authenticated client identity, effective narrowing inputs, strategy, budgets, deadline, lifecycle state, trace correlation, and either one immutable Knowledge Query Result or one trace-safe terminal problem.
+_Avoid_: Query Operation, retrieval job, answer run, Agent run, backend search request
+
+**Knowledge Query State**:
+The public execution lifecycle of a Knowledge Query: `queued`, `running`, `succeeded`, `failed`, `cancelled`, or `expired`, where `expired` means the execution missed its deadline before success rather than that a successful result later reached its retention limit. A cancellation request may be recorded while work is running, but only a terminal state freezes the final result or problem.
+_Avoid_: Result-retention state, Accepted Evidence state, worker lease state, provider status passthrough, implicit completion
+
+**Knowledge Query Result**:
+The immutable successful representation of one Knowledge Query, containing Evidence Groups, a trace-safe Knowledge Query Plan summary, execution and budget summary, coverage stop reason, and Retrieval Lineage. It contains Candidate Evidence only and never an answer, Evidence Admission decision, generic confidence, or ambiguous universal score.
+_Avoid_: Agent answer, Accepted Evidence set, mutable progress payload, provider-native response
+
+**Knowledge Query Idempotency**:
+The replay contract keyed by mandatory `Idempotency-Key` and scoped to the authenticated Agent client. It binds the canonical Create Knowledge Query request fingerprint to one `knowledge_query_id`; an exact retry returns the same resource and result, while reuse with a different fingerprint fails with a stable conflict.
+_Avoid_: Query text hash, globally scoped key, duplicate Agentic execution, best-effort deduplication
+
+**Knowledge Query Wait Preference**:
+The optional HTTP `Prefer: wait=N` request that asks the service to hold the create response for at most a bounded number of seconds. It changes response timing only: unfinished work returns `202 Accepted` with the same Knowledge Query resource and `Location`, never a different execution model.
+_Avoid_: Separate synchronous endpoint, unbounded HTTP hold, hidden timeout fallback, result streaming
+
+**Knowledge Space**:
+The organization-internal ownership and isolation boundary for Knowledge Sources, Knowledge Bases, and their authorized Agent clients. Every Source and Base belongs to exactly one Space, one Space may serve multiple Agents, and one query never spans Spaces.
+_Avoid_: SaaS tenant, Knowledge Base, client-supplied namespace, cross-Space search
+
+**Knowledge Service Client Grant**:
+The service-to-service authorization from one authenticated Agent client to an allowlisted set of Knowledge Spaces, Knowledge Bases, actions, and maximum visibility bounds. Each Agent has its own Grant even when several Agents use the same Space; the Grant never assigns end-user permissions or decides business entitlement.
+_Avoid_: Shared Space API key, caller-declared permission, Agent policy, tenant id
+
+**Knowledge Query Access Scope**:
+The effective access boundary that Knowledge Source Service derives by intersecting a Knowledge Service Client Grant, the exact Knowledge Base Version's Space and resource policy, and any caller-supplied narrowing context. It is enforced before every document, record, row, and retrieval-index lookup, and caller context can never expand it.
+_Avoid_: Raw caller ACL, post-retrieval filtering, model-selected scope, Evidence Admission
+
+**Lexical Retrieval Lane**:
+The Knowledge query lane that ranks Evidence Units through analyzed terms, exact terms, phrases, fields, and BM25-style lexical statistics without learned semantic expansion.
+_Avoid_: Sparse semantic retrieval, dense embedding retrieval, universal relevance score
+
+**Sparse Semantic Retrieval Lane**:
+The Knowledge query lane that uses a pinned learned sparse encoder to represent queries and Evidence Units as weighted vocabulary dimensions for semantic term expansion. Its model and projection identity are separate from Lexical Retrieval Lane.
+_Avoid_: BM25 alias, dense embedding, unversioned synonym expansion, mutable model latest
+
+**Dense Semantic Retrieval Lane**:
+The Knowledge query lane that uses a pinned dense embedding model and vector index to rank Evidence Units by semantic proximity.
+_Avoid_: Sparse vocabulary weights, lexical match, Evidence Admission Score
+
+**Structured Retrieval Lane**:
+The Knowledge query lane that executes a Bounded Structured Knowledge Query against exact Structured Knowledge Dataset Revisions and returns record- or aggregate-backed Candidate Evidence in a separately budgeted Structured Candidate Evidence Group. Its result order comes only from an explicit typed order or a deterministic stable-record fallback; it does not enter relevance rank fusion or semantic reranking.
+_Avoid_: Text chunk retrieval, arbitrary SQL, semantic score as aggregation truth, RRF input, semantic reranker input
+
+**Ranked Retrieval Lane Fusion**:
+The Knowledge Source Service step that combines exact-deduplicated Lexical, Sparse, and Dense candidate ranks through Knowledge Base Release-pinned Weighted Reciprocal Rank Fusion, then may apply one pinned private Reranker. It preserves every lane contribution in Retrieval Lineage, excludes Structured Candidate Evidence Groups, and never converts relevance ordering into truth, conflict, or Evidence Admission authority.
+_Avoid_: Raw-score sorting, Structured result adjudication, answer reranking, Evidence Admission
+
+**Structured Candidate Evidence Group**:
+A separately budgeted typed result group containing record- or aggregate-backed Candidate Evidence from one Bounded Structured Knowledge Query. It preserves schema types, projections, predicates, groupings, explicit order, stable record identities or aggregate-input identities, Citation Locators, and Retrieval Lineage. It shares the mixed-query response envelope with Ranked Retrieval Lane Fusion output but has no fabricated global relevance rank and never enters Weighted Reciprocal Rank Fusion or a semantic Reranker.
+_Avoid_: Flattened text chunks, pseudo relevance score, cross-group global rank, RRF contribution, reranked aggregate
+
+**Typed Mixed Retrieval Composition**:
+The deterministic response composition that returns Ranked Retrieval Lane Fusion candidates and one or more Structured Candidate Evidence Groups under the same exact Knowledge Base Release and Query Plan while preserving separate budgets, ordering semantics, and lineage. Candidate groups may support the same Agent question without implying that their ranks are comparable.
+_Avoid_: One lossy flat ranking, answer synthesis, cross-group Evidence Admission verdict
+
+**Knowledge Query Plan**:
+The Knowledge Source Service-generated typed execution plan for one Agent question against one exact Knowledge Base Release and its immutable Base Version. It selects bounded Lexical, Dense, Sparse, and Structured retrieval lanes, rewrites, filters, aggregations, and budgets without selecting authorization, mutable versions, or backend-native query syntax.
+_Avoid_: Agent Retrieval Intent, Agent-authored SQL, OpenSearch DSL, access grant, final answer plan
+
+**Knowledge Query Plan Gate**:
+The deterministic service boundary that permits a Knowledge Query Plan to execute only when every Source, Dataset Revision, field, operation, budget, query lane, and physical projection belongs to the exact Knowledge Base Release and effective Knowledge Query Access Scope.
+_Avoid_: Planner self-approval, prompt instruction, post-query validation, Evidence Admission
+
+**Agentic Knowledge Retrieval**:
+The explicitly requested Knowledge Source Service query strategy that performs bounded multi-round query reformulation, retrieval-coverage gap analysis, permitted-lane selection, and follow-up retrieval inside one exact Knowledge Space, Knowledge Base Release, and Knowledge Query Access Scope. Every round produces a Knowledge Query Plan that must pass the Knowledge Query Plan Gate, and the response preserves round-by-round plans, stop reason, and Retrieval Lineage. The default service strategy is `single_pass`; the service never activates `agentic` implicitly.
+_Avoid_: Agentic RAG answer workflow, implicit autonomous mode, mutable-latest search, cross-Space search, Evidence Admission
+
+**Knowledge Retrieval Coverage Assessment**:
+The bounded Agentic Knowledge Retrieval judgment of whether another permitted retrieval round may materially improve representation of the requested query intents or whether retrieval should stop. It is a retrieval-control signal only and cannot establish evidentiary sufficiency, factual truth, conflict outcome, Evidence Admission, or answer correctness.
+_Avoid_: Evidence sufficiency assessment, fact verification, conflict adjudication, answer evaluation
+
+**Agentic Knowledge Retrieval Budget**:
+The independent hard ceilings on Agentic Knowledge Retrieval rounds, total model calls, accumulated candidates, model tokens, and wall-clock duration, with cancellation enforced at bounded execution boundaries. It is separate from Proof Agent's outer planning and action budgets.
+_Avoid_: Advisory limit, shared ReAct budget, unlimited retry, model-selected budget
 
 **Knowledge Source Lifecycle State**:
 The reusable Knowledge Source lifecycle status. Every reusable Knowledge Source has exactly one visible lifecycle state: `ACTIVE` permits editing, publication, and new Agent binding, while `ARCHIVED` blocks new binding and new Agent publication without breaking existing Published Agent Version execution against pinned snapshots or configuration versions. Physical deletion is a guarded removal operation, not a `DELETED` lifecycle state.
@@ -296,6 +436,30 @@ _Avoid_: Knowledge Source Routing, provider selection, executable retrieval call
 The governed retrieval behavior that selects one or more bound Knowledge Sources, retrieves normalized candidate evidence from each selected source, and merges the candidates before Control Plane evidence admission.
 _Avoid_: Priority-only fallback, unbounded fan-out, provider-specific merge
 
+**Knowledge Source Service**:
+The independently deployable and operated service that owns heterogeneous intake, original retention, structural parsing, normalization, Evidence Unit construction, indexing, Knowledge Base Release, and Lexical, Dense, Sparse, and Structured Hybrid Retrieval. Its stable API returns lineage-complete Candidate Evidence but does not grant end-user permissions, perform Evidence Admission, adjudicate facts or conflicts, reason over answers, or generate final answers.
+_Avoid_: Knowledge Retrieval Service, user-permission authority, fact judge, conflict resolver, answer service, Evidence Admission authority
+
+**Knowledge Source Service Authority**:
+The sole logical authority for Knowledge Source lifecycle state, published versions, Knowledge artifacts, retrieval projections, and asynchronous Knowledge work. Agent runtimes retain immutable binding references but never become a mirror or fallback Knowledge authority.
+_Avoid_: Shared persistence authority, Proof Agent Knowledge mirror, direct storage integration, local fallback
+
+**Knowledge Service Process Role**:
+One separately started runtime role of the independently versioned Knowledge Source Service product, such as API, Knowledge Query Executor, Knowledge Worker, Synchronization Scheduler, or explicit migration. Roles may use the same OCI image and domain modules but share no in-memory authority and coordinate only through service-owned ports and durable state.
+_Avoid_: Separate product microservice, in-memory queue authority, Proof Agent process role, hidden deployment mode
+
+**Knowledge Query Executor**:
+The online-priority Knowledge Service Process Role that claims the bounded Knowledge Query queue and executes Plan Gate, retrieval lanes, Agentic rounds, fusion, context expansion, result finalization, cancellation, and deadline enforcement. It is isolated from offline ingestion workers and cannot perform Evidence Admission or answer generation.
+_Avoid_: Proof Agent Run Executor, Knowledge Worker, answer Agent, unbounded background task
+
+**Materialized Knowledge Source Revision**:
+An immutable service-owned revision created by admitting uploaded content or a bounded snapshot from an external database or API. It preserves exact origin, upstream revision or synchronization watermark when available, ingestion identity, content digest, and lineage, and is the only external-data form eligible for a V1 Knowledge Base Version.
+_Avoid_: Live federated result, mutable external table, runtime API response, latest-only import
+
+**Knowledge Source Synchronization**:
+The manual or scheduled intake that reads a bounded external-data change set and commits a new Materialized Knowledge Source Revision without mutating any prior Revision or published Knowledge Base Version.
+_Avoid_: Runtime federation, in-place refresh, mutable latest mirror, Agent query
+
 **Knowledge Retrieval Service**:
 The Control Plane service that executes governed retrieval for Enterprise QA and Controlled ReAct workflows. It owns Knowledge Source Routing, provider call coordination, required or advisory failure handling, cross-source fusion, citation enforcement, evidence admission, and trace-safe retrieval summaries.
 _Avoid_: Knowledge Provider Adapter, Runtime graph node, direct provider call, answer generator
@@ -312,6 +476,14 @@ _Avoid_: OpenSearch mapping, embedding dimension, mutable Agent override, runtim
 The bounded post-ranking step that adds only the selected Insurance Rule Unit's necessary structural context, such as heading path, table headers, neighboring rule rows, or referenced definitions, while retaining source lineage and context-budget accounting.
 _Avoid_: Whole-document prompt, pre-authorization expansion, arbitrary neighbor window, uncited context
 
+**Evidence Unit Context Expansion**:
+The general bounded post-ranking step that attaches only permitted structural context required to interpret a selected Evidence Unit, such as its heading path, table headers, adjacent siblings, or referenced definitions. Every attached unit independently passes the effective Knowledge Query Access Scope, retains its own Evidence Unit identity, Content Hash, and Citation Locator, and consumes a separate context budget; the service never concatenates it into an anonymous evidence block.
+_Avoid_: Whole-document expansion, pre-access expansion, arbitrary neighbor window, inherited citation, anonymous concatenation
+
+**Routing-Only Derived Summary**:
+A versioned derived synopsis of a document or structural parent used only as a retrieval-routing or planning projection. Because it is not original source content, it may influence candidate discovery but cannot be returned as source-backed Candidate Evidence; Retrieval Lineage records when it influenced routing.
+_Avoid_: Source quotation, Candidate Evidence content, answer evidence, unversioned model summary
+
 **Knowledge Provider Adapter**:
 The provider-specific implementation that invokes one local or remote knowledge technology stack for one selected Knowledge Source and converts its retrieval results into normalized Candidate Evidence.
 _Avoid_: Knowledge Source, Agent binding, answer model, cross-source fusion, evidence admission
@@ -321,8 +493,12 @@ The replaceable internal derived-index service that supports authorized metadata
 _Avoid_: Knowledge Source of truth, Production Transactional State Store, Production Artifact Store, vector-only authority
 
 **Candidate Evidence Identity**:
-The normalized trace-safe identifier set carried by Candidate Evidence: evidence id, source id, source version id, binding id, provider name, optional document id, optional revision id, optional chunk id, citation, provider-native score, fusion rank, admission score, and allowlisted metadata.
-_Avoid_: Raw provider payload, filesystem path, secret-bearing metadata, provider-native id only
+The required trace-safe identity carried by Knowledge Source Service Candidate Evidence: evidence id, Knowledge Space, Knowledge Base Version and Release, Knowledge Source and Source Version, Evidence Unit, Citation Locator, Content Hash, Retrieval Lineage, result-group identity, applicable lane-local relevance signals and ranks or structured result order, plus allowlisted metadata. It contains no Evidence Admission decision, fabricated cross-group rank, or Agent answer claim.
+_Avoid_: Raw provider payload, filesystem path, secret-bearing metadata, provider-native id only, Evidence Admission Score
+
+**Retrieval Lineage**:
+The trace-safe account of how one Candidate Evidence item was produced from an exact Knowledge Base Release, Knowledge Source Version, and Evidence Unit through a specific Query Plan revision, retrieval lanes, index generations, filters, fusion, reranking, and deduplication steps. It proves retrieval provenance and transformation identity, not factual truth, conflict resolution, or Evidence Admission.
+_Avoid_: Raw backend response, model chain-of-thought, authority verdict, answer reasoning, unversioned score list
 
 **Candidate Evidence Contribution**:
 One source-specific contribution retained when Exact Cross-Source Evidence Deduplication merges matching candidates. It records the contributing Knowledge Source, source version, Agent Knowledge Binding, provider, local document or remote chunk identifiers when available, provider-local rank, provider-native score, binding fusion weight, and citation.
@@ -473,7 +649,7 @@ A Remote Knowledge Source whose adapter supports `snapshot_pin` and whose publis
 _Avoid_: Local Knowledge Source Snapshot, mutable external source, observed revision only
 
 **Mutable External Knowledge Source**:
-A Remote Knowledge Source whose upstream technology stack cannot pin an immutable corpus revision. It may be bound and queried, but exact historical replay is not guaranteed.
+A Remote Knowledge Source whose upstream technology stack cannot pin an immutable corpus revision. Existing integrations may query it without exact historical replay, but it is outside Knowledge Source Service V1 Knowledge Base Version eligibility until synchronization produces a Materialized Knowledge Source Revision.
 _Avoid_: Pinned Remote Knowledge Source, immutable snapshot, silent replay guarantee
 
 **Remote Knowledge Revision Observation**:
@@ -509,8 +685,8 @@ A shared Knowledge Source governed through Hybrid-specific document intake, busi
 _Avoid_: Mixed knowledge base, Remote Knowledge Source, Local Index Knowledge Source, multi-provider bundle
 
 **RetrievalPlanner**:
-An orchestrator component that drives a multi-round agentic retrieval loop inside one governed retrieval execution. It may rewrite retrieval queries and assess evidence sufficiency, but it does not select Knowledge Sources, call tools, generate final answers, or alter the outer Controlled ReAct Workflow route.
-_Avoid_: ReAct planner, final answer model, source router, tool calling loop
+The service-side orchestration role that drives Agentic Knowledge Retrieval inside one governed query execution. It may rewrite retrieval queries, identify Knowledge Retrieval Coverage gaps, select permitted retrieval lanes, and request follow-up retrieval, but it cannot leave the pinned Knowledge Space, Knowledge Base Release, or Knowledge Query Access Scope; call arbitrary tools or live upstream sources; assess evidentiary or factual sufficiency; perform Evidence Admission; generate final answers; or alter the outer Controlled ReAct Workflow route.
+_Avoid_: ReAct planner, final answer model, evidence judge, fact judge, source-of-permission, tool-calling loop
 
 **RetrievalCapabilities**:
 A data contract that declares what structured retrieval operations a KnowledgeProvider supports. Fields: `supports_structure_listing`, `supports_scoped_retrieval`. Planner uses capabilities flags (not isinstance) to dispatch structured vs basic retrieval.
@@ -525,8 +701,8 @@ A bridge adapter that extends LlamaIndex's CustomLLM base class. Routes all LLM 
 _Avoid_: direct LlamaIndex LLM usage, async LLM calls, bypass governance
 
 **RetrievalAction**:
-A frozen dataclass representing the Planner's structured decision after each retrieval round. V1 supports three action types: `rewrite` (generate new query and continue), `sufficient` (evidence adequate, stop), `abort` (evidence inadequate, stop). Trace records action decisions for audit.
-_Avoid_: unstructured text output, implicit continuation, tool calling
+A frozen contract representing the Planner's structured decision after each retrieval round. The existing ProofAgent-local implementation uses `rewrite`, `sufficient`, and `abort`; under the independent service target, a stop decision means retrieval coverage is complete or its budget is exhausted, never that evidence is admissible, factually sufficient, or true. Trace records the decision and its coverage-safe reason.
+_Avoid_: Unstructured text output, implicit continuation, Evidence Admission decision, factual sufficiency verdict, tool calling
 
 **DocumentNode**:
 A frozen dataclass returned by `list_structure()` representing a node in the document tree. Contains node_id, title, summary, depth, child_ids, and metadata (tags, document_type, business_category). Enables Planner to reason about document structure before scoped retrieval.
@@ -537,8 +713,8 @@ A RetrievalConfig field (default 3) that caps the RetrievalPlanner's iterative r
 _Avoid_: max_actions, infinite loop, unbounded retrieval
 
 **Nested ReAct Retrieval Loop**:
-The allowed composition where one Controlled ReAct retrieval action invokes `retrieval.strategy: agentic` and therefore contains an inner RetrievalPlanner loop. The outer ReAct Action Budget and inner `max_rounds` budget are independent and both remain enforced.
-_Avoid_: Single shared loop counter, RetrievalPlanner-controlled ReAct routing, unbounded nested planning
+The allowed composition where one Controlled ReAct retrieval action explicitly invokes Agentic Knowledge Retrieval and therefore contains one inner RetrievalPlanner loop. Proof Agent owns the outer route and action budget; Knowledge Source Service owns the inner exact query scope, Knowledge Query Plan Gate, and Agentic Knowledge Retrieval Budget. Both budget sets remain independent and enforced.
+_Avoid_: Single shared loop counter, implicit nesting, RetrievalPlanner-controlled ReAct routing, unbounded nested planning
 
 **Local Index Snapshot Retrieval**:
 The bounded retrieval behavior that routes a query to eligible Knowledge Document revisions in one resolved snapshot, searches the selected revisions via LlamaIndex TreeIndex tree traversal, merges normalized candidate evidence, and fails closed if any selected document search fails.
@@ -777,8 +953,8 @@ An error that indicates a recognized Retrieval Strategy is not executable in the
 _Avoid_: Configuration shape error
 
 **Agentic RAG**:
-A controlled retrieval workflow that may plan, rewrite, rerank, or perform multiple retrieval steps before answer generation.
-_Avoid_: Knowledge provider
+A Proof Agent-side controlled retrieval strategy that may explicitly request Agentic Knowledge Retrieval, then submits returned Candidate Evidence to Control Plane Evidence Admission before any answer generation. It is not the Knowledge Source Service query strategy itself and cannot transfer Proof Agent's policy or answer responsibilities into that service.
+_Avoid_: Knowledge provider, Agentic Knowledge Retrieval API mode, autonomous answer service
 
 **Planner Model**:
 A model used by Agentic RAG to produce retrieval plans or query candidates.

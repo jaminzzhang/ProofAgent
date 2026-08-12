@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "knowledge-source-service"
+version = "0.1.0"
+description = "Independent heterogeneous knowledge intake and query service"
+requires-python = ">=3.12"
+dependencies = [
+  "boto3>=1.40,<2",
+  "fastapi>=0.111.0",
+  "httpx>=0.27,<1",
+  "openpyxl>=3.1.5,<4",
+  "Pillow>=11,<13",
+  "pyarrow>=18,<24",
+  "pydantic>=2.7.0",
+  "pypdf>=6.12,<7",
+  "psycopg[binary]>=3.2,<4",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn>=0.30,<1",
+]
+
+[project.scripts]
+knowledge-source-service = "knowledge_source_service.cli:console_main"
+knowledge-source-api = "knowledge_source_service.cli:api_main"
+knowledge-query-executor = "knowledge_source_service.cli:query_executor_main"
+knowledge-worker = "knowledge_source_service.cli:knowledge_worker_main"
+knowledge-sync-scheduler = "knowledge_source_service.cli:sync_scheduler_main"
+knowledge-source-migrate = "knowledge_source_service.cli:migrate_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["knowledge_source_service"]

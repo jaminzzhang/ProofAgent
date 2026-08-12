@@ -1,0 +1,11 @@
+---
+status: accepted
+---
+
+# Bound Agentic Knowledge Retrieval inside one query scope
+
+[FRAME | HIGH] Knowledge Source Service exposes `agentic` only as an explicit query strategy; `single_pass` remains the default and the service cannot escalate a request into Agentic execution implicitly. Agentic Knowledge Retrieval may perform bounded multi-round query reformulation, Knowledge Retrieval Coverage gap analysis, permitted-lane selection, and follow-up retrieval, but every round remains inside the request's exact Knowledge Space, Knowledge Base Release, and effective Knowledge Query Access Scope. Every proposed round is a versioned Knowledge Query Plan that must pass the deterministic Knowledge Query Plan Gate before execution.
+
+[FRAME | HIGH] One independent Agentic Knowledge Retrieval Budget places hard ceilings on rounds, total model calls, accumulated candidates, model tokens, and wall-clock duration, with cancellation enforced at bounded execution boundaries. The service returns trace-safe round-by-round Query Plans, lane outcomes, budget consumption, stop reason, and Retrieval Lineage. Its evaluator may decide only whether another permitted retrieval round may improve query-intent coverage. It cannot broaden access, switch Base or Release, call arbitrary tools or live upstream sources, determine evidentiary or factual sufficiency, adjudicate conflicts, perform Evidence Admission, reason over answers, or generate answers.
+
+[FRAME | HIGH] Proof Agent retains the outer decision to retrieve, the Knowledge question, user authorization, Evidence Admission, conflict and factual handling, and answer generation. A Controlled ReAct action may explicitly nest one service-side Agentic Knowledge Retrieval execution, but Proof Agent's outer action budget and the service's inner budget remain separate and both are enforced. This decision supersedes ADR-0015's overloaded `evidence sufficiency` wording and one-outer-gate behavior for the independent-service target; ADR-0015 remains the historical record of the existing ProofAgent-local implementation. We accept additional per-round planning, gating, budgets, and lineage so iterative retrieval improves coverage without turning the Knowledge service into an autonomous answer or policy authority.

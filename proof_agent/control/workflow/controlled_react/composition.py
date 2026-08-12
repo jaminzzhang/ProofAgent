@@ -32,6 +32,7 @@ from proof_agent.contracts import (
     ValidationResult,
     WorkflowStageLlmInteraction,
 )
+from proof_agent.contracts.knowledge_candidates import KnowledgeCandidateQuery
 from proof_agent.control.workflow.controlled_react.orchestrator import (
     ControlledReActOrchestrator,
 )
@@ -423,6 +424,7 @@ class _InvocationKnowledgeObservationAdapter:
             trace=trace,
             policy=self._invocation.policy,
             knowledge_provider=self._invocation.knowledge_provider,
+            knowledge_candidate_service=self._invocation.knowledge_candidate_service,
             model_resolver=self._invocation.model_resolver,
         )
         retrieval_result = service.retrieve(
@@ -447,6 +449,13 @@ class _InvocationKnowledgeObservationAdapter:
                 governed_hybrid_request=_governed_hybrid_request_from_controlled_state(
                     self._invocation,
                     state,
+                ),
+                knowledge_candidate_query=_knowledge_candidate_query_from_controlled_state(
+                    self._invocation,
+                    state=state,
+                    action=action,
+                    question=query,
+                    strategy=retrieval.strategy,
                 ),
             )
         )
@@ -1267,6 +1276,35 @@ def _governed_hybrid_request_from_controlled_state(
         return None
     intent = IntentResolution.model_validate(state.intent_resolution)
     return factory.build(intent, state.institution_authorization).request
+
+
+def _knowledge_candidate_query_from_controlled_state(
+    invocation: HarnessInvocation,
+    *,
+    state: ControlledReActRunState,
+    action: ReActActionProposal,
+    question: str,
+    strategy: str,
+) -> KnowledgeCandidateQuery | None:
+    factory = invocation.knowledge_candidate_query_factory
+    if factory is None:
+        return None
+    if strategy not in {"single_step", "agentic"}:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Published Agent retrieval strategy is not supported by Knowledge Source Service.",
+            "Use single_step or agentic for the exact Knowledge Candidate binding.",
+        )
+    normalized_strategy: Literal["single_step", "agentic"] = (
+        "agentic" if strategy == "agentic" else "single_step"
+    )
+    return factory.build(
+        run_id=state.run_id,
+        retrieval_action_id=action.action_id,
+        semantic_attempt=f"plan-round-{state.plan_round}",
+        question=question,
+        strategy=normalized_strategy,
+    )
 
 
 def _tool_answer_from_answer_context(

@@ -31,6 +31,20 @@ def test_compose_harness_invocation_resolves_v3_dependencies() -> None:
     assert memory_result.status == "passed"
 
 
+def test_composition_preserves_the_exact_candidate_service_binding() -> None:
+    candidate_service = object()
+    query_factory = object()
+
+    invocation = compose_harness_invocation(
+        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"),
+        knowledge_candidate_service=candidate_service,
+        knowledge_candidate_query_factory=query_factory,
+    )
+
+    assert invocation.knowledge_candidate_service is candidate_service
+    assert invocation.knowledge_candidate_query_factory is query_factory
+
+
 def test_unknown_workflow_template_fails_from_registry() -> None:
     with pytest.raises(ProofAgentError) as exc:
         resolve_workflow_template("unknown_template")

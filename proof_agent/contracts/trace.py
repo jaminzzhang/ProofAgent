@@ -37,6 +37,7 @@ class TraceEventType(str, Enum):
     RETRIEVAL_STEP = "retrieval_step"
     RETRIEVAL_RESULT = "retrieval_result"
     HYBRID_RETRIEVAL_SUMMARY = "hybrid_retrieval_summary"
+    KNOWLEDGE_CANDIDATE_QUERY = "knowledge_candidate_query"
     EVIDENCE_EVALUATION = "evidence_evaluation"
     CONTEXT_ADMISSION = "context_admission"
     CONTEXT_ASSEMBLY_SUMMARY = "context_assembly_summary"

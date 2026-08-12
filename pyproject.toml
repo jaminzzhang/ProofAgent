@@ -56,6 +56,8 @@ production = [
   "httpx>=0.27,<1",
   "openai>=1.30.0",
   "openpyxl>=3.1.5,<4",
+  "Pillow>=11,<13",
+  "pyarrow>=18,<24",
   "pypdf>=6.12.2,<7",
 ]
 all = ["proof-agent[hybrid,ingestion,openai,production,security,tree]"]
@@ -100,5 +102,7 @@ addopts = "-m 'not hybrid_integration'"
 markers = [
   "hybrid_integration: opt-in tests against disposable local Hybrid Knowledge services",
   "postgres_integration: opt-in tests against a disposable real PostgreSQL database",
+  "s3_integration: opt-in tests against a disposable versioned S3-compatible store",
+  "search_integration: opt-in tests against a disposable real OpenSearch cluster",
   "llm_regression: opt-in tests that call a real LLM provider and are skipped unless explicitly enabled",
 ]

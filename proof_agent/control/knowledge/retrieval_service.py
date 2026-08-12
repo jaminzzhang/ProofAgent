@@ -8,7 +8,8 @@ from pathlib import PurePosixPath
 import re
 from threading import Event
 import time
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
+from urllib.parse import quote
 
 from proof_agent.capabilities.knowledge import KnowledgeProvider
 from proof_agent.capabilities.knowledge.blended import BoundKnowledgeProvider
@@ -28,6 +29,20 @@ from proof_agent.contracts import (
     RetrievalQueryItem,
     ValidationResult,
 )
+from proof_agent.contracts.knowledge_candidates import (
+    KnowledgeCandidateQuery,
+    KnowledgeCandidateResult,
+    KnowledgeDocxParagraphCitation,
+    KnowledgeDocxTableCellCitation,
+    KnowledgeHtmlDomCitation,
+    KnowledgeOcrRegionCitation,
+    KnowledgePdfPageCitation,
+    KnowledgePptxShapeCitation,
+    KnowledgeRelevanceCandidate,
+    KnowledgeRelevanceCandidateGroup,
+    KnowledgeTextLinesCitation,
+)
+from proof_agent.contracts.ports.knowledge_candidates import KnowledgeCandidateService
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 from proof_agent.control.knowledge.insurance_authority import (
@@ -82,12 +97,14 @@ class KnowledgeRetrievalRequest:
     preferred_binding_ids: tuple[str, ...] = ()
     force_empty: bool = False
     governed_hybrid_request: GovernedHybridRetrievalRequest | None = None
+    knowledge_candidate_query: KnowledgeCandidateQuery | None = None
 
 
 @dataclass(frozen=True)
 class KnowledgeRetrievalResult:
     evidence: tuple[EvidenceChunk, ...]
     evidence_result: ValidationResult
+    candidate_result: KnowledgeCandidateResult | None = None
 
 
 @dataclass(frozen=True)
@@ -447,11 +464,13 @@ class KnowledgeRetrievalService:
         trace: TraceEmitter,
         policy: PolicyEngine,
         knowledge_provider: KnowledgeProvider,
+        knowledge_candidate_service: KnowledgeCandidateService | None = None,
         model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider,
     ) -> None:
         self._trace = trace
         self._policy = policy
         self._knowledge_provider = knowledge_provider
+        self._knowledge_candidate_service = knowledge_candidate_service
         self._model_resolver = model_resolver
 
     def retrieve(self, request: KnowledgeRetrievalRequest) -> KnowledgeRetrievalResult:
@@ -480,6 +499,8 @@ class KnowledgeRetrievalService:
         reviewed: bool,
         execution_mode: str | None,
     ) -> KnowledgeRetrievalResult:
+        if request.knowledge_candidate_query is not None:
+            return self._run_knowledge_candidate_query(request, reviewed=reviewed)
         if request.governed_hybrid_request is not None:
             return self._run_governed_hybrid(request, reviewed=reviewed)
         if request.strategy == "single_step":
@@ -496,6 +517,99 @@ class KnowledgeRetrievalService:
             )
         _ensure_retrieval_strategy_is_executable(request.strategy)
         raise AssertionError("unreachable")
+
+    def _run_knowledge_candidate_query(
+        self,
+        request: KnowledgeRetrievalRequest,
+        *,
+        reviewed: bool,
+    ) -> KnowledgeRetrievalResult:
+        candidate_query = request.knowledge_candidate_query
+        if candidate_query is None:
+            raise AssertionError("Knowledge Candidate branch requires an exact request")
+        if request.governed_hybrid_request is not None:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "A retrieval request cannot combine remote Candidate and local Hybrid authority.",
+                "Publish the Agent Version with exactly one Knowledge query authority.",
+            )
+        if candidate_query.question != request.question:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Knowledge Candidate Query does not match the governed retrieval question.",
+                "Rebuild the exact Candidate Query from the current retrieval action.",
+            )
+        expected_strategy = "agentic" if request.strategy == "agentic" else "single_pass"
+        if candidate_query.strategy != expected_strategy:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Knowledge Candidate Query strategy does not match the governed retrieval action.",
+                "Use single_pass for single_step or agentic for Agentic retrieval.",
+            )
+        if not reviewed:
+            decision = self._policy.evaluate(
+                EnforcementPoint.BEFORE_RETRIEVAL,
+                {
+                    "question": request.question,
+                    "strategy": "knowledge_source_service",
+                    "knowledge_base_release_id": (
+                        candidate_query.knowledge_base_release_id
+                    ),
+                },
+            )
+            _emit_policy(self._trace, decision)
+            if not _allowed(decision):
+                return self._result_for_evidence(
+                    (),
+                    step_id="knowledge_candidate_query",
+                    min_score=request.min_score,
+                )
+        if self._knowledge_candidate_service is None:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "The Agent Version requires Knowledge Source Service but no client is composed.",
+                "Compose the exact KnowledgeCandidateService binding before run activation.",
+            )
+
+        candidate_result = self._knowledge_candidate_service.query(candidate_query)
+        evidence = _project_relevance_candidates(candidate_result)
+        if request.force_empty:
+            evidence = ()
+        relevance_count = len(evidence)
+        structured_count = sum(
+            len(group.candidate_evidence)
+            for group in candidate_result.evidence_groups
+            if group.group_type == "structured"
+        )
+        self._trace.emit(
+            "knowledge_candidate_query",
+            status="ok",
+            payload={
+                "knowledge_query_id": candidate_result.knowledge_query_id,
+                "knowledge_base_release_id": (
+                    candidate_result.retrieval_lineage.knowledge_base_release_id
+                ),
+                "strategy": candidate_result.execution_summary.strategy,
+                "rounds": candidate_result.execution_summary.rounds,
+                "relevance_candidate_count": relevance_count,
+                "structured_candidate_count": structured_count,
+                "degraded": candidate_result.execution_summary.degraded,
+            },
+        )
+        evidence_result = self._evaluate_evidence(
+            evidence,
+            min_score=request.min_score,
+            no_evidence_reason_code=(
+                "knowledge_candidate_admission_pending"
+                if evidence
+                else "zero_knowledge_candidates"
+            ),
+        )
+        return KnowledgeRetrievalResult(
+            evidence=evidence,
+            evidence_result=evidence_result,
+            candidate_result=candidate_result,
+        )
 
     def _run_governed_hybrid(
         self,
@@ -1665,6 +1779,108 @@ class KnowledgeRetrievalService:
         if execution_mode is not None:
             context["execution_mode"] = execution_mode
         return context
+
+
+def _project_relevance_candidates(
+    result: KnowledgeCandidateResult,
+) -> tuple[EvidenceChunk, ...]:
+    evidence: list[EvidenceChunk] = []
+    for group in result.evidence_groups:
+        if not isinstance(group, KnowledgeRelevanceCandidateGroup):
+            continue
+        for candidate in group.candidate_evidence:
+            evidence.append(_relevance_candidate_chunk(candidate, result=result))
+    return tuple(evidence)
+
+
+def _relevance_candidate_chunk(
+    candidate: KnowledgeRelevanceCandidate,
+    *,
+    result: KnowledgeCandidateResult,
+) -> EvidenceChunk:
+    citation = _candidate_citation(candidate)
+    final_rank = candidate.ranking.reranked_rank or candidate.ranking.fused_rank
+    contribution = EvidenceContribution(
+        source_id=candidate.knowledge_source_id,
+        source_version_id=candidate.knowledge_source_version_id,
+        provider_name="knowledge_source_service",
+        document_id=candidate.knowledge_source_id,
+        revision_id=candidate.knowledge_source_version_id,
+        chunk_id=candidate.evidence_unit_id,
+        provider_local_rank=final_rank,
+        provider_native_score=None,
+        fusion_weight=None,
+        citation=citation,
+    )
+    return EvidenceChunk(
+        source=citation,
+        content=candidate.content.text,
+        status=EvidenceStatus.CANDIDATE,
+        evidence_id=candidate.candidate_evidence_id,
+        source_id=candidate.knowledge_source_id,
+        source_version_id=candidate.knowledge_source_version_id,
+        provider_name="knowledge_source_service",
+        document_id=candidate.knowledge_source_id,
+        revision_id=candidate.knowledge_source_version_id,
+        chunk_id=candidate.evidence_unit_id,
+        provider_native_score=None,
+        fusion_rank=float(final_rank),
+        admission_score=None,
+        citation=citation,
+        metadata={
+            "knowledge_candidate_group_type": "relevance_ranked",
+            "knowledge_query_id": result.knowledge_query_id,
+            "knowledge_space_id": candidate.knowledge_space_id,
+            "knowledge_base_id": candidate.knowledge_base_id,
+            "knowledge_base_version_id": candidate.knowledge_base_version_id,
+            "knowledge_base_release_id": candidate.knowledge_base_release_id,
+            "content_hash": candidate.content_hash,
+            "ranking": candidate.ranking.model_dump(mode="json"),
+            "retrieval_lineage": candidate.retrieval_lineage.model_dump(mode="json"),
+            "context_evidence_units": [
+                context.model_dump(mode="json")
+                for context in candidate.context_evidence_units
+            ],
+        },
+        contributions=(contribution,),
+    )
+
+
+def _candidate_citation(candidate: KnowledgeRelevanceCandidate) -> str:
+    locator = candidate.citation_locator
+    identity = "/".join(
+        quote(value, safe="")
+        for value in (
+            candidate.knowledge_space_id,
+            candidate.knowledge_base_release_id,
+            candidate.knowledge_source_version_id,
+            candidate.evidence_unit_id,
+        )
+    )
+    if isinstance(locator, KnowledgeTextLinesCitation):
+        fragment = f"text-lines={locator.start_line}-{locator.end_line}"
+    elif isinstance(locator, KnowledgePdfPageCitation):
+        fragment = f"pdf-page={locator.page_number}"
+    elif isinstance(locator, KnowledgeDocxParagraphCitation):
+        fragment = f"docx-paragraph={locator.paragraph_number}"
+    elif isinstance(locator, KnowledgeDocxTableCellCitation):
+        fragment = (
+            f"docx-table-cell={locator.table_number}."
+            f"{locator.row_number}.{locator.column_number}"
+        )
+    elif isinstance(locator, KnowledgePptxShapeCitation):
+        fragment = f"pptx-shape={locator.slide_number}.{locator.shape_id}"
+    elif isinstance(locator, KnowledgeHtmlDomCitation):
+        fragment = f"html-dom={quote(locator.dom_path, safe='')}"
+    elif isinstance(locator, KnowledgeOcrRegionCitation):
+        box = locator.bounding_box
+        fragment = (
+            f"ocr-region={locator.page_number},"
+            f"{box.x_min},{box.y_min},{box.x_max},{box.y_max}"
+        )
+    else:
+        assert_never(locator)
+    return f"knowledge://{identity}#{fragment}"
 
 
 def _single_step_query_item(

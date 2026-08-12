@@ -80,6 +80,9 @@ from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
+from proof_agent.contracts.ports.knowledge_candidates import KnowledgeCandidateService
+from proof_agent.control.knowledge.candidate_request import KnowledgeCandidateQueryFactory
+from proof_agent.errors import ProofAgentError
 
 
 DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
@@ -473,6 +476,8 @@ class HarnessInvocation:
         default_factory=InstitutionAuthorizationContext
     )
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None
+    knowledge_candidate_service: KnowledgeCandidateService | None = None
+    knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None
     model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider
     cancellation_check: Callable[[], None] = lambda: None
 
@@ -493,6 +498,8 @@ def compose_harness_invocation(
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
     institution_authorization: InstitutionAuthorizationContext | None = None,
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
+    knowledge_candidate_service: KnowledgeCandidateService | None = None,
+    knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None,
     hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
     guarded_http_client: GuardedHttpClient | None = None,
     secret_provider: SecretProvider | None = None,
@@ -500,6 +507,13 @@ def compose_harness_invocation(
     cancellation_check: Callable[[], None] | None = None,
 ) -> HarnessInvocation:
     """Resolve an Agent Contract into the dependencies needed to run it."""
+
+    if (knowledge_candidate_service is None) != (knowledge_candidate_query_factory is None):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Knowledge Candidate service and exact Query factory must be composed together.",
+            "Configure both dependencies for the Published Agent Version or neither.",
+        )
 
     model_provider_resolver = _model_provider_resolver(
         guarded_http_client=guarded_http_client,
@@ -638,6 +652,8 @@ def compose_harness_invocation(
             else InMemoryContextBudgetCalibrationStore()
         ),
         institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
+        knowledge_candidate_service=knowledge_candidate_service,
+        knowledge_candidate_query_factory=knowledge_candidate_query_factory,
         governed_hybrid_request_factory=governed_hybrid_request_factory,
         model_resolver=model_provider_resolver,
         cancellation_check=cancellation_check or (lambda: None),

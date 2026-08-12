@@ -1,0 +1,1 @@
+"""OpenSearch rebuildable projection adapters."""
