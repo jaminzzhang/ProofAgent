@@ -232,6 +232,10 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
 
     assert isinstance(application, FastAPI)
     assert captured["hybrid_runtime"] is hybrid_runtime
+    assert isinstance(
+        captured["production_agent_configuration_application"],
+        production_roles.ProductionAgentConfigurationService,
+    )
 
 
 def test_reference_profile_source_ids_are_explicit_exact_and_deduplicated() -> None:

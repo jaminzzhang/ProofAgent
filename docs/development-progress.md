@@ -8,6 +8,14 @@ Updated: 2026-08-11
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-08-12 production Agent Draft lifecycle repair
+
+- [KNOWN | HIGH] Production now registers a focused `/api/config/agents` list/create/read/update/contract/version slice instead of sending Create Agent to the development-only manifest import route and then the generic API 404. Creation accepts only display name and purpose plus `Idempotency-Key`; the server loads the sole packaged `agent_management_insurance_specialist` V3 template. Browser-supplied manifest paths, Agent IDs and Workflow authority are rejected.
+- [KNOWN | HIGH] Draft initialization and General metadata updates use the PostgreSQL Agent repository through one Configuration UoW with trace-safe audit metadata. Creation is singleton and fingerprint-idempotent; updates require revision CAS. The slice remains behind production OIDC Session, named Agent permissions and same-origin CSRF, and it does not register validation, publication, rollback or activation mutations.
+- [KNOWN | HIGH] Dashboard Agents and Agent Detail now render server capability projections. Production hides manifest import, unsupported configuration modules, validation, publication and rollback; development retains explicit package import and also exposes the server-owned create contract.
+- [COMPUTED | HIGH] The focused backend slice passed 91 tests with 7 PostgreSQL tests skipped. One default backend run passed 3182 tests; the final run passed 3179 tests before four unrelated `test_remote_verify_gateway*` loopback requests timed out, and those four remained timing-sensitive on isolated rerun. Dashboard passed 227 tests and its production build. Workspace Ruff and mypy over 431 product sources passed. The result is `PARTIAL_VERIFICATION`: no isolated PostgreSQL DSN was available for the new query/transaction path, the final backend suite was not wholly green, and the production-local image/browser flow was not rebuilt or exercised.
+- [KNOWN | HIGH] This repair initializes an editable Draft only. It does not satisfy Published Agent readiness, Phase F Evidence or any formal release Gate, and it does not change the current production **NO-GO** decision.
+
 ## 2026-08-11 Metadata Review candidate repair
 
 - [KNOWN | HIGH] The explicit Metadata Review V2 migration now materializes missing Review Sets for completed current candidates from their exact canonical and insurance-metadata artifacts. It never approves a Review, advances the Source Draft only when coverage is restored, and is repeatable after success. The production-local reference bootstrap waits for versioned S3 readiness before applying this fixture-only repair.

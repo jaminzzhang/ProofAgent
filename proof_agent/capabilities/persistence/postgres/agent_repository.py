@@ -67,6 +67,30 @@ class PostgresAgentLifecycleRepository:
             revision=row["revision"],
         )
 
+    def list_drafts(
+        self,
+        agent_id: str | None = None,
+    ) -> tuple[AgentDraftRecord, ...]:
+        statement = sa.select(
+            agent_drafts.c.draft_json,
+            agent_drafts.c.revision,
+        )
+        if agent_id is not None:
+            statement = statement.where(agent_drafts.c.agent_id == agent_id)
+        statement = statement.order_by(
+            agent_drafts.c.updated_at.desc(),
+            agent_drafts.c.draft_id.desc(),
+        )
+        with read_connection(self._connection_source) as connection:
+            rows = connection.execute(statement).mappings().all()
+        return tuple(
+            AgentDraftRecord(
+                draft=DraftAgent.model_validate(row["draft_json"]),
+                revision=row["revision"],
+            )
+            for row in rows
+        )
+
     def save_draft(
         self,
         draft: DraftAgent,

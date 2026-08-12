@@ -3,6 +3,7 @@ import {
   ApiError,
   archiveModelConnection,
   bindKnowledgeSourceToDraft,
+  createConfigAgent,
   createModelConnection,
   deleteModelConnection,
   fetchModelConnection,
@@ -619,6 +620,33 @@ test('importConfigAgent posts manifest path', async () => {
       manifest_path: 'examples/insurance_customer_service/agent.yaml',
     }),
   }))
+})
+
+test('createConfigAgent posts only browser-safe fields with an idempotency key', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ agent_id: 'enterprise_qa', draft_id: 'draft_1' }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  await createConfigAgent(
+    {
+      display_name: 'Insurance Specialist',
+      purpose: 'Answer governed insurance questions.',
+    },
+    'create-agent-attempt-1',
+  )
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents', sameOriginRequest({
+    method: 'POST',
+    body: JSON.stringify({
+      display_name: 'Insurance Specialist',
+      purpose: 'Answer governed insurance questions.',
+    }),
+  }))
+  const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+  expect(headers.get('Idempotency-Key')).toBe('create-agent-attempt-1')
 })
 
 test('validate publish and rollback use configuration lifecycle endpoints', async () => {

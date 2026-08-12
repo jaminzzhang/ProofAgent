@@ -31,6 +31,7 @@ rebuilt, so code remains the authority for implementation decisions.
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `VERIFIED_LOCAL` | `docs/features/knowledge-source-service/` | `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
+| `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 
 ## Status vocabulary
 
@@ -38,6 +39,9 @@ rebuilt, so code remains the authority for implementation decisions.
 - `TDD_INPUT_READY`: scope and acceptance evidence are sufficient to start RED.
 - `IMPLEMENTING`: at least one TDD slice is active, but feature acceptance is not
   complete.
+- `PARTIAL_VERIFICATION`: implementation and default local checks pass, but one or
+  more named P1 environment-backed checks remain unexecuted; this is not production
+  approval.
 - `VERIFIED_LOCAL`: recorded local acceptance checks pass; this is not deployment
   evidence.
 - `BLOCKED`: a named dependency or decision prevents meaningful progress.

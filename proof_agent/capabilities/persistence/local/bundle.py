@@ -46,6 +46,16 @@ class _LocalAgentLifecycleRepository:
     def get_draft(self, agent_id: str, draft_id: str) -> AgentDraftRecord | None:
         return self._store.get_draft_record(agent_id, draft_id)
 
+    def list_drafts(
+        self,
+        agent_id: str | None = None,
+    ) -> tuple[AgentDraftRecord, ...]:
+        records = (
+            self._store.get_draft_record(draft.agent_id, draft.draft_id)
+            for draft in self._store.list_drafts(agent_id)
+        )
+        return tuple(record for record in records if record is not None)
+
     def save_draft(
         self,
         draft: DraftAgent,

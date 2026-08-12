@@ -59,6 +59,9 @@ import {
 
 type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
+const SAFE_EDITABLE_MODULES: readonly Tab[] = ['general']
+const SAFE_LIFECYCLE_TABS: readonly Tab[] = []
+
 export function AgentDetailPage() {
   const { t } = useLocale()
   const { agentId, draftId } = useParams<{ agentId: string; draftId: string }>()
@@ -70,7 +73,19 @@ export function AgentDetailPage() {
     loading: versionsLoading,
     refresh: refreshVersions,
   } = useConfigVersions(agentId)
-  const activeTab = agentDetailTab(searchParams.get('tab'))
+  const requestedTab = agentDetailTab(searchParams.get('tab'))
+  const editableModuleIds = draft?.capabilities?.editable_modules ?? SAFE_EDITABLE_MODULES
+  const advertisedLifecycleTabs = draft?.capabilities?.lifecycle_tabs ?? SAFE_LIFECYCLE_TABS
+  const canEditGeneral = draft?.capabilities?.editable_modules.includes('general') ?? false
+  const canValidate = draft?.capabilities?.actions.can_validate ?? false
+  const canPublish = draft?.capabilities?.actions.can_publish ?? false
+  const canRollback = draft?.capabilities?.actions.can_rollback ?? false
+  const lifecycleTabIds = advertisedLifecycleTabs.filter(
+    (tab) => tab !== 'validate' || canValidate,
+  )
+  const activeTab = (
+    editableModuleIds.includes(requestedTab) || lifecycleTabIds.includes(requestedTab)
+  ) ? requestedTab : 'general'
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
@@ -208,11 +223,12 @@ export function AgentDetailPage() {
   }
 
   async function saveBasics() {
-    if (!agentId || !draftId) return
+    if (!agentId || !draftId || !canEditGeneral) return
     await runAction('basics', async () => {
       await updateConfigDraft(agentId, draftId, {
         display_name: displayName,
         purpose,
+        ...(draft?.revision === undefined ? {} : { expected_revision: draft.revision }),
       })
       setStatus(t('agentDetail.draftFieldsSaved'))
       refresh()
@@ -353,14 +369,14 @@ export function AgentDetailPage() {
     { id: 'model', label: t('agentDetail.tabModel') },
     { id: 'memory', label: t('agentDetail.tabMemory') },
     { id: 'response', label: t('agentDetail.tabResponse') },
-  ]
+  ].filter((module) => editableModuleIds.includes(module.id as Tab))
 
   const LIFECYCLE_TABS = [
     { id: 'validate', label: t('agentDetail.tabValidate') },
     { id: 'versions', label: t('agentDetail.tabVersions') },
     { id: 'contract', label: t('agentDetail.tabContract') },
     { id: 'monitor', label: t('agentDetail.tabMonitor') },
-  ]
+  ].filter((tab) => lifecycleTabIds.includes(tab.id as Tab))
 
   if (loading) return <div className="py-12 flex justify-center"><LoadingSpinner /></div>
   if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
@@ -399,13 +415,15 @@ export function AgentDetailPage() {
                   {t('agentDetail.overviewDescription')}
                 </p>
               </div>
-              <button
-                onClick={saveBasics}
-                disabled={busy === 'basics'}
-                className="w-fit rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-              >
-                {busy === 'basics' ? t('agentDetail.saving') : t('agentDetail.save')}
-              </button>
+              {canEditGeneral && (
+                <button
+                  onClick={saveBasics}
+                  disabled={busy === 'basics'}
+                  className="w-fit rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+                >
+                  {busy === 'basics' ? t('agentDetail.saving') : t('agentDetail.save')}
+                </button>
+              )}
             </div>
 
             <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -418,6 +436,7 @@ export function AgentDetailPage() {
                     aria-label={t('agentDetail.displayName')}
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
+                    disabled={!canEditGeneral}
                     className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
                   />
                 </div>
@@ -429,6 +448,7 @@ export function AgentDetailPage() {
                     aria-label={t('common.purpose')}
                     value={purpose}
                     onChange={(event) => setPurpose(event.target.value)}
+                    disabled={!canEditGeneral}
                     rows={4}
                     className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
                   />
@@ -604,7 +624,7 @@ export function AgentDetailPage() {
           headingLevel={3}
           title={t('agentDetail.publishedVersions')}
           description={activeVersionId ?? t('agentDetail.noActiveVersion')}
-          actions={
+          actions={canPublish ? (
             <Button
               variant="outline"
               size="sm"
@@ -613,9 +633,9 @@ export function AgentDetailPage() {
             >
               {t('agentDetail.publish')}
             </Button>
-          }
+          ) : undefined}
         >
-          {memoryReadinessBlockers.length > 0 && (
+          {canPublish && memoryReadinessBlockers.length > 0 && (
             <BlockingReasons title={t('validate.readinessBlocked')} reasons={memoryReadinessBlockers} />
           )}
           {versionsLoading ? (
@@ -660,7 +680,7 @@ export function AgentDetailPage() {
                         </a>
                         <Badge variant="success">{t('agentDetail.active')}</Badge>
                       </div>
-                    ) : (
+                    ) : canRollback ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -670,7 +690,7 @@ export function AgentDetailPage() {
                       >
                         {t('agentDetail.rollback')}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 )
               })}

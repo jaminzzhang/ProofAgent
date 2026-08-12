@@ -38,10 +38,16 @@ _DRAFT_ID = "019ba001-1111-7000-8000-000000000101"
 _VERSION_ID = "019ba001-1111-7000-8000-000000000102"
 
 
-def _draft(*, purpose: str = "Answer insurance questions") -> DraftAgent:
+def _draft(
+    *,
+    purpose: str = "Answer insurance questions",
+    agent_id: str = _AGENT_ID,
+    draft_id: str = _DRAFT_ID,
+    updated_at: str = "2026-07-15T00:00:00Z",
+) -> DraftAgent:
     return DraftAgent(
-        agent_id=_AGENT_ID,
-        draft_id=_DRAFT_ID,
+        agent_id=agent_id,
+        draft_id=draft_id,
         display_name="Insurance Specialist",
         purpose=purpose,
         contract_bundle=ContractBundle(
@@ -50,7 +56,7 @@ def _draft(*, purpose: str = "Answer insurance questions") -> DraftAgent:
             tools_yaml="tools: []\n",
         ),
         created_at="2026-07-15T00:00:00Z",
-        updated_at="2026-07-15T00:00:00Z",
+        updated_at=updated_at,
         created_by="operator-1",
         updated_by="operator-1",
     )
@@ -102,6 +108,31 @@ def test_postgres_agent_repository_conditionally_saves_draft(
     assert repository.get_draft(_AGENT_ID, _DRAFT_ID) == second
     with pytest.raises(PersistenceConflictError):
         repository.save_draft(_draft(purpose="stale"), expected_revision=1)
+
+
+def test_postgres_agent_repository_lists_revisioned_drafts_latest_first(
+    postgres_engine: Engine,
+) -> None:
+    repository = PostgresAgentLifecycleRepository(postgres_engine)
+    older = repository.save_draft(_draft(), expected_revision=0)
+    newer = repository.save_draft(
+        _draft(
+            draft_id="019ba001-1111-7000-8000-000000000104",
+            updated_at="2026-07-15T00:01:00Z",
+        ),
+        expected_revision=0,
+    )
+    repository.save_draft(
+        _draft(
+            agent_id="another-agent",
+            draft_id="019ba001-1111-7000-8000-000000000105",
+            updated_at="2026-07-15T00:02:00Z",
+        ),
+        expected_revision=0,
+    )
+
+    assert repository.list_drafts(_AGENT_ID) == (newer, older)
+    assert len(repository.list_drafts()) == 3
 
 
 def test_postgres_agent_repository_atomically_publishes_immutable_version(

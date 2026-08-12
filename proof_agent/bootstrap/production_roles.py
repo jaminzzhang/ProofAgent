@@ -77,6 +77,10 @@ from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.contracts.worker_roles import ProductionWorkerRole
 from proof_agent.control.artifacts.finalization import ArtifactBundleFinalizer
 from proof_agent.control.production_agent import validate_production_agent_candidate
+from proof_agent.control.production_agent_configuration import (
+    ProductionAgentConfigurationService,
+    load_server_owned_production_agent_template,
+)
 from proof_agent.control.production_agent_publication import (
     ProductionAgentPublicationService,
 )
@@ -541,6 +545,10 @@ def create_production_api_application(
             provider_capability=provider_capability,
             summary_reader=summary_reader,
         )
+        agent_configuration_application = ProductionAgentConfigurationService(
+            unit_of_work_factory=publication_uow,
+            template_bundle=load_server_owned_production_agent_template(),
+        )
         application = create_app(
             mode="production",
             hybrid_runtime=hybrid_runtime,
@@ -561,10 +569,9 @@ def create_production_api_application(
             production_metadata_review_repository=persistence.metadata_reviews,
             production_hybrid_publication_api=publication_api,
             production_hybrid_artifact_store=hybrid_runtime.artifact_store,
-            production_configuration_uow_factory=lambda: PostgresConfigurationUnitOfWork(
-                persistence.engine,
-                model_credential_cipher=model_credential_cipher,
-                hybrid_publication_repository=hybrid_runtime.repository,
+            production_configuration_uow_factory=publication_uow,
+            production_agent_configuration_application=(
+                agent_configuration_application
             ),
             knowledge_source_configuration_application=configuration_application,
             knowledge_source_ingestion_application=intake_service,

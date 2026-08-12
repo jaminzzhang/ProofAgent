@@ -819,6 +819,31 @@ export interface ConfigAgentSummary {
   updated_at: string | null
 }
 
+export interface AgentTemplateCapability {
+  id: string
+  name: string
+  purpose: string
+  description: string
+}
+
+export interface AgentConfigurationCapabilities {
+  mode: 'development' | 'production'
+  can_create: boolean
+  can_import_manifest: boolean
+  canonical_template: AgentTemplateCapability
+}
+
+export interface AgentDraftCapabilities {
+  mode: 'development' | 'production'
+  editable_modules: string[]
+  lifecycle_tabs: string[]
+  actions: {
+    can_validate: boolean
+    can_publish: boolean
+    can_rollback: boolean
+  }
+}
+
 export interface DraftAgent {
   agent_id: string
   draft_id: string
@@ -831,6 +856,8 @@ export interface DraftAgent {
   version_id: string | null
   validation_records: AgentValidationRecord[]
   operation_audit: ConfigurationOperationAudit[]
+  revision?: number
+  capabilities?: AgentDraftCapabilities
 }
 
 export interface PublishedAgentVersion {
@@ -857,6 +884,7 @@ export interface ConfigAgentsResponse {
   data: ConfigAgentSummary[]
   meta: {
     total: number
+    capabilities: AgentConfigurationCapabilities
   }
 }
 

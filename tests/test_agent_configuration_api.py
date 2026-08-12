@@ -144,7 +144,57 @@ def test_list_config_agents_empty(tmp_path: Path) -> None:
     response = client.get("/api/config/agents")
 
     assert response.status_code == 200
-    assert response.json() == {"data": [], "meta": {"total": 0}}
+    assert response.json() == {
+        "data": [],
+        "meta": {
+            "total": 0,
+            "capabilities": {
+                "mode": "development",
+                "can_create": True,
+                "can_import_manifest": True,
+                "canonical_template": {
+                    "id": "agent_management_insurance_specialist",
+                    "name": "Agent Management Insurance Specialist",
+                    "purpose": (
+                        "Assist internal insurance staff with governed, evidence-backed "
+                        "insurance knowledge consultation."
+                    ),
+                    "description": (
+                        "Operator-facing Controlled ReAct V3 consultation with "
+                        "production publication kept behind candidate gates."
+                    ),
+                },
+            },
+        },
+    }
+
+
+def test_create_config_agent_uses_server_owned_template(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/config/agents",
+        json={
+            "display_name": "Insurance Specialist",
+            "purpose": "Answer governed insurance questions.",
+        },
+    )
+
+    assert response.status_code == 201
+    draft = response.json()
+    assert draft["agent_id"] == "agent_management_insurance_specialist"
+    assert draft["display_name"] == "Insurance Specialist"
+    assert draft["capabilities"]["mode"] == "development"
+    assert draft["capabilities"]["actions"] == {
+        "can_validate": True,
+        "can_publish": True,
+        "can_rollback": True,
+    }
+    contract = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    )
+    assert contract.status_code == 200
+    assert "react_enterprise_qa_v3" in contract.json()["agent_yaml"]
 
 
 def test_agent_config_read_requires_agent_view_permission(tmp_path: Path) -> None:

@@ -1,29 +1,11 @@
-import { useState } from 'react'
-import type { DraftAgent } from '../../api/types'
-
-interface Template {
-  readonly id: string
-  readonly name: string
-  readonly purpose: string
-  readonly manifestPath: string
-  readonly description: string
-}
-
-const TEMPLATES: readonly Template[] = [
-  {
-    id: 'agent_management_insurance_specialist',
-    name: 'Agent Management Insurance Specialist',
-    purpose: 'Assist internal insurance staff with governed, evidence-backed insurance knowledge consultation.',
-    manifestPath: 'examples/agent_management_insurance_specialist/agent.yaml',
-    description: 'Operator-facing Controlled ReAct V3 consultation with deterministic offline validation and tools disabled.',
-  },
-]
+import { useRef, useState } from 'react'
+import type { AgentTemplateCapability, DraftAgent } from '../../api/types'
 
 type Step = 'template' | 'details'
 
 interface WizardState {
   readonly step: Step
-  readonly selectedTemplate: Template | null
+  readonly selectedTemplate: AgentTemplateCapability | null
   readonly displayName: string
   readonly purpose: string
   readonly loading: boolean
@@ -38,17 +20,24 @@ interface CreateAgentWizardProps {
   open: boolean
   onClose: () => void
   onCreated: (agent: DraftAgent) => void
-  onCreate: (manifestPath: string, displayName: string, purpose: string) => Promise<DraftAgent>
+  onCreate: (displayName: string, purpose: string, idempotencyKey: string) => Promise<DraftAgent>
+  template: AgentTemplateCapability
 }
 
-export function CreateAgentWizard({ open, onClose, onCreated, onCreate }: CreateAgentWizardProps) {
+export function CreateAgentWizard({ open, onClose, onCreated, onCreate, template }: CreateAgentWizardProps) {
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
+  const submission = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null)
   if (!open) return null
 
-  const resetAndClose = () => { setState(INITIAL_STATE); onClose() }
+  const resetAndClose = () => {
+    submission.current = null
+    setState(INITIAL_STATE)
+    onClose()
+  }
   const handleBackdrop = (e: React.MouseEvent<HTMLDivElement>) => { if (e.target === e.currentTarget) resetAndClose() }
 
-  const selectTemplate = (t: Template) => {
+  const selectTemplate = (t: AgentTemplateCapability) => {
+    submission.current = null
     setState({ ...INITIAL_STATE, step: 'details', selectedTemplate: t, displayName: t.name, purpose: t.purpose })
   }
 
@@ -56,7 +45,24 @@ export function CreateAgentWizard({ open, onClose, onCreated, onCreate }: Create
     if (!state.selectedTemplate || !state.displayName.trim()) return
     setState((p) => ({ ...p, loading: true, error: null }))
     try {
-      const agent = await onCreate(state.selectedTemplate.manifestPath, state.displayName.trim(), state.purpose.trim())
+      const displayName = state.displayName.trim()
+      const purpose = state.purpose.trim()
+      const fingerprint = JSON.stringify({
+        templateId: state.selectedTemplate.id,
+        displayName,
+        purpose,
+      })
+      if (submission.current?.fingerprint !== fingerprint) {
+        submission.current = {
+          fingerprint,
+          idempotencyKey: createIdempotencyKey(),
+        }
+      }
+      const agent = await onCreate(
+        displayName,
+        purpose,
+        submission.current.idempotencyKey,
+      )
       onCreated(agent)
       resetAndClose()
     } catch (err: unknown) {
@@ -94,7 +100,7 @@ export function CreateAgentWizard({ open, onClose, onCreated, onCreate }: Create
 
           {state.step === 'template' && (
             <div className="grid grid-cols-1 gap-3">
-              {TEMPLATES.map((t) => (
+              {[template].map((t) => (
                 <button key={t.id} type="button" onClick={() => selectTemplate(t)}
                   className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 text-left transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]">
                   <div className="text-sm font-semibold text-[var(--text-primary)]">{t.name}</div>
@@ -144,4 +150,11 @@ export function CreateAgentWizard({ open, onClose, onCreated, onCreate }: Create
       </div>
     </div>
   )
+}
+
+function createIdempotencyKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `create-agent-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }

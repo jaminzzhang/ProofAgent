@@ -80,6 +80,16 @@ let mockDraft: DraftAgent = {
   version_id: null,
   validation_records: [],
   operation_audit: [],
+  capabilities: {
+    mode: 'development',
+    editable_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+    lifecycle_tabs: ['validate', 'versions', 'contract', 'monitor'],
+    actions: {
+      can_validate: true,
+      can_publish: true,
+      can_rollback: true,
+    },
+  },
 }
 let mockContract = {
   agent_yaml: 'name: insurance\nmemory:\n  provider: local\n',
@@ -448,6 +458,16 @@ describe('AgentDetailPage', () => {
       version_id: null,
       validation_records: [],
       operation_audit: [],
+      capabilities: {
+        mode: 'development',
+        editable_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+        lifecycle_tabs: ['validate', 'versions', 'contract', 'monitor'],
+        actions: {
+          can_validate: true,
+          can_publish: true,
+          can_rollback: true,
+        },
+      },
     }
     mockContract = {
       agent_yaml: 'name: insurance\nmemory:\n  provider: local\n',
@@ -549,6 +569,72 @@ describe('AgentDetailPage', () => {
         purpose: 'Handle governed claims questions.',
       })
     })
+  })
+
+  it('honors production capabilities and sends the Draft revision on save', async () => {
+    mockDraft = {
+      ...mockDraft,
+      revision: 3,
+      capabilities: {
+        mode: 'production',
+        editable_modules: ['general'],
+        lifecycle_tabs: ['versions', 'contract', 'monitor'],
+        actions: {
+          can_validate: false,
+          can_publish: false,
+          can_rollback: false,
+        },
+      },
+    }
+    mockVersions = [
+      {
+        agent_id: 'agent-1',
+        version_id: 'version-1',
+        source_draft_id: 'draft-1',
+        validation_run_id: 'run-validation-1',
+        display_name: 'Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        published_at: '2026-05-28T01:00:00Z',
+        published_by: 'dashboard',
+        operation_audit: [],
+      },
+    ]
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('button', { name: 'Workflow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Validate & Test' })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByDisplayValue('Insurance Agent'), {
+      target: { value: 'Governed Insurance Agent' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        display_name: 'Governed Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        expected_revision: 3,
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Versions' }))
+    expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rollback' })).not.toBeInTheDocument()
+  })
+
+  it('fails closed when Draft capabilities are absent', async () => {
+    mockDraft = { ...mockDraft, capabilities: undefined }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    expect(await screen.findByText('Production Runs')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByLabelText('Display Name')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Workflow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Versions' })).not.toBeInTheDocument()
   })
 
   it('shows validation busy state while a validation run is running', async () => {

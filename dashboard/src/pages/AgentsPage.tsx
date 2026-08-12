@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@proofagent/ui'
-import { importConfigAgent, updateConfigDraft } from '../api/client'
+import { createConfigAgent, importConfigAgent } from '../api/client'
 import { CreateAgentWizard } from '../components/agent/CreateAgentWizard'
 import { useConfigAgents } from '../hooks/useConfigAgents'
 import { useLocale } from '../i18n/locale'
@@ -21,7 +21,7 @@ import { PageHeader } from '../components/PageHeader'
 import { TableSkeleton } from '../components/TableSkeleton'
 
 export function AgentsPage() {
-  const { agents, loading, error, refresh } = useConfigAgents()
+  const { agents, loading, error, capabilities, refresh } = useConfigAgents()
   const [manifestPath, setManifestPath] = useState(
     'examples/agent_management_insurance_specialist/agent.yaml',
   )
@@ -50,23 +50,29 @@ export function AgentsPage() {
         description={t('agents.description')}
         actions={
           <>
-            <Button variant="outline" size="md" onClick={() => setWizardOpen(true)}>
-              <Plus size={15} /> {t('agents.create').replace('+ ', '')}
-            </Button>
-            <Input
-              value={manifestPath}
-              onChange={(event) => setManifestPath(event.target.value)}
-              className="w-72 border-[var(--border)] bg-[var(--bg-base)]"
-              aria-label={t('agents.import')}
-            />
-            <Button
-              variant="subtle"
-              size="md"
-              onClick={handleImport}
-              disabled={importing || !manifestPath.trim()}
-            >
-              {importing ? t('agents.importing') : t('agents.import')}
-            </Button>
+            {capabilities?.can_create && (
+              <Button variant="outline" size="md" onClick={() => setWizardOpen(true)}>
+                <Plus size={15} /> {t('agents.create').replace('+ ', '')}
+              </Button>
+            )}
+            {capabilities?.can_import_manifest && (
+              <>
+                <Input
+                  value={manifestPath}
+                  onChange={(event) => setManifestPath(event.target.value)}
+                  className="w-72 border-[var(--border)] bg-[var(--bg-base)]"
+                  aria-label={t('agents.import')}
+                />
+                <Button
+                  variant="subtle"
+                  size="md"
+                  onClick={handleImport}
+                  disabled={importing || !manifestPath.trim()}
+                >
+                  {importing ? t('agents.importing') : t('agents.import')}
+                </Button>
+              </>
+            )}
           </>
         }
       />
@@ -128,21 +134,20 @@ export function AgentsPage() {
         </Card>
       )}
 
-      <CreateAgentWizard
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onCreated={() => refresh()}
-        onCreate={async (manifestPath, displayName, purpose) => {
-          const agent = await importConfigAgent({ manifest_path: manifestPath })
-          if (displayName || purpose) {
-            await updateConfigDraft(agent.agent_id, agent.draft_id, {
-              display_name: displayName || undefined,
-              purpose: purpose || undefined,
-            })
+      {capabilities?.canonical_template && (
+        <CreateAgentWizard
+          open={wizardOpen}
+          onClose={() => setWizardOpen(false)}
+          onCreated={() => refresh()}
+          template={capabilities.canonical_template}
+          onCreate={(displayName, purpose, idempotencyKey) =>
+            createConfigAgent(
+              { display_name: displayName, purpose },
+              idempotencyKey,
+            )
           }
-          return agent
-        }}
-      />
+        />
+      )}
     </div>
   )
 }

@@ -21,6 +21,9 @@ from proof_agent.delivery.release_bundle_api import router as release_bundle_rou
 from proof_agent.delivery.production_model_connections import (
     router as production_model_connections_router,
 )
+from proof_agent.delivery.production_agent_configuration import (
+    router as production_agent_configuration_router,
+)
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.delivery.static_server import create_static_application
 from proof_agent.contracts import KnowledgeOperationsHealthSources
@@ -97,6 +100,7 @@ def create_app(
     production_hybrid_publication_api: object | None = None,
     production_hybrid_artifact_store: object | None = None,
     production_configuration_uow_factory: object | None = None,
+    production_agent_configuration_application: object | None = None,
     knowledge_source_configuration_application: object | None = None,
     knowledge_source_ingestion_application: object | None = None,
     knowledge_source_operations_application: object | None = None,
@@ -172,6 +176,10 @@ def create_app(
                 ("Hybrid exact artifact store", production_hybrid_artifact_store),
                 ("PostgreSQL configuration unit of work", production_configuration_uow_factory),
                 (
+                    "production Agent configuration application",
+                    production_agent_configuration_application,
+                ),
+                (
                     "Knowledge Source configuration application",
                     knowledge_source_configuration_application,
                 ),
@@ -235,6 +243,9 @@ def create_app(
     application.state.production_hybrid_artifact_store = production_hybrid_artifact_store
     application.state.production_configuration_uow_factory = (
         production_configuration_uow_factory
+    )
+    application.state.production_agent_configuration_application = (
+        production_agent_configuration_application
     )
     application.state.knowledge_source_configuration_application = (
         knowledge_source_configuration_application
@@ -386,6 +397,7 @@ def create_app(
         application.include_router(stats.router, prefix="/api")
         application.include_router(health.router, prefix="/api")
     else:
+        application.include_router(production_agent_configuration_router, prefix="/api")
         application.include_router(production_model_connections_router, prefix="/api")
 
     # Keep unknown API paths inside the JSON API boundary. The Dashboard SPA mounted

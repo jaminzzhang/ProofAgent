@@ -500,6 +500,20 @@ export function importConfigAgent(payload: {
   })
 }
 
+export function createConfigAgent(
+  payload: { display_name: string; purpose: string },
+  idempotencyKey: string,
+): Promise<DraftAgent> {
+  return fetchJson<DraftAgent>(`${BASE}/config/agents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
 export function fetchConfigDraft(agentId: string, draftId: string): Promise<DraftAgent> {
   return fetchJson<DraftAgent>(`${BASE}/config/agents/${agentId}/drafts/${draftId}`)
 }
@@ -507,7 +521,7 @@ export function fetchConfigDraft(agentId: string, draftId: string): Promise<Draf
 export function updateConfigDraft(
   agentId: string,
   draftId: string,
-  payload: { display_name?: string; purpose?: string },
+  payload: { display_name?: string; purpose?: string; expected_revision?: number },
 ): Promise<DraftAgent> {
   return fetchJson<DraftAgent>(`${BASE}/config/agents/${agentId}/drafts/${draftId}`, {
     method: 'PATCH',

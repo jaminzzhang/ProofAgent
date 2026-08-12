@@ -63,6 +63,13 @@ class _InMemoryAgentLifecycleRepository:
     def get_draft(self, agent_id: str, draft_id: str) -> AgentDraftRecord | None:
         return self._drafts.get((agent_id, draft_id))
 
+    def list_drafts(self, agent_id: str | None = None) -> tuple[AgentDraftRecord, ...]:
+        return tuple(
+            record
+            for (stored_agent_id, _), record in sorted(self._drafts.items())
+            if agent_id is None or stored_agent_id == agent_id
+        )
+
     def save_draft(
         self,
         draft: DraftAgent,

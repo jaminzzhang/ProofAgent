@@ -17,6 +17,11 @@ class AgentLifecycleRepository(Protocol):
 
     def get_draft(self, agent_id: str, draft_id: str) -> AgentDraftRecord | None: ...
 
+    def list_drafts(
+        self,
+        agent_id: str | None = None,
+    ) -> Sequence[AgentDraftRecord]: ...
+
     def save_draft(
         self,
         draft: DraftAgent,

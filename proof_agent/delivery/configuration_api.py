@@ -67,6 +67,10 @@ from proof_agent.contracts import (
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.contracts.knowledge_release import KnowledgeReleaseEvidenceSet
+from proof_agent.control.production_agent_configuration import (
+    SOLE_PRODUCTION_AGENT_ID,
+    load_server_owned_production_agent_template,
+)
 from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
@@ -106,6 +110,38 @@ SUPPORTED_SHARED_MODEL_CONNECTION_PROVIDERS = {
     "deepseek",
 }
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_CANONICAL_AGENT_TEMPLATE = {
+    "id": SOLE_PRODUCTION_AGENT_ID,
+    "name": "Agent Management Insurance Specialist",
+    "purpose": (
+        "Assist internal insurance staff with governed, evidence-backed insurance "
+        "knowledge consultation."
+    ),
+    "description": (
+        "Operator-facing Controlled ReAct V3 consultation with production publication "
+        "kept behind candidate gates."
+    ),
+}
+_DEVELOPMENT_DRAFT_CAPABILITIES = {
+    "mode": "development",
+    "editable_modules": [
+        "general",
+        "workflow",
+        "skills",
+        "knowledge",
+        "tools",
+        "policy",
+        "model",
+        "memory",
+        "response",
+    ],
+    "lifecycle_tabs": ["validate", "versions", "contract", "monitor"],
+    "actions": {
+        "can_validate": True,
+        "can_publish": True,
+        "can_rollback": True,
+    },
+}
 
 
 def _require_operator(
@@ -124,6 +160,15 @@ class AgentImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest_path: str = Field(min_length=1)
+
+
+class AgentCreateRequest(BaseModel):
+    """Browser-safe command for creating a Draft from the server-owned template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(default="", max_length=4_000)
 
 
 class DraftUpdateRequest(BaseModel):
@@ -790,7 +835,42 @@ def list_config_agents(
     store = _get_configuration_store(app_request)
     agent_ids = _configuration_agent_ids(store)
     data = [_agent_summary_payload(store, agent_id) for agent_id in agent_ids]
-    return {"data": data, "meta": {"total": len(data)}}
+    return {
+        "data": data,
+        "meta": {
+            "total": len(data),
+            "capabilities": {
+                "mode": "development",
+                "can_create": OperatorPermission.AGENT_EDIT in identity.permissions,
+                "can_import_manifest": (
+                    OperatorPermission.AGENT_EDIT in identity.permissions
+                ),
+                "canonical_template": _CANONICAL_AGENT_TEMPLATE,
+            },
+        },
+    }
+
+
+@router.post("/config/agents", status_code=201)
+def create_config_agent(
+    request: AgentCreateRequest,
+    app_request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Create a local Draft from the same server-owned canonical template."""
+
+    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    try:
+        draft = _get_configuration_store(app_request).create_draft(
+            agent_id=SOLE_PRODUCTION_AGENT_ID,
+            display_name=request.display_name.strip(),
+            purpose=request.purpose.strip(),
+            contract_bundle=load_server_owned_production_agent_template(),
+            actor=actor,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="server_agent_template_unavailable") from exc
+    return _draft_payload(draft)
 
 
 @router.post("/config/agents/import")
@@ -1890,6 +1970,7 @@ def _draft_payload(draft: DraftAgent) -> dict[str, Any]:
         "operation_audit": [
             operation.model_dump(mode="json") for operation in draft.operation_audit
         ],
+        "capabilities": _DEVELOPMENT_DRAFT_CAPABILITIES,
     }
 
 
