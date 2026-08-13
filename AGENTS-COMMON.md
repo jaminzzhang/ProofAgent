@@ -56,7 +56,8 @@ S0 local files are development adapters. Production requires:
 - S3-compatible immutable artifacts with S3-first verification and one PostgreSQL visibility transaction;
 - a bounded PostgreSQL queue and same-image Run Executor role;
 - coarse SSE progress with durable current-state reconnect;
-- hardened Compose/Blue-Green deployment and all 13 release Gates.
+- hardened Compose/Blue-Green deployment and all five top-level release Gates,
+  covering the 13 required release-check families.
 
 Do not add filesystem or local-identity fallbacks in production mode. Dependency failure must fail closed.
 

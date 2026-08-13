@@ -80,7 +80,10 @@ from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
-from proof_agent.contracts.ports.knowledge_candidates import KnowledgeCandidateService
+from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionScorer,
+    KnowledgeCandidateService,
+)
 from proof_agent.control.knowledge.candidate_request import KnowledgeCandidateQueryFactory
 from proof_agent.errors import ProofAgentError
 
@@ -478,6 +481,9 @@ class HarnessInvocation:
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None
     knowledge_candidate_service: KnowledgeCandidateService | None = None
     knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None
+    knowledge_candidate_admission_scorer: (
+        KnowledgeCandidateAdmissionScorer | None
+    ) = None
     model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider
     cancellation_check: Callable[[], None] = lambda: None
 
@@ -500,6 +506,9 @@ def compose_harness_invocation(
     governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
     knowledge_candidate_service: KnowledgeCandidateService | None = None,
     knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None,
+    knowledge_candidate_admission_scorer: (
+        KnowledgeCandidateAdmissionScorer | None
+    ) = None,
     hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
     guarded_http_client: GuardedHttpClient | None = None,
     secret_provider: SecretProvider | None = None,
@@ -654,6 +663,7 @@ def compose_harness_invocation(
         institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
         knowledge_candidate_service=knowledge_candidate_service,
         knowledge_candidate_query_factory=knowledge_candidate_query_factory,
+        knowledge_candidate_admission_scorer=knowledge_candidate_admission_scorer,
         governed_hybrid_request_factory=governed_hybrid_request_factory,
         model_resolver=model_provider_resolver,
         cancellation_check=cancellation_check or (lambda: None),

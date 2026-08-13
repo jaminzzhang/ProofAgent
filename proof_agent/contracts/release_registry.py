@@ -34,7 +34,13 @@ _ROLE_KINDS: dict[ReleaseBundleMemberRole, frozenset[ArtifactKind]] = {
     ReleaseBundleMemberRole.CLOSURE_AUDIT: frozenset(
         {ArtifactKind.RELEASE_CLOSURE_AUDIT}
     ),
-    ReleaseBundleMemberRole.EVIDENCE: frozenset({ArtifactKind.EVALUATION_EVIDENCE}),
+    ReleaseBundleMemberRole.EVIDENCE: frozenset(
+        {
+            ArtifactKind.EVALUATION_EVIDENCE,
+            ArtifactKind.RELEASE_ATTESTATION,
+            ArtifactKind.RELEASE_EVIDENCE,
+        }
+    ),
     ReleaseBundleMemberRole.SBOM: frozenset(
         {ArtifactKind.SOFTWARE_BILL_OF_MATERIALS}
     ),

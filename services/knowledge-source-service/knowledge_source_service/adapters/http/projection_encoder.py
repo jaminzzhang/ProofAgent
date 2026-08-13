@@ -47,6 +47,7 @@ class HttpProjectionTextEncoder:
         dense_revision: str,
         sparse_revision: str,
         dense_dimension: int,
+        ca_file: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         _validate_endpoint(endpoint)
@@ -68,6 +69,7 @@ class HttpProjectionTextEncoder:
             timeout=httpx.Timeout(30, connect=3),
             follow_redirects=False,
             trust_env=False,
+            verify=True if ca_file is None else ca_file,
             transport=transport,
             headers={
                 "Accept": "application/json",

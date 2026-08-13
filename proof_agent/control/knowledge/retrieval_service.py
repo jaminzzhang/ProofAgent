@@ -4,6 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from hashlib import sha256
+from math import isfinite
 from pathlib import PurePosixPath
 import re
 from threading import Event
@@ -42,7 +43,10 @@ from proof_agent.contracts.knowledge_candidates import (
     KnowledgeRelevanceCandidateGroup,
     KnowledgeTextLinesCitation,
 )
-from proof_agent.contracts.ports.knowledge_candidates import KnowledgeCandidateService
+from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionScorer,
+    KnowledgeCandidateService,
+)
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.control.knowledge.hybrid_request import GovernedHybridRetrievalRequest
 from proof_agent.control.knowledge.insurance_authority import (
@@ -465,12 +469,18 @@ class KnowledgeRetrievalService:
         policy: PolicyEngine,
         knowledge_provider: KnowledgeProvider,
         knowledge_candidate_service: KnowledgeCandidateService | None = None,
+        knowledge_candidate_admission_scorer: (
+            KnowledgeCandidateAdmissionScorer | None
+        ) = None,
         model_resolver: Callable[[ModelConfig], ModelProvider] = resolve_provider,
     ) -> None:
         self._trace = trace
         self._policy = policy
         self._knowledge_provider = knowledge_provider
         self._knowledge_candidate_service = knowledge_candidate_service
+        self._knowledge_candidate_admission_scorer = (
+            knowledge_candidate_admission_scorer
+        )
         self._model_resolver = model_resolver
 
     def retrieve(self, request: KnowledgeRetrievalRequest) -> KnowledgeRetrievalResult:
@@ -572,7 +582,20 @@ class KnowledgeRetrievalService:
             )
 
         candidate_result = self._knowledge_candidate_service.query(candidate_query)
-        evidence = _project_relevance_candidates(candidate_result)
+        admission_scores: Mapping[str, float] = {}
+        admission_scorer = self._knowledge_candidate_admission_scorer
+        if admission_scorer is not None:
+            admission_scores = _validated_candidate_admission_scores(
+                admission_scorer.score_candidates(
+                    query=candidate_query,
+                    result=candidate_result,
+                )
+            )
+        evidence = _project_relevance_candidates(
+            candidate_result,
+            admission_scores=admission_scores,
+            admission_scorer=admission_scorer,
+        )
         if request.force_empty:
             evidence = ()
         relevance_count = len(evidence)
@@ -1783,20 +1806,50 @@ class KnowledgeRetrievalService:
 
 def _project_relevance_candidates(
     result: KnowledgeCandidateResult,
+    *,
+    admission_scores: Mapping[str, float] | None = None,
+    admission_scorer: KnowledgeCandidateAdmissionScorer | None = None,
 ) -> tuple[EvidenceChunk, ...]:
+    resolved_admission_scores = admission_scores or {}
     evidence: list[EvidenceChunk] = []
     for group in result.evidence_groups:
         if not isinstance(group, KnowledgeRelevanceCandidateGroup):
             continue
         for candidate in group.candidate_evidence:
-            evidence.append(_relevance_candidate_chunk(candidate, result=result))
+            evidence.append(
+                _relevance_candidate_chunk(
+                    candidate,
+                    result=result,
+                    admission_score=resolved_admission_scores.get(
+                        candidate.candidate_evidence_id
+                    ),
+                    admission_scorer=admission_scorer,
+                )
+            )
     return tuple(evidence)
+
+
+def _validated_candidate_admission_scores(
+    scores: Mapping[str, float],
+) -> Mapping[str, float]:
+    normalized: dict[str, float] = {}
+    for candidate_evidence_id, score in scores.items():
+        if not isfinite(score) or not 0.0 <= score <= 1.0:
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_001",
+                "Knowledge Candidate admission scorer returned a value outside the approved normalized range of 0 through 1.",
+                "Use an approved calibrated scorer that returns finite normalized admission values.",
+            )
+        normalized[candidate_evidence_id] = float(score)
+    return normalized
 
 
 def _relevance_candidate_chunk(
     candidate: KnowledgeRelevanceCandidate,
     *,
     result: KnowledgeCandidateResult,
+    admission_score: float | None = None,
+    admission_scorer: KnowledgeCandidateAdmissionScorer | None = None,
 ) -> EvidenceChunk:
     citation = _candidate_citation(candidate)
     final_rank = candidate.ranking.reranked_rank or candidate.ranking.fused_rank
@@ -1825,7 +1878,7 @@ def _relevance_candidate_chunk(
         chunk_id=candidate.evidence_unit_id,
         provider_native_score=None,
         fusion_rank=float(final_rank),
-        admission_score=None,
+        admission_score=admission_score,
         citation=citation,
         metadata={
             "knowledge_candidate_group_type": "relevance_ranked",
@@ -1835,6 +1888,16 @@ def _relevance_candidate_chunk(
             "knowledge_base_version_id": candidate.knowledge_base_version_id,
             "knowledge_base_release_id": candidate.knowledge_base_release_id,
             "content_hash": candidate.content_hash,
+            **(
+                {
+                    "admission_scorer": {
+                        "scorer_id": admission_scorer.scorer_id,
+                        "scorer_revision": admission_scorer.scorer_revision,
+                    }
+                }
+                if admission_scorer is not None and admission_score is not None
+                else {}
+            ),
             "ranking": candidate.ranking.model_dump(mode="json"),
             "retrieval_lineage": candidate.retrieval_lineage.model_dump(mode="json"),
             "context_evidence_units": [

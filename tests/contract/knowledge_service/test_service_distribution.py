@@ -24,6 +24,9 @@ from knowledge_source_service.adapters.http.projection_encoder import (
 from knowledge_source_service.adapters.http.ocr_extractor import (
     HttpDocumentOcrExtractor,
 )
+from knowledge_source_service.application.projection_encoding import (
+    DeterministicHashProjectionEncoder,
+)
 from knowledge_source_service.bootstrap import processes
 
 
@@ -206,6 +209,18 @@ def test_api_process_wires_release_pinned_hybrid_projection(
         HttpAgenticRetrievalController,
     )
     assert isinstance(observed["ocr_extractor"], HttpDocumentOcrExtractor)
+
+
+def test_explicit_deterministic_encoder_accepts_an_overridden_dimension() -> None:
+    encoder = processes._projection_encoder(
+        {
+            "KSS_DETERMINISTIC_ENCODER_ENABLED": "1",
+            "KSS_DENSE_DIMENSION": "64",
+        }
+    )
+
+    assert isinstance(encoder, DeterministicHashProjectionEncoder)
+    assert encoder.dense_dimension == 64
 
 
 def test_sync_scheduler_runs_bounded_result_expiration_batch(

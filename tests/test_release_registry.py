@@ -207,6 +207,40 @@ def test_bundle_index_authorizes_only_named_non_bootstrap_members() -> None:
         )
 
 
+def test_bundle_index_accepts_exact_product_release_evidence() -> None:
+    evidence = _ref(
+        object_id="019ba001-1111-7000-8000-000000000905",
+        body=b"release evidence",
+        kind=ArtifactKind.RELEASE_EVIDENCE,
+        name="candidate-integrity-quality.json",
+    )
+
+    member = ReleaseBundleIndexMember(
+        artifact_name="candidate-integrity-quality.json",
+        role=ReleaseBundleMemberRole.EVIDENCE,
+        artifact=evidence,
+    )
+
+    assert member.artifact == evidence
+
+
+def test_bundle_index_accepts_detached_product_evidence_attestation() -> None:
+    attestation = _ref(
+        object_id="019ba001-1111-7000-8000-000000000906",
+        body=b"release evidence attestation",
+        kind=ArtifactKind.RELEASE_ATTESTATION,
+        name="candidate-integrity-quality.attestation.json",
+    )
+
+    member = ReleaseBundleIndexMember(
+        artifact_name="candidate-integrity-quality.attestation.json",
+        role=ReleaseBundleMemberRole.EVIDENCE,
+        artifact=attestation,
+    )
+
+    assert member.artifact == attestation
+
+
 def test_release_registry_contract_rejects_path_like_artifact_names() -> None:
     with pytest.raises(ValidationError):
         ReleaseBundleIndexMember(

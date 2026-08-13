@@ -1,5 +1,6 @@
 import json
 import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -33,11 +34,143 @@ from proof_agent.control.context_budget import (
     ContextBudgetKey,
     InMemoryContextBudgetCalibrationStore,
 )
+from proof_agent.control.knowledge.candidate_request import (
+    BoundKnowledgeCandidateQueryFactory,
+)
+from proof_agent.contracts.knowledge_candidates import (
+    KnowledgeCandidateExecutionBudget,
+    KnowledgeCandidateQuery,
+    KnowledgeCandidateResult,
+)
 from proof_agent.delivery.agent_package_execution import (
     AgentPackageRunRequest,
     execute_agent_package_run,
 )
+from proof_agent.delivery import agent_package_execution
 from proof_agent.observability.storage.run_store import RunStore
+
+
+def _candidate_digest(character: str) -> str:
+    return f"sha256:{character * 64}"
+
+
+class _AgentPackageCandidateService:
+    def __init__(self) -> None:
+        self.requests: list[KnowledgeCandidateQuery] = []
+
+    def query(self, request: KnowledgeCandidateQuery) -> KnowledgeCandidateResult:
+        self.requests.append(request)
+        return KnowledgeCandidateResult.model_validate(
+            {
+                "schema_version": "knowledge-query-result.v1",
+                "knowledge_query_id": "query-agent-package-1",
+                "evidence_groups": [
+                    {
+                        "evidence_group_id": "relevance-agent-package-1",
+                        "group_type": "relevance_ranked",
+                        "ordering": {
+                            "kind": "relevance",
+                            "final_rank_field": "fused_rank",
+                        },
+                        "candidate_evidence": [
+                            {
+                                "candidate_evidence_id": "candidate-agent-package-1",
+                                "knowledge_space_id": "space-agent-package-1",
+                                "knowledge_base_id": "base-agent-package-1",
+                                "knowledge_base_version_id": "base-version-agent-package-1",
+                                "knowledge_base_release_id": (
+                                    request.knowledge_base_release_id
+                                ),
+                                "knowledge_source_id": "source-agent-package-1",
+                                "knowledge_source_version_id": (
+                                    "source-version-agent-package-1"
+                                ),
+                                "evidence_unit_id": "unit-agent-package-1",
+                                "content": {
+                                    "media_type": "text/plain",
+                                    "text": (
+                                        "Travel meals are reimbursed up to 50 USD per day "
+                                        "and require receipts."
+                                    ),
+                                },
+                                "content_hash": _candidate_digest("a"),
+                                "citation_locator": {
+                                    "kind": "text_lines",
+                                    "start_line": 3,
+                                    "end_line": 3,
+                                },
+                                "context_evidence_units": [],
+                                "ranking": {
+                                    "kind": "relevance",
+                                    "lane_contributions": [
+                                        {
+                                            "lane": "lexical",
+                                            "native_score": 3.0,
+                                            "lane_rank": 1,
+                                            "weight": 1.0,
+                                            "rrf_contribution": 0.01639,
+                                        }
+                                    ],
+                                    "fused_rank": 1,
+                                    "reranked_rank": None,
+                                },
+                                "retrieval_lineage": {
+                                    "retrieval_round": 1,
+                                    "plan_revision": 1,
+                                    "index_identity": "index-agent-package-1",
+                                    "query_digest": _candidate_digest("b"),
+                                    "access_scope_digest": _candidate_digest("c"),
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "query_plan_summary": {
+                    "plan_revision": 1,
+                    "planned_lanes": ["lexical"],
+                    "structured_query_count": 0,
+                    "plan_digest": _candidate_digest("d"),
+                },
+                "execution_summary": {
+                    "strategy": "single_pass",
+                    "rounds": 1,
+                    "stop_reason": "single_pass_complete",
+                    "degraded": False,
+                    "budget_usage": {
+                        "rounds": 1,
+                        "model_calls": 0,
+                        "candidates": 1,
+                        "model_tokens": 0,
+                        "duration_ms": 10,
+                    },
+                },
+                "retrieval_lineage": {
+                    "knowledge_base_release_id": request.knowledge_base_release_id,
+                    "release_manifest_digest": _candidate_digest("e"),
+                    "access_scope_digest": _candidate_digest("c"),
+                    "plan_revision_digests": [_candidate_digest("d")],
+                },
+            }
+        )
+
+
+class _AgentPackageCandidateAdmissionScorer:
+    scorer_id = "approved-agent-package-test-scorer"
+    scorer_revision = "approved-agent-package-test-scorer.v1"
+
+    def score_candidates(
+        self,
+        *,
+        query: KnowledgeCandidateQuery,
+        result: KnowledgeCandidateResult,
+    ) -> dict[str, float]:
+        del query
+        return {
+            candidate.candidate_evidence_id: 1.0
+            for group in result.evidence_groups
+            if group.group_type == "relevance_ranked"
+            for candidate in group.candidate_evidence
+        }
 
 
 def test_execute_agent_package_run_checks_cancellation_at_model_stage_boundary(
@@ -91,6 +224,90 @@ def test_execute_agent_package_run_executes_v3_with_controlled_react(
         and event["payload"]["runtime"] == "controlled_react_orchestrator"
         for event in events
     )
+
+
+def test_agent_package_run_forwards_remote_knowledge_candidate_dependencies(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    candidate_service = object()
+    query_factory = object()
+    admission_scorer = object()
+    observed: dict[str, object] = {}
+    original = agent_package_execution.compose_harness_invocation
+
+    def capture(*args, **kwargs):
+        observed.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        agent_package_execution,
+        "compose_harness_invocation",
+        capture,
+    )
+
+    execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            controlled_react_orchestrator=_CapturingControlledReActOrchestrator(),
+            knowledge_candidate_service=candidate_service,
+            knowledge_candidate_query_factory=query_factory,
+            knowledge_candidate_admission_scorer=admission_scorer,
+        )
+    )
+
+    assert observed["knowledge_candidate_service"] is candidate_service
+    assert observed["knowledge_candidate_query_factory"] is query_factory
+    assert observed["knowledge_candidate_admission_scorer"] is admission_scorer
+
+
+def test_agent_package_run_answers_from_explicitly_scored_remote_candidates(
+    tmp_path: Path,
+) -> None:
+    candidate_service = _AgentPackageCandidateService()
+    query_factory = BoundKnowledgeCandidateQueryFactory(
+        knowledge_base_release_id="release-agent-package-1",
+        execution_budget=KnowledgeCandidateExecutionBudget(
+            max_rounds=1,
+            max_model_calls=1,
+            max_candidates=10,
+            max_model_tokens=1000,
+            max_duration_ms=5000,
+        ),
+        deadline_after=timedelta(seconds=30),
+        clock=lambda: datetime(2026, 8, 12, 9, 0, tzinfo=UTC),
+    )
+
+    result = execute_agent_package_run(
+        AgentPackageRunRequest(
+            agent_yaml=Path(
+                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+            ),
+            question="What is the reimbursement rule for travel meals?",
+            runs_dir=tmp_path / "run",
+            run_id="run-remote-candidate-1",
+            knowledge_candidate_service=candidate_service,
+            knowledge_candidate_query_factory=query_factory,
+            knowledge_candidate_admission_scorer=(
+                _AgentPackageCandidateAdmissionScorer()
+            ),
+        )
+    )
+
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert "50 USD" in result.final_output
+    assert len(candidate_service.requests) == 1
+    execution = result.workflow_template_execution_result
+    assert execution is not None
+    assert execution.evidence[0].admission_score == 1.0
+    assert execution.evidence[0].metadata["admission_scorer"] == {
+        "scorer_id": "approved-agent-package-test-scorer",
+        "scorer_revision": "approved-agent-package-test-scorer.v1",
+    }
 
 
 def test_execute_agent_package_run_passes_conversation_context_to_v3_orchestrator(

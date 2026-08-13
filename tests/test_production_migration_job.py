@@ -61,6 +61,120 @@ def test_local_production_uses_the_same_locked_expand_only_migration_contract() 
     ]
 
 
+def test_local_production_runs_all_knowledge_source_service_roles() -> None:
+    services = yaml.safe_load(
+        LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    )["services"]
+    role_services = {
+        "kss-api": "api",
+        "kss-query-executor": "query-executor",
+        "kss-knowledge-worker": "knowledge-worker",
+        "kss-sync-scheduler": "sync-scheduler",
+        "kss-migrate": "migrate",
+    }
+
+    images = {services[name]["image"] for name in role_services}
+    assert images == {"proofagent-knowledge-source-service:production-local"}
+    assert services["kss-api"]["build"] == {
+        "context": "./services/knowledge-source-service",
+        "dockerfile": "Dockerfile",
+    }
+    for service_name, role in role_services.items():
+        service = services[service_name]
+        assert service["command"] == [role]
+        assert service["user"] == "10001:10001"
+        assert service["read_only"] is True
+        assert service["cap_drop"] == ["ALL"]
+        assert service["security_opt"] == ["no-new-privileges:true"]
+        assert service["tmpfs"] == ["/tmp:size=64m,mode=0700,uid=10001,gid=10001"]
+
+    assert services["kss-migrate"]["restart"] == "no"
+    assert services["kss-database-init"]["image"] == services["postgres"]["image"]
+    assert services["kss-database-init"]["restart"] == "no"
+    assert services["kss-database-init"]["environment"][
+        "KSS_DATABASE_PASSWORD"
+    ] == "${KSS_POSTGRES_PASSWORD}"
+    database_init = services["kss-database-init"]["command"][0]
+    assert "CREATE ROLE knowledge_source_service LOGIN" in database_init
+    assert "OWNER TO knowledge_source_service" in database_init
+    assert "WHERE schemaname = 'public'" in database_init
+    assert "ALTER TABLE public.%I OWNER TO knowledge_source_service" in database_init
+    assert "REASSIGN OWNED" not in database_init
+    assert services["kss-migrate"]["depends_on"]["kss-database-init"][
+        "condition"
+    ] == "service_completed_successfully"
+    assert services["kss-api"]["depends_on"]["kss-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    for service_name in (
+        "kss-query-executor",
+        "kss-knowledge-worker",
+        "kss-sync-scheduler",
+    ):
+        assert services[service_name]["depends_on"]["kss-api"]["condition"] == (
+            "service_healthy"
+        )
+
+
+def test_local_production_knowledge_service_uses_tls_authority_boundaries() -> None:
+    services = yaml.safe_load(
+        LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    )["services"]
+    api_environment = services["kss-api"]["environment"]
+    executor_environment = services["kss-query-executor"]["environment"]
+
+    assert api_environment["KSS_POSTGRES_DSN"] == (
+        "postgresql://knowledge_source_service:${KSS_POSTGRES_PASSWORD}"
+        "@postgres:5432/knowledge_source_service"
+    )
+    assert api_environment["KSS_POSTGRES_DSN"] != services["api"]["environment"][
+        "HYBRID_POSTGRES_DSN"
+    ]
+    assert api_environment["KSS_SEARCH_ENDPOINT"] == (
+        "https://opensearch.internal:9200"
+    )
+    assert api_environment["KSS_PROJECTION_ENCODER_ENDPOINT"] == (
+        "https://models.internal:9449/v1/encode"
+    )
+    assert api_environment["KSS_AGENTIC_CONTROLLER_ENDPOINT"] == (
+        "https://models.internal:9450/v1/next"
+    )
+    assert api_environment["KSS_OCR_ENDPOINT"] == (
+        "https://models.internal:9451/v1/extract"
+    )
+    assert executor_environment["KSS_AGENTIC_CONTROLLER_ENDPOINT"] == (
+        "https://models.internal:9450/v1/next"
+    )
+    assert api_environment["SSL_CERT_FILE"] == "/run/tls/ca.crt"
+    assert "127.0.0.1:8444:8444" in services["gateway"]["ports"]
+
+    nginx = (PROJECT_ROOT / "docker/production-local/nginx.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "listen 8444 ssl;" in nginx
+    assert "http://kss-api:8080" in nginx
+    assert "listen 9449 ssl;" in nginx
+    assert "rewrite ^/(.*)$ /kss/projection/$1 break;" in nginx
+    assert "listen 9450 ssl;" in nginx
+    assert "rewrite ^/(.*)$ /kss/agentic/$1 break;" in nginx
+    assert "listen 9451 ssl;" in nginx
+    assert "rewrite ^/(.*)$ /kss/ocr/$1 break;" in nginx
+
+
+def test_local_production_verifier_covers_knowledge_service_authorities() -> None:
+    verifier = (PROJECT_ROOT / "scripts/production-local-verify.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "https://proof-agent.localhost:8444/readyz" in verifier
+    assert "-d knowledge_source_service" in verifier
+    assert "KSS PostgreSQL authority isolation" in verifier
+    assert "rolname = 'knowledge_source_service'" in verifier
+    assert "pg_get_userbyid(datdba)" in verifier
+    assert "tableowner <> 'knowledge_source_service'" in verifier
+    assert "local/proof-agent-knowledge-local" in verifier
+
+
 def test_local_production_bootstraps_only_the_designated_reference_profile_source() -> None:
     services = yaml.safe_load(
         LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8")

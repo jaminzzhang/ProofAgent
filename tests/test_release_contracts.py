@@ -87,8 +87,8 @@ def _gate_result(**overrides: Any) -> GateResult:
 
 def _manifest(**overrides: Any) -> ReleaseGateManifest:
     values: dict[str, Any] = {
-        "schema_version": "proofagent.release-gate-manifest.v1",
-        "profile_id": "initial-private-pilot-v1",
+        "schema_version": "proofagent.release-gate-manifest.v2",
+        "profile_id": "initial-private-pilot-v2",
         "candidate": _candidate(),
         "results": (_gate_result(),),
         "generated_at": NOW,
@@ -274,35 +274,51 @@ def test_evidence_ref_defaults_expiration_to_none() -> None:
     assert evidence.expires_at is None
 
 
-def test_packaged_initial_private_pilot_profile_is_exact_and_frozen() -> None:
+def test_packaged_initial_private_pilot_profile_owns_complete_gate_policy() -> None:
     profile_resource = (
         resources.files("proof_agent.release")
         .joinpath("profiles")
-        .joinpath("initial-private-pilot-v1.json")
+        .joinpath("initial-private-pilot-v2.json")
     )
 
     profile = GateProfile.model_validate_json(profile_resource.read_text(encoding="utf-8"))
 
+    assert profile.schema_version == "proofagent.gate-profile.v2"
+    assert profile.profile_id == "initial-private-pilot-v2"
     assert profile.required_gate_ids == INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS
     assert profile.required_gate_ids == (
-        "backend_frontend_quality",
-        "distribution_image",
-        "supply_chain_runtime_security",
-        "identity_authorization",
-        "secrets_egress",
-        "deterministic_evaluation",
-        "real_llm_evaluation",
-        "dependency_compatibility",
-        "capacity_responsiveness",
-        "queue_progress",
-        "resilience_recovery",
-        "deployment",
-        "browser_operations",
+        "candidate_integrity",
+        "access_security",
+        "governed_behavior",
+        "operational_readiness",
+        "deployment_recovery",
     )
+    candidate_integrity = profile.gates[0]
+    assert tuple(rule.kind for rule in candidate_integrity.evidence) == (
+        "candidate_quality",
+        "distribution_image",
+        "supply_chain_security",
+    )
+    assert candidate_integrity.evidence[2].max_age_seconds == 24 * 60 * 60
+    assert candidate_integrity.evidence[2].expiry_required is True
+    coverage = candidate_integrity.metrics[0]
+    assert coverage.key == "quality_line_coverage_percent"
+    assert coverage.comparison == "minimum"
+    assert coverage.expected == 90
     with pytest.raises(ValidationError):
         profile.profile_id = "changed"  # type: ignore[misc]
     with pytest.raises(TypeError):
         profile.required_gate_ids[0] = "changed"  # type: ignore[index]
+
+
+def test_active_profile_binding_is_derived_from_the_complete_packaged_policy() -> None:
+    from proof_agent.release.digests import canonical_json_bytes
+    from proof_agent.release.profile import initial_private_pilot_profile
+
+    profile = initial_private_pilot_profile()
+
+    assert profile.gate_ids == INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS
+    assert profile.binding_bytes == canonical_json_bytes(profile.gate_profile)
 
 
 @pytest.mark.parametrize(
@@ -358,8 +374,9 @@ def test_release_contract_json_schemas_are_closed_at_every_object_layer() -> Non
 def test_release_package_exports_only_provider_neutral_contracts() -> None:
     expected_exports = {
         "DigestRef",
-        "EvidenceRef",
-        "GateProfile",
+            "EvidenceRef",
+            "GateFacts",
+            "GateProfile",
         "GateResult",
         "GateStatus",
         "INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS",

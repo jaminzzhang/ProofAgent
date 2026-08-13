@@ -50,6 +50,23 @@ if [ ! -f "$ENV_FILE" ]; then
   chmod 0600 "$ENV_FILE"
 fi
 
+ensure_random_secret() {
+  key=$1
+  if ! grep -q "^${key}=" "$ENV_FILE"; then
+    value=$(openssl rand -hex 24)
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+# These credentials are intentionally generated after the initial file block so
+# existing local-production environments can be upgraded without rotating any
+# already-issued authority secret.
+ensure_random_secret KSS_MODEL_BEARER_TOKEN
+ensure_random_secret KSS_OPERATOR_BEARER_TOKEN
+ensure_random_secret KSS_AGENT_CLIENT_BEARER_TOKEN
+ensure_random_secret KSS_POSTGRES_PASSWORD
+chmod 0600 "$ENV_FILE"
+
 if [ ! -f "$MODEL_CREDENTIAL_KEYRING" ]; then
   MODEL_CREDENTIAL_KEY=$(openssl rand -base64 32 | tr -d '\n')
   {

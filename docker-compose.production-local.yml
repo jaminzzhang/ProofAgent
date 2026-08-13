@@ -91,6 +91,51 @@ x-proof-agent-volumes: &proof-agent-volumes
   - ./docker/production-local/runtime/deployment-compatibility-manifest.json:/run/proof-agent-config/deployment-compatibility-manifest.json:ro
   - vault-agent-token:/run/vault-agent:ro
 
+x-kss-common-environment: &kss-common-environment
+  KSS_POSTGRES_DSN: postgresql://knowledge_source_service:${KSS_POSTGRES_PASSWORD}@postgres:5432/knowledge_source_service
+  KSS_OBJECT_STORE_URI: s3://proof-agent-knowledge-local/knowledge-source-service
+  KSS_SEARCH_ENDPOINT: https://opensearch.internal:9200
+  KSS_RELEASE_IDENTITY: knowledge-source-service-local-production-v1
+  KSS_S3_ENDPOINT: http://minio:9000
+  KSS_S3_REGION: us-east-1
+  KSS_S3_ALLOW_INSECURE_ENDPOINT: "1"
+  KSS_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  KSS_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  KSS_TLS_CA_FILE: /run/tls/ca.crt
+  SSL_CERT_FILE: /run/tls/ca.crt
+  PYTHONUNBUFFERED: "1"
+
+x-kss-query-environment: &kss-query-environment
+  <<: *kss-common-environment
+  KSS_PROJECTION_ENCODER_ENDPOINT: https://models.internal:9449/v1/encode
+  KSS_PROJECTION_ENCODER_BEARER_TOKEN: ${KSS_MODEL_BEARER_TOKEN}
+  KSS_DENSE_ENCODER_REVISION: kss-dense-local-production-v1
+  KSS_SPARSE_ENCODER_REVISION: kss-sparse-local-production-v1
+  KSS_DENSE_DIMENSION: "64"
+  KSS_AGENTIC_CONTROLLER_ENDPOINT: https://models.internal:9450/v1/next
+  KSS_AGENTIC_CONTROLLER_BEARER_TOKEN: ${KSS_MODEL_BEARER_TOKEN}
+
+x-kss-api-environment: &kss-api-environment
+  <<: *kss-query-environment
+  KSS_OPERATOR_ID: local-production-operator
+  KSS_OPERATOR_BEARER_TOKEN: ${KSS_OPERATOR_BEARER_TOKEN}
+  KSS_OCR_ENDPOINT: https://models.internal:9451/v1/extract
+  KSS_OCR_BEARER_TOKEN: ${KSS_MODEL_BEARER_TOKEN}
+  KSS_OCR_MODEL_REVISION: kss-ocr-local-production-v1
+
+x-kss-service: &kss-service
+  image: proofagent-knowledge-source-service:production-local
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  tmpfs:
+    - /tmp:size=64m,mode=0700,uid=10001,gid=10001
+  volumes:
+    - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro
+  networks: [production]
+
 services:
   postgres:
     image: postgres:17.5-alpine
@@ -141,6 +186,8 @@ services:
       - |
         mc mb --ignore-existing local/proof-agent-local
         mc version enable local/proof-agent-local
+        mc mb --ignore-existing local/proof-agent-knowledge-local
+        mc version enable local/proof-agent-knowledge-local
     restart: "no"
     networks: [production]
 
@@ -245,6 +292,8 @@ services:
       dockerfile: Dockerfile.production
     entrypoint: ["uvicorn"]
     command: ["model_plane:app", "--app-dir", "/opt/proof-agent-local", "--host", "0.0.0.0", "--port", "8081"]
+    environment:
+      KSS_MODEL_BEARER_TOKEN: ${KSS_MODEL_BEARER_TOKEN}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
       interval: 3s
@@ -266,6 +315,7 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8444:8444"
     volumes:
       - ./docker/production-local/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/production-local/runtime/tls:/etc/nginx/tls:ro
@@ -282,6 +332,121 @@ services:
           - vault.internal
           - opensearch.internal
           - models.internal
+
+  kss-database-init:
+    image: postgres:17.5-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      KSS_DATABASE_PASSWORD: ${KSS_POSTGRES_PASSWORD}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        case "$${KSS_DATABASE_PASSWORD}" in
+          ""|*[!0-9a-f]*)
+            printf 'KSS database credential must be lowercase hexadecimal.\n' >&2
+            exit 1
+            ;;
+        esac
+        role_exists=$$(psql -h postgres -U proof -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'knowledge_source_service'")
+        if [ "$$role_exists" != "1" ]; then
+          printf "CREATE ROLE knowledge_source_service LOGIN PASSWORD '%s';\n" "$${KSS_DATABASE_PASSWORD}" | psql -h postgres -U proof -d postgres --set ON_ERROR_STOP=1
+        else
+          printf "ALTER ROLE knowledge_source_service LOGIN PASSWORD '%s';\n" "$${KSS_DATABASE_PASSWORD}" | psql -h postgres -U proof -d postgres --set ON_ERROR_STOP=1
+        fi
+        database_exists=$$(psql -h postgres -U proof -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'knowledge_source_service'")
+        if [ "$$database_exists" != "1" ]; then
+          createdb -h postgres -U proof --owner knowledge_source_service knowledge_source_service
+        fi
+        psql -h postgres -U proof -d knowledge_source_service --set ON_ERROR_STOP=1 <<'SQL'
+        ALTER SCHEMA public OWNER TO knowledge_source_service;
+        DO $$ownership$$
+        DECLARE
+          item record;
+        BEGIN
+          FOR item IN
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tableowner <> 'knowledge_source_service'
+          LOOP
+            EXECUTE format(
+              'ALTER TABLE public.%I OWNER TO knowledge_source_service',
+              item.tablename
+            );
+          END LOOP;
+        END
+        $$ownership$$;
+        SQL
+        psql -h postgres -U proof -d postgres --set ON_ERROR_STOP=1 -c "ALTER DATABASE knowledge_source_service OWNER TO knowledge_source_service"
+    restart: "no"
+    networks: [production]
+
+  kss-migrate:
+    <<: *kss-service
+    depends_on:
+      kss-database-init:
+        condition: service_completed_successfully
+    environment: *kss-common-environment
+    command: ["migrate"]
+    restart: "no"
+
+  kss-api:
+    <<: *kss-service
+    build:
+      context: ./services/knowledge-source-service
+      dockerfile: Dockerfile
+    depends_on:
+      gateway:
+        condition: service_healthy
+      kss-migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    environment: *kss-api-environment
+    command: ["api"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 60
+    restart: unless-stopped
+
+  kss-query-executor:
+    <<: *kss-service
+    depends_on:
+      kss-api:
+        condition: service_healthy
+    environment:
+      <<: *kss-query-environment
+      KSS_QUERY_WORKER_ID: kss-query-executor-local-production-1
+    command: ["query-executor"]
+    restart: unless-stopped
+
+  kss-knowledge-worker:
+    <<: *kss-service
+    depends_on:
+      kss-api:
+        condition: service_healthy
+    environment:
+      <<: *kss-common-environment
+      KSS_KNOWLEDGE_WORKER_ID: kss-knowledge-worker-local-production-1
+      KSS_KNOWLEDGE_WORK_INTERVAL_SECONDS: "5"
+    command: ["knowledge-worker"]
+    restart: unless-stopped
+
+  kss-sync-scheduler:
+    <<: *kss-service
+    depends_on:
+      kss-api:
+        condition: service_healthy
+    environment:
+      <<: *kss-common-environment
+      KSS_RESULT_REAPER_INTERVAL_SECONDS: "30"
+    command: ["sync-scheduler"]
+    restart: unless-stopped
 
   database-migrate:
     image: proof-agent:production-local

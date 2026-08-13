@@ -4,8 +4,10 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
+import base64
 
 import pytest
+from fastapi import HTTPException
 
 from proof_agent.capabilities.knowledge.hybrid.model_clients import (
     ImmediateKnowledgeModelWorkScheduler,
@@ -246,3 +248,110 @@ def test_runtime_verifier_parser_requests_match_model_plane_contract(
     )
 
     runtime_verifier.main()
+
+
+def test_local_model_plane_serves_pinned_kss_projection_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_plane = _model_plane()
+    monkeypatch.setenv("KSS_MODEL_BEARER_TOKEN", "local-model-token-123456789")
+
+    response = model_plane.kss_projection_encode(
+        {
+            "schema_version": "knowledge-projection-encoding-request.v1",
+            "text": "保单等待期为三十天",
+            "dense_revision": "dense-local-v1",
+            "sparse_revision": "sparse-local-v1",
+            "dense_dimension": 64,
+        },
+        authorization="Bearer local-model-token-123456789",
+    )
+
+    assert response["schema_version"] == "knowledge-projection-encoding.v1"
+    assert response["dense_revision"] == "dense-local-v1"
+    assert response["sparse_revision"] == "sparse-local-v1"
+    assert response["dense_dimension"] == 64
+    assert len(response["dense_vector"]) == 64
+    assert response["sparse_vector"]
+    assert all(weight > 0 for weight in response["sparse_vector"].values())
+
+
+def test_local_model_plane_rejects_invalid_kss_model_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_plane = _model_plane()
+    monkeypatch.setenv("KSS_MODEL_BEARER_TOKEN", "local-model-token-123456789")
+
+    with pytest.raises(HTTPException) as captured:
+        model_plane.kss_agentic_decide(
+            {
+                "schema_version": "agentic-retrieval-observation.v1",
+                "retrieval_round": 1,
+                "question": "等待期是多少？",
+                "knowledge_base_release_id": "release-local",
+                "access_scope_digest": "sha256:" + "a" * 64,
+                "candidate_count": 2,
+                "candidate_evidence_ids": ["evidence-1", "evidence-2"],
+                "remaining_rounds": 2,
+                "remaining_model_calls": 2,
+                "remaining_model_tokens": 256,
+                "remaining_duration_ms": 5000,
+            },
+            authorization="Bearer wrong-token-123456789",
+        )
+
+    assert captured.value.status_code == 401
+
+
+def test_local_model_plane_serves_content_free_agentic_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_plane = _model_plane()
+    monkeypatch.setenv("KSS_MODEL_BEARER_TOKEN", "local-model-token-123456789")
+
+    response = model_plane.kss_agentic_decide(
+        {
+            "schema_version": "agentic-retrieval-observation.v1",
+            "retrieval_round": 1,
+            "question": "等待期是多少？",
+            "knowledge_base_release_id": "release-local",
+            "access_scope_digest": "sha256:" + "a" * 64,
+            "candidate_count": 2,
+            "candidate_evidence_ids": ["evidence-1", "evidence-2"],
+            "remaining_rounds": 2,
+            "remaining_model_calls": 2,
+            "remaining_model_tokens": 256,
+            "remaining_duration_ms": 5000,
+        },
+        authorization="Bearer local-model-token-123456789",
+    )
+
+    assert response == {
+        "schema_version": "agentic-retrieval-decision.v1",
+        "action": "complete",
+        "revised_question": None,
+        "model_tokens_used": 0,
+    }
+
+
+def test_local_model_plane_serves_pinned_kss_ocr_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_plane = _model_plane()
+    monkeypatch.setenv("KSS_MODEL_BEARER_TOKEN", "local-model-token-123456789")
+
+    response = model_plane.kss_ocr_extract(
+        {
+            "schema_version": "knowledge-document-ocr-request.v1",
+            "media_type": "image/png",
+            "content_base64": base64.b64encode(b"local-image-fixture").decode(),
+            "model_revision": "ocr-local-v1",
+        },
+        authorization="Bearer local-model-token-123456789",
+    )
+
+    assert response["schema_version"] == "knowledge-document-ocr.v1"
+    assert response["model_revision"] == "ocr-local-v1"
+    assert response["quality_state"] == "passed"
+    assert response["pages"] == [{"page_number": 1, "width": 1000, "height": 1400}]
+    assert response["regions"][0]["text"]

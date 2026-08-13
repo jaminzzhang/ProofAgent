@@ -47,7 +47,7 @@ A future sandbox may safely execute scripts and commands, but it requires a sepa
 
 ## Release success criteria
 
-Release is GO only when the immutable `initial-private-pilot-v1` profile has all 13 required Gates passed and bound to the same candidate. At minimum this includes code quality, distribution, supply chain, identity/authorization, secrets/egress, deterministic and real-LLM evaluation, dependency compatibility, capacity/latency, queue/progress, resilience/recovery, deployment and browser/operations evidence.
+Release is GO only when the immutable `initial-private-pilot-v2` profile has all five top-level risk Gates passed and bound to the same candidate. Those Gates retain all 13 required check families: code quality, distribution, supply chain, identity/authorization, secrets/egress, deterministic and real-LLM evaluation, dependency compatibility, capacity/latency, queue/progress, resilience/recovery, deployment and browser/operations evidence.
 
 The target operating envelope is 20 online operators, five active runs and 50 queued requests. Admission is subsecond, first progress and free-slot dispatch target one second, ordinary governed answers target 60-second P95, and the hard attempt deadline is 120 seconds.
 

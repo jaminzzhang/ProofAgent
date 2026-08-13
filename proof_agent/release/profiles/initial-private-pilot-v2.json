@@ -1,0 +1,113 @@
+{
+  "schema_version": "proofagent.gate-profile.v2",
+  "profile_id": "initial-private-pilot-v2",
+  "gates": [
+    {
+      "gate_id": "candidate_integrity",
+      "evidence": [
+        {"kind": "candidate_quality", "max_age_seconds": null, "expiry_required": false},
+        {"kind": "distribution_image", "max_age_seconds": null, "expiry_required": false},
+        {"kind": "supply_chain_security", "max_age_seconds": 86400, "expiry_required": true}
+      ],
+      "metrics": [
+        {"key": "quality_line_coverage_percent", "kind": "number", "comparison": "minimum", "expected": 90, "maximum_allowed": 100},
+        {"key": "quality_required_command_failures", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "quality_required_integration_skips", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "distribution_clean_install_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "distribution_image_readiness_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_unresolved_critical_findings", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "security_unresolved_high_findings", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "security_runtime_hardening_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_sbom_present", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_provenance_verified", "kind": "bool", "comparison": "equal", "expected": true}
+      ]
+    },
+    {
+      "gate_id": "access_security",
+      "evidence": [
+        {"kind": "identity_authorization", "max_age_seconds": 259200, "expiry_required": true},
+        {"kind": "secrets_egress", "max_age_seconds": 259200, "expiry_required": true}
+      ],
+      "metrics": [
+        {"key": "identity_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "secrets_egress_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true}
+      ]
+    },
+    {
+      "gate_id": "governed_behavior",
+      "evidence": [
+        {"kind": "deterministic_evaluation", "max_age_seconds": null, "expiry_required": false},
+        {"kind": "real_llm_evaluation", "max_age_seconds": 259200, "expiry_required": true}
+      ],
+      "metrics": [
+        {"key": "deterministic_required_case_failures", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "deterministic_required_case_skips", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "real_llm_required_case_failures", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "real_llm_required_case_skips", "kind": "int", "comparison": "equal", "expected": 0},
+        {"key": "real_llm_sample_count", "kind": "int", "comparison": "minimum", "expected": 1, "failure": "insufficient_sample"}
+      ]
+    },
+    {
+      "gate_id": "operational_readiness",
+      "evidence": [
+        {"kind": "dependency_compatibility", "max_age_seconds": 259200, "expiry_required": true},
+        {"kind": "capacity_responsiveness", "max_age_seconds": 259200, "expiry_required": true},
+        {"kind": "queue_progress", "max_age_seconds": 259200, "expiry_required": true},
+        {"kind": "browser_operations", "max_age_seconds": 259200, "expiry_required": true}
+      ],
+      "metrics": [
+        {"key": "compatibility_postgresql_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_s3_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_oidc_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_secret_provider_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_gateway_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_model_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_tool_mode_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_manifest_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "deployment_compatibility_manifest"},
+        {"key": "capacity_online_sessions", "kind": "int", "comparison": "minimum", "expected": 20},
+        {"key": "capacity_active_attempts", "kind": "int", "comparison": "equal", "expected": 5},
+        {"key": "capacity_queued_runs", "kind": "int", "comparison": "equal", "expected": 50},
+        {"key": "capacity_overload_request_51_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "capacity_load_duration_seconds", "kind": "number", "comparison": "minimum", "expected": 1800},
+        {"key": "capacity_admission_sample_count", "kind": "int", "comparison": "minimum", "expected": 200, "failure": "insufficient_sample"},
+        {"key": "capacity_first_progress_sample_count", "kind": "int", "comparison": "minimum", "expected": 200, "failure": "insufficient_sample"},
+        {"key": "capacity_terminal_sample_count", "kind": "int", "comparison": "minimum", "expected": 100, "failure": "insufficient_sample"},
+        {"key": "capacity_admission_p95_ms", "kind": "number", "comparison": "maximum", "expected": 500, "minimum_allowed": 0},
+        {"key": "capacity_first_progress_p95_ms", "kind": "number", "comparison": "maximum", "expected": 1000, "minimum_allowed": 0},
+        {"key": "capacity_free_slot_start_p95_ms", "kind": "number", "comparison": "maximum", "expected": 1000, "minimum_allowed": 0},
+        {"key": "capacity_standard_terminal_p95_ms", "kind": "number", "comparison": "maximum", "expected": 60000, "minimum_allowed": 0},
+        {"key": "capacity_max_attempt_terminal_ms", "kind": "number", "comparison": "maximum", "expected": 120000, "minimum_allowed": 0},
+        {"key": "queue_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "queue_soak_duration_seconds", "kind": "number", "comparison": "minimum", "expected": 14400},
+        {"key": "browser_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "browser_pilot_operator_count", "kind": "int", "comparison": "minimum", "expected": 3, "maximum_allowed": 5},
+        {"key": "browser_support_window_seconds", "kind": "number", "comparison": "minimum", "expected": 32400},
+        {"key": "browser_required_scenario_coverage_percent", "kind": "number", "comparison": "equal", "expected": 100}
+      ]
+    },
+    {
+      "gate_id": "deployment_recovery",
+      "evidence": [
+        {"kind": "fault", "max_age_seconds": 259200, "expiry_required": true},
+        {"kind": "combined_restore", "max_age_seconds": 2592000, "expiry_required": true},
+        {"kind": "blue_green", "max_age_seconds": 259200, "expiry_required": true}
+      ],
+      "metrics": [
+        {"key": "fault_matrix_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "recovery_reference_digest_verification_percent", "kind": "number", "comparison": "equal", "expected": 100},
+        {"key": "recovery_rpo_minutes", "kind": "number", "comparison": "maximum", "expected": 15, "minimum_allowed": 0},
+        {"key": "recovery_rto_minutes", "kind": "number", "comparison": "maximum", "expected": 240, "minimum_allowed": 0},
+        {"key": "recovery_topology_sha256", "kind": "sha256", "comparison": "format"},
+        {"key": "recovery_backup_policy_sha256", "kind": "sha256", "comparison": "format"},
+        {"key": "recovery_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "migration_set"},
+        {"key": "deployment_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "deployment_drain_seconds", "kind": "number", "comparison": "maximum", "expected": 150, "minimum_allowed": 0},
+        {"key": "deployment_soak_seconds", "kind": "number", "comparison": "minimum", "expected": 1800},
+        {"key": "deployment_topology_sha256", "kind": "sha256", "comparison": "format"},
+        {"key": "deployment_backup_policy_sha256", "kind": "sha256", "comparison": "format"},
+        {"key": "deployment_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "migration_set"},
+        {"key": "deployment_compatibility_manifest_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "deployment_compatibility_manifest"}
+      ]
+    }
+  ]
+}

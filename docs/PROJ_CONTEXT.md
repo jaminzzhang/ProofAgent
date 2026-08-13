@@ -19,8 +19,16 @@
 - `[KNOWN | HIGH]` Local acceptance on 2026-08-12 covers strict contracts,
   heterogeneous intake, immutable Source/Release authority, real
   PostgreSQL/MinIO/OpenSearch retrieval, bounded Agentic retrieval, durable
-  synchronization, ProofAgent integration, and an independently built non-root
-  OCI image. This is local verification, not production approval.
+  synchronization, ProofAgent integration, and a retained production-shaped
+  Docker Compose deployment. KSS runs five isolated roles from non-root image
+  `97c2db1f…`, owns a separate PostgreSQL database through its dedicated
+  non-superuser login role, and is exposed at `https://proof-agent.localhost:8444`.
+  This is local deployment verification, not production approval.
+- `[KNOWN | HIGH]` Product Release Authority uses the versioned
+  `initial-private-pilot-v2` policy to compute five fail-closed risk Gates from
+  raw pipeline facts. Exact Evidence and detached workload-identity attestations
+  reuse the existing Artifact Store and Release Bundle Index; the verifier can
+  reach `GO` only with deployment-owned public trust.
 
 The existing Graphify map was queried on 2026-08-11 to locate the composition,
 knowledge-resolution, provider, retrieval, and local-index seams. It was not
@@ -32,6 +40,7 @@ rebuilt, so code remains the authority for implementation decisions.
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `VERIFIED_LOCAL` | `docs/features/knowledge-source-service/` | `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
+| `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 
 ## Status vocabulary
 
@@ -42,6 +51,6 @@ rebuilt, so code remains the authority for implementation decisions.
 - `PARTIAL_VERIFICATION`: implementation and default local checks pass, but one or
   more named P1 environment-backed checks remain unexecuted; this is not production
   approval.
-- `VERIFIED_LOCAL`: recorded local acceptance checks pass; this is not deployment
-  evidence.
+- `VERIFIED_LOCAL`: recorded local acceptance checks pass; local Docker evidence
+  may exist, but the status is not production approval or a formal release Gate.
 - `BLOCKED`: a named dependency or decision prevents meaningful progress.

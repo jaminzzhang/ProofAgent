@@ -79,9 +79,18 @@ from proof_agent.evaluation.suites import (
     load_sealed_knowledge_acceptance_envelope,
 )
 from proof_agent.observability.storage.run_store import RunStore
-from proof_agent.release.contracts import ReleaseGateManifest
-from proof_agent.release.digests import reject_duplicate_json_keys
+from proof_agent.release.contracts import (
+    GateFacts,
+    GateResult,
+    ProductionCandidateBinding,
+    ReleaseGateManifest,
+)
+from proof_agent.release.assembler import assemble_release_manifest
+from proof_agent.release.digests import digest_ref, reject_duplicate_json_keys
+from proof_agent.release.gate_engine import evaluate_gate
+from proof_agent.release.profile import initial_private_pilot_profile_bytes
 from proof_agent.release.verifier import (
+    AttestationVerifier,
     EvidenceRootArtifactReader,
     UnavailableAttestationVerifier,
     VerifierInternalError,
@@ -502,6 +511,18 @@ def release_verify(
         help="Required. Directory containing content-addressed Evidence artifacts",
         show_default=False,
     ),
+    attestation_root: Path | None = typer.Option(
+        None,
+        "--attestation-root",
+        help="Directory containing detached Evidence attestations",
+        show_default=False,
+    ),
+    trust_policy: Path | None = typer.Option(
+        None,
+        "--trust-policy",
+        help="Deployment-owned Evidence public trust policy JSON file",
+        show_default=False,
+    ),
     at: str | None = typer.Option(
         None,
         "--at",
@@ -527,6 +548,29 @@ def release_verify(
         reject_duplicate_json_keys(raw_manifest)
         release_manifest = ReleaseGateManifest.model_validate_json(raw_manifest)
         artifact_reader = EvidenceRootArtifactReader(evidence_root)
+        if (attestation_root is None) != (trust_policy is None):
+            raise ValueError("--attestation-root and --trust-policy must be supplied together")
+        attestation_verifier: AttestationVerifier
+        if attestation_root is None or trust_policy is None:
+            attestation_verifier = UnavailableAttestationVerifier()
+        else:
+            from proof_agent.release.attestation import (
+                load_evidence_attestation_verifier,
+            )
+
+            if not attestation_root.is_dir() or not os.access(attestation_root, os.R_OK):
+                raise ValueError("--attestation-root must be a readable directory")
+            if not trust_policy.is_file() or not os.access(trust_policy, os.R_OK):
+                raise ValueError("--trust-policy must be a readable file")
+            attestation_verifier = load_evidence_attestation_verifier(
+                trust_policy=trust_policy.read_bytes(),
+                attestation_root=attestation_root,
+                evidence=tuple(
+                    evidence
+                    for result in release_manifest.results
+                    for evidence in result.evidence
+                ),
+            )
     except (OSError, UnicodeError, ValidationError, ValueError) as exc:
         _raise_release_cli_error("release_verifier_invalid_input", exc)
 
@@ -535,13 +579,103 @@ def release_verify(
             release_manifest,
             checked_at=checked_at,
             artifact_reader=artifact_reader,
-            attestation_verifier=UnavailableAttestationVerifier(),
+            attestation_verifier=attestation_verifier,
         )
     except VerifierInternalError as exc:
         _raise_release_cli_error("release_verifier_internal_error", exc)
     typer.echo(decision.model_dump_json())
     if decision.decision == "NO-GO":
         raise typer.Exit(code=1)
+
+
+@release_app.command("evaluate-gate")
+def release_evaluate_gate(
+    candidate: Path = typer.Option(..., "--candidate", help="Candidate Binding JSON file"),
+    facts: Path = typer.Option(..., "--facts", help="Raw Gate Facts JSON file"),
+    at: str = typer.Option(..., "--at", help="Explicit RFC3339 evaluation time"),
+) -> None:
+    """Compute one Gate Result from raw facts and the candidate-bound profile."""
+
+    try:
+        candidate_raw = candidate.read_bytes()
+        facts_raw = facts.read_bytes()
+        reject_duplicate_json_keys(candidate_raw)
+        reject_duplicate_json_keys(facts_raw)
+        bound_candidate = ProductionCandidateBinding.model_validate_json(candidate_raw)
+        raw_facts = GateFacts.model_validate_json(facts_raw)
+        result = evaluate_gate(
+            candidate=bound_candidate,
+            gate_id=raw_facts.gate_id,
+            evidence=raw_facts.evidence,
+            metrics=raw_facts.metrics,
+            evaluated_at=_parse_release_checked_at(at),
+        )
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        _raise_release_cli_error("release_gate_invalid_input", exc)
+    typer.echo(result.model_dump_json())
+
+
+@release_app.command("bind-candidate")
+def release_bind_candidate(
+    inventory: Path = typer.Option(
+        ...,
+        "--inventory",
+        help="Immutable build inventory JSON file without policy-controlled fields",
+    ),
+) -> None:
+    """Bind immutable build outputs to the packaged Gate Profile."""
+
+    try:
+        raw = inventory.read_bytes()
+        reject_duplicate_json_keys(raw)
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("build inventory must be a JSON object")
+        if "schema_version" in payload or "gate_profile" in payload:
+            raise ValueError("build inventory contains policy-controlled fields")
+        candidate = ProductionCandidateBinding.model_validate(
+            {
+                **payload,
+                "schema_version": "proofagent.candidate-binding.v1",
+                "gate_profile": digest_ref(
+                    initial_private_pilot_profile_bytes()
+                ).model_dump(mode="json"),
+            }
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+        _raise_release_cli_error("release_candidate_invalid_input", exc)
+    typer.echo(candidate.model_dump_json())
+
+
+@release_app.command("assemble-manifest")
+def release_assemble_manifest(
+    candidate: Path = typer.Option(..., "--candidate", help="Candidate Binding JSON file"),
+    results: list[Path] = typer.Option(
+        ...,
+        "--result",
+        help="Gate Result JSON file; repeat for each completed Gate",
+    ),
+    at: str = typer.Option(..., "--at", help="Explicit RFC3339 manifest time"),
+) -> None:
+    """Assemble a complete fail-closed manifest from partial Gate Results."""
+
+    try:
+        candidate_raw = candidate.read_bytes()
+        reject_duplicate_json_keys(candidate_raw)
+        bound_candidate = ProductionCandidateBinding.model_validate_json(candidate_raw)
+        gate_results: list[GateResult] = []
+        for result_path in results:
+            result_raw = result_path.read_bytes()
+            reject_duplicate_json_keys(result_raw)
+            gate_results.append(GateResult.model_validate_json(result_raw))
+        manifest = assemble_release_manifest(
+            candidate=bound_candidate,
+            results=gate_results,
+            generated_at=_parse_release_checked_at(at),
+        )
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        _raise_release_cli_error("release_manifest_invalid_input", exc)
+    typer.echo(manifest.model_dump_json())
 
 
 def _hybrid_recovery_service_from_environment() -> Any:

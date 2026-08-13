@@ -148,7 +148,7 @@ Trace is the execution fact log. Governance Receipt is a human projection. Produ
 
 The immutable release candidate binding pins source commit, clean tree, product version, OCI digest, Python distribution, frontend assets, migrations, sole Agent bundle, evaluation contract, configuration snapshot, Gate profile and dependency compatibility manifest.
 
-The `initial-private-pilot-v1` profile requires 13 Gates. `proof-agent release verify` recomputes digests, binding, freshness, thresholds and status. Missing, stale, mismatched, unknown or non-passed required evidence returns NO-GO.
+The `initial-private-pilot-v2` profile requires five top-level risk Gates covering 13 required check families. `proof-agent release verify` recomputes digests, binding, freshness, thresholds and status. Missing, stale, mismatched, unknown or non-passed required evidence returns NO-GO.
 
 ### 10.1 Hybrid Knowledge release boundary
 

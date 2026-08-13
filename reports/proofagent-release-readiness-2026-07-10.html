@@ -1,0 +1,1192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proof Agent 正式发布就绪审计 · 2026-07-10</title>
+  <style>
+    :root {
+      --ink: #16201d;
+      --muted: #5e6d67;
+      --paper: #f4f1e9;
+      --panel: #fffdf7;
+      --line: #d7d1c3;
+      --brand: #145c4d;
+      --brand-soft: #dbece6;
+      --p0: #a52a2a;
+      --p0-soft: #f8dfdc;
+      --p1: #a35b00;
+      --p1-soft: #f8e8ca;
+      --p2: #4f6070;
+      --p2-soft: #e5ebef;
+      --ok: #176b42;
+      --ok-soft: #dff0e7;
+      --warn: #9a6200;
+      --warn-soft: #fff0ce;
+      --info: #275a8a;
+      --info-soft: #e1edf8;
+      --shadow: 0 14px 40px rgba(26, 37, 33, .08);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 8% -10%, rgba(20, 92, 77, .11), transparent 31rem),
+        radial-gradient(circle at 96% 3%, rgba(165, 42, 42, .08), transparent 27rem),
+        var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.62;
+    }
+
+    a { color: var(--brand); text-underline-offset: 3px; }
+    a:hover { color: #0d4036; }
+    code {
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: .9em;
+      overflow-wrap: anywhere;
+    }
+    .shell {
+      width: min(1440px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 64px 0 38px;
+      border-bottom: 1px solid rgba(94, 109, 103, .2);
+    }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--brand);
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    h1, h2, h3, h4 { line-height: 1.18; letter-spacing: -.025em; }
+    h1 { margin: 0; max-width: 980px; font-size: clamp(38px, 6vw, 76px); }
+    .hero-sub {
+      max-width: 980px;
+      margin: 20px 0 0;
+      font-size: clamp(18px, 2.1vw, 26px);
+      color: #34453f;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+    .meta span, .meta a, .pill, .claim, .confidence, .status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      font-weight: 750;
+      line-height: 1;
+    }
+    .meta span, .meta a {
+      padding: 9px 12px;
+      background: rgba(255, 253, 247, .82);
+      border: 1px solid var(--line);
+      color: #354640;
+      font-size: 13px;
+    }
+    .meta a { color: var(--brand); text-decoration: none; }
+    .meta a:hover { background: var(--brand-soft); }
+    .verdict-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(250px, .5fr);
+      gap: 20px;
+      margin-top: 32px;
+    }
+    .verdict {
+      padding: 24px;
+      border-radius: var(--radius);
+      background: #8f2525;
+      color: white;
+      box-shadow: var(--shadow);
+    }
+    .verdict .label {
+      font-weight: 850;
+      letter-spacing: .12em;
+      font-size: 12px;
+      opacity: .78;
+    }
+    .verdict strong {
+      display: block;
+      margin: 7px 0;
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1.05;
+    }
+    .verdict p { margin: 10px 0 0; color: #fff4f2; }
+    .score {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 24px;
+      border-radius: var(--radius);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .score b { font-size: 48px; color: var(--p0); line-height: 1; }
+    .score small { color: var(--muted); margin-top: 8px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 28px;
+      padding: 30px 0 80px;
+    }
+    nav {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 18px;
+      background: rgba(255, 253, 247, .84);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      backdrop-filter: blur(14px);
+    }
+    nav h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); }
+    nav a {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 8px;
+      text-decoration: none;
+      color: #33433d;
+      font-size: 14px;
+    }
+    nav a:hover { background: var(--brand-soft); color: var(--brand); }
+
+    main { min-width: 0; }
+    section {
+      scroll-margin-top: 24px;
+      margin: 0 0 42px;
+    }
+    section > h2 {
+      margin: 0 0 18px;
+      font-size: clamp(27px, 3.4vw, 42px);
+    }
+    .section-lead {
+      margin: -7px 0 20px;
+      max-width: 980px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .card {
+      padding: 22px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      box-shadow: 0 5px 22px rgba(26, 37, 33, .035);
+    }
+    .grid-2, .grid-3, .grid-4 {
+      display: grid;
+      gap: 16px;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .metric b { display: block; font-size: 31px; line-height: 1.1; }
+    .metric span { color: var(--muted); font-size: 13px; }
+
+    .claim {
+      padding: 5px 8px;
+      margin-right: 5px;
+      font-size: 10px;
+      letter-spacing: .035em;
+      vertical-align: 1px;
+    }
+    .computed { background: var(--brand-soft); color: var(--brand); }
+    .known { background: var(--info-soft); color: var(--info); }
+    .inferred { background: var(--warn-soft); color: #815100; }
+    .common { background: #ebe7f4; color: #5b4782; }
+    .confidence {
+      padding: 5px 8px;
+      margin-right: 5px;
+      background: #efeee9;
+      color: #53605b;
+      font-size: 10px;
+      letter-spacing: .04em;
+    }
+    .status {
+      padding: 6px 9px;
+      font-size: 11px;
+      letter-spacing: .04em;
+    }
+    .status.blocked, .status.fail { background: var(--p0-soft); color: var(--p0); }
+    .status.partial, .status.warn { background: var(--warn-soft); color: var(--warn); }
+    .status.pass { background: var(--ok-soft); color: var(--ok); }
+    .status.unknown { background: var(--p2-soft); color: var(--p2); }
+
+    .callout {
+      padding: 18px 20px;
+      border-left: 5px solid var(--brand);
+      background: var(--brand-soft);
+      border-radius: 0 12px 12px 0;
+    }
+    .callout.danger { border-color: var(--p0); background: var(--p0-soft); }
+    .callout.warning { border-color: var(--warn); background: var(--warn-soft); }
+    .callout p { margin: 0; }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td {
+      padding: 14px 15px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid #e4dfd4;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #ede9df;
+      color: #485650;
+      font-size: 11px;
+      letter-spacing: .075em;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td small { color: var(--muted); }
+    .bar {
+      width: 112px;
+      height: 8px;
+      margin-top: 7px;
+      background: #e7e3d9;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .bar i { display: block; height: 100%; background: var(--brand); }
+    .bar.danger i { background: var(--p0); }
+    .bar.warn i { background: var(--warn); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: stretch;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .flow > div {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 86px;
+      padding: 12px;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      font-size: 13px;
+    }
+    .flow > div:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -12px;
+      z-index: 2;
+      color: var(--p0);
+      font-weight: 900;
+      font-size: 19px;
+    }
+    .flow .hot { border-color: #e3aaa4; background: var(--p0-soft); }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .toolbar button {
+      cursor: pointer;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .toolbar button.active { border-color: var(--brand); background: var(--brand); color: white; }
+    .finding-list { display: grid; gap: 14px; }
+    .finding {
+      border-left: 6px solid var(--p2);
+      transition: opacity .2s ease;
+    }
+    .finding[data-severity="P0"] { border-left-color: var(--p0); }
+    .finding[data-severity="P1"] { border-left-color: var(--p1); }
+    .finding[data-severity="P2"] { border-left-color: var(--p2); }
+    .finding.hidden { display: none; }
+    .finding-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .finding h3 { margin: 0; font-size: 21px; }
+    .pill {
+      flex: 0 0 auto;
+      padding: 7px 9px;
+      font-size: 11px;
+    }
+    .pill.p0 { background: var(--p0-soft); color: var(--p0); }
+    .pill.p1 { background: var(--p1-soft); color: var(--p1); }
+    .pill.p2 { background: var(--p2-soft); color: var(--p2); }
+    .finding p { margin: 10px 0; }
+    .finding dl {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 8px 12px;
+      margin: 14px 0 0;
+      font-size: 14px;
+    }
+    .finding dt { color: var(--muted); font-weight: 750; }
+    .finding dd { margin: 0; }
+    .evidence {
+      padding: 11px 13px;
+      border: 1px dashed #cbc4b6;
+      border-radius: 10px;
+      background: #f7f4ec;
+      color: #42514b;
+    }
+
+    .checklist { display: grid; gap: 9px; }
+    .check {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel);
+    }
+    .check strong { font-size: 13px; }
+    .check p { margin: 0; }
+
+    .timeline { position: relative; display: grid; gap: 18px; }
+    .phase {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 18px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .phase h3 { margin: 2px 0; color: var(--brand); }
+    .phase ol { margin: 0; padding-left: 22px; }
+    .phase li + li { margin-top: 7px; }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    details + details { margin-top: 10px; }
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      font-weight: 780;
+      background: #f1ede4;
+    }
+    details > div { padding: 14px 16px; }
+    footer {
+      padding: 32px 0 48px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: static; max-height: none; columns: 2; }
+      nav h2 { column-span: all; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: 1fr; }
+      .flow > div:not(:last-child)::after {
+        content: "↓";
+        right: auto;
+        bottom: -18px;
+      }
+    }
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 20px, 1440px); }
+      .hero { padding-top: 38px; }
+      .verdict-bar, .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      nav { columns: 1; }
+      .phase, .check { grid-template-columns: 1fr; }
+      .finding-head { display: block; }
+      .finding-head .pill { margin-top: 10px; }
+    }
+    @media print {
+      body { background: white; font-size: 10pt; }
+      .shell { width: 100%; }
+      nav, .toolbar { display: none; }
+      .layout { display: block; padding-top: 20px; }
+      section { break-before: page; }
+      section:first-child { break-before: auto; }
+      .card, .table-wrap, details { box-shadow: none; break-inside: avoid; }
+      details > div { display: block !important; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <p class="eyebrow">Release readiness / evidence-led audit</p>
+      <h1>Proof Agent 正式发布就绪审计</h1>
+      <p class="hero-sub">
+        <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+        当前版本可以作为本地确定性演示和研发验证基线，但不应直接作为网络暴露的企业生产服务或公网多租户产品发布。
+      </p>
+      <div class="meta">
+        <span>审计日期：2026-07-10（Asia/Shanghai）</span>
+        <span>分支：main</span>
+        <span>提交：1bd0fbf4ff3248a45d07dff4ce85d305448adcf2</span>
+        <span>范围：代码、测试、AI 评估、安全、供应链、部署、数据、运维、前端、文档与治理</span>
+        <a href="proofagent-release-readiness-2026-07-10.html" download>下载 HTML 原文件</a>
+      </div>
+      <div class="verdict-bar">
+        <div class="verdict">
+          <span class="label">正式生产发布结论</span>
+          <strong>BLOCKED · 暂缓发布</strong>
+          <p>
+            <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+            发现 12 项 P0 发布阻断项；除身份、CORS、Docker、CI、依赖处置、V2/V3 主线、真实 LLM 门禁与制品链外，还存在未认证 SSRF、环境凭证外带、本地进程启动和并发数据完整性风险。
+          </p>
+        </div>
+        <div class="score">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>
+          <b>4.1 / 10</b>
+          <small>面向“网络暴露的企业生产发布”的加权就绪度；不是安全认证或合规证明。</small>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell layout">
+    <nav aria-label="报告目录">
+      <h2>报告目录</h2>
+      <a href="#executive">01 · 执行摘要</a>
+      <a href="#tiers">02 · 发布层级结论</a>
+      <a href="#scorecard">03 · 就绪度评分</a>
+      <a href="#strengths">04 · 已具备的基础</a>
+      <a href="#attack-paths">05 · 关键风险链</a>
+      <a href="#findings">06 · 完整问题清单</a>
+      <a href="#verification">07 · 验证结果</a>
+      <a href="#coverage">08 · 防遗漏覆盖矩阵</a>
+      <a href="#gates">09 · 发布门禁</a>
+      <a href="#roadmap">10 · 收口路线图</a>
+      <a href="#acceptance">11 · 验收标准</a>
+      <a href="#limitations">12 · 限制与未验证项</a>
+      <a href="#method">13 · 方法与标签</a>
+    </nav>
+
+    <main>
+      <section id="executive">
+        <h2>01 · 执行摘要</h2>
+        <p class="section-lead">
+          <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+          代码本身的确定性质量明显强于发行工程与生产边界；“测试绿”不能抵消“生产身份缺失、CI 红、镜像可能携带本地秘密和运行数据”。
+        </p>
+        <div class="grid-2">
+          <div class="card">
+            <h3>必须先回答的发布问题</h3>
+            <p>
+              <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+              当前仓库同时表达了两条不一致的产品事实：权威架构把 <code>react_enterprise_qa_v3</code> 定义为产品主路径并要求删除旧路径，但三个公开示例仍全部运行 <code>react_enterprise_qa_v2</code> 与 LangGraph。
+            </p>
+            <div class="callout warning">
+              <p>
+                <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+                发布负责人必须冻结一个明确版本承诺：发布 V2 隔离试点，或完成 V3 主线迁移；不能把两者同时称为正式产品基线。
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <h3>最危险的错误认识</h3>
+            <p>
+              <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+              本地环境中 Python 1443 项测试和前端 246 项测试通过，但 GitHub 上最近 10 次 CI 全部失败；本地虚拟环境已包含 CI 未安装的 <code>tree</code> 依赖，掩盖了干净环境的收集失败。
+            </p>
+            <div class="callout danger">
+              <p>
+                <span class="claim common">[COMMON]</span><span class="confidence">HIGH</span>
+                正式发行应以可复现的干净环境、受保护分支和不可变制品为准，而不是以开发机已有依赖的结果为准。
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="grid-4" style="margin-top:16px">
+          <div class="card metric"><b>12</b><span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>P0 阻断项</span></div>
+          <div class="card metric"><b>1,443 / 1</b><span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Python 通过 / 跳过</span></div>
+          <div class="card metric"><b>89.89%</b><span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Python 行覆盖率</span></div>
+          <div class="card metric"><b>10 / 10</b><span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>最近 CI 失败次数</span></div>
+        </div>
+      </section>
+
+      <section id="tiers">
+        <h2>02 · 按发布层级给结论</h2>
+        <p class="section-lead">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+          “正式发布”不是单一状态；不同暴露面和数据责任对应不同门槛。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>目标层级</th><th>当前结论</th><th>可做什么</th><th>仍需关闭</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>L0 · 本地确定性演示</strong></td>
+                <td><span class="status partial">CONDITIONAL GO</span></td>
+                <td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>离线 demo、示例问答、拒答、澄清和审批暂停路径均已运行通过。</td>
+                <td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>打正式 Tag 前仍应修复 CI 和根级构建，避免发布一个不可复现的演示版本。</td>
+              </tr>
+              <tr>
+                <td><strong>L1 · 隔离单用户试点</strong></td>
+                <td><span class="status blocked">NO-GO</span></td>
+                <td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>仅可在 localhost、受控机器、无敏感生产数据且明确标注 mock identity 的条件下短期试用。</td>
+                <td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>至少关闭镜像泄露、依赖漏洞、CI、V2/V3 版本承诺、数据备份和试点退出机制。</td>
+              </tr>
+              <tr>
+                <td><strong>L2 · 企业内部生产</strong></td>
+                <td><span class="status blocked">BLOCKED</span></td>
+                <td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>当前没有生产 IAM、租户与资源所有权授权、共享事务锁后端、可审计部署链或 SRE 门禁。</td>
+                <td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>全部 P0，加上数据、运维、SSRF/出站、备份恢复、可观测性和发布治理 P1。</td>
+              </tr>
+              <tr>
+                <td><strong>L3 · 公网多租户 GA</strong></td>
+                <td><span class="status blocked">NOT READY</span></td>
+                <td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>项目自己的信任边界文档明确把生产 IAM、企业 DLP、防篡改审计、多租户授权和托管合规报告列为当前范围外。</td>
+                <td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>除 L2 全部项目外，还需租户隔离证明、隐私/合规控制、容量与灾备目标、客户支持与安全响应体系。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <details style="margin-top:14px">
+          <summary>Python 依赖审计的修复目标</summary>
+          <div>
+            <p>
+              <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+              下表版本是 2026-07-10 的 <code>pip-audit</code> 对各公告返回的最高修复下限；它们不是可直接逐个强升的兼容性承诺，必须由锁解析、框架兼容测试和全量回归共同确认。
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>包</th><th>审计返回的修复目标</th><th>当前相关路径</th></tr></thead>
+                <tbody>
+                  <tr><td><code>aiohttp</code></td><td>3.14.0 / 3.14.1</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>tree</code> / LlamaIndex 依赖树</td></tr>
+                  <tr><td><code>cryptography</code></td><td>48.0.1</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>MCP crypto 依赖链</td></tr>
+                  <tr><td><code>idna</code></td><td>3.15</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>HTTP 客户端传递依赖</td></tr>
+                  <tr><td><code>langgraph-checkpoint</code></td><td>4.1.1</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>LangGraph checkpoint / approval resume</td></tr>
+                  <tr><td><code>langgraph-sdk</code></td><td>0.3.15</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>LangGraph 依赖链</td></tr>
+                  <tr><td><code>langsmith</code></td><td>0.8.18</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>LangChain/LangGraph 依赖链</td></tr>
+                  <tr><td><code>pydantic-settings</code></td><td>2.14.2</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>MCP 依赖链</td></tr>
+                  <tr><td><code>PyJWT</code></td><td>2.13.0</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>mcp[crypto]</code> 依赖链</td></tr>
+                  <tr><td><code>pypdf</code></td><td>6.13.3</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Knowledge ingestion extra</td></tr>
+                  <tr><td><code>python-multipart</code></td><td>0.0.31</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>MCP / Web 请求依赖链</td></tr>
+                  <tr><td><code>starlette</code></td><td>最高 1.3.1</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>FastAPI Dashboard API 与 MCP 依赖链</td></tr>
+                  <tr><td><code>nltk</code></td><td>审计无修复版本</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>可选文本处理依赖链；需移除、隔离或风险接受</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section id="scorecard">
+        <h2>03 · 加权就绪度评分</h2>
+        <p class="section-lead">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>
+          评分用于排序收口工作，不是客观认证。总分按下表权重计算：Σ（维度得分 × 权重）= 4.1。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>维度</th><th>权重</th><th>得分</th><th>依据</th></tr></thead>
+            <tbody>
+              <tr><td>产品范围与发布主线</td><td>12%</td><td><strong>5.5</strong><div class="bar warn"><i style="width:55%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>产品定位清楚，但 V3 权威主线与三个 V2 公开示例冲突。</td></tr>
+              <tr><td>代码质量与可维护性</td><td>12%</td><td><strong>8.3</strong><div class="bar"><i style="width:83%"></i></div></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Ruff、mypy、测试全绿；健康度 8.3，但存在超大模块和死代码。</td></tr>
+              <tr><td>测试与 Agent 评估</td><td>14%</td><td><strong>6.5</strong><div class="bar warn"><i style="width:65%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>确定性覆盖强；真实 LLM 产品门禁被跳过，当前 release fixture 仅 2 个固定案例。</td></tr>
+              <tr><td>安全与隐私</td><td>18%</td><td><strong>1.5</strong><div class="bar danger"><i style="width:15%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>缺少生产身份、租户/资源授权；任意来源 CORS；并存在未认证 SSRF、环境凭证外带与本地进程启动链。</td></tr>
+              <tr><td>软件供应链</td><td>10%</td><td><strong>3.0</strong><div class="bar danger"><i style="width:30%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>npm audit 为 0，但 Python 锁定依赖存在多项公告，CI/Docker 又不强制使用锁。</td></tr>
+              <tr><td>制品与部署</td><td>12%</td><td><strong>2.5</strong><div class="bar danger"><i style="width:25%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>Wheel 可构建，但根级 npm build 失败、Wheel 不含 SPA、Docker 为开发演示形态。</td></tr>
+              <tr><td>数据与生产运维</td><td>12%</td><td><strong>2.5</strong><div class="bar danger"><i style="width:25%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>除共享事务后端、平台备份/恢复、SLO、告警和灾备未闭环外，单进程 timeline/snapshot 写入也有并发丢写与短 ID 碰撞风险。</td></tr>
+              <tr><td>文档、支持与发布治理</td><td>10%</td><td><strong>4.0</strong><div class="bar danger"><i style="width:40%"></i></div></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>技术文档丰富，但发布文档、分支保护、Release/Tag、变更日志、翻译同步和支持策略未闭环。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="strengths">
+        <h2>04 · 已具备的发布基础</h2>
+        <p class="section-lead">
+          <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+          下列能力是真实资产，应保留并进入正式门禁，而不是在生产化时另起一套执行路径。
+        </p>
+        <div class="grid-3">
+          <div class="card">
+            <h3>控制与审计</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>PolicyEngine、证据准入、工具审批、Memory Boundary、Trace 与 Governance Receipt 已在同一 Harness 路径中被大量测试。</p>
+          </div>
+          <div class="card">
+            <h3>确定性回归</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>支持回答、无证据拒答、澄清等待和审批等待四类 demo 结果与项目声明一致。</p>
+          </div>
+          <div class="card">
+            <h3>类型与静态质量</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Ruff 无问题；mypy strict 对 209 个 Python 源文件通过；核心 Contracts 未发现第三方 SDK 类型直接导入。</p>
+          </div>
+          <div class="card">
+            <h3>测试规模</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Python 1443 项通过、1 项跳过；Dashboard 215 项与 Chat 31 项通过；Python 行覆盖率 89.89%。</p>
+          </div>
+          <div class="card">
+            <h3>前端可构建部分</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Dashboard 与 Chat 独立生产构建通过，UI workspace 的 TypeScript 类型检查通过。</p>
+          </div>
+          <div class="card">
+            <h3>基础秘密卫生</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">MED</span>跟踪文件中未扫描到明显 API token 或私钥模式；真实 <code>.env</code> 未被 Git 跟踪；GitHub secret scanning 与 push protection 已开启。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="attack-paths">
+        <h2>05 · 关键风险链</h2>
+        <p class="section-lead">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+          单个缺口的严重性有限，但以下组合链会把开发模式缺口放大成生产事故路径。
+        </p>
+        <div class="card">
+          <h3>风险链 A · 未认证配置与数据命令面</h3>
+          <div class="flow">
+            <div class="hot">任意网络客户端 / 默认 public quick tunnel</div>
+            <div class="hot">通配 CORS + credentials</div>
+            <div class="hot">固定 local-user</div>
+            <div class="hot">授予全部 OperatorPermission</div>
+            <div class="hot">配置/记忆/审批 + 凭证外带与本地进程启动</div>
+          </div>
+          <p>
+            <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+            运行时烟测确认：无认证 <code>GET /api/config/agents</code> 返回 200；无认证可用任意 <code>customer_id</code> 创建客户会话；恶意 Origin 得到回显式 <code>Access-Control-Allow-Origin</code> 与 <code>allow-credentials:true</code>。开发命令 <code>verify-remote</code> 默认创建 public cloudflared quick tunnel，其网关把所有常见 HTTP 方法的 <code>/api/*</code> 原样代理到后端。
+          </p>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>风险链 B · 服务端出站请求</h3>
+          <div class="flow">
+            <div>未认证配置 API</div>
+            <div>创建 http_json Knowledge Source</div>
+            <div>endpoint 仅校验绝对 http(s)</div>
+            <div>调用 publication/validate</div>
+            <div class="hot">服务端访问攻击者选择的地址</div>
+          </div>
+          <p>
+            <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+            代码未发现私网/loopback/link-local、DNS 重绑定、重定向目标或 HTTPS-only 控制；在网络暴露部署中，该组合构成高可信 SSRF/内网探测路径。
+          </p>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>风险链 C · 镜像携带开发机秘密与运行数据</h3>
+          <div class="flow">
+            <div>仓库根存在真实 .env</div>
+            <div>runs 中约 5,253 个文件</div>
+            <div>无 .dockerignore</div>
+            <div>COPY . .</div>
+            <div class="hot">秘密、会话/Trace、虚拟环境进入构建上下文与镜像层</div>
+          </div>
+          <p>
+            <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+            工作区约 2.0 GB，其中 <code>.venv</code> 约 1.1 GB、根 <code>node_modules</code> 约 186 MB、<code>runs</code> 约 47 MB；Dockerfile 第 5 行复制整个上下文。
+          </p>
+        </div>
+      </section>
+
+      <section id="findings">
+        <h2>06 · 完整问题清单</h2>
+        <p class="section-lead">
+          <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+          共 29 项：12 个 P0、12 个 P1、5 个 P2，覆盖发布范围、代码、Agent 评估、安全、供应链、部署、数据、运维、前端、文档与治理；可按优先级筛选。
+        </p>
+        <div class="toolbar" aria-label="问题优先级筛选">
+          <button class="active" data-filter="ALL">全部</button>
+          <button data-filter="P0">P0 · 发布阻断</button>
+          <button data-filter="P1">P1 · 生产前必补</button>
+          <button data-filter="P2">P2 · 发布后收敛</button>
+        </div>
+        <div class="finding-list">
+          <article class="card finding" data-severity="P0" data-domain="security">
+            <div class="finding-head"><h3>PA-P0-01 · 生产身份、租户与资源授权缺失</h3><span class="pill p0">P0 · Security</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>API 固定使用 <code>local-user</code>，并赋予全部 OperatorPermission；客户身份由请求体 <code>customer_id</code> 直接声明，记忆导出/删除按路径中的 <code>subject_ref</code> 执行。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>任何能访问 API 的主体可读取或改变配置、处理审批、伪造客户上下文，且可能导出或删除其他主体的记忆；Agent import 还接受服务端本地 <code>manifest_path</code>。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>proof_agent/observability/api/app.py:124</code>；<code>operator_identity.py:43-51</code>；<code>customer_api.py:70-77, 107-127, 139-209</code>；<code>configuration_api.py:1501-1521</code>；<code>delivery/cli.py:147-186,193-235</code>；<code>remote_verify_gateway.py:43-63,102-113</code>；运行时无认证烟测。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>立即把 remote verification 改为 local-only 默认或加一次性强认证；接入生产 OIDC/JWT 或受控 session；服务端建立 operator/customer identity；RBAC + tenant/resource ownership 检查覆盖所有命令与读模型；默认拒绝；跨租户负向测试通过；本地路径导入仅限受信管理平面和允许根目录，或改为受控包上传。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="security">
+            <div class="finding-head"><h3>PA-P0-02 · 任意来源 CORS 与未来凭证模型冲突</h3><span class="pill p0">P0 · Security</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>FastAPI 配置 <code>allow_origins=["*"]</code>、<code>allow_credentials=True</code>、全部方法和全部请求头；运行时对恶意 Origin 返回允许凭证的跨域响应。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>当前允许任意网页跨域驱动未认证命令面；未来接入 Cookie/session 后还会形成 CSRF 与凭证滥用风险。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>proof_agent/observability/api/app.py:88-94</code>；对 <code>https://attacker.example</code> 的实测响应。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>环境级 Origin allowlist；凭证模型与 CSRF 策略明确；预检只允许必要方法/请求头；负向浏览器测试证明非白名单 Origin 无法读写。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="deployment">
+            <div class="finding-head"><h3>PA-P0-03 · Docker 构建上下文会复制秘密与运行数据</h3><span class="pill p0">P0 · Deployment</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>仓库没有 <code>.dockerignore</code>，根目录存在真实 <code>.env</code> 与大量 <code>runs</code> 数据，Dockerfile 执行 <code>COPY . .</code>；Compose 还把整个宿主仓库 bind mount 到 <code>/app</code>。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>本地凭证、客户/会话数据、Trace、配置、虚拟环境和依赖树可能进入构建上下文、缓存和镜像层；同时导致巨大的慢构建。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>Dockerfile:5-6</code>；<code>docker-compose.yml:3-7</code>；<code>.env</code> 存在但未跟踪；工作区 2.0 GB；<code>runs</code> 47 MB / 约 5,253 文件。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>提交严格 <code>.dockerignore</code>；采用多阶段、非 root、最小运行时镜像；只复制锁文件、源码与已构建制品；镜像层扫描证明无秘密、运行数据、Git、venv 或 node_modules。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="ci">
+            <div class="finding-head"><h3>PA-P0-04 · 主分支 CI 持续失败且本地绿不可复现</h3><span class="pill p0">P0 · CI</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>当前 HEAD 的 CI 失败，最近 10 次可见 CI 全部失败；工作流只安装 <code>.[dev,dashboard]</code>，四个测试模块在收集时缺少 <code>llama_index</code>。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>没有可信的合并门禁；Lint、mypy 和 CLI smoke 因测试收集失败而未运行；开发机现有 tree extra 掩盖问题。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><a href="https://github.com/jaminzzhang/ProofAgent/actions/runs/29036250358">GitHub Actions run 29036250358</a>；<code>.github/workflows/ci.yml:16-27</code>；隔离环境 <code>import llama_index</code> 复现失败。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>定义支持的 extras 矩阵；使用 <code>uv sync --frozen</code> 或等价锁定安装；全套 CI 绿；main 设置 required checks 与禁止绕过的分支保护。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="supply-chain">
+            <div class="finding-head"><h3>PA-P0-05 · 锁定 Python 依赖含未修复安全公告</h3><span class="pill p0">P0 · Supply chain</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>pip-audit</code> 对全部生产 extras 的锁定依赖报告 12 个受影响包、39 条漏洞记录；对应基础/开发依赖切片报告 9 个受影响包、24 条记录。</p>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>这里的 P0 表示“未完成逐公告分级与风险处置前不得发布”，不表示 39 条记录都具有 Critical CVSS、位于实际部署 extras 或已证明可利用；完成 advisory ID、severity、direct/transitive、reachability 与补丁兼容性分析后可重新定级。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>Starlette、python-multipart、pypdf、LangGraph checkpoint 等位于 Web、上传、解析或恢复路径；并非每条公告都已证明可利用，但发布前不能保留未知暴露。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>受影响包包括 <code>aiohttp, cryptography, idna, langgraph-checkpoint, langgraph-sdk, langsmith, nltk, pydantic-settings, pyjwt, pypdf, python-multipart, starlette</code>；2026-07-10 <code>pip-audit --no-deps --disable-pip</code>。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>升级并重锁；逐条给出可利用性/不可利用性说明；全量回归；生成 SBOM；CI 对已知高危公告与锁漂移失败关闭。无修复的 NLTK 公告需移除、隔离或记录正式风险接受。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="product">
+            <div class="finding-head"><h3>PA-P0-06 · V3 产品主线与 V2 公开交付物冲突</h3><span class="pill p0">P0 · Product</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>docs/development-progress.md</code> 和技术设计定义 V3 为产品主路径；ADR-0048 要求删除旧可执行路径；三个公开示例却全部使用 V2 + LangGraph。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>用户、测试、发行说明和支持团队无法确定正式语义；V2 通过不能证明 V3 主路径通过，反之亦然。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>docs/development-progress.md:48-58</code>；<code>docs/technical-design.md:141-147</code>；<code>docs/adr/0048-...:5-7</code>；三个 <code>examples/*/agent.yaml:5-7</code>。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>批准一份 Release Scope ADR；若发 V3，则迁移三个公开示例、文档、套件和 seed；若发 V2 试点，则明确降级为历史/私测通道并移除“V3 已是发布主线”的冲突表述。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="evaluation">
+            <div class="finding-head"><h3>PA-P0-07 · 项目自己定义的真实 LLM 产品门禁未执行</h3><span class="pill p0">P0 · AI evaluation</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>唯一跳过的 Python 测试正是 V3 真实 LLM 回归；文档把它定义为产品发布门禁。现有 V3 suite 只有 3 个 retrieval-answer case 和 1 个 approval-wait case，没有实现文档要求的复合请求、证据不足、审批拒绝、振荡、硬预算耗尽与 plan-round 阈值。已通过的 Analyzer release smoke 只分析 2 个固定 fixture subject；第三个公开 Agent <code>agent_management_insurance_specialist</code> 依赖真实 <code>openai_compatible</code> planner/reviewer/model，但没有对应正式 release suite。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>确定性 provider 无法证明真实模型在意图、循环、工具提案、拒答和终止预算下仍符合阈值；当前门禁也不覆盖三个实际公开 Agent。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>tests/llm_regression/test_v3_intent_execution_real_llm.py:12-40</code>；<code>docs/evaluation-system.md:398-429</code>；<code>proof_agent/evaluation/suites/v3_intent_execution.yaml:7-98</code>；<code>insurance_qa_smoke_release_subjects.yaml</code> 仅 2 subjects；<code>examples/agent_management_insurance_specialist/agent.yaml:216-256</code>；无凭证 CLI smoke 返回 <code>PA_MODEL_003</code>。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>先实现文档声明的完整 V3 场景与 plan-round/预算阈值，再在受控秘密与成本预算下运行；冻结模型/参数/基准版本；对三个发布 Agent 运行正式 Campaign；所有必需安全/治理 gate 100% 通过并保留不可变结果。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="packaging">
+            <div class="finding-head"><h3>PA-P0-08 · 发行制品与前端部署链未闭环</h3><span class="pill p0">P0 · Packaging</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>根 <code>npm run build</code> 因 <code>@proofagent/ui</code> 缺少 build script 立即失败；Wheel 不含 Dashboard/Chat 构建产物或公开 examples；API-only server 的 <code>/</code> 返回 404。</p>
+            <dl>
+              <dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>无法从一个受支持、可复现的发行制品得到文档所描述的完整产品表面；源码开发启动与安装包部署是两套世界。</dd>
+              <dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>package.json:11-18</code>；<code>packages/ui/package.json:16-18</code>；Wheel 内容检查；<code>app.py:140-149</code>；API 烟测。</dd>
+              <dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>选择并记录单一部署拓扑；修复根 build；生产构建中生成并装载 SPA，或发布独立前端制品；对安装后的 Wheel/容器做 clean-room smoke；版本号与制品一致。</dd>
+            </dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="security">
+            <div class="finding-head"><h3>PA-P0-09 · 未认证 http_json 配置形成直接 SSRF</h3><span class="pill p0">P0 · Security</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>未认证调用者可创建 <code>http_json</code> Knowledge Source，再调用 publication validation 触发服务端请求；endpoint 只校验绝对 <code>http(s)</code> URL，未发现私网/loopback/link-local、DNS 重绑定、重定向后复核或 HTTPS-only 策略。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>configuration_api.py:899-928,1377-1401</code>；<code>configuration/local_store.py:1532-1558</code>；<code>capabilities/knowledge/http_json.py:269-282,309-314</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>先完成真实认证授权；集中式 egress policy；默认 HTTPS；主机/端口 allowlist；解析后 IP 检查；每次重定向复核；禁私网与 metadata 网段；代理、DNS 重绑定与重定向测试。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="secrets">
+            <div class="finding-head"><h3>PA-P0-10 · 任意 credential env + base_url 可外带服务端秘密</h3><span class="pill p0">P0 · Credential exfiltration</span></div>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>未认证调用者可创建 Shared Model Connection，任意指定 <code>credential_ref.name</code> 与 <code>base_url</code>，再通过 Draft contract 与 validation run 解析该环境变量；OpenAI-compatible client 会把值放入 <code>Authorization: Bearer</code> 并请求所选 endpoint，因此可把服务端环境秘密发送到攻击者地址。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>configuration_api.py:253-277,506-533,1841-1887,1983-2025</code>；<code>contracts/agent_configuration.py:52-56,212-225</code>；<code>bootstrap/model_resolution.py:66-100</code>；<code>capabilities/models/openai_compatible.py:81-107,146-183</code>；本地 OpenAI SDK <code>_client.py:463-467</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>禁止客户端提交任意环境变量名；改用服务端创建的 opaque secret id 与按环境 allowlist；模型 endpoint/egress allowlist；密钥按 provider/tenant 最小权限；回归测试证明非授权 env 无法解析且凭证永不发送到非批准主机；轮换可能已暴露的凭证。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="security">
+            <div class="finding-head"><h3>PA-P1-02 · 缺少生产 Web 边界控制</h3><span class="pill p1">P1 · Security</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>未发现 TrustedHost、HTTPS redirect、安全响应头、全局请求体上限或限流中间件；客户问题字段只有 <code>min_length</code> 没有 <code>max_length</code>；OpenAPI/Docs 默认暴露。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>在应用或受信网关实现 TLS、host allowlist、HSTS/CSP/X-Content-Type-Options、请求与上传上限、用户/租户/端点限流、超时与并发预算；生产关闭或保护 API docs。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="data">
+            <div class="finding-head"><h3>PA-P0-11 · 单进程也存在丢写/部分 JSON 与短 ID 碰撞</h3><span class="pill p0">P0 · Data integrity</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>ConversationStore.append_turn</code> 与 <code>CustomerStore.append_snapshot</code> 是无锁 read-modify-write，并直接覆盖 JSON；并发请求可丢失 turn/snapshot 或暴露部分文件。Run 与 conversation id 只取 UUID 前 8 个十六进制字符，现有路径创建/写入没有一致的碰撞拒绝。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>在 32-bit ID 空间中，生日碰撞概率约在 9,291 个 ID 达到 1%，在 77,163 个 ID 达到 50%；这不是只有多实例才出现的问题。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>conversation_store.py:38-72,130-140</code>；<code>customer_store.py:32-82,148-158</code>；<code>run_execution_service.py:58-59</code>；<code>run_store.py:73-77</code>；<code>docs/technical-design.md:1215</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>使用全宽随机 ID 与数据库唯一约束；原子创建且碰撞重试；所有 timeline/snapshot 写入使用事务或原子 replace + 锁；并发/崩溃恢复测试；再完成共享事务后端、Schema migration、备份恢复、RPO/RTO、加密、租户分区和删除证明。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="privacy">
+            <div class="finding-head"><h3>PA-P1-04 · 数据生命周期与防篡改审计未生产化</h3><span class="pill p1">P1 · Privacy</span></div>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>代码支持 retention_days、到期过滤、软删除和部分清理，但未验证覆盖所有会话、Trace、Receipt、配置审计、上传原件、备份与外部 Memory Provider 的统一保留计划、自动擦除证明、Legal Hold 或防篡改存储方案。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>control/memory/extractor.py:23-41,195-196</code>；<code>capabilities/memory/local_store.py:60-77,80-110,123-147</code>；<code>configuration/local_store.py:1993-2026</code>；<code>docs/concepts/trust-boundaries.md:39-54,87-97</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>数据分类与 owner；每类数据 TTL/归档/删除/备份规则；加密与密钥轮换；审计 WORM/签名；DSAR/删除演练；敏感生产样本进入评估前的脱敏与审批。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="ops">
+            <div class="finding-head"><h3>PA-P1-05 · 生产可观测性、SLO 与事件响应缺失</h3><span class="pill p1">P1 · SRE</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">MED</span>现有 Trace/Receipt 是业务审计资产，但未发现生产指标导出、集中日志、分布式追踪 adapter、SLO/告警、容量基线、On-call、事故响应、Canary 或回滚运行手册。<code>/api/health</code> 虽称 readiness summary，却只读取 RunStore 统计并固定返回 <code>status: ok</code>，未检查存储可写、配置、worker、provider 或 approval-resume 状态。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>proof_agent/observability/api/routers/health.py:15-25</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>拆分 liveness/readiness；readiness 检查关键存储与 worker 依赖；定义可用性、延迟、错误率、拒答/审批/工具失败与 token 成本 SLI；仪表盘与告警；值班/事故/回滚 runbook；负载、故障注入、恢复和 canary 演练。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="ci">
+            <div class="finding-head"><h3>PA-P1-06 · CI 未覆盖完整产品制品</h3><span class="pill p1">P1 · CI</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>当前 CI 只有 Python test/lint/type/CLI smoke；未运行 Dashboard/Chat typecheck、单测和构建，也未构建 Wheel、Docker、SBOM、E2E、依赖审计、SAST、secret scan 或 release gate。Actions 使用可变 major tag，Docker base image 也未 pin digest。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>.github/workflows/ci.yml:11-23</code>；<code>Dockerfile:1</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>按 PR、main、nightly、release 分层；前后端、包、镜像、依赖、安全、浏览器 E2E 与 Agent evaluation 门禁全部进入 required checks；第三方 Action pin 完整 commit SHA，基础镜像 pin digest；上传可追溯测试和制品。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="governance">
+            <div class="finding-head"><h3>PA-P1-07 · 仓库与发行治理未启用</h3><span class="pill p1">P1 · Governance</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>main 无分支保护；Dependabot security updates 关闭；没有 code scanning analysis；没有 Tag、GitHub Release 或 release workflow；最近 open issue 数为 0。正向项是 Actions 默认权限为 read、不能批准 PR review，secret scanning 与 push protection 已启用。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><a href="https://github.com/jaminzzhang/ProofAgent">GitHub 仓库只读查询</a>，2026-07-10。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>CODEOWNERS/必需审批/required checks/禁止强推；Dependabot 或替代依赖机器人；CodeQL/SAST；签名 Tag 与 Release；自动生成 provenance/SBOM；发布审批与回滚 owner。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="secrets">
+            <div class="finding-head"><h3>PA-P1-08 · 环境变量引用不是生产 Secret Vault</h3><span class="pill p1">P1 · Secrets</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>项目避免持久化 raw API key，但技术进度文档仍把 real secret vault 列为后续方向；当前配置主要保存环境变量名。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>使用云 KMS/Vault/Secrets Manager；按租户/环境最小权限；短期凭证、轮换和吊销；启动时不回显；失败日志与 core dump 防泄露；秘密访问审计。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="qa">
+            <div class="finding-head"><h3>PA-P1-09 · 浏览器 E2E、可访问性、性能与负载门禁缺失</h3><span class="pill p1">P1 · QA</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Dashboard 声明 Playwright 依赖，但未发现 Playwright config/spec；未发现 axe/pa11y/Lighthouse、k6/Locust/Artillery 或生产式故障恢复测试。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>覆盖登录、Agent 配置/发布、审批、客户聊天、记忆删除、上传/索引和错误恢复的真实浏览器测试；WCAG 自动+人工审计；核心页面性能预算；API/worker/load/soak 测试。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="reproducibility">
+            <div class="finding-head"><h3>PA-P1-10 · Shared Model Connection 的 live reference 削弱复现性</h3><span class="pill p1">P1 · AI reproducibility</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>技术设计说明 V1 的 Shared Model Connection 更新会影响未来解析，Published Agent Version 不固定连接版本。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>docs/technical-design.md:893-898</code>；<code>docs/adr/0020-live-shared-model-connections.md</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>每次运行记录不可变 connection revision/digest 与有效参数；Release/Campaign 固定版本；连接变更触发影响分析、再验证和回滚；紧急轮换与行为变更分离。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="architecture">
+            <div class="finding-head"><h3>PA-P1-11 · 超大模块与旧运行时耦合提高发布变更风险</h3><span class="pill p1">P1 · Architecture</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>local_store.py</code> 4,610 行、<code>configuration_api.py</code> 3,457 行；Control 模块仍导入 Runtime graph 与具体 observability/capability 实现；旧 V2/LangGraph 路径仍广泛存在。全量图谱中 <code>LocalAgentConfigurationStore</code> 以 465 条边成为第二大核心节点。</p>
+            <dl><dt>影响</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>并发、授权、存储与发布逻辑集中在少数深而宽的模块，增加回归半径和安全审查难度。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>先冻结 V3/V2 主线；按领域拆出深模块与端口；删除退役执行路径；为存储事务、授权和发布状态机建立边界测试；禁止新反向依赖。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="api">
+            <div class="finding-head"><h3>PA-P1-12 · API 生命周期与韧性契约未正式化</h3><span class="pill p1">P1 · API</span></div>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>84 条 OpenAPI paths 直接位于 <code>/api</code>，未发现公开版本/弃用策略；关键创建、发布、审批和 run start 的跨进程幂等键、统一错误脱敏契约与容量预算尚未形成发布门禁。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>版本兼容与弃用政策；幂等键和冲突语义；统一错误 envelope；schema diff gate；超时/重试/熔断；API 负载和并发基线；客户端兼容测试。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="docs">
+            <div class="finding-head"><h3>PA-P1-13 · 文档、示例目录、ADR 与中英文不同步</h3><span class="pill p1">P1 · Docs</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>测试认定有 3 个公开示例，但 README、PRD、Developer Guide 和 AGENTS-COMMON 主要只列 2 个；102 个 ADR 中 0007 与 0032 重号；150 篇非 superpowers 英文文档中只有 13 篇存在对应中文路径，137 篇缺失；中文目录共 14 篇，其中 1 篇没有英文对应。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>发布文档以一个 source-of-truth 生成；修正示例 catalog 与 V3/V2 说明；ADR 编号唯一；执行 release-time zh sync；链接、命令和 clean-room quickstart 自动验证。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P1" data-domain="release">
+            <div class="finding-head"><h3>PA-P1-14 · 开源与客户支持材料不完整</h3><span class="pill p1">P1 · Release</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>仓库有 Apache-2.0 LICENSE，README 已包含简短贡献规则和最小漏洞披露说明；但未发现独立 SECURITY.md、CONTRIBUTING、CHANGELOG、CODE_OF_CONDUCT、NOTICE、VERSION 文件，也没有完整的私密报告渠道、响应 SLA、兼容/弃用与支持政策。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>README.md:380-406</code>；仓库根文件清单。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>发布安全联系、私密报告渠道与响应 SLA；贡献与治理规则；变更日志和语义版本；支持矩阵、升级/回滚指南、第三方许可证与 NOTICE 评审、隐私与数据处理说明。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P0" data-domain="sandbox">
+            <div class="finding-head"><h3>PA-P0-12 · 公网未认证配置可启动任意 MCP stdio 进程</h3><span class="pill p0">P0 · Command execution</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Tool Source API 接受 MCP stdio <code>command</code>/<code>args</code>，存储校验只要求 command 非空，运行时交给 MCP SDK 启动。本地 Tool Handler 与 Customer Adapter 也会通过 <code>importlib</code> 执行 Python 文件。</p>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>结合固定全权限 local identity、未认证 Draft contract PATCH/validation run 与默认 public quick tunnel，网络调用者可配置 <code>/bin/sh -c ...</code> 一类进程；命令副作用可在 MCP handshake 失败前发生，因此这是网络到 OS 命令执行链，不只是未来的沙箱设计问题。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>configuration_api.py:763-784,1841-1887,1983-2025</code>；<code>configuration/local_store.py:4343-4375</code>；<code>mcp_discovery.py:273-281</code>；<code>mcp_runtime.py:74-100</code>；<code>delivery/cli.py:175-199,868-879</code>；<code>operator_identity.py:43-51</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>立即取消默认公网隧道并完成认证授权；Hosted 模式禁用任意 MCP stdio、本地 Python Handler 与 Customer Adapter；若必须支持，只允许平台签名包和 executable/args allowlist，并在最小权限容器或微虚拟机中执行，限制网络/文件系统/资源，保留完整审计和负向利用回归。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P2" data-domain="frontend">
+            <div class="finding-head"><h3>PA-P2-01 · 前端包体与测试噪声需收敛</h3><span class="pill p2">P2 · Frontend</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Chat 构建产生约 607.83 kB 主 JS chunk（gzip 186.19 kB）并触发 Vite 超 500 kB 警告；Dashboard 两个 pagination 测试输出 React <code>act(...)</code> 警告。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>路由/编辑器代码分割；真实网络与弱设备性能预算；清零 act warning；发布前浏览器矩阵和可访问性回归。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P2" data-domain="quality">
+            <div class="finding-head"><h3>PA-P2-02 · 死代码与依赖清理</h3><span class="pill p2">P2 · Quality</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Vulture 报告 6 个 100% 置信度未使用局部变量；Knip 报告 7 个未使用文件、1 个未使用生产依赖、3 个未使用开发依赖、1 个未声明依赖、9 个未使用 exports、64 个未使用 exported types 和 1 条配置提示。</p>
+            <dl><dt>解释</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>导出的类型可能是有意保留的公共 API，不能机械删除；未声明的 <code>tailwindcss</code> 与缺失 package entry 则应优先确认。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>逐项删除或标注有意保留；修正依赖声明；将 dead-code 检查放入非阻断 CI，待基线清零后转阻断。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P2" data-domain="coverage">
+            <div class="finding-head"><h3>PA-P2-03 · 覆盖率缺少阈值且低覆盖集中在外部边界</h3><span class="pill p2">P2 · Testing</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>总行覆盖率 89.89%，但 ToolResult validator 54.55%、remote verify gateway 64.76%、CLI 64.89%、memory admission 69.09%、http_json 70.67%、MCP runtime 71.43%、Brave Search 75.49%、Mem0 store 77.19%、OpenAI-compatible provider 81.53%；CI 未配置 fail-under。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>先为鉴权、SSRF、上传、MCP、恢复与错误路径补行为测试；设置不低于当前基线的总阈值与关键模块阈值，禁止覆盖率倒退。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P2" data-domain="support">
+            <div class="finding-head"><h3>PA-P2-04 · 发布后运营与客户反馈闭环未定义</h3><span class="pill p2">P2 · Operations</span></div>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>代码已有 feedback、handoff、evaluation curation 等原语，但未找到面向正式客户的工单 owner、升级路径、已知问题列表、模型行为回归处置和版本退场节奏。</p>
+            <dl><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>定义支持等级、问题分级、Agent 事故与普通软件事故的分流、反馈到评估样本的审批链、hotfix 与模型回滚流程、EOL 通知。</dd></dl>
+          </article>
+
+          <article class="card finding" data-severity="P2" data-domain="scope">
+            <div class="finding-head"><h3>PA-P2-05 · 未实现能力必须形成显式支持矩阵</h3><span class="pill p2">P2 · Product scope</span></div>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Streaming 尚未实现；Azure OpenAI 与 Anthropic provider 是清晰失败的 placeholder；Model Connection smoke-test API 不发送远程请求；客户模式仍是 private pilot，不提供生产 IAM、ticketing、SLA tracking 或 transactional account changes。</p>
+            <dl><dt>证据</dt><dd class="evidence"><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>docs/development-progress.md:98-112</code>；<code>docs/technical-design.md:883-898</code>；<code>configuration_api.py:3386-3417</code>；<code>docs/concepts/trust-boundaries.md:107-111</code>。</dd><dt>关闭标准</dt><dd><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>发行说明、定价/销售材料、README 与支持手册使用同一 capabilities matrix；未实现项明确标注 unavailable/preview；任何新增支持项必须有适配器测试、集成 smoke、运维 owner 和弃用政策。</dd></dl>
+          </article>
+        </div>
+      </section>
+
+      <section id="verification">
+        <h2>07 · 本次验证结果</h2>
+        <p class="section-lead">
+          <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+          所有结果均基于提交 <code>1bd0fbf</code> 的本地或 GitHub 只读验证；失败项没有被“本地绿”覆盖。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>检查</th><th>结果</th><th>关键输出</th><th>发布含义</th></tr></thead>
+            <tbody>
+              <tr><td>Ruff</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>All checks passed</td><td>Python lint 基线干净。</td></tr>
+              <tr><td>mypy strict</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>209 source files，无错误</td><td>静态类型基线强。</td></tr>
+              <tr><td>Python pytest</td><td><span class="status partial">PASS + SKIP</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>1443 passed, 1 skipped, 3 warnings / 26.30s<br><small>LangGraph serde pending deprecation 1 条；Pydantic FrozenDict serializer warning 2 条。</small></td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>跳过项是正式 V3 real-LLM gate，不能视为完整 release pass。</td></tr>
+              <tr><td>Python coverage</td><td><span class="status pass">89.89%</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>19,086 / 21,233 statements covered</td><td>总体良好；外部边界需定向补测与阈值。</td></tr>
+              <tr><td>Dashboard tests</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>30 files / 215 tests；有 act warning</td><td>组件回归强，浏览器 E2E 未覆盖。</td></tr>
+              <tr><td>Chat tests</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>10 files / 31 tests</td><td>组件回归通过。</td></tr>
+              <tr><td>Dashboard build</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>2030 modules；主 index 393.34 kB</td><td>独立构建可用。</td></tr>
+              <tr><td>Chat build</td><td><span class="status partial">PASS + WARN</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>主 index 607.83 kB；chunk warning</td><td>功能构建通过，需性能预算。</td></tr>
+              <tr><td>根 npm build</td><td><span class="status fail">FAIL</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>@proofagent/ui</code> 缺 build script</td><td>统一发行构建阻断。</td></tr>
+              <tr><td>npm audit</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>生产与全量均 0 vulnerability</td><td>Node 锁定供应链当前无已知公告。</td></tr>
+              <tr><td>pip-audit</td><td><span class="status fail">FAIL</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>all extras：12 packages / 39 records</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>Python 依赖需升级、重锁和风险判定。</td></tr>
+              <tr><td>Bandit</td><td><span class="status partial">TRIAGE</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>15 findings；3 medium B310</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>两项接近误报；http_json 暴露真实出站控制缺口。</td></tr>
+              <tr><td>Vulture / Knip</td><td><span class="status partial">FINDINGS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>6 Python unused vars；7 files / 1 dep / 3 dev deps / 1 unlisted dep / 9 exports / 64 exported types</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>不阻断安全；需人工区分死代码与有意公共 API。</td></tr>
+              <tr><td>Health composite</td><td><span class="status pass">8.3 / 10</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Type 10 / Lint 10 / Test 10 / Dead code 0；Shell 无适用脚本<br><small>首次健康检查，尚无趋势数据。</small></td><td>代码健康良好，不能代表生产就绪。</td></tr>
+              <tr><td>确定性 demo</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>ANSWERED_WITH_CITATIONS / REFUSED_NO_EVIDENCE / WAITING_FOR_USER_CLARIFICATION / WAITING_FOR_APPROVAL</td><td>核心本地行为基线成立。</td></tr>
+              <tr><td>公开示例 smoke</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>两条支持回答通过；不支持折扣被 Harness 拒答</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>V2 示例可演示，不能证明 V3 release。</td></tr>
+              <tr><td>Agent Management 公开示例</td><td><span class="status unknown">UNGATED</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>无真实 provider 凭证时以 <code>PA_MODEL_003</code> 退出；未发现对应 release suite</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>配置要求合理，但作为第三个公开示例尚无可重复发布证据。</td></tr>
+              <tr><td>Analyzer release smoke</td><td><span class="status partial">PASS / NARROW</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>GRR 2/2，decision passed</td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>仅固定旧 fixture；覆盖范围不足。</td></tr>
+              <tr><td>Python package build</td><td><span class="status partial">PASS / INCOMPLETE</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>sdist 与 wheel 成功；wheel 477 kB，不含 SPA/public examples</td><td>库包可生成，完整产品制品未形成。</td></tr>
+              <tr><td>API smoke</td><td><span class="status partial">PASS / UNSAFE</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>health 200、84 paths；配置与客户会话无认证可访问；根 404</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>功能面可启动，生产边界不合格。</td></tr>
+              <tr><td>配置攻击链静态复核</td><td><span class="status fail">P0</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>未认证 MCP stdio command/args 可进入 validation execution；任意 credential env/base_url 可进入 OpenAI Authorization 请求</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>未执行破坏性利用，但代码链足以阻断任何公网暴露。</td></tr>
+              <tr><td>本地存储并发复核</td><td><span class="status fail">P0</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>Conversation/Customer timeline 无锁 read-modify-write；运行/会话 ID 截断至 32 bit</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>单进程并发也可能丢写；正式流量前必须改造。</td></tr>
+              <tr><td>Docker compose config</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>配置可解析</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>不等于镜像可构建或可安全运行。</td></tr>
+              <tr><td>Docker image build</td><td><span class="status unknown">UNVERIFIED</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>本机 Docker daemon 不可用</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>必须在 CI clean runner 重新验证。</td></tr>
+              <tr><td>GitHub CI</td><td><span class="status fail">FAIL</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>最近 10 次全部失败</td><td><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>正式 Tag/Release 的硬阻断。</td></tr>
+              <tr><td>文档域检查</td><td><span class="status pass">PASS</span></td><td><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span><code>scripts/check-domain-contexts.py</code> 与 <code>git diff --check</code> 通过</td><td>结构检查通过，内容漂移仍存在。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="coverage">
+        <h2>08 · 防遗漏覆盖矩阵</h2>
+        <p class="section-lead">
+          <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+          本矩阵把“已审查、已验证、仍缺什么”逐域列出；“已审查”不代表通过。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>域</th><th>审查内容</th><th>状态</th><th>对应条目</th></tr></thead>
+            <tbody>
+              <tr><td>产品与范围</td><td>定位、目标用户、V2/V3 主线、公开示例、版本承诺</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-06</td></tr>
+              <tr><td>架构与边界</td><td>Contracts、Control/Runtime/Capability、遗留路径、模块规模、扩展代码信任模型</td><td><span class="status partial">PARTIAL</span></td><td>PA-P1-11、P0-12</td></tr>
+              <tr><td>后端质量</td><td>Ruff、mypy、pytest、coverage、Vulture、复杂度热点</td><td><span class="status pass">STRONG</span></td><td>PA-P2-02/03</td></tr>
+              <tr><td>Agent 与 LLM 评估</td><td>确定性 demo、Analyzer、Campaign、real-LLM gate、公开 Agent 套件</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-07</td></tr>
+              <tr><td>身份与授权</td><td>Operator、Customer、tenant/resource ownership、审批、配置、记忆</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-01/10/12</td></tr>
+              <tr><td>Web 与网络安全</td><td>CORS/CSRF、Host/TLS/headers、限流、请求界限、SSRF/egress</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-02/09、P1-02</td></tr>
+              <tr><td>秘密与隐私</td><td>Git 秘密、镜像秘密、Vault、PII、Memory、保留/删除、审计防篡改</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-03/10、P1-04/08</td></tr>
+              <tr><td>供应链</td><td>Python/Node 漏洞、锁、SBOM、SAST、secret scan、制品签名</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-05、P1-06/07</td></tr>
+              <tr><td>构建与制品</td><td>npm workspaces、wheel/sdist、SPA 静态资源、Docker、版本一致性</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-08</td></tr>
+              <tr><td>部署与配置</td><td>容器用户/层、环境配置、拓扑、迁移、回滚、不可变部署</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-03/08/11</td></tr>
+              <tr><td>数据与可靠性</td><td>本地/共享存储、事务锁、幂等、备份恢复、RPO/RTO、DR</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-11、P1-04/12</td></tr>
+              <tr><td>生产运维</td><td>健康、metrics/logs/traces、SLO、告警、容量、canary、事故响应</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P1-05</td></tr>
+              <tr><td>前端与 UX</td><td>类型、单测、构建、包体、真实浏览器、错误/空态</td><td><span class="status partial">PARTIAL</span></td><td>PA-P1-09、P2-01</td></tr>
+              <tr><td>可访问性</td><td>ARIA 代码抽查、自动化 axe/pa11y、键盘/读屏/对比度人工审计</td><td><span class="status blocked">NOT GATED</span></td><td>PA-P1-09</td></tr>
+              <tr><td>性能与容量</td><td>bundle、API/worker latency、并发、soak、模型成本与预算</td><td><span class="status blocked">NOT GATED</span></td><td>PA-P1-05/09、P2-01</td></tr>
+              <tr><td>API 与兼容性</td><td>OpenAPI、版本、错误、幂等、弃用、客户端兼容</td><td><span class="status partial">PARTIAL</span></td><td>PA-P1-12</td></tr>
+              <tr><td>文档与本地化</td><td>README/PRD/guide、示例、ADR、zh 同步、clean-room quickstart</td><td><span class="status partial">DRIFT</span></td><td>PA-P1-13</td></tr>
+              <tr><td>法律与开源</td><td>LICENSE、第三方许可证、NOTICE、贡献与行为准则</td><td><span class="status partial">PARTIAL</span></td><td>PA-P1-14</td></tr>
+              <tr><td>发布与仓库治理</td><td>CI、分支保护、Tag/Release、CHANGELOG、provenance、回滚审批</td><td><span class="status blocked">BLOCKED</span></td><td>PA-P0-04、P1-06/07/14</td></tr>
+              <tr><td>支持与反馈</td><td>工单、SLA、升级、已知问题、反馈进入评估、EOL</td><td><span class="status partial">UNDEFINED</span></td><td>PA-P2-04</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="gates">
+        <h2>09 · 建议的正式发布门禁</h2>
+        <p class="section-lead">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>
+          任何一项“阻断”未通过，都不应创建生产 Tag 或推广生产流量。
+        </p>
+        <div class="checklist">
+          <div class="check"><strong><span class="status fail">BLOCK</span> 身份与租户</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>真实 identity、RBAC、tenant/resource ownership、审批和记忆负向越权测试全部通过。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 网络边界</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>CORS/CSRF、TLS/Host/headers、限流、request budgets、SSRF/egress 测试通过。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 凭证解析</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>客户端不能选择任意环境变量或凭证值；opaque secret id、provider/host allowlist、最小权限与外带负向测试通过。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 扩展执行</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>Hosted 模式禁用任意 MCP stdio 与本地 Python；批准的扩展在签名、allowlist、沙箱与资源/网络/文件系统策略下运行。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 供应链</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>无未接受的高危公告；锁定安装；SBOM、SAST、secret scan、签名与 provenance 可追溯。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> CI 与分支</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>main required checks 绿色；分支保护启用；clean-room 后端、前端、Wheel 与镜像构建通过。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> Agent 评估</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>发布 Agent 的确定性 gates 100%；V3 real-LLM gate 在冻结配置下通过；结果与制品绑定。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 数据可靠性</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>共享事务后端、迁移、幂等、备份/恢复、RPO/RTO 与删除证明通过演练。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 生产运维</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>SLO、仪表盘、告警、容量、canary、回滚、On-call 和事故演练完成。</p></div>
+          <div class="check"><strong><span class="status fail">BLOCK</span> 发行制品</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>单一部署拓扑；版本一致；非 root 最小镜像；无秘密/运行数据；安装后 smoke 与 rollback 通过。</p></div>
+          <div class="check"><strong><span class="status warn">REVIEW</span> 文档与法律</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>Release notes、CHANGELOG、SECURITY、支持矩阵、升级/回滚、第三方许可、隐私说明和中英文发布文档完成审批。</p></div>
+          <div class="check"><strong><span class="status warn">REVIEW</span> UX 与访问性</strong><p><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>关键旅程 E2E、WCAG 审计、性能预算和浏览器矩阵达到批准阈值。</p></div>
+        </div>
+      </section>
+
+      <section id="roadmap">
+        <h2>10 · 收口路线图</h2>
+        <p class="section-lead">
+          <span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>
+          时间是工作顺序建议，不是人日承诺；安全边界与发布主线必须先于 UI 打磨。
+        </p>
+        <div class="timeline">
+          <div class="phase">
+            <div><span class="pill p0">0–48 小时</span><h3>止血</h3></div>
+            <ol>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>冻结外部发布与镜像分发；确认任何历史镜像是否包含本地 <code>.env</code> 或 <code>runs</code>。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>提交 <code>.dockerignore</code>，轮换任何可能进入构建缓存的凭证，清理远端缓存。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>修复 CI extras 与根 npm build；把 current HEAD 拉回绿色。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>批准 Release Scope ADR：V2 隔离试点或 V3 正式主线。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>在身份边界完成前强制只绑定 localhost，把 <code>verify-remote</code> 改成 local-only 默认，并在文档中标红 mock identity 与公网隧道风险。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>立即从任何外部入口封锁配置/validation API，审计远程验证记录，并轮换可能被任意 credential env/base_url 或历史镜像触达的服务端凭证。</li>
+            </ol>
+          </div>
+          <div class="phase">
+            <div><span class="pill p0">第 1–2 周</span><h3>P0 关闭</h3></div>
+            <ol>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>落地 IAM、RBAC、tenant/resource ownership；收紧 CORS 与 Web 边界。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>Hosted 模式禁用任意 MCP stdio/本地 Python 扩展；credential reference 改为服务端 opaque id，并为模型、Knowledge 与 MCP 建立统一 egress allowlist。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>升级/重锁 Python 依赖，建立 SBOM 与安全门禁。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>构建非 root、多阶段、无秘密的生产镜像与 clean-room Wheel/SPA 制品。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>迁移/确认公开 Agent 主线，运行 V3 real-LLM 与三个发布 Agent 的正式 Campaign。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>启用分支保护和 required checks；建立签名 Tag/Release 流程。</li>
+            </ol>
+          </div>
+          <div class="phase">
+            <div><span class="pill p1">第 2–6 周</span><h3>生产化</h3></div>
+            <ol>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>共享事务存储、approval resume lock、migration、backup/restore 和数据删除证明。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>SSRF/egress、Vault、加密、审计防篡改与数据保留体系。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>SLO/metrics/logging/tracing/alerts、容量/负载/恢复、canary 与 rollback。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>浏览器 E2E、可访问性、性能与错误恢复门禁。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>API 版本/幂等/错误契约和模型配置复现性。</li>
+            </ol>
+          </div>
+          <div class="phase">
+            <div><span class="pill p2">GA 前</span><h3>治理闭环</h3></div>
+            <ol>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>SECURITY、CONTRIBUTING、CHANGELOG、支持/兼容/EOL、第三方许可与隐私材料。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>中英文文档同步、示例 catalog、ADR 编号和旧路径删除。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>On-call、漏洞响应、客户升级、模型事故与普通软件事故 runbook 演练。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>生产 canary 达到 SLO 观察窗后，由产品、安全、工程、运维共同签署 Go 决策。</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="acceptance">
+        <h2>11 · 可直接采用的验收标准</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>工程与安全 Definition of Done</h3>
+            <ul>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>从空白 runner 执行锁定安装、全部检查、前端构建、Wheel、镜像和 smoke，零人工补依赖。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>匿名、低权限、跨租户、跨资源、恶意 Origin、SSRF、任意 credential env/base_url、MCP stdio command、超大请求和重复提交测试均以预期状态失败关闭。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>镜像以非 root 运行，扫描不到 <code>.env</code>、<code>runs</code>、VCS、开发依赖或高危漏洞。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>备份恢复与审批并发恢复在多实例环境实测，达到已批准 RPO/RTO。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Agent Release Definition of Done</h3>
+            <ul>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>每个发布 Agent 绑定 immutable agent version、knowledge/tool versions、model connection revision/digest、suite/gate profile 和制品 SHA。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>必需 deterministic safety/governance gates 100%，真实 LLM gate 达到冻结阈值，无未审批 blocker。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>拒答、澄清、工具审批、超时、否决、重试、模型错误、证据不足、记忆拒写和红action路径均有发布样本。</li>
+              <li><span class="claim inferred">[INFERRED]</span><span class="confidence">HIGH</span>模型、Prompt、知识、工具或策略任何行为性变更都会触发影响分析和对应再评估。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="limitations">
+        <h2>12 · 限制与未验证项</h2>
+        <div class="callout warning">
+          <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>以下项目被明确标为未验证，未被默认为通过。</p>
+        </div>
+        <div style="margin-top:14px">
+          <details open><summary>Docker 镜像未实际构建</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>本机 Docker daemon 不可用；静态 Dockerfile/compose 审查已完成，但镜像启动、层内容、CVE、用户、healthcheck 与运行时文件系统必须在 CI runner 复验。</div></details>
+          <details open><summary>真实 LLM 门禁未运行</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>缺少本次审计可用的 <code>PROOF_AGENT_RUN_LLM_REGRESSION=1</code>、<code>OPENAI_COMPATIBLE_API_KEY</code> 与 <code>OPENAI_COMPATIBLE_BASE_URL</code>；因此真实模型行为和成本未判定。</div></details>
+          <details open><summary>没有生产环境、真实身份提供方或真实多实例后端</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>无法验证 CDN/WAF、反向代理、KMS/Vault、数据库、对象存储、备份、告警、SLO、租户边界或灾备；这些缺失被列为门禁，而非假定由外部平台自动解决。</div></details>
+          <details open><summary>未进行破坏性安全利用</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>未执行命令执行、内网扫描、跨主体记忆删除、凭证读取或数据破坏；风险链来自代码与安全烟测，正式发布前应在隔离测试环境完成授权渗透测试。</div></details>
+          <details open><summary>敏感文件内容被有意排除</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>图谱检测到 865 个支持文件并按规则跳过 2 个敏感文件；本审计确认真实 <code>.env</code> 的存在和 Docker 复制语义，但没有读取或输出其中的秘密值。秘密扫描针对 Git 跟踪内容与模式，不构成对本地凭证有效性的证明。</div></details>
+          <details open><summary>GitHub 安全查询权限有限</summary><div><span class="claim computed">[COMPUTED]</span><span class="confidence">MED</span>仓库元数据确认 secret scanning 与 push protection 已启用，code scanning 无 analysis，Dependabot alerts/updates 关闭；部分 alert 明细接口受当前 token scope 限制。</div></details>
+        </div>
+      </section>
+
+      <section id="method">
+        <h2>13 · 方法、证据与声明标签</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>审计方法</h3>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>扫描了 884 个 Git 跟踪文件；统计 209 个 Python 源文件 / 53,201 行、184 个 TypeScript/TSX 文件 / 32,824 行、136 个 Python 测试文件 / 51,207 行。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>执行了静态分析、单测、覆盖率、前端构建/测试、依赖审计、包构建、API 与示例 smoke、GitHub CI/治理查询，并对代码与文档进行跨层架构图谱分析。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>合并后的图谱包含 10,520 个节点、31,173 条去重关系和 454 个社区；大于可视化阈值后输出为 454 个社区节点 / 1,658 条跨社区边的聚合视图；未检测到 import cycle。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>最高连接度实体为 <code>ProofAgentError</code> 467、<code>LocalAgentConfigurationStore</code> 465、<code>FrozenModel</code> 298、<code>RunStore</code> 247；图谱查询也确认 <code>LocalOperatorIdentityProvider</code> 直接连接应用工厂、依赖注入与多个配置/运行路由。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>报告正文与样式自包含；补充架构图谱位于 <a href="../graphify-out/graph.html">graphify-out/graph.html</a>，原始图数据位于 <a href="../graphify-out/graph.json">graphify-out/graph.json</a>。单独下载 HTML 仍可完整阅读审计正文，图谱链接只在保留同级附件或使用远程预览站点时可用。</p>
+          </div>
+          <div class="card">
+            <h3>声明标签</h3>
+            <p><span class="claim known">[KNOWN]</span><span class="confidence">HIGH</span>训练数据中的稳定事实。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>由本次命令、代码、文档或 API 结果直接计算/观察。</p>
+            <p><span class="claim inferred">[INFERRED]</span><span class="confidence">MED</span>由多项证据推导；不是直接测量。</p>
+            <p><span class="claim common">[COMMON]</span><span class="confidence">HIGH</span>通行的软件工程或安全知识。</p>
+            <p><span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>置信度体系：HIGH ≥ 80%；MED 为 50% ≤ p &lt; 80%；LOW 为 20% ≤ p &lt; 50%；VERY LOW &lt; 20%；UNKNOWN 表示无法判定。本报告没有把未验证项标成通过。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="shell">
+      <p>
+        <span class="claim computed">[COMPUTED]</span><span class="confidence">HIGH</span>
+        报告基线：Proof Agent <code>main@1bd0fbf4</code>，生成于 2026-07-10。建议在每个 P0 关闭后重新执行同一门禁，并把结果与候选制品 SHA 绑定。
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-filter]'));
+      var findings = Array.prototype.slice.call(document.querySelectorAll('.finding'));
+      var findingList = document.querySelector('.finding-list');
+      var severityRank = { P0: 0, P1: 1, P2: 2 };
+      findings.sort(function (left, right) {
+        var severityDelta = severityRank[left.getAttribute('data-severity')] -
+          severityRank[right.getAttribute('data-severity')];
+        if (severityDelta !== 0) return severityDelta;
+        var leftMatch = left.textContent.match(/PA-P[012]-(\d+)/);
+        var rightMatch = right.textContent.match(/PA-P[012]-(\d+)/);
+        return Number(leftMatch ? leftMatch[1] : 0) - Number(rightMatch ? rightMatch[1] : 0);
+      });
+      findings.forEach(function (finding) { findingList.appendChild(finding); });
+      buttons.forEach(function (button) {
+        button.addEventListener('click', function () {
+          var filter = button.getAttribute('data-filter');
+          buttons.forEach(function (item) { item.classList.remove('active'); });
+          button.classList.add('active');
+          findings.forEach(function (finding) {
+            var visible = filter === 'ALL' || finding.getAttribute('data-severity') === filter;
+            finding.classList.toggle('hidden', !visible);
+          });
+        });
+      });
+    }());
+  </script>
+</body>
+</html>

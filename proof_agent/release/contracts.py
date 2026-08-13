@@ -21,6 +21,23 @@ Sha256: TypeAlias = Annotated[
     StringConstraints(pattern=r"^[0-9a-f]{64}$"),
 ]
 GateStatus: TypeAlias = Literal["passed", "failed", "skipped", "error", "not_run"]
+MetricKind: TypeAlias = Literal["bool", "int", "number", "sha256"]
+MetricComparison: TypeAlias = Literal[
+    "equal",
+    "minimum",
+    "maximum",
+    "binding",
+    "format",
+]
+MetricFailure: TypeAlias = Literal[
+    "threshold_missed",
+    "insufficient_sample",
+    "binding_mismatch",
+]
+BindingTarget: TypeAlias = Literal[
+    "migration_set",
+    "deployment_compatibility_manifest",
+]
 
 _SourceCommit: TypeAlias = Annotated[
     str,
@@ -36,19 +53,11 @@ _MetricValue: TypeAlias = float | int | str | bool
 
 
 INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS: tuple[str, ...] = (
-    "backend_frontend_quality",
-    "distribution_image",
-    "supply_chain_runtime_security",
-    "identity_authorization",
-    "secrets_egress",
-    "deterministic_evaluation",
-    "real_llm_evaluation",
-    "dependency_compatibility",
-    "capacity_responsiveness",
-    "queue_progress",
-    "resilience_recovery",
-    "deployment",
-    "browser_operations",
+    "candidate_integrity",
+    "access_security",
+    "governed_behavior",
+    "operational_readiness",
+    "deployment_recovery",
 )
 
 
@@ -118,9 +127,30 @@ class GateResult(StrictFrozenModel):
         return dict(value)
 
 
+class GateFacts(StrictFrozenModel):
+    """Raw pipeline facts; deliberately contains no producer-supplied status."""
+
+    schema_version: Literal["proofagent.gate-facts.v1"]
+    gate_id: _NonEmptyString
+    evidence: tuple[EvidenceRef, ...]
+    metrics: Mapping[str, _MetricValue]
+
+    @field_validator("metrics", mode="after")
+    @classmethod
+    def freeze_metrics(
+        cls,
+        value: Mapping[str, _MetricValue],
+    ) -> Mapping[str, _MetricValue]:
+        return cast("Mapping[str, _MetricValue]", freeze_value(value))
+
+    @field_serializer("metrics")
+    def serialize_metrics(self, value: Mapping[str, _MetricValue]) -> dict[str, _MetricValue]:
+        return dict(value)
+
+
 class ReleaseGateManifest(StrictFrozenModel):
-    schema_version: Literal["proofagent.release-gate-manifest.v1"]
-    profile_id: Literal["initial-private-pilot-v1"]
+    schema_version: Literal["proofagent.release-gate-manifest.v2"]
+    profile_id: Literal["initial-private-pilot-v2"]
     candidate: ProductionCandidateBinding
     results: tuple[GateResult, ...]
     generated_at: AwareDatetime
@@ -133,15 +163,52 @@ class ReleaseGateManifest(StrictFrozenModel):
         return self
 
 
+class EvidenceRule(StrictFrozenModel):
+    kind: _NonEmptyString
+    max_age_seconds: int | None = Field(default=None, gt=0)
+    expiry_required: bool = False
+
+
+class MetricRule(StrictFrozenModel):
+    key: _NonEmptyString
+    kind: MetricKind
+    comparison: MetricComparison
+    expected: _MetricValue | None = None
+    failure: MetricFailure = "threshold_missed"
+    binding_target: BindingTarget | None = None
+    minimum_allowed: int | float | None = None
+    maximum_allowed: int | float | None = None
+
+
+class GateRule(StrictFrozenModel):
+    gate_id: _NonEmptyString
+    evidence: tuple[EvidenceRule, ...] = Field(min_length=1)
+    metrics: tuple[MetricRule, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def reject_duplicate_policy_keys(self) -> Self:
+        evidence_kinds = tuple(rule.kind for rule in self.evidence)
+        if len(evidence_kinds) != len(set(evidence_kinds)):
+            raise ValueError("GateRule evidence kinds must be unique")
+        metric_keys = tuple(rule.key for rule in self.metrics)
+        if len(metric_keys) != len(set(metric_keys)):
+            raise ValueError("GateRule metric keys must be unique")
+        return self
+
+
 class GateProfile(StrictFrozenModel):
-    schema_version: Literal["proofagent.gate-profile.v1"]
-    profile_id: Literal["initial-private-pilot-v1"]
-    required_gate_ids: tuple[str, ...]
+    schema_version: Literal["proofagent.gate-profile.v2"]
+    profile_id: Literal["initial-private-pilot-v2"]
+    gates: tuple[GateRule, ...] = Field(min_length=1)
+
+    @property
+    def required_gate_ids(self) -> tuple[str, ...]:
+        return tuple(gate.gate_id for gate in self.gates)
 
     @model_validator(mode="after")
     def require_initial_private_pilot_gates(self) -> Self:
         if self.required_gate_ids != INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS:
             raise ValueError(
-                "initial-private-pilot-v1 required_gate_ids must match the package-owned profile"
+                "initial-private-pilot-v2 gates must match the package-owned profile"
             )
         return self

@@ -30,7 +30,7 @@ class SearchProjectionError(RuntimeError):
 class OpenSearchHybridProjection:
     """Maintain one exact physical index per immutable projection generation."""
 
-    def __init__(self, *, endpoint: str) -> None:
+    def __init__(self, *, endpoint: str, ca_file: str | None = None) -> None:
         parsed = urlsplit(endpoint)
         if (
             parsed.scheme not in {"http", "https"}
@@ -49,6 +49,7 @@ class OpenSearchHybridProjection:
             timeout=httpx.Timeout(10, connect=3),
             follow_redirects=False,
             trust_env=False,
+            verify=True if ca_file is None else ca_file,
             headers={"Accept": "application/json"},
         )
 

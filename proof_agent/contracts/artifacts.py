@@ -31,6 +31,7 @@ class ArtifactKind(StrEnum):
     BUNDLE_INDEX = "bundle_index"
     RELEASE_ATTESTATION = "release_attestation"
     RELEASE_CLOSURE_AUDIT = "release_closure_audit"
+    RELEASE_EVIDENCE = "release_evidence"
     SOFTWARE_BILL_OF_MATERIALS = "software_bill_of_materials"
     BUILD_PROVENANCE = "build_provenance"
     ARTIFACT_MANIFEST = "artifact_manifest"

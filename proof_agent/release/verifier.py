@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import math
 import os
-import re
 import stat
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 
 from pydantic import AwareDatetime
 
@@ -25,15 +23,10 @@ from proof_agent.release.digests import (
     parse_content_addressed_uri,
     sha256_hex,
 )
-from proof_agent.release.profile import (
-    INITIAL_PRIVATE_PILOT_PROFILE,
-    EvidenceRule,
-    GateRule,
-    MetricRule,
-)
+from proof_agent.release.gate_engine import gate_policy_blockers
+from proof_agent.release.profile import INITIAL_PRIVATE_PILOT_PROFILE
 
 
-_LOWER_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DEPLOYMENT_WINDOW = timedelta(hours=24)
 
 
@@ -218,21 +211,38 @@ def verify_release_manifest(
         for reported_blocker in result.blocker_codes:
             blockers.append(f"gate.reported_blocker:{result.gate_id}:{reported_blocker}")
 
-        gate_rule = _gate_rule(result.gate_id)
+        gate_rule = next(
+            (rule for rule in profile.gates if rule.gate_id == result.gate_id),
+            None,
+        )
         if gate_rule is not None:
-            _verify_evidence_kinds(result, gate_rule, blockers)
-            _verify_metrics(result, gate_rule, manifest, blockers)
+            blockers.extend(
+                gate_policy_blockers(
+                    candidate=manifest.candidate,
+                    gate_id=result.gate_id,
+                    evidence=result.evidence,
+                    metrics=result.metrics,
+                    evaluated_at=checked_at,
+                )
+            )
 
         for evidence in result.evidence:
-            evidence_rule = _evidence_rule(gate_rule, evidence.kind)
-            _verify_evidence_time(
-                evidence,
-                evidence_rule=evidence_rule,
-                generated_at=manifest.generated_at,
-                checked_at=checked_at,
-                blockers=blockers,
-                required_expiries=required_expiries,
-            )
+            if evidence.produced_at > manifest.generated_at:
+                blockers.append(f"evidence.produced_in_future:{evidence.evidence_id}")
+            evidence_rule = next(
+                (
+                    rule
+                    for rule in gate_rule.evidence
+                    if rule.kind == evidence.kind
+                ),
+                None,
+            ) if gate_rule is not None else None
+            if (
+                evidence_rule is not None
+                and evidence_rule.expiry_required
+                and evidence.expires_at is not None
+            ):
+                required_expiries.append(evidence.expires_at)
             evidence_binding_valid = evidence.candidate_binding_sha256 == binding
             if not evidence_binding_valid:
                 blockers.append(f"evidence.binding_mismatch:{evidence.evidence_id}")
@@ -260,19 +270,6 @@ def verify_release_manifest(
     )
 
 
-def _gate_rule(gate_id: str) -> GateRule | None:
-    return next(
-        (rule for rule in INITIAL_PRIVATE_PILOT_PROFILE.gates if rule.gate_id == gate_id),
-        None,
-    )
-
-
-def _evidence_rule(gate_rule: GateRule | None, kind: str) -> EvidenceRule | None:
-    if gate_rule is None:
-        return None
-    return next((rule for rule in gate_rule.evidence if rule.kind == kind), None)
-
-
 def _verify_evidence_identity(
     evidence_items: tuple[EvidenceRef, ...],
     blockers: list[str],
@@ -286,66 +283,6 @@ def _verify_evidence_identity(
         for value, count in Counter(values).items():
             if count > 1:
                 blockers.append(f"evidence.{category}:{value}")
-
-
-def _verify_evidence_kinds(
-    result: GateResult,
-    gate_rule: GateRule,
-    blockers: list[str],
-) -> None:
-    actual_kinds = tuple(evidence.kind for evidence in result.evidence)
-    allowed_kinds = tuple(rule.kind for rule in gate_rule.evidence)
-    for kind in allowed_kinds:
-        count = actual_kinds.count(kind)
-        if count == 0:
-            blockers.append(f"evidence.missing:{result.gate_id}:{kind}")
-        elif count != 1:
-            blockers.append(f"evidence.cardinality:{result.gate_id}:{kind}")
-    for kind in actual_kinds:
-        if kind not in allowed_kinds:
-            blockers.append(f"evidence.kind_unknown:{result.gate_id}:{kind}")
-
-
-def _verify_evidence_time(
-    evidence: EvidenceRef,
-    *,
-    evidence_rule: EvidenceRule | None,
-    generated_at: datetime,
-    checked_at: datetime,
-    blockers: list[str],
-    required_expiries: list[datetime],
-) -> None:
-    if evidence.produced_at > generated_at:
-        blockers.append(f"evidence.produced_in_future:{evidence.evidence_id}")
-
-    expires_at = evidence.expires_at
-    if expires_at is not None:
-        if expires_at <= evidence.produced_at:
-            blockers.append(f"evidence.expiry_not_after_production:{evidence.evidence_id}")
-        if checked_at >= expires_at:
-            blockers.append(f"evidence.expired:{evidence.evidence_id}")
-
-    if evidence_rule is None:
-        return
-    if evidence_rule.expiry_required:
-        if expires_at is None:
-            blockers.append(f"evidence.expiry_missing:{evidence.evidence_id}")
-        else:
-            required_expiries.append(expires_at)
-    if evidence_rule.max_age is None:
-        return
-
-    if (
-        expires_at is not None
-        and expires_at > evidence.produced_at
-        and expires_at - evidence.produced_at > evidence_rule.max_age
-    ):
-        blockers.append(f"evidence.expiry_exceeds_policy:{evidence.evidence_id}")
-    if (
-        checked_at >= evidence.produced_at
-        and checked_at - evidence.produced_at >= evidence_rule.max_age
-    ):
-        blockers.append(f"evidence.policy_stale:{evidence.evidence_id}")
 
 
 def _verify_evidence_artifact(
@@ -414,76 +351,18 @@ def _verify_evidence_artifact(
         blockers.append(f"evidence.attestation_claim_mismatch:{evidence.evidence_id}")
 
 
-def _verify_metrics(
-    result: GateResult,
-    gate_rule: GateRule,
-    manifest: ReleaseGateManifest,
-    blockers: list[str],
-) -> None:
-    allowed_keys = {rule.key for rule in gate_rule.metrics}
-    for key in result.metrics:
-        if key not in allowed_keys:
-            blockers.append(f"metric.unknown:{result.gate_id}:{key}")
-    for rule in gate_rule.metrics:
-        if rule.key not in result.metrics:
-            blockers.append(f"metric.missing:{result.gate_id}:{rule.key}")
-            continue
-        value = result.metrics[rule.key]
-        if not _metric_type_matches(value, rule):
-            blockers.append(f"metric.type_mismatch:{result.gate_id}:{rule.key}")
-            continue
-        if not _metric_satisfies(value, rule, manifest):
-            blockers.append(f"metric.{rule.failure}:{result.gate_id}:{rule.key}")
-
-
-def _metric_type_matches(value: object, rule: MetricRule) -> bool:
-    if rule.kind == "bool":
-        return type(value) is bool
-    if rule.kind == "int":
-        return type(value) is int
-    if rule.kind == "number":
-        return type(value) is int or (type(value) is float and math.isfinite(value))
-    return type(value) is str and _LOWER_SHA256.fullmatch(value) is not None
-
-
-def _metric_satisfies(
-    value: object,
-    rule: MetricRule,
-    manifest: ReleaseGateManifest,
-) -> bool:
-    if rule.comparison == "format":
-        return True
-    if rule.comparison == "binding":
-        expected = (
-            manifest.candidate.migration_set.sha256
-            if rule.binding_target == "migration_set"
-            else manifest.candidate.deployment_compatibility_manifest.sha256
-        )
-        return value == expected
-    numeric_value = cast("int | float", value)
-    if rule.minimum_allowed is not None and numeric_value < rule.minimum_allowed:
-        return False
-    if rule.maximum_allowed is not None and numeric_value > rule.maximum_allowed:
-        return False
-    if rule.comparison == "equal":
-        return value == rule.expected
-    numeric_expected = cast("int | float", rule.expected)
-    if rule.comparison == "minimum":
-        return numeric_value >= numeric_expected
-    return numeric_value <= numeric_expected
-
-
 def _verify_recovery_deployment_bindings(
     results_by_gate: dict[str, GateResult],
     blockers: list[str],
 ) -> None:
-    recovery = results_by_gate.get("resilience_recovery")
-    deployment = results_by_gate.get("deployment")
-    if recovery is None or deployment is None:
+    result = results_by_gate.get("deployment_recovery")
+    if result is None:
         return
     for key in ("topology_sha256", "backup_policy_sha256", "migration_set_sha256"):
-        recovery_value = recovery.metrics.get(key)
-        deployment_value = deployment.metrics.get(key)
+        recovery_value = result.metrics.get(f"recovery_{key}")
+        deployment_value = result.metrics.get(f"deployment_{key}")
         if type(recovery_value) is str and type(deployment_value) is str:
             if recovery_value != deployment_value:
-                blockers.append(f"metric.binding_mismatch:resilience_recovery:{key}")
+                blockers.append(
+                    f"metric.binding_mismatch:deployment_recovery:recovery_{key}"
+                )

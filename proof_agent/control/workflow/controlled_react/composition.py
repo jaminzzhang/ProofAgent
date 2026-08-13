@@ -425,6 +425,9 @@ class _InvocationKnowledgeObservationAdapter:
             policy=self._invocation.policy,
             knowledge_provider=self._invocation.knowledge_provider,
             knowledge_candidate_service=self._invocation.knowledge_candidate_service,
+            knowledge_candidate_admission_scorer=(
+                self._invocation.knowledge_candidate_admission_scorer
+            ),
             model_resolver=self._invocation.model_resolver,
         )
         retrieval_result = service.retrieve(

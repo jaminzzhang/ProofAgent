@@ -39,6 +39,7 @@ class HttpAgenticRetrievalController:
         *,
         endpoint: str,
         bearer_token: str,
+        ca_file: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         _validate_endpoint(endpoint)
@@ -53,6 +54,7 @@ class HttpAgenticRetrievalController:
             timeout=httpx.Timeout(10, connect=3),
             follow_redirects=False,
             trust_env=False,
+            verify=True if ca_file is None else ca_file,
             transport=transport,
             headers={
                 "Accept": "application/json",

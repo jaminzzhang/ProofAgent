@@ -57,8 +57,15 @@ from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
     from proof_agent.capabilities.knowledge.hybrid.provider import HybridIndexProvider
+    from proof_agent.control.knowledge.candidate_request import (
+        KnowledgeCandidateQueryFactory,
+    )
     from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
     from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+    from proof_agent.contracts.ports.knowledge_candidates import (
+        KnowledgeCandidateAdmissionScorer,
+        KnowledgeCandidateService,
+    )
     from proof_agent.contracts.ports.secret_provider import SecretProvider
     from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 
@@ -98,6 +105,11 @@ class AgentPackageRunRequest:
     )
     hybrid_providers: Mapping[str, "HybridIndexProvider"] | None = None
     governed_hybrid_request_factory: "GovernedHybridRequestFactory" | None = None
+    knowledge_candidate_service: "KnowledgeCandidateService" | None = None
+    knowledge_candidate_query_factory: "KnowledgeCandidateQueryFactory" | None = None
+    knowledge_candidate_admission_scorer: (
+        "KnowledgeCandidateAdmissionScorer" | None
+    ) = None
     cancellation_check: Callable[[], None] | None = None
     guarded_http_client: "GuardedHttpClient" | None = None
     secret_provider: "SecretProvider" | None = None
@@ -184,6 +196,13 @@ def _execute_controlled_react_v3_agent_package_run(
             institution_authorization=request.institution_authorization,
             hybrid_providers=request.hybrid_providers,
             governed_hybrid_request_factory=request.governed_hybrid_request_factory,
+            knowledge_candidate_service=request.knowledge_candidate_service,
+            knowledge_candidate_query_factory=(
+                request.knowledge_candidate_query_factory
+            ),
+            knowledge_candidate_admission_scorer=(
+                request.knowledge_candidate_admission_scorer
+            ),
             guarded_http_client=request.guarded_http_client,
             secret_provider=request.secret_provider,
             model_credential_resolver=request.model_credential_resolver,

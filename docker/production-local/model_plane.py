@@ -7,13 +7,15 @@ cannot be confused with real-model or Phase F evidence.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
+import os
 import secrets
-from typing import Any
+from typing import Any, cast
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Response
 
 
 app = FastAPI(title="Proof Agent local private-model compatibility plane")
@@ -163,6 +165,174 @@ def chat_completions(payload: dict[str, Any]) -> dict[str, object]:
     }
 
 
+@app.post("/kss/projection/v1/encode")
+def kss_projection_encode(
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
+    """Serve the strict KSS projection contract for local compatibility checks."""
+
+    _require_kss_model_bearer(authorization)
+    _require_fields(
+        payload,
+        {
+            "schema_version",
+            "text",
+            "dense_revision",
+            "sparse_revision",
+            "dense_dimension",
+        },
+    )
+    text = payload["text"]
+    dense_revision = payload["dense_revision"]
+    sparse_revision = payload["sparse_revision"]
+    dimension = payload["dense_dimension"]
+    if (
+        payload["schema_version"] != "knowledge-projection-encoding-request.v1"
+        or not isinstance(text, str)
+        or not text.strip()
+        or len(text.encode("utf-8")) > 256 * 1024
+        or not isinstance(dense_revision, str)
+        or not dense_revision.strip()
+        or not isinstance(sparse_revision, str)
+        or not sparse_revision.strip()
+        or not isinstance(dimension, int)
+        or not 4 <= dimension <= 4096
+    ):
+        raise HTTPException(status_code=422, detail="invalid KSS projection request")
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    sparse_vector = {
+        f"f_{digest[offset:offset + 8]}": float(index + 1)
+        for index, offset in enumerate(range(0, 64, 8))
+    }
+    return {
+        "schema_version": "knowledge-projection-encoding.v1",
+        "dense_revision": dense_revision,
+        "sparse_revision": sparse_revision,
+        "dense_dimension": dimension,
+        "dense_vector": _deterministic_vector(
+            text,
+            dimension=dimension,
+            normalized=True,
+        ),
+        "sparse_vector": sparse_vector,
+    }
+
+
+@app.post("/kss/agentic/v1/next")
+def kss_agentic_decide(
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
+    """Return one bounded Agentic decision without receiving candidate content."""
+
+    _require_kss_model_bearer(authorization)
+    _require_fields(
+        payload,
+        {
+            "schema_version",
+            "retrieval_round",
+            "question",
+            "knowledge_base_release_id",
+            "access_scope_digest",
+            "candidate_count",
+            "candidate_evidence_ids",
+            "remaining_rounds",
+            "remaining_model_calls",
+            "remaining_model_tokens",
+            "remaining_duration_ms",
+        },
+    )
+    string_fields = (
+        "question",
+        "knowledge_base_release_id",
+        "access_scope_digest",
+    )
+    integer_fields = (
+        "retrieval_round",
+        "candidate_count",
+        "remaining_rounds",
+        "remaining_model_calls",
+        "remaining_model_tokens",
+        "remaining_duration_ms",
+    )
+    candidate_ids = payload["candidate_evidence_ids"]
+    if (
+        payload["schema_version"] != "agentic-retrieval-observation.v1"
+        or any(
+            not isinstance(payload[field], str) or not payload[field].strip()
+            for field in string_fields
+        )
+        or any(
+            not isinstance(payload[field], int) or payload[field] < 0
+            for field in integer_fields
+        )
+        or not isinstance(candidate_ids, list)
+        or any(not isinstance(value, str) or not value for value in candidate_ids)
+        or len(candidate_ids) != payload["candidate_count"]
+    ):
+        raise HTTPException(status_code=422, detail="invalid KSS Agentic request")
+    return {
+        "schema_version": "agentic-retrieval-decision.v1",
+        "action": "complete",
+        "revised_question": None,
+        "model_tokens_used": 0,
+    }
+
+
+@app.post("/kss/ocr/v1/extract")
+def kss_ocr_extract(
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
+    """Serve the pinned OCR response shape for deployment connectivity checks."""
+
+    _require_kss_model_bearer(authorization)
+    _require_fields(
+        payload,
+        {"schema_version", "media_type", "content_base64", "model_revision"},
+    )
+    media_type = payload["media_type"]
+    model_revision = payload["model_revision"]
+    try:
+        content = base64.b64decode(payload["content_base64"], validate=True)
+    except (TypeError, ValueError):
+        content = b""
+    if (
+        payload["schema_version"] != "knowledge-document-ocr-request.v1"
+        or media_type not in {
+            "application/pdf",
+            "image/jpeg",
+            "image/png",
+            "image/tiff",
+        }
+        or not isinstance(model_revision, str)
+        or not model_revision.strip()
+        or not content
+        or len(content) > 50 * 1024 * 1024
+    ):
+        raise HTTPException(status_code=422, detail="invalid KSS OCR request")
+    return {
+        "schema_version": "knowledge-document-ocr.v1",
+        "model_revision": model_revision,
+        "quality_state": "passed",
+        "pages": [{"page_number": 1, "width": 1000, "height": 1400}],
+        "regions": [
+            {
+                "page_number": 1,
+                "bounding_box": {
+                    "x_min": 40,
+                    "y_min": 80,
+                    "x_max": 960,
+                    "y_max": 180,
+                },
+                "text": "本地 OCR 协议兼容结果，仅用于类生产部署连通性验证。",
+                "confidence": 1.0,
+            }
+        ],
+    }
+
+
 def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, object]:
     _require_fields(
         payload,
@@ -190,6 +360,7 @@ def _parser_response(payload: dict[str, Any], *, adapter: str) -> dict[str, obje
         or not isinstance(original_ref.get("sha256"), str)
         or not isinstance(page_numbers, list)
         or not page_numbers
+        or any(type(value) is not int or value < 1 for value in page_numbers)
         or payload["allow_runtime_downloads"] is not False
     ):
         raise HTTPException(status_code=422, detail="invalid parser request")
@@ -244,7 +415,7 @@ def _docling_vendor(
         "precedence_order": 0,
     }
     for value in page_numbers:
-        page_number = int(value)
+        page_number = cast(int, value)
         heading = f"Local Production Rule Page {page_number}"
         pages.append(
             {
@@ -354,3 +525,17 @@ def _deterministic_vector(text: str, *, dimension: int, normalized: bool) -> lis
 def _require_fields(payload: dict[str, Any], expected: set[str]) -> None:
     if set(payload) != expected:
         raise HTTPException(status_code=422, detail="request fields do not match contract")
+
+
+def _require_kss_model_bearer(authorization: str | None) -> None:
+    expected = os.environ.get("KSS_MODEL_BEARER_TOKEN", "")
+    presented = "" if authorization is None else authorization
+    if (
+        len(expected) < 16
+        or not secrets.compare_digest(presented, f"Bearer {expected}")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="KSS model credential is invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

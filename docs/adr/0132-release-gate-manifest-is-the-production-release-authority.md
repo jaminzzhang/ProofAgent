@@ -2,6 +2,10 @@
 
 Accepted.
 
+Top-level Gate taxonomy and the active profile version are refined by ADR 0208;
+the required check families, freshness limits, and fail-closed authority in this
+decision remain in force.
+
 [FRAME | HIGH] A strict `release-gate-manifest.json` is the sole machine authority for an initial-production `GO` or `NO-GO` decision. Its versioned Initial Private Pilot Gate Profile fixes the required checks and thresholds; unknown fields, unknown or duplicate gates, and producer-selected optionality are rejected. A canonical Production Candidate Binding covers the source commit, OCI image digest, product version, sole Initial Production Agent version and bundle, evaluation contract, configuration snapshot, migration set, frontend assets, Gate Profile, and Production Deployment Compatibility Manifest. Every Gate result and content-addressed Evidence artifact must carry that same binding and a verifiable SHA-256.
 
 [FRAME | HIGH] Required gates cover backend and frontend quality, installable and deployable artifacts, supply-chain and runtime security, OIDC authorization, secret and egress controls, deterministic and real-LLM evaluation, concrete dependency compatibility, the 20/5/50 capacity envelope and responsiveness objectives, queue and best-effort progress behavior, fault injection and combined recovery, Blue/Green release behavior, browser E2E, and operational readiness. Result status is limited to `passed`, `failed`, `skipped`, `error`, or `not_run`. A required result that is absent or not `passed`, stale or unavailable Evidence, a digest or binding mismatch, an unmet threshold, or an incomplete dependency binding deterministically yields `NO-GO`; initial production has no top-level manual `GO` override and does not add a release approval workflow.

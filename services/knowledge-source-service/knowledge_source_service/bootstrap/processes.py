@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 import ipaddress
 import os
+import ssl
 import time
 from typing import Any
 from urllib.parse import unquote, urlsplit
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import HTTPSHandler, ProxyHandler, build_opener
 from uuid import uuid4
 
 import psycopg
@@ -70,7 +71,13 @@ def run_process_role(
     if role == "sync-scheduler":
         return _run_sync_scheduler(configuration, environment)
     artifacts = _s3_artifact_store(configuration, environment)
-    projection = OpenSearchHybridProjection(endpoint=configuration.search_endpoint)
+    projection_arguments: dict[str, str] = {
+        "endpoint": configuration.search_endpoint,
+    }
+    ca_file = environment.get("KSS_TLS_CA_FILE", "").strip()
+    if ca_file:
+        projection_arguments["ca_file"] = ca_file
+    projection = OpenSearchHybridProjection(**projection_arguments)
     if role == "knowledge-worker":
         try:
             return _run_knowledge_worker(
@@ -110,6 +117,7 @@ def run_process_role(
             dependency_readiness=lambda: _dependency_readiness(
                 configuration,
                 artifacts,
+                environment,
             ),
             clock=lambda: datetime.now(UTC),
             query_id_factory=lambda: f"knowledge-query-{uuid4().hex}",
@@ -217,6 +225,7 @@ def _ocr_extractor(
             endpoint=fields["KSS_OCR_ENDPOINT"],
             bearer_token=fields["KSS_OCR_BEARER_TOKEN"],
             model_revision=fields["KSS_OCR_MODEL_REVISION"],
+            ca_file=environment.get("KSS_TLS_CA_FILE", "").strip() or None,
         )
     return None
 
@@ -238,13 +247,14 @@ def _agentic_controller(
     return HttpAgenticRetrievalController(
         endpoint=endpoint,
         bearer_token=bearer_token,
+        ca_file=environment.get("KSS_TLS_CA_FILE", "").strip() or None,
     )
 
 
 def _projection_encoder(
     environment: Mapping[str, str],
 ) -> ProjectionTextEncoder:
-    fields = {
+    remote_fields = {
         "endpoint": environment.get("KSS_PROJECTION_ENCODER_ENDPOINT", "").strip(),
         "bearer_token": environment.get(
             "KSS_PROJECTION_ENCODER_BEARER_TOKEN",
@@ -258,9 +268,12 @@ def _projection_encoder(
             "KSS_SPARSE_ENCODER_REVISION",
             "",
         ).strip(),
-        "dense_dimension": environment.get("KSS_DENSE_DIMENSION", "").strip(),
     }
-    if any(fields.values()):
+    if any(remote_fields.values()):
+        fields = {
+            **remote_fields,
+            "dense_dimension": environment.get("KSS_DENSE_DIMENSION", "").strip(),
+        }
         missing = tuple(key for key, value in fields.items() if not value)
         if missing:
             raise ValueError(
@@ -277,6 +290,7 @@ def _projection_encoder(
                 "KSS_DENSE_DIMENSION",
                 384,
             ),
+            ca_file=environment.get("KSS_TLS_CA_FILE", "").strip() or None,
         )
     if environment.get("KSS_DETERMINISTIC_ENCODER_ENABLED", "").strip() != "1":
         raise ValueError(
@@ -514,11 +528,15 @@ def _validate_custom_endpoint(endpoint: str, *, allow_insecure: bool) -> None:
 def _dependency_readiness(
     configuration: ApiRuntimeConfiguration,
     artifacts: S3ImmutableArtifactStore,
+    environment: Mapping[str, str],
 ) -> dict[str, bool]:
     return {
         "postgresql": _postgres_ready(configuration.postgres_dsn),
         "object_storage": artifacts.is_ready(),
-        "search": _search_ready(configuration.search_endpoint),
+        "search": _search_ready(
+            configuration.search_endpoint,
+            ca_file=environment.get("KSS_TLS_CA_FILE", "").strip() or None,
+        ),
     }
 
 
@@ -533,10 +551,17 @@ def _postgres_ready(dsn: str) -> bool:
         return False
 
 
-def _search_ready(endpoint: str) -> bool:
+def _search_ready(endpoint: str, *, ca_file: str | None = None) -> bool:
     try:
         target = f"{endpoint.rstrip('/')}/_cluster/health"
-        response = build_opener(ProxyHandler({})).open(target, timeout=3)
+        handlers: list[Any] = [ProxyHandler({})]
+        if target.startswith("https://"):
+            handlers.append(
+                HTTPSHandler(
+                    context=ssl.create_default_context(cafile=ca_file),
+                )
+            )
+        response = build_opener(*handlers).open(target, timeout=3)
         try:
             return bool(200 <= response.status < 300)
         finally:

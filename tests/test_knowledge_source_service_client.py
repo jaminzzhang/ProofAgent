@@ -20,6 +20,7 @@ from proof_agent.control.knowledge.retrieval_service import (
 )
 from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceWriter
 
 
@@ -351,6 +352,24 @@ class StaticCandidateService:
         )
 
 
+class StaticCandidateAdmissionScorer:
+    scorer_id = "approved-test-scorer"
+    scorer_revision = "approved-test-scorer.v1"
+
+    def __init__(self, scores: dict[str, float]) -> None:
+        self.scores = scores
+        self.requests: list[tuple[KnowledgeCandidateQuery, KnowledgeCandidateResult]] = []
+
+    def score_candidates(
+        self,
+        *,
+        query: KnowledgeCandidateQuery,
+        result: KnowledgeCandidateResult,
+    ) -> dict[str, float]:
+        self.requests.append((query, result))
+        return self.scores
+
+
 class ForbiddenLegacyProvider:
     provider_name = "legacy-must-not-run"
     capabilities = RetrievalCapabilities(supports_parallel_retrieval=True)
@@ -417,6 +436,99 @@ def test_control_plane_routes_exact_query_without_flattening_structured_groups(
     structured = result.candidate_result.evidence_groups[1].candidate_evidence[0]
     assert structured.content.structured_data.fields[0].value == 2025
     assert result.evidence_result.status == "failed"
+
+
+def test_control_plane_applies_an_explicit_candidate_admission_scorer(
+    tmp_path: Any,
+) -> None:
+    candidate_service = StaticCandidateService()
+    admission_scorer = StaticCandidateAdmissionScorer({"candidate-doc-1": 0.84})
+    service = KnowledgeRetrievalService(
+        trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
+        policy=PolicyEngine(()),
+        knowledge_provider=ForbiddenLegacyProvider(),
+        knowledge_candidate_service=candidate_service,
+        knowledge_candidate_admission_scorer=admission_scorer,
+    )
+    candidate_query = KnowledgeCandidateQuery.model_validate(
+        {
+            "idempotency_key": "run-1:retrieval-1:attempt-1",
+            "knowledge_base_release_id": "release-1",
+            "question": "理赔增长原因和 2025 年理赔总额",
+            "strategy": "single_pass",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 10,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 1000,
+            },
+            "deadline_at": datetime(2026, 8, 12, 9, 1, tzinfo=UTC),
+        }
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question=candidate_query.question,
+            strategy="single_step",
+            top_k=10,
+            min_score=0.5,
+            knowledge_candidate_query=candidate_query,
+        )
+    )
+
+    assert len(admission_scorer.requests) == 1
+    assert admission_scorer.requests[0][0] == candidate_query
+    assert result.evidence[0].admission_score == 0.84
+    assert result.evidence[0].metadata["admission_scorer"] == {
+        "scorer_id": "approved-test-scorer",
+        "scorer_revision": "approved-test-scorer.v1",
+    }
+    assert result.evidence_result.status == "passed"
+
+
+def test_control_plane_rejects_an_invalid_candidate_admission_score(
+    tmp_path: Any,
+) -> None:
+    candidate_service = StaticCandidateService()
+    admission_scorer = StaticCandidateAdmissionScorer({"candidate-doc-1": 1.01})
+    service = KnowledgeRetrievalService(
+        trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
+        policy=PolicyEngine(()),
+        knowledge_provider=ForbiddenLegacyProvider(),
+        knowledge_candidate_service=candidate_service,
+        knowledge_candidate_admission_scorer=admission_scorer,
+    )
+    candidate_query = KnowledgeCandidateQuery.model_validate(
+        {
+            "idempotency_key": "run-1:retrieval-1:attempt-1",
+            "knowledge_base_release_id": "release-1",
+            "question": "理赔增长原因和 2025 年理赔总额",
+            "strategy": "single_pass",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 10,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 1000,
+            },
+            "deadline_at": datetime(2026, 8, 12, 9, 1, tzinfo=UTC),
+        }
+    )
+
+    with pytest.raises(ProofAgentError) as exc:
+        service.retrieve(
+            KnowledgeRetrievalRequest(
+                question=candidate_query.question,
+                strategy="single_step",
+                top_k=10,
+                min_score=0.5,
+                knowledge_candidate_query=candidate_query,
+            )
+        )
+
+    assert exc.value.code == "PA_KNOWLEDGE_001"
+    assert "approved normalized range" in str(exc.value)
 
 
 @pytest.mark.parametrize(

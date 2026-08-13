@@ -16,11 +16,11 @@
 
 | 目标 | 说明 | 验收口径 |
 | --- | --- | --- |
-| 独立服务 | Knowledge Source Service 拥有独立运行入口、进程角色和逻辑数据权限 | API、Query Executor、Worker、Scheduler、Migration 角色可独立组合；生产依赖缺失时失败关闭 |
+| 独立服务 | Knowledge Source Service 拥有独立运行入口、进程角色和逻辑数据权限 | API、Query Executor、Worker、Scheduler、Migration 角色可独立组合；类生产部署使用独立 PostgreSQL 数据库、非超级用户登录凭证和 S3 namespace；生产依赖缺失时失败关闭 |
 | 异构知识处理 | 分析、版本化和存储结构化与非结构化数据 | 格式矩阵、失败隔离、不可变 Source/Base Version 与原子 Release 测试通过 |
 | 标准查询 | 为多个 Agent 提供 exact-Space、exact-Release 的 Candidate Evidence 查询 | Knowledge Query 契约、授权、幂等、状态机、取消、过期和 typed result 测试通过 |
 | 混合与 Agentic 检索 | 支持 Lexical、Dense、Sparse、Structured 及显式的有界 Agentic 检索 | 检索质量、lineage、预算、逐轮 Gate、取消和提示注入测试通过 |
-| ProofAgent 接入 | ProofAgent 通过远程端口查询并继续负责 Evidence Admission 和最终答案 | 端到端测试证明候选证据可进入既有 Admission 流程，服务不可越过权限边界 |
+| ProofAgent 接入 | ProofAgent 通过远程端口查询，并通过显式组合的已批准评分器继续负责 Evidence Admission 和最终答案 | 端到端测试证明候选证据可进入既有 Admission 流程；缺少评分器或评分无效时失败关闭；服务不可越过权限边界 |
 
 ### 范围内
 
@@ -33,7 +33,8 @@
 | 查询与结果 | `POST /v1/knowledge-queries`、查询、取消和 typed Evidence Group | ADR-0203、ADR-0206 |
 | 检索 | Lexical、learned Sparse、Dense、Structured；前三者以 Weighted RRF 融合 | ADR-0200、ADR-0201、ADR-0203 |
 | Agentic | 显式启用、预算约束、逐轮 Plan Gate、固定 Space/Release/scope | ADR-0202 |
-| ProofAgent 适配 | 远程 `KnowledgeProvider` 适配器、稳定幂等键、无本地生产回退 | 设计第 17 节 |
+| ProofAgent 适配 | 远程 Candidate Service、稳定幂等键、显式 Admission Scorer 组合缝、无本地生产回退 | 设计第 17 节；Knowledge/Evidence 领域决策 |
+| 类生产部署 | KSS 五个角色使用同一固定镜像；外部查询只通过 `https://proof-agent.localhost:8444`；KSS 数据库由专用非超级用户角色拥有；OpenSearch、projection encoder、Agentic controller 和 OCR 只通过内部 TLS 网关 | `docker-compose.production-local.yml`、`docker/production-local/nginx.conf` |
 
 ### 范围外与非目标
 
@@ -56,7 +57,7 @@
 | MAIN-4 | 原子发布 | Base Version 已成功构建 | 一次可见性事务发布 exact Release | 查询只能观察完整 Release | 并发发布、失败恢复测试 | P1 | 已关闭 |
 | MAIN-5 | 混合检索 | 已通过 Gate 的 single-pass plan | 运行 Lexical、Sparse、Dense 与可选 reranker；Structured 单独执行 | typed `evidence_groups` 与 lineage | 排名、类型、引用测试 | P1 | 已关闭 |
 | MAIN-6 | Agentic 检索 | 请求显式选择 Agentic 且 grant 允许 | 每轮评估覆盖、选择允许 lane、再次过 Gate，并扣减预算 | 有界多轮 Candidate Evidence 或稳定失败 | 预算、取消、注入、权限不扩展测试 | P1 | 已关闭 |
-| MAIN-7 | ProofAgent 接入 | ProofAgent retrieval action | 远程适配器提交/等待/轮询 Knowledge Query，再转换为既有候选证据 | 既有 Admission 流程继续执行 | adapter、契约、端到端测试 | P1 | 已关闭 |
+| MAIN-7 | ProofAgent 接入 | ProofAgent retrieval action | 远程适配器提交、等待并轮询 Knowledge Query，再由显式组合的已批准评分器生成 Evidence Admission 输入 | 既有 Admission 流程继续执行；未配置评分器时，候选保持不可准入 | adapter、契约、端到端测试 | P1 | 已关闭 |
 | BRANCH-1 | 幂等冲突 | 同一 client 和 key 重放 | 相同 fingerprint 返回同一资源；不同 fingerprint 返回 `409` | 无重复 Query 或工作项 | 并发重放测试 | P1 | 已关闭 |
 | BRANCH-2 | 权限拒绝 | grant、Space、Release 或过滤范围不匹配 | Gate 拒绝且不执行任何 retrieval lane | 稳定 Problem Details 与审计事件 | 隔离、越权和 side-channel 测试 | P1 | 已关闭 |
 | BRANCH-3 | 取消与期限 | client 取消或 execution deadline 到期 | 持久化意图；executor 在安全点停止；区分 `cancelled` 与 `expired` | 单一合法终态 | race、重试、恢复测试 | P1 | 已关闭 |
@@ -77,6 +78,7 @@
 | KSS-R07 | Agentic 必须显式启用并受轮数、模型调用、候选数、token 和时长预算限制 | 预算具体默认值属于实施校准，不改变 hard-bound 规则 | 已确认 |
 | KSS-R08 | 外部数据库、API 和对象清单在查询前物化为不可变 Source Version | 查询时不得访问 live upstream | 已确认 |
 | KSS-R09 | Release 只在全部必需投影就绪后原子可见 | 失败构建不可被查询 | 已确认 |
+| KSS-R10 | KSS 排序与 lane-native score 不得直接变成 Evidence Admission Score | ProofAgent 只能通过显式组合、已批准且输出 0–1 有限值的评分器生成 Admission 输入；缺失或非法值失败关闭 | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 

@@ -279,10 +279,27 @@
 | GREEN-INTEGRITY-001 | Worker 有界重放 PostgreSQL/S3 Release authority 并核验 OpenSearch attestation | worker/process/real-dependency contracts | 真实三依赖 integrity regression 通过 |
 | RED-CITATION-001 | ProofAgent 将非 `text_lines` locator 当作行号读取 | consumer integration + strict mypy | PDF locator 触发 `AttributeError`；mypy 报 union-attr |
 | GREEN-CITATION-001 | 七类 document locator 映射为稳定 `knowledge://` fragment | ProofAgent retrieval integration | 7 个 locator 参数化回归与 strict mypy 通过 |
+| RED-ENCODER-002 | 显式 deterministic encoder 与自定义 dense dimension 组合必须可启动 | process distribution contract | 失败符合预期：dimension 被误判为远程 encoder 配置并报告字段不完整 |
+| GREEN-ENCODER-002 | 仅 endpoint/token/revision 激活远程 encoder；deterministic 模式独立接受 dimension | KSS process composition | targeted distribution tests 通过；Ruff 与 strict mypy 通过 |
+| RED-PA-006 | 公共 Agent Package 运行入口必须可注入 exact Candidate Service 与 Query factory | Agent Package execution contract | 失败符合预期：`AgentPackageRunRequest` 不接受远程 Knowledge 依赖 |
+| GREEN-PA-006 | 远程 Candidate Service 与 Query factory 贯通 Agent Package composition | delivery/bootstrap composition | Agent Package 与 composition targeted tests 通过 |
+| RED-PA-007 | KSS 保持 Candidate-only 时，ProofAgent 必须有显式已批准 Admission Scorer 组合缝 | Control Plane integration + real runtime smoke | 无评分器的真实运行正确收敛为 `REFUSED_NO_EVIDENCE`；融合名次不得伪装为 Admission Score |
+| GREEN-PA-007 | 新增批量 Candidate Admission Scorer port，记录 scorer identity/revision，默认仍失败关闭 | contracts/retrieval/bootstrap/workflow composition | 有评分器的真实运行返回 `ANSWERED_WITH_CITATIONS`；无评分器回归保持 failed |
+| RED-PA-008 | Admission Scorer 越界值不得进入 Evidence Threshold | ProofAgent client integration | 失败符合预期：`1.01` 被当作普通 admission score 接受 |
+| GREEN-PA-008 | Control Plane 只接受 0–1 的有限 Admission Score | ProofAgent retrieval service | 越界值以 `PA_KNOWLEDGE_001` 失败关闭 |
 | VERIFY-KSS-001 | KSS contract suite | `tests/contract/knowledge_service` | 104 passed；使用真实 PostgreSQL、MinIO、OpenSearch |
 | VERIFY-PA-001 | ProofAgent remote client、query factory、composition 与 citation | ProofAgent targeted suites | 25 passed；Ruff 与 strict mypy 通过 |
 | VERIFY-REPO-001 | 仓库默认完整回归 | root `pytest -q` + localhost 定向复跑 | 3156 passed；133 skipped；13 marker-deselected；无代码失败 |
 | VERIFY-IMAGE-001 | 独立 OCI image | Docker build、inspect、ephemeral `roles` | image `sha256:05e9f975…` 构建成功；UID/GID `10001:10001`；五角色 CLI 通过 |
+| VERIFY-RUNTIME-002 | Markdown + typed CSV Release 经真实 KSS API、queue、executor、ProofAgent Control Plane 与最终回答 | loopback runtime smoke | Query `knowledge-query-cb42a6e21c914fd1b40d4e4691f38811`；2 条 accepted cited evidence；回答包含 300 元与所需材料 |
+| VERIFY-IMAGE-002 | 重建最终 KSS 与 Agent 镜像并执行角色/API/问答 smoke | Docker build、inspect、run | KSS `sha256:e9742d85…`；Agent `sha256:f6f66c97…`；均为 UID/GID `10001:10001`；KSS 五角色与 Agent cited-answer 通过 |
+| RED-DEPLOY-001 | KSS 五角色必须进入完整类生产 Compose，并经独立 TLS 入口和私有模型协议运行 | deployment contract | 失败符合预期：Compose 中没有 KSS 角色，模型兼容面缺少 KSS projection、Agentic 和 OCR 协议 |
+| GREEN-DEPLOY-001 | 新增 KSS 五角色、`8444` TLS 入口、三个受 Bearer 保护的模型协议和显式私有 CA 装配 | Compose、nginx、model plane、KSS adapters | 部署契约与模型协议定向测试通过；Compose 展开校验通过 |
+| RED-DEPLOY-002 | KSS 与 ProofAgent 不能共享同一逻辑 PostgreSQL database | real migration startup | 首次迁移因双方独立拥有同名 `knowledge_sources` 表而失败关闭 |
+| GREEN-DEPLOY-002 | 新增幂等数据库初始化 Job，KSS 独占 `knowledge_source_service` database 和迁移 ledger | Compose migration authority | 初始化与六个 KSS migration 均退出 0；KSS readiness 的 PostgreSQL、对象存储和搜索均为 `ready` |
+| RED-DEPLOY-003 | 独立逻辑数据库还必须使用独立登录凭证，并可重复检测对象所有权漂移 | deployment authority contract | 失败符合预期：KSS DSN 仍复用 `proof` 角色，验收脚本未检查角色、数据库、schema 和表所有权 |
+| GREEN-DEPLOY-003 | 生成独立随机凭证，幂等创建非超级用户 `knowledge_source_service` 角色，仅迁移 KSS 数据库 `public` schema 内对象，并加入失败关闭验收 | Compose database initialization + verifier | 保留现有数据；KSS database、`public` schema 和 13 张表均由专用角色拥有；`proof` database 所有权不变；更新后的 verifier 通过 |
+| VERIFY-DEPLOY-001 | 完整类生产 Docker 栈、异构摄取、标准/结构化/Agentic 查询和 ProofAgent 问答 | retained Compose runtime | KSS `sha256:97c2db1f…`；Agent `sha256:cc4f8014…`；KSS 五角色 non-root/read-only；精确 Release `release-a4b70851cb914862000e15c3` 返回 3 个 single-pass、2 个 structured、3 个 Agentic candidates；ProofAgent 为 `ANSWERED_WITH_CITATIONS` |
 
 ## 7. 实现产物
 
@@ -292,18 +309,22 @@
 | Authority | PostgreSQL Query/Grant/Catalog/Synchronization authority；S3 immutable originals/canonical/manifests/results；OpenSearch rebuildable generation |
 | Intake | Markdown、text、HTML、PDF、DOCX、PPTX、PNG/JPEG/TIFF、CSV、XLSX、mapped JSON/JSONL、Parquet、HTTP JSON、PostgreSQL snapshot、object manifest |
 | Query | exact Release `KnowledgeQuery` API；Lexical/Sparse/Dense weighted RRF；typed Structured analysis；显式 bounded Agentic |
-| Integration | ProofAgent `KnowledgeCandidateService` port、strict remote client、stable request factory、Control Plane composition |
+| Integration | ProofAgent `KnowledgeCandidateService` port、strict remote client、stable request factory、显式 `KnowledgeCandidateAdmissionScorer`、Control Plane composition |
 
 ## 8. 最终验证记录
 
 | 命令或证据 | 结果 |
 | --- | --- |
 | `pytest -q tests/contract/knowledge_service`，启用 required PostgreSQL/S3/Search flags | 104 passed |
-| ProofAgent targeted client/factory/composition suites | 25 passed |
+| 2026-08-12 final affected deployment/integration suites | 95 passed |
 | `ruff check`：KSS、ProofAgent 变更与测试 | passed |
-| `mypy --strict`：KSS 76 source files 与 ProofAgent 8 source files | passed |
+| `mypy --strict`：KSS 76 source files 与 ProofAgent 429 source files | passed |
 | root `pytest -q` | 3148 passed；8 个 localhost bind 用例受 sandbox 阻止；授权环境定向复跑 8 passed |
-| `docker build` + image inspect + ephemeral role CLI | passed；non-root image；五角色可执行 |
+| `docker build` + image inspect + runtime smoke | KSS `sha256:e9742d85…`、Agent `sha256:f6f66c97…`；non-root；KSS 五角色、Agent API health 和 cited-answer 通过 |
+| 真实 KSS → ProofAgent 问答 | `ANSWERED_WITH_CITATIONS`；精确绑定 `release-3e5ac7da4da3e2bc9bd6f480`；回答包含 300 元、登机牌和航空公司延误证明 |
+| 2026-08-12 类生产 Compose 部署 | KSS `sha256:97c2db1f…`、Agent `sha256:cc4f8014…`；KSS API/Executor/Worker/Scheduler 运行；Migration 与 Database Init 退出 0；`8444/readyz` 为 `ready`；数据库权限隔离验收通过 |
+| 类生产异构查询与 Agent 接入 | Markdown + typed CSV；single-pass、structured、Agentic 均成功；ProofAgent 通过 guarded HTTPS 和显式 compatibility scorer 返回 `ANSWERED_WITH_CITATIONS`，答案包含 4 小时、300 元和 30 天 |
+| KSS 真实依赖契约复跑 | PostgreSQL、MinIO、OpenSearch 均为 required；105 passed |
 | `git diff --check` | passed |
 
 ## 9. 生产前剩余事项
@@ -313,7 +334,7 @@
 | 问题 | 等级 | 影响 | 建议动作 |
 | --- | --- | --- | --- |
 | 企业 OIDC、细粒度 operator permission 与配置审计尚未接入 | P1 | 管理面生产身份与审计 | 在 deployment/security slice 实现并演练 |
-| ProofAgent 远程 client 仍由显式 composition 注入；deployment binding、credential wiring 和 Client Grant provisioning 尚未产品化 | P1 | 生产启用与凭证轮换 | 通过 Secret Provider 和受控 control plane 完成部署装配；不得用本地 provider 回退 |
+| ProofAgent 远程 client、Admission Scorer 仍由显式 composition 注入；当前类生产验证使用一次性 compatibility scorer 和预置 client credential，生产 scorer 校准/批准、Published Agent deployment binding、Secret Provider credential wiring 和 Client Grant provisioning 尚未产品化 | P1 | 长期运行的生产 Agent 启用、Evidence Admission 与凭证轮换 | 通过受控发布流程批准 scorer revision，并由 Secret Provider 和 Control Plane 完成部署装配；不得把 KSS rank 当分数或使用本地 provider 回退 |
 | 正式 OpenAPI golden、client generation compatibility gate 尚未冻结 | P1 | 跨版本兼容 | 发布候选前生成并纳入 CI |
 | Release Preparation one-use CAS、shadow/pilot/cutover 尚未实施 | P1 | 生产发布与回滚 | 按 Task 4、13、14 单独执行发布工程 |
 | content-level ACL narrowing、reranker/context expansion 尚未交付 | P1 | 细粒度授权与质量 | 未启用这些能力前保持 fail closed，不声明支持 |

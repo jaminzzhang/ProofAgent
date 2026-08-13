@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import socket
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, get_type_hints
@@ -122,110 +121,107 @@ class RaisingArtifactReader:
 
 
 VALID_METRICS: dict[str, dict[str, bool | int | float | str]] = {
-    "backend_frontend_quality": {
-        "line_coverage_percent": 90,
-        "required_command_failures": 0,
-        "required_integration_skips": 0,
+    "candidate_integrity": {
+        "quality_line_coverage_percent": 90,
+        "quality_required_command_failures": 0,
+        "quality_required_integration_skips": 0,
+        "distribution_clean_install_passed": True,
+        "distribution_image_readiness_passed": True,
+        "security_unresolved_critical_findings": 0,
+        "security_unresolved_high_findings": 0,
+        "security_runtime_hardening_passed": True,
+        "security_sbom_present": True,
+        "security_provenance_verified": True,
     },
-    "distribution_image": {
-        "clean_install_passed": True,
-        "image_readiness_passed": True,
+    "access_security": {
+        "identity_required_checks_passed": True,
+        "secrets_egress_required_checks_passed": True,
     },
-    "supply_chain_runtime_security": {
-        "unresolved_critical_findings": 0,
-        "unresolved_high_findings": 0,
-        "runtime_hardening_passed": True,
+    "governed_behavior": {
+        "deterministic_required_case_failures": 0,
+        "deterministic_required_case_skips": 0,
+        "real_llm_required_case_failures": 0,
+        "real_llm_required_case_skips": 0,
+        "real_llm_sample_count": 1,
     },
-    "identity_authorization": {"required_checks_passed": True},
-    "secrets_egress": {"required_checks_passed": True},
-    "deterministic_evaluation": {
-        "required_case_failures": 0,
-        "required_case_skips": 0,
+    "operational_readiness": {
+        "compatibility_postgresql_bound": True,
+        "compatibility_s3_bound": True,
+        "compatibility_oidc_bound": True,
+        "compatibility_secret_provider_bound": True,
+        "compatibility_gateway_bound": True,
+        "compatibility_model_bound": True,
+        "compatibility_tool_mode_bound": True,
+        "compatibility_manifest_sha256": "d" * 64,
+        "capacity_online_sessions": 20,
+        "capacity_active_attempts": 5,
+        "capacity_queued_runs": 50,
+        "capacity_overload_request_51_passed": True,
+        "capacity_load_duration_seconds": 1800,
+        "capacity_admission_sample_count": 200,
+        "capacity_first_progress_sample_count": 200,
+        "capacity_terminal_sample_count": 100,
+        "capacity_admission_p95_ms": 500,
+        "capacity_first_progress_p95_ms": 1000,
+        "capacity_free_slot_start_p95_ms": 1000,
+        "capacity_standard_terminal_p95_ms": 60000,
+        "capacity_max_attempt_terminal_ms": 120000,
+        "queue_required_checks_passed": True,
+        "queue_soak_duration_seconds": 14400,
+        "browser_required_checks_passed": True,
+        "browser_pilot_operator_count": 3,
+        "browser_support_window_seconds": 32400,
+        "browser_required_scenario_coverage_percent": 100,
     },
-    "real_llm_evaluation": {
-        "required_case_failures": 0,
-        "required_case_skips": 0,
-        "sample_count": 1,
-    },
-    "dependency_compatibility": {
-        "postgresql_bound": True,
-        "s3_bound": True,
-        "oidc_bound": True,
-        "secret_provider_bound": True,
-        "gateway_bound": True,
-        "model_bound": True,
-        "tool_mode_bound": True,
-        "deployment_compatibility_manifest_sha256": "d" * 64,
-    },
-    "capacity_responsiveness": {
-        "online_sessions": 20,
-        "active_attempts": 5,
-        "queued_runs": 50,
-        "overload_request_51_passed": True,
-        "load_duration_seconds": 1800,
-        "admission_sample_count": 200,
-        "first_progress_sample_count": 200,
-        "terminal_sample_count": 100,
-        "admission_p95_ms": 500,
-        "first_progress_p95_ms": 1000,
-        "free_slot_start_p95_ms": 1000,
-        "standard_terminal_p95_ms": 60000,
-        "max_attempt_terminal_ms": 120000,
-    },
-    "queue_progress": {
-        "required_checks_passed": True,
-        "soak_duration_seconds": 14400,
-    },
-    "resilience_recovery": {
+    "deployment_recovery": {
         "fault_matrix_passed": True,
-        "reference_digest_verification_percent": 100,
-        "rpo_minutes": 15,
-        "rto_minutes": 240,
-        "topology_sha256": "f" * 64,
-        "backup_policy_sha256": "1" * 64,
-        "migration_set_sha256": "e" * 64,
-    },
-    "deployment": {
-        "required_checks_passed": True,
-        "drain_seconds": 150,
-        "soak_seconds": 1800,
-        "topology_sha256": "f" * 64,
-        "backup_policy_sha256": "1" * 64,
-        "migration_set_sha256": "e" * 64,
+        "recovery_reference_digest_verification_percent": 100,
+        "recovery_rpo_minutes": 15,
+        "recovery_rto_minutes": 240,
+        "recovery_topology_sha256": "f" * 64,
+        "recovery_backup_policy_sha256": "1" * 64,
+        "recovery_migration_set_sha256": "e" * 64,
+        "deployment_required_checks_passed": True,
+        "deployment_drain_seconds": 150,
+        "deployment_soak_seconds": 1800,
+        "deployment_topology_sha256": "f" * 64,
+        "deployment_backup_policy_sha256": "1" * 64,
+        "deployment_migration_set_sha256": "e" * 64,
         "deployment_compatibility_manifest_sha256": "d" * 64,
-    },
-    "browser_operations": {
-        "required_checks_passed": True,
-        "pilot_operator_count": 3,
-        "support_window_seconds": 32400,
-        "required_scenario_coverage_percent": 100,
     },
 }
 
 
 EVIDENCE_KINDS: dict[str, tuple[str, ...]] = {
-    "backend_frontend_quality": ("candidate_static",),
-    "distribution_image": ("candidate_static",),
-    "supply_chain_runtime_security": ("vulnerability_scan",),
-    "identity_authorization": ("production_dependency",),
-    "secrets_egress": ("production_dependency",),
-    "deterministic_evaluation": ("candidate_static",),
-    "real_llm_evaluation": ("real_llm",),
-    "dependency_compatibility": ("production_dependency",),
-    "capacity_responsiveness": ("load",),
-    "queue_progress": ("load",),
-    "resilience_recovery": ("fault", "combined_restore"),
-    "deployment": ("blue_green",),
-    "browser_operations": ("browser",),
+    "candidate_integrity": (
+        "candidate_quality",
+        "distribution_image",
+        "supply_chain_security",
+    ),
+    "access_security": ("identity_authorization", "secrets_egress"),
+    "governed_behavior": ("deterministic_evaluation", "real_llm_evaluation"),
+    "operational_readiness": (
+        "dependency_compatibility",
+        "capacity_responsiveness",
+        "queue_progress",
+        "browser_operations",
+    ),
+    "deployment_recovery": ("fault", "combined_restore", "blue_green"),
 }
 
 
 MAX_AGES: dict[str, timedelta | None] = {
-    "candidate_static": None,
-    "vulnerability_scan": timedelta(hours=24),
-    "production_dependency": timedelta(hours=72),
-    "real_llm": timedelta(hours=72),
-    "load": timedelta(hours=72),
+    "candidate_quality": None,
+    "distribution_image": None,
+    "supply_chain_security": timedelta(hours=24),
+    "identity_authorization": timedelta(hours=72),
+    "secrets_egress": timedelta(hours=72),
+    "deterministic_evaluation": None,
+    "real_llm_evaluation": timedelta(hours=72),
+    "dependency_compatibility": timedelta(hours=72),
+    "capacity_responsiveness": timedelta(hours=72),
+    "queue_progress": timedelta(hours=72),
+    "browser_operations": timedelta(hours=72),
     "fault": timedelta(hours=72),
     "combined_restore": timedelta(days=30),
     "blue_green": timedelta(hours=72),
@@ -294,8 +290,8 @@ def _valid_manifest() -> tuple[ReleaseGateManifest, dict[str, bytes]]:
         )
     return (
         ReleaseGateManifest(
-            schema_version="proofagent.release-gate-manifest.v1",
-            profile_id="initial-private-pilot-v1",
+            schema_version="proofagent.release-gate-manifest.v2",
+            profile_id="initial-private-pilot-v2",
             candidate=candidate,
             results=tuple(results),
             generated_at=GENERATED_AT,
@@ -383,7 +379,7 @@ def _attestation_claims(
     )
 
 
-def test_all_exact_thirteen_passing_gates_produce_go() -> None:
+def test_all_five_risk_gates_passing_produce_go() -> None:
     manifest, artifacts = _valid_manifest()
 
     decision = _verify(manifest, artifacts)
@@ -397,12 +393,12 @@ def test_all_exact_thirteen_passing_gates_produce_go() -> None:
 @pytest.mark.parametrize("status", ["failed", "skipped", "error", "not_run"])
 def test_required_nonpassing_status_produces_no_go(status: str) -> None:
     manifest, artifacts = _valid_manifest()
-    manifest = _replace_result(manifest, "backend_frontend_quality", status=status)
+    manifest = _replace_result(manifest, "candidate_integrity", status=status)
 
     decision = _verify(manifest, artifacts)
 
     assert decision.decision == "NO-GO"
-    assert f"gate.status:backend_frontend_quality:{status}" in decision.blocker_codes
+    assert f"gate.status:candidate_integrity:{status}" in decision.blocker_codes
 
 
 def test_missing_and_unknown_gates_produce_no_go() -> None:
@@ -414,7 +410,7 @@ def test_missing_and_unknown_gates_produce_no_go() -> None:
     decision = _verify(manifest, artifacts)
 
     assert decision.decision == "NO-GO"
-    assert "gate.missing:backend_frontend_quality" in decision.blocker_codes
+    assert "gate.missing:candidate_integrity" in decision.blocker_codes
     assert "gate.unknown:producer_optional_gate" in decision.blocker_codes
 
 
@@ -524,7 +520,8 @@ def test_invalid_evidence_never_reaches_attestation_but_valid_items_still_do(
     decision = _verify(manifest, artifacts, attestation=attestation)
 
     assert decision.decision == "NO-GO"
-    assert attestation.calls == sum(len(item.evidence) for item in manifest.results) - 1
+    skipped = len(result.evidence) if invalidity == "result_binding_mismatch" else 1
+    assert attestation.calls == sum(len(item.evidence) for item in manifest.results) - skipped
 
 
 def test_gate_and_evidence_binding_mismatches_are_both_blockers() -> None:
@@ -601,7 +598,7 @@ def test_gate_result_digest_binds_status_metrics_and_all_claims() -> None:
     manifest, _artifacts = _valid_manifest()
     result = manifest.results[0]
     metrics = dict(result.metrics)
-    metrics["line_coverage_percent"] = 91
+    metrics["quality_line_coverage_percent"] = 91
 
     assert gate_result_sha256(result) != gate_result_sha256(
         result.model_copy(update={"status": "failed"})
@@ -625,7 +622,7 @@ def test_fixed_old_attestation_claims_reject_changed_gate_result(mutation: str) 
         manifest = _replace_result(manifest, original.gate_id, status="failed")
     else:
         metrics = dict(original.metrics)
-        metrics["line_coverage_percent"] = 91
+        metrics["quality_line_coverage_percent"] = 91
         manifest = _replace_result(manifest, original.gate_id, metrics=metrics)
     verifier = AttestationStub(fixed_claims={evidence.evidence_id: old_claims})
 
@@ -766,9 +763,9 @@ def test_invalid_evidence_time_relationships_are_blockers(
     expected_code: str,
 ) -> None:
     manifest, artifacts = _valid_manifest()
-    gate_id = "supply_chain_runtime_security"
-    target = next(result for result in manifest.results if result.gate_id == gate_id).evidence[0]
-    manifest = _replace_evidence(manifest, gate_id, **{field: value})
+    gate_id = "candidate_integrity"
+    target = next(result for result in manifest.results if result.gate_id == gate_id).evidence[2]
+    manifest = _replace_evidence(manifest, gate_id, evidence_index=2, **{field: value})
 
     decision = _verify(manifest, artifacts)
 
@@ -778,7 +775,7 @@ def test_invalid_evidence_time_relationships_are_blockers(
 
 def test_required_expiry_missing_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
-    gate_id = "identity_authorization"
+    gate_id = "access_security"
     target = next(result for result in manifest.results if result.gate_id == gate_id).evidence[0]
     manifest = _replace_evidence(manifest, gate_id, expires_at=None)
 
@@ -789,12 +786,13 @@ def test_required_expiry_missing_is_a_blocker() -> None:
 
 def test_evidence_older_than_policy_or_expired_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
-    gate_id = "real_llm_evaluation"
-    target = next(result for result in manifest.results if result.gate_id == gate_id).evidence[0]
+    gate_id = "governed_behavior"
+    target = next(result for result in manifest.results if result.gate_id == gate_id).evidence[1]
     produced_at = CHECKED_AT - timedelta(hours=73)
     manifest = _replace_evidence(
         manifest,
         gate_id,
+        evidence_index=1,
         produced_at=produced_at,
         expires_at=produced_at + timedelta(hours=72),
     )
@@ -838,14 +836,12 @@ def test_complete_policy_binding_has_versioned_canonical_golden() -> None:
     profile = INITIAL_PRIVATE_PILOT_PROFILE
 
     assert sha256_hex(profile.binding_bytes) == (
-        "93d87701d3fc57f54f05b99fccba0acc178c407756a743b2b5afefbff0b60b8b"
+        "89ffdf55f47ba6151ffa4478b3c51d88a137b51651b469a66bb7099776841d0c"
     )
     payload = json.loads(profile.binding_bytes)
-    assert payload["schema_version"] == "proofagent.release-profile-binding.v1"
-    assert payload["source"] == {
-        "sha256": sha256_hex(profile.source_bytes),
-        "length": len(profile.source_bytes),
-    }
+    assert payload["schema_version"] == "proofagent.gate-profile.v2"
+    assert payload["profile_id"] == "initial-private-pilot-v2"
+    assert tuple(gate["gate_id"] for gate in payload["gates"]) == profile.gate_ids
 
 
 @pytest.mark.parametrize("mutation", ["rto_threshold", "freshness"])
@@ -854,22 +850,31 @@ def test_policy_binding_changes_when_rules_change_but_source_ids_do_not(mutation
     gates = list(profile.gates)
     if mutation == "rto_threshold":
         gate_index = next(
-            index for index, gate in enumerate(gates) if gate.gate_id == "resilience_recovery"
+            index for index, gate in enumerate(gates) if gate.gate_id == "deployment_recovery"
         )
         gate = gates[gate_index]
         metrics = tuple(
-            replace(metric, expected=999) if metric.key == "rto_minutes" else metric
+            metric.model_copy(update={"expected": 999})
+            if metric.key == "recovery_rto_minutes"
+            else metric
             for metric in gate.metrics
         )
-        gates[gate_index] = replace(gate, metrics=metrics)
+        gates[gate_index] = gate.model_copy(update={"metrics": metrics})
     else:
         gate_index = next(
-            index for index, gate in enumerate(gates) if gate.gate_id == "identity_authorization"
+            index for index, gate in enumerate(gates) if gate.gate_id == "access_security"
         )
         gate = gates[gate_index]
-        evidence = tuple(replace(rule, max_age=timedelta(hours=73)) for rule in gate.evidence)
-        gates[gate_index] = replace(gate, evidence=evidence)
-    changed = replace(profile, gates=tuple(gates))
+        evidence = tuple(
+            rule.model_copy(update={"max_age_seconds": 73 * 60 * 60})
+            for rule in gate.evidence
+        )
+        gates[gate_index] = gate.model_copy(update={"evidence": evidence})
+    changed = profile_module.ReleaseProfile(
+        gate_profile=profile.gate_profile.model_copy(update={"gates": tuple(gates)}),
+        source_bytes=profile.source_bytes,
+        binding_bytes=b"",
+    )
 
     assert changed.source_bytes == profile.source_bytes
     assert profile_module.release_profile_binding_bytes(changed) != profile.binding_bytes
@@ -878,14 +883,14 @@ def test_policy_binding_changes_when_rules_change_but_source_ids_do_not(mutation
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("postgresql_bound", False),
-        ("s3_bound", False),
-        ("oidc_bound", False),
-        ("secret_provider_bound", False),
-        ("gateway_bound", False),
-        ("model_bound", False),
-        ("tool_mode_bound", False),
-        ("deployment_compatibility_manifest_sha256", SHA_A),
+        ("compatibility_postgresql_bound", False),
+        ("compatibility_s3_bound", False),
+        ("compatibility_oidc_bound", False),
+        ("compatibility_secret_provider_bound", False),
+        ("compatibility_gateway_bound", False),
+        ("compatibility_model_bound", False),
+        ("compatibility_tool_mode_bound", False),
+        ("compatibility_manifest_sha256", SHA_A),
     ],
 )
 def test_incomplete_or_mismatched_dependency_compatibility_is_a_blocker(
@@ -893,50 +898,54 @@ def test_incomplete_or_mismatched_dependency_compatibility_is_a_blocker(
     value: bool | str,
 ) -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["dependency_compatibility"])
+    metrics = dict(VALID_METRICS["operational_readiness"])
     metrics[key] = value
-    manifest = _replace_result(manifest, "dependency_compatibility", metrics=metrics)
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     category = "threshold_missed" if isinstance(value, bool) else "binding_mismatch"
-    assert f"metric.{category}:dependency_compatibility:{key}" in decision.blocker_codes
+    assert f"metric.{category}:operational_readiness:{key}" in decision.blocker_codes
 
 
 def test_missing_dependency_compatibility_component_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["dependency_compatibility"])
-    del metrics["gateway_bound"]
-    manifest = _replace_result(manifest, "dependency_compatibility", metrics=metrics)
+    metrics = dict(VALID_METRICS["operational_readiness"])
+    del metrics["compatibility_gateway_bound"]
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
-    assert "metric.missing:dependency_compatibility:gateway_bound" in decision.blocker_codes
+    assert (
+        "metric.missing:operational_readiness:compatibility_gateway_bound"
+        in decision.blocker_codes
+    )
 
 
 def test_insufficient_capacity_sample_and_threshold_miss_are_distinct() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["capacity_responsiveness"])
-    metrics["admission_sample_count"] = 199
-    metrics["online_sessions"] = 19
-    manifest = _replace_result(manifest, "capacity_responsiveness", metrics=metrics)
+    metrics = dict(VALID_METRICS["operational_readiness"])
+    metrics["capacity_admission_sample_count"] = 199
+    metrics["capacity_online_sessions"] = 19
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     assert (
-        "metric.insufficient_sample:capacity_responsiveness:admission_sample_count"
+        "metric.insufficient_sample:operational_readiness:capacity_admission_sample_count"
         in decision.blocker_codes
     )
     assert (
-        "metric.threshold_missed:capacity_responsiveness:online_sessions" in decision.blocker_codes
+        "metric.threshold_missed:operational_readiness:capacity_online_sessions"
+        in decision.blocker_codes
     )
 
 
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("active_attempts", 6),
-        ("queued_runs", 51),
+        ("capacity_active_attempts", 6),
+        ("capacity_queued_runs", 51),
     ],
 )
 def test_capacity_active_attempts_and_queued_runs_are_exact(
@@ -944,35 +953,35 @@ def test_capacity_active_attempts_and_queued_runs_are_exact(
     value: int,
 ) -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["capacity_responsiveness"])
+    metrics = dict(VALID_METRICS["operational_readiness"])
     metrics[key] = value
-    manifest = _replace_result(manifest, "capacity_responsiveness", metrics=metrics)
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     assert decision.decision == "NO-GO"
-    assert f"metric.threshold_missed:capacity_responsiveness:{key}" in decision.blocker_codes
+    assert f"metric.threshold_missed:operational_readiness:{key}" in decision.blocker_codes
 
 
 @pytest.mark.parametrize(
     ("gate_id", "key", "value"),
     [
-        ("capacity_responsiveness", "admission_p95_ms", -0.1),
-        ("capacity_responsiveness", "admission_p95_ms", -1),
-        ("capacity_responsiveness", "first_progress_p95_ms", -0.1),
-        ("capacity_responsiveness", "first_progress_p95_ms", -1),
-        ("capacity_responsiveness", "free_slot_start_p95_ms", -0.1),
-        ("capacity_responsiveness", "free_slot_start_p95_ms", -1),
-        ("capacity_responsiveness", "standard_terminal_p95_ms", -0.1),
-        ("capacity_responsiveness", "standard_terminal_p95_ms", -1),
-        ("capacity_responsiveness", "max_attempt_terminal_ms", -0.1),
-        ("capacity_responsiveness", "max_attempt_terminal_ms", -1),
-        ("resilience_recovery", "rpo_minutes", -0.1),
-        ("resilience_recovery", "rpo_minutes", -1),
-        ("resilience_recovery", "rto_minutes", -0.1),
-        ("resilience_recovery", "rto_minutes", -1),
-        ("deployment", "drain_seconds", -0.1),
-        ("deployment", "drain_seconds", -1),
+        ("operational_readiness", "capacity_admission_p95_ms", -0.1),
+        ("operational_readiness", "capacity_admission_p95_ms", -1),
+        ("operational_readiness", "capacity_first_progress_p95_ms", -0.1),
+        ("operational_readiness", "capacity_first_progress_p95_ms", -1),
+        ("operational_readiness", "capacity_free_slot_start_p95_ms", -0.1),
+        ("operational_readiness", "capacity_free_slot_start_p95_ms", -1),
+        ("operational_readiness", "capacity_standard_terminal_p95_ms", -0.1),
+        ("operational_readiness", "capacity_standard_terminal_p95_ms", -1),
+        ("operational_readiness", "capacity_max_attempt_terminal_ms", -0.1),
+        ("operational_readiness", "capacity_max_attempt_terminal_ms", -1),
+        ("deployment_recovery", "recovery_rpo_minutes", -0.1),
+        ("deployment_recovery", "recovery_rpo_minutes", -1),
+        ("deployment_recovery", "recovery_rto_minutes", -0.1),
+        ("deployment_recovery", "recovery_rto_minutes", -1),
+        ("deployment_recovery", "deployment_drain_seconds", -0.1),
+        ("deployment_recovery", "deployment_drain_seconds", -1),
     ],
 )
 def test_maximum_time_and_latency_metrics_reject_negative_physical_values(
@@ -993,14 +1002,14 @@ def test_maximum_time_and_latency_metrics_reject_negative_physical_values(
 
 def test_coverage_threshold_miss_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["backend_frontend_quality"])
-    metrics["line_coverage_percent"] = 89
-    manifest = _replace_result(manifest, "backend_frontend_quality", metrics=metrics)
+    metrics = dict(VALID_METRICS["candidate_integrity"])
+    metrics["quality_line_coverage_percent"] = 89
+    manifest = _replace_result(manifest, "candidate_integrity", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     assert (
-        "metric.threshold_missed:backend_frontend_quality:line_coverage_percent"
+        "metric.threshold_missed:candidate_integrity:quality_line_coverage_percent"
         in decision.blocker_codes
     )
 
@@ -1008,12 +1017,12 @@ def test_coverage_threshold_miss_is_a_blocker() -> None:
 @pytest.mark.parametrize(
     ("gate_id", "key", "value"),
     [
-        ("backend_frontend_quality", "line_coverage_percent", 101),
-        ("backend_frontend_quality", "line_coverage_percent", 100.1),
-        ("resilience_recovery", "reference_digest_verification_percent", 101),
-        ("resilience_recovery", "reference_digest_verification_percent", 100.1),
-        ("browser_operations", "required_scenario_coverage_percent", 101),
-        ("browser_operations", "required_scenario_coverage_percent", 100.1),
+        ("candidate_integrity", "quality_line_coverage_percent", 101),
+        ("candidate_integrity", "quality_line_coverage_percent", 100.1),
+        ("deployment_recovery", "recovery_reference_digest_verification_percent", 101),
+        ("deployment_recovery", "recovery_reference_digest_verification_percent", 100.1),
+        ("operational_readiness", "browser_required_scenario_coverage_percent", 101),
+        ("operational_readiness", "browser_required_scenario_coverage_percent", 100.1),
     ],
 )
 def test_percentage_metrics_reject_values_above_one_hundred(
@@ -1034,25 +1043,25 @@ def test_percentage_metrics_reject_values_above_one_hundred(
 
 def test_percentage_metrics_accept_numeric_one_hundred() -> None:
     manifest, artifacts = _valid_manifest()
-    quality_metrics = dict(VALID_METRICS["backend_frontend_quality"])
-    quality_metrics["line_coverage_percent"] = 100.0
-    recovery_metrics = dict(VALID_METRICS["resilience_recovery"])
-    recovery_metrics["reference_digest_verification_percent"] = 100.0
-    browser_metrics = dict(VALID_METRICS["browser_operations"])
-    browser_metrics["required_scenario_coverage_percent"] = 100.0
+    quality_metrics = dict(VALID_METRICS["candidate_integrity"])
+    quality_metrics["quality_line_coverage_percent"] = 100.0
+    recovery_metrics = dict(VALID_METRICS["deployment_recovery"])
+    recovery_metrics["recovery_reference_digest_verification_percent"] = 100.0
+    browser_metrics = dict(VALID_METRICS["operational_readiness"])
+    browser_metrics["browser_required_scenario_coverage_percent"] = 100.0
     manifest = _replace_result(
         manifest,
-        "backend_frontend_quality",
+        "candidate_integrity",
         metrics=quality_metrics,
     )
     manifest = _replace_result(
         manifest,
-        "resilience_recovery",
+        "deployment_recovery",
         metrics=recovery_metrics,
     )
     manifest = _replace_result(
         manifest,
-        "browser_operations",
+        "operational_readiness",
         metrics=browser_metrics,
     )
 
@@ -1061,18 +1070,18 @@ def test_percentage_metrics_accept_numeric_one_hundred() -> None:
 
 def test_continuous_coverage_and_latency_measurements_accept_finite_floats() -> None:
     manifest, artifacts = _valid_manifest()
-    quality_metrics = dict(VALID_METRICS["backend_frontend_quality"])
-    quality_metrics["line_coverage_percent"] = 90.5
-    capacity_metrics = dict(VALID_METRICS["capacity_responsiveness"])
-    capacity_metrics["admission_p95_ms"] = 499.5
+    quality_metrics = dict(VALID_METRICS["candidate_integrity"])
+    quality_metrics["quality_line_coverage_percent"] = 90.5
+    capacity_metrics = dict(VALID_METRICS["operational_readiness"])
+    capacity_metrics["capacity_admission_p95_ms"] = 499.5
     manifest = _replace_result(
         manifest,
-        "backend_frontend_quality",
+        "candidate_integrity",
         metrics=quality_metrics,
     )
     manifest = _replace_result(
         manifest,
-        "capacity_responsiveness",
+        "operational_readiness",
         metrics=capacity_metrics,
     )
 
@@ -1081,37 +1090,41 @@ def test_continuous_coverage_and_latency_measurements_accept_finite_floats() -> 
 
 def test_sample_counts_remain_exact_integers() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["capacity_responsiveness"])
-    metrics["admission_sample_count"] = 200.5
-    manifest = _replace_result(manifest, "capacity_responsiveness", metrics=metrics)
+    metrics = dict(VALID_METRICS["operational_readiness"])
+    metrics["capacity_admission_sample_count"] = 200.5
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     assert (
-        "metric.type_mismatch:capacity_responsiveness:admission_sample_count"
+        "metric.type_mismatch:operational_readiness:capacity_admission_sample_count"
         in decision.blocker_codes
     )
 
 
 def test_unbounded_integer_measurement_fails_threshold_without_escaping_verifier() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["capacity_responsiveness"])
-    metrics["admission_p95_ms"] = 10**1000
-    manifest = _replace_result(manifest, "capacity_responsiveness", metrics=metrics)
+    metrics = dict(VALID_METRICS["operational_readiness"])
+    metrics["capacity_admission_p95_ms"] = 10**1000
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
     assert decision.decision == "NO-GO"
     assert (
-        "metric.threshold_missed:capacity_responsiveness:admission_p95_ms" in decision.blocker_codes
+        "metric.threshold_missed:operational_readiness:capacity_admission_p95_ms"
+        in decision.blocker_codes
     )
 
 
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
-        ({"unknown_metric": 1}, "metric.unknown:deployment:unknown_metric"),
-        ({"required_checks_passed": 1}, "metric.type_mismatch:deployment:required_checks_passed"),
+        ({"unknown_metric": 1}, "metric.unknown:deployment_recovery:unknown_metric"),
+        (
+            {"deployment_required_checks_passed": 1},
+            "metric.type_mismatch:deployment_recovery:deployment_required_checks_passed",
+        ),
     ],
 )
 def test_unknown_or_wrongly_typed_metric_is_a_blocker(
@@ -1119,9 +1132,9 @@ def test_unknown_or_wrongly_typed_metric_is_a_blocker(
     expected_code: str,
 ) -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["deployment"])
+    metrics = dict(VALID_METRICS["deployment_recovery"])
     metrics.update(mutation)
-    manifest = _replace_result(manifest, "deployment", metrics=metrics)
+    manifest = _replace_result(manifest, "deployment_recovery", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
@@ -1130,58 +1143,70 @@ def test_unknown_or_wrongly_typed_metric_is_a_blocker(
 
 def test_missing_metric_is_a_blocker() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["browser_operations"])
-    del metrics["support_window_seconds"]
-    manifest = _replace_result(manifest, "browser_operations", metrics=metrics)
+    metrics = dict(VALID_METRICS["operational_readiness"])
+    del metrics["browser_support_window_seconds"]
+    manifest = _replace_result(manifest, "operational_readiness", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
-    assert "metric.missing:browser_operations:support_window_seconds" in decision.blocker_codes
+    assert (
+        "metric.missing:operational_readiness:browser_support_window_seconds"
+        in decision.blocker_codes
+    )
 
 
-@pytest.mark.parametrize("key", ["topology_sha256", "backup_policy_sha256", "migration_set_sha256"])
+@pytest.mark.parametrize(
+    "key",
+    ["topology_sha256", "backup_policy_sha256", "migration_set_sha256"],
+)
 def test_recovery_bindings_must_match_current_deployment(key: str) -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["resilience_recovery"])
-    metrics[key] = SHA_A
-    manifest = _replace_result(manifest, "resilience_recovery", metrics=metrics)
+    metrics = dict(VALID_METRICS["deployment_recovery"])
+    metrics[f"recovery_{key}"] = SHA_A
+    manifest = _replace_result(manifest, "deployment_recovery", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
-    assert f"metric.binding_mismatch:resilience_recovery:{key}" in decision.blocker_codes
+    assert (
+        f"metric.binding_mismatch:deployment_recovery:recovery_{key}"
+        in decision.blocker_codes
+    )
 
 
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("reference_digest_verification_percent", 99),
-        ("rpo_minutes", 16),
-        ("rto_minutes", 241),
+        ("recovery_reference_digest_verification_percent", 99),
+        ("recovery_rpo_minutes", 16),
+        ("recovery_rto_minutes", 241),
     ],
 )
 def test_recovery_thresholds_are_fail_closed(key: str, value: int) -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["resilience_recovery"])
+    metrics = dict(VALID_METRICS["deployment_recovery"])
     metrics[key] = value
-    manifest = _replace_result(manifest, "resilience_recovery", metrics=metrics)
+    manifest = _replace_result(manifest, "deployment_recovery", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
-    assert f"metric.threshold_missed:resilience_recovery:{key}" in decision.blocker_codes
+    assert f"metric.threshold_missed:deployment_recovery:{key}" in decision.blocker_codes
 
 
 def test_deployment_migration_and_dcm_bindings_must_match_candidate() -> None:
     manifest, artifacts = _valid_manifest()
-    metrics = dict(VALID_METRICS["deployment"])
-    metrics["migration_set_sha256"] = SHA_A
+    metrics = dict(VALID_METRICS["deployment_recovery"])
+    metrics["deployment_migration_set_sha256"] = SHA_A
     metrics["deployment_compatibility_manifest_sha256"] = SHA_B
-    manifest = _replace_result(manifest, "deployment", metrics=metrics)
+    manifest = _replace_result(manifest, "deployment_recovery", metrics=metrics)
 
     decision = _verify(manifest, artifacts)
 
-    assert "metric.binding_mismatch:deployment:migration_set_sha256" in decision.blocker_codes
     assert (
-        "metric.binding_mismatch:deployment:deployment_compatibility_manifest_sha256"
+        "metric.binding_mismatch:deployment_recovery:deployment_migration_set_sha256"
+        in decision.blocker_codes
+    )
+    assert (
+        "metric.binding_mismatch:deployment_recovery:deployment_compatibility_manifest_sha256"
         in decision.blocker_codes
     )
 
@@ -1208,8 +1233,13 @@ def test_deploy_decision_window_expires_after_twenty_four_hours() -> None:
 def test_checked_at_must_precede_earliest_required_evidence_expiry() -> None:
     manifest, artifacts = _valid_manifest()
     earliest_expiry = GENERATED_AT + timedelta(hours=2)
-    gate_id = "supply_chain_runtime_security"
-    manifest = _replace_evidence(manifest, gate_id, expires_at=earliest_expiry)
+    gate_id = "candidate_integrity"
+    manifest = _replace_evidence(
+        manifest,
+        gate_id,
+        evidence_index=2,
+        expires_at=earliest_expiry,
+    )
 
     decision = _verify(manifest, artifacts, checked_at=earliest_expiry)
 
@@ -1597,18 +1627,18 @@ def test_release_verify_cli_reports_internal_verifier_bug_as_structured_exit_two
     ("needle", "replacement"),
     [
         (
-            '"profile_id":"initial-private-pilot-v1"',
-            '"profile_id":"initial-private-pilot-v1","profile_id":"initial-private-pilot-v1"',
+            '"profile_id":"initial-private-pilot-v2"',
+            '"profile_id":"initial-private-pilot-v2","profile_id":"initial-private-pilot-v2"',
         ),
         ('"status":"passed"', '"status":"passed","status":"passed"'),
         (
-            '"line_coverage_percent":90',
-            '"line_coverage_percent":90,"line_coverage_percent":90',
+            '"quality_line_coverage_percent":90',
+            '"quality_line_coverage_percent":90,"quality_line_coverage_percent":90',
         ),
         (
-            '"evidence_id":"backend_frontend_quality-candidate_static"',
-            '"evidence_id":"backend_frontend_quality-candidate_static",'
-            '"evidence_id":"backend_frontend_quality-candidate_static"',
+            '"evidence_id":"candidate_integrity-candidate_quality"',
+            '"evidence_id":"candidate_integrity-candidate_quality",'
+            '"evidence_id":"candidate_integrity-candidate_quality"',
         ),
     ],
 )
