@@ -27,11 +27,13 @@ x-proof-agent-environment: &proof-agent-environment
   PROOF_AGENT_SECRET_PROVIDER_COMPATIBILITY_INPUT: /opt/proof-agent-local/compatibility-input.json
   PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE: /run/proof-agent-secrets/model-credential-keyring.json
   PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON: >-
-    {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"}}
+    {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"},"knowledge/source-service/operator":{"mount":"secret","path":"proof-agent/knowledge-source-service-operator","field":"value"}}
   PROOF_AGENT_SECRET_PROBE_HANDLE: session-key-v1
   PROOF_AGENT_VAULT_AGENT_TOKEN_FILE: /run/vault-agent/token
   PROOF_AGENT_OPENSEARCH_SECRET_HANDLE: knowledge/opensearch/proof-agent
   PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE: evaluation/proof-agent/release
+  PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT: https://proof-agent.localhost:8444
+  PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE: knowledge/source-service/operator
   PROOF_AGENT_RECOVERY_GROUP_CLAIM: groups
   PROOF_AGENT_RECOVERY_GROUP_NAME: proof-agent-recovery
   PROOF_AGENT_SESSION_ENVELOPE_KEY_HANDLES_JSON: '{"v1":"session-key-v1"}'
@@ -239,6 +241,7 @@ services:
       CSRF_KEY: ${CSRF_KEY}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
       LOCAL_EVALUATION_TOKEN: ${LOCAL_EVALUATION_TOKEN}
+      KSS_OPERATOR_BEARER_TOKEN: ${KSS_OPERATOR_BEARER_TOKEN}
     volumes:
       - vault-agent-token:/run/vault-agent
     entrypoint: ["/bin/sh", "-ec"]
@@ -249,6 +252,7 @@ services:
         vault kv put secret/proof-agent/oidc value="$${OIDC_CLIENT_SECRET}"
         vault kv put secret/proof-agent/opensearch value='{"authorization":"Basic bG9jYWwtcHJvZHVjdGlvbjpvcGVuc2VhcmNo"}'
         vault kv put secret/proof-agent/evaluation value="$${LOCAL_EVALUATION_TOKEN}"
+        vault kv put secret/proof-agent/knowledge-source-service-operator value="$${KSS_OPERATOR_BEARER_TOKEN}"
         printf '%s' "$${VAULT_TOKEN}" > /run/vault-agent/token
         chown 10001:10001 /run/vault-agent/token
         chmod 0400 /run/vault-agent/token
@@ -398,6 +402,9 @@ services:
     build:
       context: ./services/knowledge-source-service
       dockerfile: Dockerfile
+      args:
+        UV_IMAGE: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+        RUNTIME_IMAGE: python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
     depends_on:
       gateway:
         condition: service_healthy
@@ -521,6 +528,8 @@ services:
         condition: service_completed_successfully
       vault-init:
         condition: service_completed_successfully
+      kss-api:
+        condition: service_healthy
     environment: *proof-agent-environment
     volumes:
       - ./docker/production-local/runtime/tls/ca.crt:/run/tls/ca.crt:ro

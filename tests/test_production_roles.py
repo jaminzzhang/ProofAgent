@@ -47,9 +47,7 @@ class Secrets:
 
 
 def test_opensearch_secret_adapter_exposes_only_bounded_authorization_header() -> None:
-    material = ProductionOpenSearchSecretProvider(Secrets()).resolve(
-        "knowledge/opensearch"
-    )
+    material = ProductionOpenSearchSecretProvider(Secrets()).resolve("knowledge/opensearch")
 
     assert material.headers == {"Authorization": "Bearer bounded-token"}
     assert material.client_certificate_path is None
@@ -163,7 +161,9 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
     monkeypatch.setattr(
         production_roles, "compose_application_persistence", lambda **kwargs: Persistence()
     )
-    monkeypatch.setattr(production_roles, "compose_production_egress_client", lambda value: object())
+    monkeypatch.setattr(
+        production_roles, "compose_production_egress_client", lambda value: object()
+    )
     monkeypatch.setattr(
         production_roles,
         "compose_production_vault_secret_provider",
@@ -226,12 +226,18 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
             "PROOF_AGENT_POSTGRES_DSN": "postgresql+psycopg://proof@postgres/proof",
             "HYBRID_POSTGRES_DSN": "postgresql://proof@postgres/proof",
             "PROOF_AGENT_OPENSEARCH_SECRET_HANDLE": "knowledge/opensearch",
+            "PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT": ("https://proof-agent.example:8444"),
+            "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE": ("knowledge/source-service/operator"),
             "PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR": "/tmp/release-bundles",
         }
     )
 
     assert isinstance(application, FastAPI)
     assert captured["hybrid_runtime"] is hybrid_runtime
+    assert isinstance(
+        captured["knowledge_service_management_client"],
+        production_roles.KnowledgeSourceServiceManagementClient,
+    )
     assert isinstance(
         captured["production_agent_configuration_application"],
         production_roles.ProductionAgentConfigurationService,

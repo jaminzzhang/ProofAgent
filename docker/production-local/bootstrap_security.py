@@ -23,7 +23,8 @@ from proof_agent.contracts import (
 
 LEGACY_PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000001"
 PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000004"
-EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000003"
+LEGACY_EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000003"
+EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000005"
 
 
 def main() -> None:
@@ -102,6 +103,7 @@ def _bootstrap_egress(bundle: PostgresPersistenceBundle) -> None:
                 )
                 for origin in (
                     "https://proof-agent.localhost:8443",
+                    "https://proof-agent.localhost:8444",
                     "https://vault.internal:8200",
                     "https://opensearch.internal:9200",
                     "https://models.internal:9443",
@@ -121,16 +123,18 @@ def _bootstrap_egress(bundle: PostgresPersistenceBundle) -> None:
         )
         existing = version
     active = bundle.security.get_active_egress_policy()
-    if active is None or active.version_id != existing.version_id:
+    if active is None or active.version_id == LEGACY_EGRESS_VERSION_ID:
         bundle.security.activate_egress_policy(
             existing.version_id,
             audit_event=_audit(
-                audit_id="019ba100-0000-7000-8000-000000000013",
+                audit_id="019ba100-0000-7000-8000-000000000015",
                 event_type="egress_policy.activated",
                 target_type="egress_policy_version",
                 target_id=existing.version_id,
             ),
         )
+    elif active.version_id != existing.version_id:
+        raise RuntimeError("a different egress policy is already active")
 
 
 def _audit(

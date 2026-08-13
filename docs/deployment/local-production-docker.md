@@ -12,8 +12,9 @@ not replace real model, capacity, recovery, or acceptance evidence.
 - MinIO S3 API/console: `127.0.0.1:59010` / `127.0.0.1:59011`
 - OpenSearch diagnostic port: `127.0.0.1:19210`
 - OIDC: Keycloak behind `/oidc`
-- Vault KV v2 for non-model secrets, PostgreSQL-encrypted model credentials, OpenSearch,
-  and nine private-model origins behind the internal TLS gateway
+- Vault KV v2 for non-model secrets, including the KSS operator credential;
+  PostgreSQL-encrypted model credentials; OpenSearch; and nine private-model origins
+  behind the internal TLS gateway
 - production API, Knowledge Worker, and same-image Run Executor roles
 - one KSS image running isolated API, Query Executor, Knowledge Worker, Sync Scheduler,
   and one-shot Migration roles
@@ -59,6 +60,13 @@ Open `https://proof-agent.localhost:8443`. KSS readiness is available at
 local CA, so a browser will warn until
 `docker/production-local/runtime/tls/ca.crt` is trusted locally.
 
+After login, open Dashboard `Knowledge`. The `Hybrid Knowledge Service` card reads
+the KSS catalog through `/api/config/knowledge-service`; it does not call port `8444`
+from the browser. The card reports readiness and catalog counts, lists Space, Source,
+Base, Source Version, and Release resources, and provides Space, Source, and Base
+creation actions. ProofAgent resolves the KSS operator token from Vault and applies
+the active Egress Policy. The browser never receives that token.
+
 The local OIDC user is `proof-admin`. Retrieve its generated password without copying
 the whole secret file:
 
@@ -93,6 +101,10 @@ issuer, the Agent private-model routes, TLS OpenSearch access, both PostgreSQL m
 ledgers, the KSS non-superuser role/database/schema/table ownership boundary, and
 versioning on both S3 buckets. KSS readiness passes only when PostgreSQL, object storage,
 and search are all ready. Any KSS database ownership drift fails verification.
+
+The security bootstrap can append immutable Permission Mapping or Egress Policy
+revisions. When the Permission Mapping epoch changes, existing Dashboard sessions
+must sign in again before the KSS card can load authenticated data.
 
 After a Hybrid document completes, the `Reviews` tab should show
 `proofagent-insurance-reference.v1`, the current Review Set, and the generated review

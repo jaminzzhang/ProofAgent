@@ -335,7 +335,7 @@
 | --- | --- | --- | --- |
 | 企业 OIDC、细粒度 operator permission 与配置审计尚未接入 | P1 | 管理面生产身份与审计 | 在 deployment/security slice 实现并演练 |
 | ProofAgent 远程 client、Admission Scorer 仍由显式 composition 注入；当前类生产验证使用一次性 compatibility scorer 和预置 client credential，生产 scorer 校准/批准、Published Agent deployment binding、Secret Provider credential wiring 和 Client Grant provisioning 尚未产品化 | P1 | 长期运行的生产 Agent 启用、Evidence Admission 与凭证轮换 | 通过受控发布流程批准 scorer revision，并由 Secret Provider 和 Control Plane 完成部署装配；不得把 KSS rank 当分数或使用本地 provider 回退 |
-| 正式 OpenAPI golden、client generation compatibility gate 尚未冻结 | P1 | 跨版本兼容 | 发布候选前生成并纳入 CI |
+| OpenAPI golden 已冻结，但 client generation compatibility 尚未接入真实流水线 | P1 | 跨版本兼容 | 使用 `openapi-contract` 生成候选字节，并在流水线执行 client compatibility 检查 |
 | Release Preparation one-use CAS、shadow/pilot/cutover 尚未实施 | P1 | 生产发布与回滚 | 按 Task 4、13、14 单独执行发布工程 |
 | content-level ACL narrowing、reranker/context expansion 尚未交付 | P1 | 细粒度授权与质量 | 未启用这些能力前保持 fail closed，不声明支持 |
 | 生产预算、SLO、retention 与 provider revision 尚待运行数据批准 | P2 | 容量、成本和超时 | 通过 load/shadow 数据校准并审批 |
@@ -346,3 +346,40 @@
 | --- | --- |
 | `docs/features/knowledge-source-service/feature_context.md` | Goal 状态改为 `VERIFIED_LOCAL`；保留生产批准边界 |
 | `docs/PROJ_CONTEXT.md` | feature index 改为 `VERIFIED_LOCAL` 并记录实际服务入口与验证事实 |
+
+## 11. 2026-08-13 Dashboard 管理接入与重新部署
+
+[KNOWN | HIGH] 本节记录 Dashboard 管理接入的增量 TDD 和本地类生产部署证据。该证据不代表正式生产发布批准。
+
+| 步骤 | 行为 | 文件或命令 | 结果 |
+| --- | --- | --- | --- |
+| RED-DASHBOARD-001 | KSS 管理 API 必须提供可枚举的 Space、Source、Base、Source Version 和 Release 集合 | `tests/contract/knowledge_service/test_management_collection_api.py` | 失败符合预期：集合 `GET` 返回 `405` |
+| GREEN-DASHBOARD-001 | 增加参数化、确定性排序的集合查询与 strict HTTP resources | KSS catalog 与 `management_http.py` | 定向契约通过；真实数据库用例在未配置测试 DSN 时显式跳过 |
+| RED-DASHBOARD-002 | Dashboard 不得持有 KSS operator token 或直连 `8444` | `tests/test_knowledge_service_management_{client,api}.py` | 失败符合预期：ProofAgent 尚无管理客户端和 BFF 模块 |
+| GREEN-DASHBOARD-002 | 增加 Vault-backed、guarded HTTPS 管理客户端和权限化同源 BFF | ProofAgent contracts、client、delivery、production composition | BFF 只返回 browser-safe projections；上游失败映射为安全 `503` |
+| RED-DASHBOARD-003 | Knowledge 配置页必须显示 KSS readiness、目录并提供 Space/Source/Base 创建动作 | `KnowledgePage.test.tsx` | 失败符合预期：前端管理 API 模块不存在 |
+| GREEN-DASHBOARD-003 | 增加独立 `Hybrid Knowledge Service` 卡片 | Dashboard API、types、component、i18n | 5 个页面交互测试和生产构建通过 |
+| RED-DEPLOY-004 | ProofAgent API 必须通过 Vault 和 Egress Policy 访问 KSS | Compose 与 security bootstrap tests | 失败符合预期：缺少 endpoint、Secret Handle locator、Vault material 和 `8444` Egress rule |
+| GREEN-DEPLOY-004 | 增加不可变 Egress revision、Vault 句柄和 `kss-api` 健康依赖 | `docker-compose.production-local.yml`、`bootstrap_security.py` | 部署契约通过；Egress Policy revision 3 激活 |
+| RED-IMAGE-003 | 固定基础镜像的 KSS Dockerfile 必须能在本地 Compose 构建和运行 console script | `./scripts/production-local-up.sh` | 首次缺少 build args；第二次因虚拟环境解释器路径漂移以 `127` 退出 |
+| GREEN-IMAGE-003 | Compose 传入 immutable base digests，虚拟环境直接构建到最终绝对路径 | KSS Dockerfile、local Compose、distribution tests | KSS image `sha256:53747fd5…`；Migration 退出 0；五角色启动 |
+| VERIFY-DASHBOARD-001 | 真实生产 composition 解析 Vault 凭据并通过受控出站读取 KSS | API 容器内只读 workspace 检查 | `ready`；3 Spaces、6 Sources、3 Bases、6 Source Versions、3 Releases；无凭据输出 |
+| VERIFY-DEPLOY-002 | 重新构建并执行类生产验收 | `production-local-up.sh`、`production-local-verify.sh` | ProofAgent `sha256:f74462bb…`；TLS、OIDC、KSS readiness、6 个 migration、PostgreSQL 权限隔离和两个 S3 版本化检查通过 |
+
+[KNOWN | HIGH] 新 Permission Mapping revision 会使旧 Dashboard session 失效。浏览器已确认新卡片资产可见，但登录后的数据态需要操作员重新完成 OIDC 登录；容器内的同一生产 BFF 客户端已完成真实数据闭环验证。
+
+## 12. 2026-08-13 发布身份与正式部署边界
+
+[KNOWN | HIGH] 本节记录 KSS 发布候选身份、供应链输入和正式部署定义的增量 TDD。该证据不代表真实候选已经构建、签名或部署。
+
+| 步骤 | 行为 | 文件或命令 | 结果 |
+| --- | --- | --- | --- |
+| RED-RELEASE-001 | Product Release Authority 必须绑定独立 KSS artifact、OpenAPI 和 migration set | release contract/profile tests | 失败符合预期：Candidate Binding v1 只有一个 OCI 和 Python distribution |
+| GREEN-RELEASE-001 | Candidate Binding v2 增加 KSS 子绑定；DCM 增加 KSS、OpenSearch 和 private model plane | release contracts、Gate Profile、DCM schema | 发布边界定向回归通过 |
+| RED-CONTRACT-001 | KSS OpenAPI 与 migration set 必须有确定性的候选产物 | distribution contract tests | 失败符合预期：服务没有 contract producer |
+| GREEN-CONTRACT-001 | 增加 `openapi-contract` 和 `migration-contract` 规范字节输出及 golden digest | KSS CLI、OpenAPI composer、migration adapter | contract 输出稳定，并覆盖 Query、管理面和六个 SQL migration |
+| RED-SUPPLY-001 | KSS image 不得使用 mutable base 或非冻结依赖安装 | distribution image test | 失败符合预期：`FROM python:3.12-slim` 且执行宽松 `pip install` |
+| GREEN-SUPPLY-001 | immutable build args、独立 `uv.lock` 和 `uv sync --frozen` | KSS Dockerfile、lock file | `uv lock --check` 通过；34 packages |
+| RED-FORMAL-DEPLOY-001 | 正式 production topology 必须表达 KSS 五角色和 Secret 边界 | production Compose tests | 失败符合预期：只有 production-local 定义 |
+| GREEN-FORMAL-DEPLOY-001 | 新增独立 KSS production Compose，并使用 mode-`0400` Secret 文件 | `deploy/production/knowledge/` | Compose 静态展开和容器安全契约通过 |
+| VERIFY-RELEASE-001 | 当前组合工作区回归 | root Pytest、Ruff、strict mypy、Dashboard | 3221 passed、135 skipped、13 deselected；Dashboard 229 passed；ProofAgent 438 source files、KSS 77 source files 类型检查通过 |

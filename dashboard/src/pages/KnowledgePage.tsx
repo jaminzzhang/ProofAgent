@@ -14,6 +14,7 @@ import type {
   KnowledgeSourceProviderCapability,
 } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
+import { HybridKnowledgeServicePanel } from '../components/HybridKnowledgeServicePanel'
 import { PageHeader } from '../components/PageHeader'
 import { TableSkeleton } from '../components/TableSkeleton'
 import { useLocale } from '../i18n/locale'
@@ -109,6 +110,8 @@ export function KnowledgePage() {
         title={t('knowledge.title')}
         description={t('knowledge.description')}
       />
+
+      <HybridKnowledgeServicePanel />
 
       <Card className="p-6">
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.55fr)]">

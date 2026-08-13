@@ -103,6 +103,8 @@ flowchart TB
 
 [KNOWN | HIGH] Dashboard 的 Agent Knowledge 配置会识别已发布的 `hybrid_index` Source，并可选固定 `retrieval_profile_revision_id`；留空时由后端在 Agent validation 中解析部署默认版本。已绑定卡片回显 provider 与固定的 profile，但页面仍不接受 PostgreSQL、S3、OpenSearch、私有模型服务 endpoint 或凭据，也不会因此获得 Agent activation 权限。
 
+[KNOWN | HIGH] Dashboard 的 Knowledge 配置页同时提供独立 Knowledge Source Service 的管理入口。浏览器只访问同源 `/api/config/knowledge-service`；ProofAgent API 使用 OIDC、CSRF 和 `knowledge_source.*` 权限保护该 BFF，再通过活动 Egress Policy 访问 KSS。KSS operator token 由服务器端 Vault Secret Handle 解析，不会进入浏览器响应。当前入口支持读取 readiness 和 Space、Source、Base、Source Version、Release 清单，并创建 Space、Source 和 Base；KSS 继续独占这些资源的权威。
+
 ### 2.4 目录职责
 
 | 路径 | 主要职责 | 新手常见改动 |
@@ -465,15 +467,30 @@ uv run proof-agent knowledge migrate-development-hub \
 
 以下命令是当前代码中可执行的角色入口，不是完整的正式生产部署方案。只有在 PostgreSQL、S3、OpenSearch、OIDC、Vault、Egress Policy、私有模型和已发布 Agent 全部正确配置后才使用。
 
-先设置生产模式并完成显式迁移：
+先设置生产模式并检查当前 revision：
 
 ```bash
 export PROOF_AGENT_MODE=production
 export PROOF_AGENT_RELEASE_SCHEMA=0021_metadata_workbook_v2
-uv run proof-agent database upgrade \
+uv run proof-agent database current
+```
+
+[KNOWN | HIGH] 如果当前 revision 早于 `0020_metadata_review_v2`，不要执行普通 expand-only 或 Blue/Green migration。`0020` 和 `0021` 是 ADR-0188 定义的 maintenance-window direct cutover。关闭 Knowledge Source 写入并停止 API 和 Worker 后，验证可恢复的数据库、artifact backup 和 restore-drill Evidence，再执行：
+
+```bash
+uv run proof-agent database cutover-metadata-v2 \
   --locked \
-  --expand-only \
+  --maintenance-window-authorized \
+  --application-writes-stopped \
+  --workers-stopped \
+  --backup-evidence /approved/change/pre-cutover-backup-evidence.json \
+  --backup-evidence-sha256 replace-with-exact-lowercase-sha256 \
   --target "$PROOF_AGENT_RELEASE_SCHEMA"
+```
+
+如果当前 revision 已为 `0021_metadata_workbook_v2`，后续相同 schema 候选可以继续使用正式 slot 中的 locked expand-only job。完成适用的迁移后，再执行：
+
+```bash
 uv run proof-agent hybrid-migrate
 uv run proof-agent database check
 ```

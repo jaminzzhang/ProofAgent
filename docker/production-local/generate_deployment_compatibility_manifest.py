@@ -80,6 +80,48 @@ COMPONENTS = (
             "provider_errors",
         ],
     },
+    {
+        "component_id": "knowledge_source_service",
+        "product": "Knowledge Source Service Local Harness",
+        "product_version": "0.1.0-local.1",
+        "endpoint_origin": "https://proof-agent.localhost:8444",
+        "authentication_method": "local-compose-secret",
+        "adapter_protocol_id": "knowledge-query-http-v1",
+        "tested_capabilities": [
+            "durable_queries",
+            "exact_release",
+            "client_grants",
+            "readiness",
+        ],
+    },
+    {
+        "component_id": "opensearch",
+        "product": "OpenSearch Local Harness",
+        "product_version": "3.1.0-local.1",
+        "endpoint_origin": "https://opensearch.internal:9200",
+        "authentication_method": "local-network-policy",
+        "adapter_protocol_id": "opensearch-hybrid-v1",
+        "tested_capabilities": [
+            "tls",
+            "index_generation",
+            "exact_generation_read",
+            "rebuild",
+        ],
+    },
+    {
+        "component_id": "knowledge_model_plane",
+        "product": "Private Knowledge Model Plane Local Harness",
+        "product_version": "2026.08.1-local.1",
+        "endpoint_origin": "https://models.internal:9449",
+        "authentication_method": "local-compose-secret",
+        "adapter_protocol_id": "knowledge-model-http-v1",
+        "tested_capabilities": [
+            "projection_encoding",
+            "ocr",
+            "agentic_control",
+            "timeout",
+        ],
+    },
 )
 
 

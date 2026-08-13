@@ -99,6 +99,7 @@ def _production_app(
         knowledge_source_publication_application=object(),
         knowledge_source_workspace_application=object(),
         knowledge_source_metadata_workbook_application=object(),
+        knowledge_service_management_client=object(),
         release_registry_repository=object(),
         release_bundle_materializer=object(),
         release_bundle_attestation_verifier=object(),
@@ -153,6 +154,11 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
         route.path
         == "/api/config/knowledge-sources/{source_id}/publication-validations"
         and "POST" in (route.methods or set())
+        for route in application.routes
+    )
+    assert any(
+        route.path == "/api/config/knowledge-service/workspace"
+        and "GET" in (route.methods or set())
         for route in application.routes
     )
     expected_production_agent_routes = {

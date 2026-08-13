@@ -1036,6 +1036,60 @@ export interface KnowledgeSourceCapabilityProjection {
   providers: KnowledgeSourceProviderCapability[]
 }
 
+export interface KnowledgeServiceReadinessProjection {
+  state: 'ready' | 'unavailable'
+  revision: string | null
+  blockers: string[]
+}
+
+export interface KnowledgeServiceSpaceProjection {
+  knowledge_space_id: string
+}
+
+export interface KnowledgeServiceSourceProjection {
+  knowledge_space_id: string
+  knowledge_source_id: string
+}
+
+export interface KnowledgeServiceBaseProjection {
+  knowledge_space_id: string
+  knowledge_base_id: string
+}
+
+export interface KnowledgeServiceSourceVersionProjection {
+  knowledge_space_id: string
+  knowledge_source_id: string
+  knowledge_source_version_id: string
+  source_kind: 'document' | 'dataset'
+  media_type: string
+}
+
+export interface KnowledgeServiceReleaseProjection {
+  knowledge_space_id: string
+  knowledge_base_id: string
+  knowledge_base_version_id: string
+  knowledge_base_release_id: string
+  source_version_count: number
+  state: 'queryable' | 'retired'
+}
+
+export interface KnowledgeServiceManagementWorkspace {
+  schema_version: 'knowledge-service-management.v1'
+  readiness: KnowledgeServiceReadinessProjection
+  spaces: KnowledgeServiceSpaceProjection[]
+  sources: KnowledgeServiceSourceProjection[]
+  bases: KnowledgeServiceBaseProjection[]
+  source_versions: KnowledgeServiceSourceVersionProjection[]
+  releases: KnowledgeServiceReleaseProjection[]
+  summary: {
+    spaces: number
+    sources: number
+    bases: number
+    source_versions: number
+    releases: number
+  }
+}
+
 export interface KnowledgeSourceActionBlocker {
   code: string
   detail: string

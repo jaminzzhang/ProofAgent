@@ -13,6 +13,12 @@
   `proof_agent/capabilities/knowledge/source_service_client.py`. The production
   path fails closed and does not use the local Hybrid provider as an exception
   fallback.
+- `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
+  same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS
+  operator credential from Vault and calls the independent service through the
+  active Egress Policy; browser responses contain only readiness and catalog
+  projections. The UI can create Space, Source, and Base resources and list
+  Source Versions and Releases. KSS remains the catalog authority.
 - `[KNOWN | HIGH]` `AGENTS-COMMON.md` requires PostgreSQL authority for mutable
   production state, S3-compatible immutable artifacts, and fail-closed
   production composition.
@@ -24,11 +30,25 @@
   `97c2db1f…`, owns a separate PostgreSQL database through its dedicated
   non-superuser login role, and is exposed at `https://proof-agent.localhost:8444`.
   This is local deployment verification, not production approval.
+- `[KNOWN | HIGH]` The 2026-08-13 retained deployment rebuilt ProofAgent image
+  `f74462bb…` and KSS image `53747fd5…`. The deployment verifier passed, and a
+  production-composed BFF client read `ready` plus 3 Spaces, 6 Sources, 3 Bases,
+  6 Source Versions, and 3 Releases. Existing browser sessions were invalidated
+  by the immutable Permission Mapping epoch change and require a new OIDC login.
 - `[KNOWN | HIGH]` Product Release Authority uses the versioned
   `initial-private-pilot-v2` policy to compute five fail-closed risk Gates from
   raw pipeline facts. Exact Evidence and detached workload-identity attestations
   reuse the existing Artifact Store and Release Bundle Index; the verifier can
   reach `GO` only with deployment-owned public trust.
+- `[KNOWN | HIGH]` Production Candidate Binding v2 identifies ProofAgent and KSS
+  independently. KSS contributes exact OCI, Python distribution, canonical
+  OpenAPI and ordered migration-contract digests; the DCM also binds KSS,
+  OpenSearch and the private knowledge-model plane. The formal KSS five-role
+  Compose has an independent lifecycle under `deploy/production/knowledge/`.
+- `[KNOWN | HIGH]` Metadata Review V2 remains a maintenance-window direct
+  cutover. The normal Blue/Green expand-only migration rejects revisions `0020`
+  and `0021`; the explicit cutover command requires stopped writes, stopped
+  Workers and exact pre-cutover backup Evidence.
 
 The existing Graphify map was queried on 2026-08-11 to locate the composition,
 knowledge-resolution, provider, retrieval, and local-index seams. It was not

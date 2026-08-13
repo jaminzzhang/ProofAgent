@@ -11,6 +11,7 @@ from proof_agent.capabilities.persistence.postgres.hybrid_ingestion_repository i
     PostgresHybridIngestionRepository,
 )
 from proof_agent.contracts import (
+    EgressPolicyVersion,
     InstitutionAuthorizationContext,
     Permission,
     PermissionClaimRule,
@@ -23,9 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _local_module(filename: str) -> ModuleType:
     path = PROJECT_ROOT / "docker" / "production-local" / filename
-    spec = importlib.util.spec_from_file_location(
-        f"proof_agent_test_{path.stem}", path
-    )
+    spec = importlib.util.spec_from_file_location(f"proof_agent_test_{path.stem}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -105,6 +104,62 @@ def test_security_bootstrap_upgrades_legacy_admin_permissions_immutably() -> Non
     assert security.activated == security.appended.version_id
 
 
+class _EgressAuthority:
+    def __init__(self, legacy: EgressPolicyVersion) -> None:
+        self.legacy = legacy
+        self.appended: EgressPolicyVersion | None = None
+        self.appended_expected_revision: int | None = None
+        self.activated: str | None = None
+
+    def get_egress_policy(self, version_id: str) -> EgressPolicyVersion | None:
+        if self.appended is not None and self.appended.version_id == version_id:
+            return self.appended
+        if self.legacy.version_id == version_id:
+            return self.legacy
+        return None
+
+    def list_egress_policies(self) -> tuple[EgressPolicyVersion, ...]:
+        return (self.legacy,) if self.appended is None else (self.appended, self.legacy)
+
+    def append_egress_policy(
+        self,
+        version: EgressPolicyVersion,
+        *,
+        expected_revision: int,
+    ) -> None:
+        self.appended = version
+        self.appended_expected_revision = expected_revision
+
+    def get_active_egress_policy(self) -> EgressPolicyVersion:
+        return self.legacy
+
+    def activate_egress_policy(self, version_id: str, **_: Any) -> None:
+        self.activated = version_id
+
+
+def test_security_bootstrap_adds_kss_to_egress_policy_immutably() -> None:
+    bootstrap = _local_module("bootstrap_security.py")
+    legacy = EgressPolicyVersion(
+        version_id="019ba100-0000-7000-8000-000000000003",
+        revision=1,
+        rules=(),
+        created_at="2026-07-01T00:00:00Z",
+        created_by="legacy-local-bootstrap",
+    )
+    security = _EgressAuthority(legacy)
+
+    bootstrap._bootstrap_egress(SimpleNamespace(security=security))
+
+    assert security.appended is not None
+    assert security.appended.version_id != legacy.version_id
+    assert security.appended.revision == 2
+    assert security.appended_expected_revision == 1
+    assert "https://proof-agent.localhost:8444" in {
+        rule.origin.value for rule in security.appended.rules
+    }
+    assert security.activated == security.appended.version_id
+
+
 class _ReferenceMetadataAuthority:
     def __init__(self) -> None:
         self.published: tuple[object, str, str] | None = None
@@ -153,9 +208,7 @@ def test_reference_metadata_bootstrap_binds_only_the_designated_local_fixture() 
     metadata = _ReferenceMetadataAuthority()
     bundle = SimpleNamespace(
         knowledge=SimpleNamespace(
-            get_source_record=lambda source_id: (
-                object() if source_id == "ks_insurance" else None
-            )
+            get_source_record=lambda source_id: object() if source_id == "ks_insurance" else None
         ),
         metadata_reviews=metadata,
     )

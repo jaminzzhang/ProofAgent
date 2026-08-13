@@ -35,6 +35,7 @@
 | Agentic | 显式启用、预算约束、逐轮 Plan Gate、固定 Space/Release/scope | ADR-0202 |
 | ProofAgent 适配 | 远程 Candidate Service、稳定幂等键、显式 Admission Scorer 组合缝、无本地生产回退 | 设计第 17 节；Knowledge/Evidence 领域决策 |
 | 类生产部署 | KSS 五个角色使用同一固定镜像；外部查询只通过 `https://proof-agent.localhost:8444`；KSS 数据库由专用非超级用户角色拥有；OpenSearch、projection encoder、Agentic controller 和 OCR 只通过内部 TLS 网关 | `docker-compose.production-local.yml`、`docker/production-local/nginx.conf` |
+| Dashboard 管理接入 | Dashboard 通过 ProofAgent 的 OIDC、CSRF 和权限化 BFF 读取 KSS 目录，并创建 Space、Source 和 Base；浏览器不持有 KSS operator token | `/api/config/knowledge-service`、Vault Secret Handle、Egress Policy |
 
 ### 范围外与非目标
 
@@ -79,6 +80,7 @@
 | KSS-R08 | 外部数据库、API 和对象清单在查询前物化为不可变 Source Version | 查询时不得访问 live upstream | 已确认 |
 | KSS-R09 | Release 只在全部必需投影就绪后原子可见 | 失败构建不可被查询 | 已确认 |
 | KSS-R10 | KSS 排序与 lane-native score 不得直接变成 Evidence Admission Score | ProofAgent 只能通过显式组合、已批准且输出 0–1 有限值的评分器生成 Admission 输入；缺失或非法值失败关闭 | 已确认 |
+| KSS-R11 | Dashboard 不得绕过 ProofAgent BFF 直连 KSS 管理 API | operator token 只由服务器端 Vault Secret Handle 解析；KSS 仍是 Space、Source、Base、Version 和 Release 的唯一权威 | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -101,6 +103,7 @@
 | 公共 API | `/v1/knowledge-queries` 与管理 API | 新增稳定资源、错误和幂等语义 | P1 |
 | 数据 | PostgreSQL schema、S3-compatible objects、search projections | 新增独立逻辑权威、迁移和重建路径 | P1 |
 | ProofAgent | bootstrap、knowledge provider registry 和 remote adapter | 生产查询改为远程服务；Control Plane 权限不变 | P1 |
+| Dashboard | Knowledge 配置页、同源 BFF 与 KSS 管理客户端 | 增加独立 KSS readiness、目录计数、Space/Source/Base 创建和 Version/Release 清单 | P1 |
 | 交付 | image、process commands、CI、migration、runbook | 新增多角色部署和故障恢复证据 | P1 |
 | 测试 | unit、contract、integration、fault、quality、security、E2E | 增加完整验收矩阵 | P1 |
 

@@ -9,12 +9,25 @@ import {
   fetchKnowledgeSourceCapabilities,
   fetchKnowledgeSourcesPage,
 } from '../../api/knowledgeSources'
+import {
+  createKnowledgeServiceBase,
+  createKnowledgeServiceSource,
+  createKnowledgeServiceSpace,
+  fetchKnowledgeServiceWorkspace,
+} from '../../api/knowledgeService'
 import { KnowledgePage } from '../KnowledgePage'
 
 vi.mock('../../api/knowledgeSources', () => ({
   createKnowledgeSourceV1: vi.fn(),
   fetchKnowledgeSourceCapabilities: vi.fn(),
   fetchKnowledgeSourcesPage: vi.fn(),
+}))
+
+vi.mock('../../api/knowledgeService', () => ({
+  createKnowledgeServiceBase: vi.fn(),
+  createKnowledgeServiceSource: vi.fn(),
+  createKnowledgeServiceSpace: vi.fn(),
+  fetchKnowledgeServiceWorkspace: vi.fn(),
 }))
 
 const capabilities = {
@@ -37,6 +50,46 @@ const capabilities = {
   }],
 }
 
+const managementWorkspace = {
+  schema_version: 'knowledge-service-management.v1' as const,
+  readiness: {
+    state: 'ready' as const,
+    revision: 'knowledge-source-service-local-production-v1',
+    blockers: [],
+  },
+  spaces: [{ knowledge_space_id: 'insurance' }],
+  sources: [{
+    knowledge_space_id: 'insurance',
+    knowledge_source_id: 'claims_documents',
+  }],
+  bases: [{
+    knowledge_space_id: 'insurance',
+    knowledge_base_id: 'claims_assistant',
+  }],
+  source_versions: [{
+    knowledge_space_id: 'insurance',
+    knowledge_source_id: 'claims_documents',
+    knowledge_source_version_id: 'claims_documents_v1',
+    source_kind: 'document' as const,
+    media_type: 'application/pdf',
+  }],
+  releases: [{
+    knowledge_space_id: 'insurance',
+    knowledge_base_id: 'claims_assistant',
+    knowledge_base_version_id: 'claims_assistant_v1',
+    knowledge_base_release_id: 'claims_assistant_release_v1',
+    source_version_count: 1,
+    state: 'queryable' as const,
+  }],
+  summary: {
+    spaces: 1,
+    sources: 1,
+    bases: 1,
+    source_versions: 1,
+    releases: 1,
+  },
+}
+
 describe('KnowledgePage V1', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -45,6 +98,18 @@ describe('KnowledgePage V1', () => {
       data: [],
       page: { limit: 50, next_cursor: null, has_more: false },
       summary: { total: 0 },
+    })
+    vi.mocked(fetchKnowledgeServiceWorkspace).mockResolvedValue(managementWorkspace)
+    vi.mocked(createKnowledgeServiceSpace).mockResolvedValue({
+      knowledge_space_id: 'underwriting',
+    })
+    vi.mocked(createKnowledgeServiceSource).mockResolvedValue({
+      knowledge_space_id: 'insurance',
+      knowledge_source_id: 'policy_documents',
+    })
+    vi.mocked(createKnowledgeServiceBase).mockResolvedValue({
+      knowledge_space_id: 'insurance',
+      knowledge_base_id: 'policy_assistant',
     })
   })
 
@@ -59,6 +124,60 @@ describe('KnowledgePage V1', () => {
     expect(screen.queryByRole('option', { name: 'local_index' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Remote Endpoint')).not.toBeInTheDocument()
     expect(screen.getByText('private-plane.v1')).toBeInTheDocument()
+  })
+
+  it('renders the independent Hybrid Knowledge Service inventory through the BFF', async () => {
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Hybrid Knowledge Service')).toBeInTheDocument()
+    expect(screen.getByText('knowledge-source-service-local-production-v1')).toBeInTheDocument()
+    expect(screen.getAllByText('insurance')).toHaveLength(3)
+    expect(screen.getByText('claims_documents')).toBeInTheDocument()
+    expect(screen.getByText('claims_assistant')).toBeInTheDocument()
+  })
+
+  it('creates Space, Source, and Base through same-origin management endpoints', async () => {
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Hybrid Knowledge Service')
+    fireEvent.change(screen.getByLabelText('Space ID'), {
+      target: { value: 'underwriting' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Space' }))
+    await waitFor(() => {
+      expect(createKnowledgeServiceSpace).toHaveBeenCalledWith('underwriting')
+    })
+
+    fireEvent.change(screen.getByLabelText('Hybrid Source ID'), {
+      target: { value: 'policy_documents' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Hybrid Source' }))
+    await waitFor(() => {
+      expect(createKnowledgeServiceSource).toHaveBeenCalledWith(
+        'insurance',
+        'policy_documents',
+      )
+    })
+
+    fireEvent.change(screen.getByLabelText('Knowledge Base ID'), {
+      target: { value: 'policy_assistant' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Knowledge Base' }))
+    await waitFor(() => {
+      expect(createKnowledgeServiceBase).toHaveBeenCalledWith(
+        'insurance',
+        'policy_assistant',
+      )
+    })
+    expect(fetchKnowledgeServiceWorkspace).toHaveBeenCalledTimes(4)
   })
 
   it('creates Hybrid Source without browser-owned private-service settings', async () => {

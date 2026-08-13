@@ -30,6 +30,9 @@ from proof_agent.capabilities.artifacts.materialization import VerifiedArtifactM
 from proof_agent.capabilities.knowledge.hybrid.opensearch import (
     OpenSearchSecretMaterial,
 )
+from proof_agent.capabilities.knowledge.source_service_management_client import (
+    KnowledgeSourceServiceManagementClient,
+)
 from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
     HybridKnowledgeWorker,
     HybridWorkerOutcome,
@@ -399,6 +402,14 @@ def create_production_api_application(
             environment=values,
             guarded_http_client=guarded,
         )
+        knowledge_service_management = KnowledgeSourceServiceManagementClient(
+            endpoint=_required(values, "PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT"),
+            http_client=guarded,
+            authorization_header_factory=lambda: _knowledge_service_authorization(
+                secret_provider,
+                _required(values, "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"),
+            ),
+        )
         opensearch_handle = _required(values, "PROOF_AGENT_OPENSEARCH_SECRET_HANDLE")
         hybrid_runtime = compose_production_hybrid_runtime_from_env(
             values,
@@ -584,6 +595,7 @@ def create_production_api_application(
             knowledge_source_metadata_workbook_application=(
                 metadata_workbook_application
             ),
+            knowledge_service_management_client=knowledge_service_management,
             release_registry_repository=persistence.releases,
             release_bundle_materializer=release_bundle_materializer,
             release_bundle_attestation_verifier=release_bundle_attestation_verifier,
@@ -1086,6 +1098,31 @@ def _secret_provider_ready(
         checked_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
     return validation.resolvable
+
+
+def _knowledge_service_authorization(
+    provider: SecretProvider,
+    handle_id: str,
+) -> str:
+    material = provider.resolve(
+        ProductionSecretHandle(
+            protocol_id=provider.protocol_id,
+            handle_id=handle_id,
+            purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
+        )
+    ).reveal_for_use()
+    try:
+        token = material.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Knowledge service operator credential is invalid") from exc
+    if (
+        not token
+        or len(material) > 16 * 1024
+        or token != token.strip()
+        or any(character.isspace() for character in token)
+    ):
+        raise ValueError("Knowledge service operator credential is invalid")
+    return f"Bearer {token}"
 
 
 def _require_same_postgres_authority(values: Mapping[str, str]) -> None:
