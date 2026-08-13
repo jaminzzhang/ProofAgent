@@ -31,6 +31,17 @@ def _component(component_id: str, capabilities: list[str]) -> dict[str, object]:
         ),
         "gateway": ("NGINX", "1.28.0", "nginx-blue-green-v1"),
         "model_provider": ("vLLM", "0.10.0", "openai-compatible-http-v1"),
+        "knowledge_source_service": (
+            "Knowledge Source Service",
+            "0.1.0",
+            "knowledge-query-http-v1",
+        ),
+        "opensearch": ("OpenSearch", "3.1.0", "opensearch-hybrid-v1"),
+        "knowledge_model_plane": (
+            "Private Knowledge Model Plane",
+            "2026.08.1",
+            "knowledge-model-http-v1",
+        ),
         "read_only_tool": ("Internal Tool Gateway", "2026.07.1", "readonly-https-v1"),
     }
     product, product_version, adapter_protocol_id = products[component_id]
@@ -84,6 +95,18 @@ def _manifest() -> dict[str, object]:
                 "model_provider",
                 ["governed_calls", "timeout", "rate_limit", "provider_errors"],
             ),
+            _component(
+                "knowledge_source_service",
+                ["durable_queries", "exact_release", "client_grants", "readiness"],
+            ),
+            _component(
+                "opensearch",
+                ["tls", "index_generation", "exact_generation_read", "rebuild"],
+            ),
+            _component(
+                "knowledge_model_plane",
+                ["projection_encoding", "ocr", "agentic_control", "timeout"],
+            ),
         ],
     }
 
@@ -102,8 +125,11 @@ def test_loads_complete_manifest_and_hashes_canonical_payload(tmp_path: Path) ->
 
     assert [component.component_id for component in manifest.components] == [
         "gateway",
+        "knowledge_model_plane",
+        "knowledge_source_service",
         "model_provider",
         "oidc",
+        "opensearch",
         "postgresql",
         "s3",
         "secret_provider",
@@ -120,7 +146,7 @@ def test_checked_in_example_is_structurally_valid() -> None:
     manifest = load_deployment_compatibility_manifest(path, checked_at=CHECKED_AT)
 
     assert manifest.tool_mode == "disabled"
-    assert len(manifest.components) == 6
+    assert len(manifest.components) == 9
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
 import tomllib
@@ -48,6 +50,112 @@ def test_knowledge_source_service_is_an_independent_python_distribution() -> Non
         "proof-agent" not in dependency.lower()
         for dependency in dependencies
     )
+
+
+def test_service_image_requires_immutable_build_images_and_a_frozen_lock() -> None:
+    dockerfile = (SERVICE_PROJECT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG UV_IMAGE" in dockerfile
+    assert "ARG RUNTIME_IMAGE" in dockerfile
+    assert "FROM ${UV_IMAGE} AS python-build" in dockerfile
+    assert "FROM ${RUNTIME_IMAGE} AS runtime" in dockerfile
+    assert "FROM python:3.12-slim" not in dockerfile
+    assert "COPY pyproject.toml uv.lock ./" in dockerfile
+    assert "UV_PROJECT_ENVIRONMENT=/opt/knowledge-source-service/venv" in dockerfile
+    assert "uv sync --frozen --no-dev --no-editable" in dockerfile
+    assert (
+        "/opt/knowledge-source-service/venv /opt/knowledge-source-service/venv"
+        in dockerfile
+    )
+
+
+def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
+    from knowledge_source_service.openapi_contract import (
+        build_openapi_contract_bytes,
+    )
+
+    contract = build_openapi_contract_bytes()
+    payload = json.loads(contract)
+
+    assert contract == json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert {
+        "/livez",
+        "/readyz",
+        "/v1/knowledge-queries",
+        "/v1/knowledge-spaces",
+        "/v1/knowledge-source-synchronizations",
+    } <= set(payload["paths"])
+    assert hashlib.sha256(contract).hexdigest() == (
+        "5101269935f2aecaf985f673641a593db58c3afe98f5d6bf38acb33a995b2a7a"
+    )
+
+
+def test_openapi_contract_cli_emits_the_exact_canonical_bytes() -> None:
+    from knowledge_source_service.openapi_contract import (
+        build_openapi_contract_bytes,
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "knowledge_source_service", "openapi-contract"],
+        cwd=SERVICE_PROJECT,
+        check=False,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8")
+    assert result.stdout == build_openapi_contract_bytes()
+
+
+def test_migration_contract_is_canonical_and_binds_every_packaged_revision() -> None:
+    from knowledge_source_service.adapters.postgres.migrations import (
+        knowledge_service_migration_contract_bytes,
+    )
+
+    contract = knowledge_service_migration_contract_bytes()
+    payload = json.loads(contract)
+
+    assert contract == json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert payload["head_revision"] == "0006_source_synchronizations"
+    assert [item["revision"] for item in payload["migrations"]] == [
+        f"000{number}_{name}"
+        for number, name in (
+            (1, "knowledge_queries"),
+            (2, "knowledge_catalog"),
+            (3, "knowledge_access"),
+            (4, "query_result_artifacts"),
+            (5, "release_projection_attestation"),
+            (6, "source_synchronizations"),
+        )
+    ]
+    assert hashlib.sha256(contract).hexdigest() == (
+        "707106a66e820852debf617f93ec3086f1e47241e07e9896afb749288bdc8101"
+    )
+
+
+def test_migration_contract_cli_emits_the_exact_canonical_bytes() -> None:
+    from knowledge_source_service.adapters.postgres.migrations import (
+        knowledge_service_migration_contract_bytes,
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "knowledge_source_service", "migration-contract"],
+        cwd=SERVICE_PROJECT,
+        check=False,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8")
+    assert result.stdout == knowledge_service_migration_contract_bytes()
 
 
 def test_service_cli_exposes_the_five_isolated_process_roles() -> None:
@@ -102,6 +210,53 @@ def test_api_role_configuration_check_fails_closed_without_required_dependencies
     assert configured.returncode == 0, configured.stderr
     assert configured.stdout == "configuration valid\n"
     assert all(value not in configured.stdout for value in configured_environment.values())
+
+
+def test_runtime_configuration_reads_postgres_dsn_from_hardened_secret_file(
+    tmp_path: Path,
+) -> None:
+    secret = tmp_path / "postgres-dsn"
+    secret.write_text("postgresql://knowledge-service@db/knowledge\n", encoding="utf-8")
+    secret.chmod(0o600)
+
+    configuration = ApiRuntimeConfiguration.from_environment(
+        {
+            "KSS_POSTGRES_DSN_FILE": str(secret),
+            "KSS_OBJECT_STORE_URI": "s3://knowledge-service-test",
+            "KSS_SEARCH_ENDPOINT": "https://search.invalid.example",
+            "KSS_RELEASE_IDENTITY": "sha256:test-release",
+        }
+    )
+
+    assert configuration.postgres_dsn == "postgresql://knowledge-service@db/knowledge"
+
+
+def test_runtime_configuration_rejects_ambiguous_or_weak_secret_files(
+    tmp_path: Path,
+) -> None:
+    secret = tmp_path / "postgres-dsn"
+    secret.write_text("postgresql://knowledge-service@db/knowledge\n", encoding="utf-8")
+    common = {
+        "KSS_OBJECT_STORE_URI": "s3://knowledge-service-test",
+        "KSS_SEARCH_ENDPOINT": "https://search.invalid.example",
+        "KSS_RELEASE_IDENTITY": "sha256:test-release",
+    }
+
+    secret.chmod(0o644)
+    with pytest.raises(ValueError, match="permissions"):
+        ApiRuntimeConfiguration.from_environment(
+            {**common, "KSS_POSTGRES_DSN_FILE": str(secret)}
+        )
+
+    secret.chmod(0o600)
+    with pytest.raises(ValueError, match="both"):
+        ApiRuntimeConfiguration.from_environment(
+            {
+                **common,
+                "KSS_POSTGRES_DSN": "postgresql://other@db/knowledge",
+                "KSS_POSTGRES_DSN_FILE": str(secret),
+            }
+        )
 
 
 def test_distribution_exposes_one_console_entry_point_per_process_role() -> None:
@@ -209,6 +364,13 @@ def test_api_process_wires_release_pinned_hybrid_projection(
         HttpAgenticRetrievalController,
     )
     assert isinstance(observed["ocr_extractor"], HttpDocumentOcrExtractor)
+
+
+def test_non_api_roles_do_not_resolve_the_operator_secret_file() -> None:
+    assert processes._operator_authenticator(  # noqa: SLF001 - role boundary contract
+        "query-executor",
+        {"KSS_OPERATOR_BEARER_TOKEN_FILE": "/run/secrets/not-mounted-for-query"},
+    ) is None
 
 
 def test_explicit_deterministic_encoder_accepts_an_overridden_dimension() -> None:

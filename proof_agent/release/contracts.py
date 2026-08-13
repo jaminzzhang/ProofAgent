@@ -36,6 +36,8 @@ MetricFailure: TypeAlias = Literal[
 ]
 BindingTarget: TypeAlias = Literal[
     "migration_set",
+    "knowledge_service_migration_set",
+    "knowledge_service_openapi_contract",
     "deployment_compatibility_manifest",
 ]
 
@@ -77,8 +79,18 @@ class DigestRef(StrictFrozenModel):
     length: _NonNegativeInt
 
 
+class KnowledgeServiceCandidateBinding(StrictFrozenModel):
+    """Exact independently released Knowledge Source Service artifacts."""
+
+    product_version: _NonEmptyString
+    oci_digest: _OciDigest
+    python_distribution: DigestRef
+    migration_set: DigestRef
+    openapi_contract: DigestRef
+
+
 class ProductionCandidateBinding(StrictFrozenModel):
-    schema_version: Literal["proofagent.candidate-binding.v1"]
+    schema_version: Literal["proofagent.candidate-binding.v2"]
     source_commit: _SourceCommit
     clean_tree: Literal[True]
     product_version: _NonEmptyString
@@ -87,6 +99,7 @@ class ProductionCandidateBinding(StrictFrozenModel):
     dashboard_assets: DigestRef
     operator_chat_assets: DigestRef
     migration_set: DigestRef
+    knowledge_source_service: KnowledgeServiceCandidateBinding
     agent_id: Literal["agent_management_insurance_specialist"]
     agent_version: _NonEmptyString
     agent_bundle: DigestRef

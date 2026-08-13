@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from importlib.resources import files
+import json
 
 import psycopg
 
@@ -19,6 +21,33 @@ _MIGRATIONS = (
     ("0006_source_synchronizations", "0006_source_synchronizations.sql"),
 )
 _MIGRATION_LOCK_ID = 4_934_575_833_127_731_121
+
+
+def knowledge_service_migration_contract_bytes() -> bytes:
+    """Bind the ordered packaged SQL migration set as canonical JSON bytes."""
+
+    migrations = []
+    migration_root = files("knowledge_source_service.migrations")
+    for revision, resource_name in _MIGRATIONS:
+        content = migration_root.joinpath(resource_name).read_bytes()
+        migrations.append(
+            {
+                "length": len(content),
+                "resource": resource_name,
+                "revision": revision,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    return json.dumps(
+        {
+            "head_revision": _MIGRATIONS[-1][0],
+            "migrations": migrations,
+            "schema_version": "knowledge-source-service.migration-contract.v1",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def apply_knowledge_service_migrations(dsn: str) -> None:
@@ -59,3 +88,9 @@ def apply_knowledge_service_migrations(dsn: str) -> None:
 
 def _psycopg_dsn(dsn: str) -> str:
     return dsn.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+__all__ = [
+    "apply_knowledge_service_migrations",
+    "knowledge_service_migration_contract_bytes",
+]

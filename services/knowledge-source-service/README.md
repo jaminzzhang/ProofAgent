@@ -34,19 +34,21 @@
 所有角色都先校验四个公共变量：
 
 ```text
-KSS_POSTGRES_DSN=postgresql://user:password@postgres:5432/knowledge
+KSS_POSTGRES_DSN_FILE=/run/secrets/kss-postgres-dsn
 KSS_OBJECT_STORE_URI=s3://knowledge-artifacts/kss
-KSS_SEARCH_ENDPOINT=http://opensearch:9200
+KSS_SEARCH_ENDPOINT=https://opensearch.internal.example
 KSS_RELEASE_IDENTITY=kss-2026-08-12.1
 ```
+
+`KSS_POSTGRES_DSN` 仍可用于本地验证。生产环境应使用绝对路径形式的 `KSS_POSTGRES_DSN_FILE`。Secret 文件必须是普通文件，权限为 `0600` 或更严格，大小为 1–64 KiB，且只包含一行非空 UTF-8 文本。同一个 Secret 不得同时配置直接值和 `_FILE`。
 
 S3-compatible endpoint 可使用：
 
 ```text
 KSS_S3_ENDPOINT=http://minio:9000
 KSS_S3_REGION=us-east-1
-KSS_S3_ACCESS_KEY_ID=<secret>
-KSS_S3_SECRET_ACCESS_KEY=<secret>
+KSS_S3_ACCESS_KEY_ID_FILE=/run/secrets/kss-s3-access-key-id
+KSS_S3_SECRET_ACCESS_KEY_FILE=/run/secrets/kss-s3-secret-access-key
 KSS_S3_ALLOW_INSECURE_ENDPOINT=1
 ```
 
@@ -56,7 +58,7 @@ Dense/Sparse 投影必须配置私有 encoder：
 
 ```text
 KSS_PROJECTION_ENCODER_ENDPOINT=https://encoder.internal.example/v1/encode
-KSS_PROJECTION_ENCODER_BEARER_TOKEN=<secret>
+KSS_PROJECTION_ENCODER_BEARER_TOKEN_FILE=/run/secrets/kss-projection-encoder-token
 KSS_DENSE_ENCODER_REVISION=dense-v1
 KSS_SPARSE_ENCODER_REVISION=sparse-v1
 KSS_DENSE_DIMENSION=384
@@ -68,13 +70,13 @@ KSS_DENSE_DIMENSION=384
 
 ```text
 KSS_AGENTIC_CONTROLLER_ENDPOINT=https://retrieval-controller.internal.example/v1/next
-KSS_AGENTIC_CONTROLLER_BEARER_TOKEN=<secret>
+KSS_AGENTIC_CONTROLLER_BEARER_TOKEN_FILE=/run/secrets/kss-agentic-controller-token
 
 KSS_OCR_ENDPOINT=https://ocr.internal.example/v1/extract
-KSS_OCR_BEARER_TOKEN=<secret>
+KSS_OCR_BEARER_TOKEN_FILE=/run/secrets/kss-ocr-token
 KSS_OCR_MODEL_REVISION=ocr-v1
 
-KSS_OPERATOR_BEARER_TOKEN=<at-least-16-character-secret>
+KSS_OPERATOR_BEARER_TOKEN_FILE=/run/secrets/kss-operator-token
 KSS_OPERATOR_ID=knowledge-operator
 ```
 
@@ -112,13 +114,26 @@ API 只有在配置 operator token 后才挂载管理路由；未配置时仍保
 
 ## 启动顺序
 
-先构建镜像：
+先验证独立依赖锁，并生成发布候选需要绑定的 OpenAPI 与 migration contract：
 
 ```bash
-docker build \
-  -t proofagent-knowledge-source-service:local \
-  services/knowledge-source-service
+uv lock --check --project services/knowledge-source-service
+knowledge-source-service openapi-contract
+knowledge-source-service migration-contract
 ```
+
+随后使用不可变基础镜像构建：
+
+```bash
+docker buildx build \
+  --file services/knowledge-source-service/Dockerfile \
+  --build-arg UV_IMAGE="$KSS_UV_IMAGE" \
+  --build-arg RUNTIME_IMAGE="$KSS_RUNTIME_IMAGE" \
+  --tag proofagent-knowledge-source-service:candidate \
+  --load services/knowledge-source-service
+```
+
+`KSS_UV_IMAGE` 和 `KSS_RUNTIME_IMAGE` 必须是 `name@sha256:...`。发布流水线应使用 registry digest 部署构建结果，并把 OCI、wheel、OpenAPI 和 migration contract 的精确摘要写入 Candidate Binding v2。
 
 部署时使用同一配置依次启动：
 
@@ -129,6 +144,8 @@ docker build \
 5. 一个 `sync-scheduler`。
 
 API 默认监听 `0.0.0.0:8080`，可由 `KSS_API_HOST` 和 `KSS_API_PORT` 修改。生产入口应在受管 HTTPS gateway 后，并配置独立的 Agent client 身份和 exact-Release Client Grant。
+
+正式 Compose 定义位于 `../../deploy/production/knowledge/compose.yaml`。该定义使用同一不可变镜像启动五个角色，并通过外部 mode-`0400` Secret 文件注入 PostgreSQL、S3、operator 和私有模型凭据。KSS 使用独立部署生命周期，不属于 ProofAgent 的 Blue/Green slot。
 
 ## HTTP 接口
 

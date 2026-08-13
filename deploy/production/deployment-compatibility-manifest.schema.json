@@ -19,8 +19,8 @@
     "tool_mode": {"enum": ["disabled", "read_only_https"]},
     "components": {
       "type": "array",
-      "minItems": 6,
-      "maxItems": 7,
+      "minItems": 9,
+      "maxItems": 10,
       "items": {"$ref": "#/$defs/component"}
     }
   },
@@ -48,6 +48,9 @@
             "secret_provider",
             "gateway",
             "model_provider",
+            "knowledge_source_service",
+            "opensearch",
+            "knowledge_model_plane",
             "read_only_tool"
           ]
         },

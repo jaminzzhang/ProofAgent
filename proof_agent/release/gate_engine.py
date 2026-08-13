@@ -152,9 +152,7 @@ def _collect_policy_blockers(
             blockers.append(f"metric.type_mismatch:{rule.gate_id}:{metric_rule.key}")
             continue
         if not _metric_satisfies(value, metric_rule, candidate):
-            blockers.append(
-                f"metric.{metric_rule.failure}:{rule.gate_id}:{metric_rule.key}"
-            )
+            blockers.append(f"metric.{metric_rule.failure}:{rule.gate_id}:{metric_rule.key}")
     return blockers
 
 
@@ -176,11 +174,22 @@ def _metric_satisfies(
     if rule.comparison == "format":
         return True
     if rule.comparison == "binding":
-        expected = (
-            candidate.migration_set.sha256
-            if rule.binding_target == "migration_set"
-            else candidate.deployment_compatibility_manifest.sha256
-        )
+        expected_by_target = {
+            "migration_set": candidate.migration_set.sha256,
+            "knowledge_service_migration_set": (
+                candidate.knowledge_source_service.migration_set.sha256
+            ),
+            "knowledge_service_openapi_contract": (
+                candidate.knowledge_source_service.openapi_contract.sha256
+            ),
+            "deployment_compatibility_manifest": (
+                candidate.deployment_compatibility_manifest.sha256
+            ),
+        }
+        binding_target = rule.binding_target
+        if binding_target is None:
+            return False
+        expected = expected_by_target[binding_target]
         return value == expected
     if rule.comparison == "equal":
         return value == rule.expected

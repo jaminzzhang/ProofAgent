@@ -37,9 +37,10 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0017_metadata_import_jobs",
         "0018_publication_preparation",
         "0019_ingestion_operation_link",
-        "0020_metadata_review_v2",
-        "0021_metadata_workbook_v2",
     }
+)
+METADATA_V2_DIRECT_CUTOVER_REVISIONS: Final = frozenset(
+    {"0020_metadata_review_v2", "0021_metadata_workbook_v2"}
 )
 
 
@@ -140,8 +141,9 @@ def upgrade_database(
     lock_timeout_seconds: float = 30.0,
     target_revision: str | None = None,
     expand_only: bool = False,
+    metadata_v2_cutover: bool = False,
 ) -> str:
-    """Run locked expand-only migrations; application startup never calls this function."""
+    """Run one explicit locked migration mode; startup never calls this function."""
 
     if lock_timeout_seconds <= 0:
         raise ValueError("lock_timeout_seconds must be positive")
@@ -150,11 +152,15 @@ def upgrade_database(
         raise UnsafeMigrationError(
             "migration target must equal the schema head packaged in this image"
         )
+    if expand_only and metadata_v2_cutover:
+        raise UnsafeMigrationError("migration safety modes are mutually exclusive")
     engine = create_postgres_engine(dsn)
     try:
         installed_revision = current_revision(engine)
         if expand_only:
             _require_expand_only_path(installed_revision, target)
+        if metadata_v2_cutover:
+            _require_metadata_v2_direct_cutover_path(installed_revision, target)
         with engine.connect() as connection, connection.begin():
             connection.execute(
                 text("SELECT set_config('lock_timeout', :timeout, true)"),
@@ -188,14 +194,37 @@ def _require_expand_only_path(current: str | None, target: str) -> None:
         revisions = tuple(scripts.iterate_revisions(target, current))
     except CommandError as exc:
         raise UnsafeMigrationError("migration path is not known to this image") from exc
-    unsafe = tuple(
+    unsafe = tuple(sorted(
         revision.revision
         for revision in revisions
         if revision.revision not in EXPAND_ONLY_REVISIONS
-    )
+    ))
     if unsafe:
         raise UnsafeMigrationError(
             "migration path contains a revision not declared expand-only: "
+            + ", ".join(unsafe)
+        )
+
+
+def _require_metadata_v2_direct_cutover_path(
+    current: str | None,
+    target: str,
+) -> None:
+    scripts = ScriptDirectory.from_config(_alembic_config())
+    try:
+        revisions = tuple(scripts.iterate_revisions(target, current))
+    except CommandError as exc:
+        raise UnsafeMigrationError("migration path is not known to this image") from exc
+    revision_names = tuple(revision.revision for revision in revisions)
+    if not METADATA_V2_DIRECT_CUTOVER_REVISIONS.intersection(revision_names):
+        raise UnsafeMigrationError(
+            "migration path does not contain a Metadata V2 direct-cutover revision"
+        )
+    admitted = EXPAND_ONLY_REVISIONS | METADATA_V2_DIRECT_CUTOVER_REVISIONS
+    unsafe = tuple(sorted(name for name in revision_names if name not in admitted))
+    if unsafe:
+        raise UnsafeMigrationError(
+            "Metadata V2 direct-cutover path contains an unapproved revision: "
             + ", ".join(unsafe)
         )
 

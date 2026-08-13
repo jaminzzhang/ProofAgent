@@ -279,6 +279,107 @@ def database_upgrade(
     typer.echo(json.dumps({"revision": revision, "status": "upgraded"}, sort_keys=True))
 
 
+@database_app.command("cutover-metadata-v2")
+def database_cutover_metadata_v2(
+    dsn: str = typer.Option(
+        ...,
+        "--dsn",
+        envvar="PROOF_AGENT_POSTGRES_DSN",
+        help="PostgreSQL DSN; may also be supplied through PROOF_AGENT_POSTGRES_DSN.",
+    ),
+    lock_timeout_seconds: float = typer.Option(
+        30.0,
+        "--lock-timeout-seconds",
+        min=0.001,
+        help="Maximum wait for the global PostgreSQL migration lock.",
+    ),
+    locked: bool = typer.Option(False, "--locked"),
+    maintenance_window_authorized: bool = typer.Option(
+        False,
+        "--maintenance-window-authorized",
+    ),
+    application_writes_stopped: bool = typer.Option(
+        False,
+        "--application-writes-stopped",
+    ),
+    workers_stopped: bool = typer.Option(False, "--workers-stopped"),
+    backup_evidence: Path | None = typer.Option(None, "--backup-evidence"),
+    backup_evidence_sha256: str | None = typer.Option(
+        None,
+        "--backup-evidence-sha256",
+    ),
+    target: str = typer.Option(
+        ...,
+        "--target",
+        help="Exact candidate schema revision; must be the packaged head.",
+    ),
+) -> None:
+    """Run the explicit stopped-stack Metadata V2 direct-cutover migration."""
+
+    acknowledgements = {
+        "--locked": locked,
+        "--maintenance-window-authorized": maintenance_window_authorized,
+        "--application-writes-stopped": application_writes_stopped,
+        "--workers-stopped": workers_stopped,
+        "--backup-evidence": backup_evidence is not None,
+        "--backup-evidence-sha256": backup_evidence_sha256 is not None,
+    }
+    missing = tuple(key for key, supplied in acknowledgements.items() if not supplied)
+    if missing:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": (
+                        "Metadata V2 direct cutover requires " + " ".join(missing)
+                    )
+                },
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    assert backup_evidence is not None
+    assert backup_evidence_sha256 is not None
+    try:
+        if re.fullmatch(r"[0-9a-f]{64}", backup_evidence_sha256) is None:
+            raise ValueError("backup evidence SHA-256 must be lowercase hexadecimal")
+        metadata = backup_evidence.stat()
+        if not backup_evidence.is_file() or not 1 <= metadata.st_size <= 16 * 1024 * 1024:
+            raise ValueError("backup evidence must be a non-empty regular file")
+        actual_backup_evidence_sha256 = _sha256(backup_evidence)
+        if actual_backup_evidence_sha256 != backup_evidence_sha256:
+            raise ValueError("backup evidence SHA-256 does not match")
+
+        from proof_agent.capabilities.persistence.postgres.database import (
+            upgrade_database,
+        )
+
+        revision = upgrade_database(
+            dsn,
+            lock_timeout_seconds=lock_timeout_seconds,
+            target_revision=target,
+            expand_only=False,
+            metadata_v2_cutover=True,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        typer.echo(json.dumps({"error": str(exc)}, sort_keys=True), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "backup_evidence_sha256": actual_backup_evidence_sha256,
+                "revision": revision,
+                "status": "metadata_v2_cutover_completed",
+            },
+            sort_keys=True,
+        )
+    )
+
+
 @artifacts_app.command("expire")
 def artifacts_expire(
     dsn: str = typer.Option(..., "--dsn", envvar="PROOF_AGENT_POSTGRES_DSN"),
@@ -636,7 +737,7 @@ def release_bind_candidate(
         candidate = ProductionCandidateBinding.model_validate(
             {
                 **payload,
-                "schema_version": "proofagent.candidate-binding.v1",
+                "schema_version": "proofagent.candidate-binding.v2",
                 "gate_profile": digest_ref(
                     initial_private_pilot_profile_bytes()
                 ).model_dump(mode="json"),

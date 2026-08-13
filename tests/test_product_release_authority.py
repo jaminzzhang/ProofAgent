@@ -55,7 +55,7 @@ def _digest() -> DigestRef:
 
 def _candidate() -> ProductionCandidateBinding:
     return ProductionCandidateBinding(
-        schema_version="proofagent.candidate-binding.v1",
+        schema_version="proofagent.candidate-binding.v2",
         source_commit=SOURCE_COMMIT,
         clean_tree=True,
         product_version="0.1.0",
@@ -64,6 +64,13 @@ def _candidate() -> ProductionCandidateBinding:
         dashboard_assets=_digest(),
         operator_chat_assets=_digest(),
         migration_set=_digest(),
+        knowledge_source_service={
+            "product_version": "0.1.0",
+            "oci_digest": f"sha256:{SHA_A}",
+            "python_distribution": _digest(),
+            "migration_set": _digest(),
+            "openapi_contract": _digest(),
+        },
         agent_id="agent_management_insurance_specialist",
         agent_version="2026.08.13",
         agent_bundle=_digest(),
@@ -109,6 +116,29 @@ def test_candidate_integrity_fails_when_only_quality_facts_are_present() -> None
     )
 
 
+def test_gate_profile_requires_knowledge_service_distribution_and_compatibility() -> None:
+    metrics = {
+        rule.key
+        for gate in INITIAL_PRIVATE_PILOT_PROFILE.gates
+        for rule in gate.metrics
+    }
+
+    assert {
+        "distribution_knowledge_service_clean_install_passed",
+        "distribution_knowledge_service_image_readiness_passed",
+        "security_knowledge_service_runtime_hardening_passed",
+        "security_knowledge_service_sbom_present",
+        "security_knowledge_service_provenance_verified",
+        "compatibility_knowledge_source_service_bound",
+        "compatibility_opensearch_bound",
+        "compatibility_knowledge_model_plane_bound",
+        "compatibility_knowledge_service_openapi_sha256",
+        "deployment_metadata_v2_transition_safe",
+        "deployment_knowledge_service_migration_set_sha256",
+        "recovery_knowledge_service_migration_set_sha256",
+    } <= metrics
+
+
 def test_candidate_integrity_passes_only_after_all_profile_facts_pass() -> None:
     candidate = _candidate()
     binding = candidate_binding_sha256(candidate)
@@ -140,11 +170,16 @@ def test_candidate_integrity_passes_only_after_all_profile_facts_pass() -> None:
             "quality_required_integration_skips": 0,
             "distribution_clean_install_passed": True,
             "distribution_image_readiness_passed": True,
+            "distribution_knowledge_service_clean_install_passed": True,
+            "distribution_knowledge_service_image_readiness_passed": True,
             "security_unresolved_critical_findings": 0,
             "security_unresolved_high_findings": 0,
             "security_runtime_hardening_passed": True,
             "security_sbom_present": True,
             "security_provenance_verified": True,
+            "security_knowledge_service_runtime_hardening_passed": True,
+            "security_knowledge_service_sbom_present": True,
+            "security_knowledge_service_provenance_verified": True,
         },
         evaluated_at=NOW,
     )
@@ -554,11 +589,18 @@ def test_release_verify_cli_can_reach_go_with_deployment_owned_trust(
         metrics: dict[str, bool | int | float | str] = {}
         for metric_rule in gate_rule.metrics:
             if metric_rule.comparison == "binding":
-                metrics[metric_rule.key] = (
-                    candidate.migration_set.sha256
-                    if metric_rule.binding_target == "migration_set"
-                    else candidate.deployment_compatibility_manifest.sha256
-                )
+                metrics[metric_rule.key] = {
+                    "migration_set": candidate.migration_set.sha256,
+                    "knowledge_service_migration_set": (
+                        candidate.knowledge_source_service.migration_set.sha256
+                    ),
+                    "knowledge_service_openapi_contract": (
+                        candidate.knowledge_source_service.openapi_contract.sha256
+                    ),
+                    "deployment_compatibility_manifest": (
+                        candidate.deployment_compatibility_manifest.sha256
+                    ),
+                }[metric_rule.binding_target]
             elif metric_rule.comparison == "format":
                 metrics[metric_rule.key] = SHA_A
             else:

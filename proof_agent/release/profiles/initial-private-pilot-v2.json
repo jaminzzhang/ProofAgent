@@ -15,11 +15,16 @@
         {"key": "quality_required_integration_skips", "kind": "int", "comparison": "equal", "expected": 0},
         {"key": "distribution_clean_install_passed", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "distribution_image_readiness_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "distribution_knowledge_service_clean_install_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "distribution_knowledge_service_image_readiness_passed", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "security_unresolved_critical_findings", "kind": "int", "comparison": "equal", "expected": 0},
         {"key": "security_unresolved_high_findings", "kind": "int", "comparison": "equal", "expected": 0},
         {"key": "security_runtime_hardening_passed", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "security_sbom_present", "kind": "bool", "comparison": "equal", "expected": true},
-        {"key": "security_provenance_verified", "kind": "bool", "comparison": "equal", "expected": true}
+        {"key": "security_provenance_verified", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_knowledge_service_runtime_hardening_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_knowledge_service_sbom_present", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "security_knowledge_service_provenance_verified", "kind": "bool", "comparison": "equal", "expected": true}
       ]
     },
     {
@@ -62,8 +67,12 @@
         {"key": "compatibility_secret_provider_bound", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "compatibility_gateway_bound", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "compatibility_model_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_knowledge_source_service_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_opensearch_bound", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "compatibility_knowledge_model_plane_bound", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "compatibility_tool_mode_bound", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "compatibility_manifest_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "deployment_compatibility_manifest"},
+        {"key": "compatibility_knowledge_service_openapi_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "knowledge_service_openapi_contract"},
         {"key": "capacity_online_sessions", "kind": "int", "comparison": "minimum", "expected": 20},
         {"key": "capacity_active_attempts", "kind": "int", "comparison": "equal", "expected": 5},
         {"key": "capacity_queued_runs", "kind": "int", "comparison": "equal", "expected": 50},
@@ -100,12 +109,15 @@
         {"key": "recovery_topology_sha256", "kind": "sha256", "comparison": "format"},
         {"key": "recovery_backup_policy_sha256", "kind": "sha256", "comparison": "format"},
         {"key": "recovery_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "migration_set"},
+        {"key": "recovery_knowledge_service_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "knowledge_service_migration_set"},
         {"key": "deployment_required_checks_passed", "kind": "bool", "comparison": "equal", "expected": true},
+        {"key": "deployment_metadata_v2_transition_safe", "kind": "bool", "comparison": "equal", "expected": true},
         {"key": "deployment_drain_seconds", "kind": "number", "comparison": "maximum", "expected": 150, "minimum_allowed": 0},
         {"key": "deployment_soak_seconds", "kind": "number", "comparison": "minimum", "expected": 1800},
         {"key": "deployment_topology_sha256", "kind": "sha256", "comparison": "format"},
         {"key": "deployment_backup_policy_sha256", "kind": "sha256", "comparison": "format"},
         {"key": "deployment_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "migration_set"},
+        {"key": "deployment_knowledge_service_migration_set_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "knowledge_service_migration_set"},
         {"key": "deployment_compatibility_manifest_sha256", "kind": "sha256", "comparison": "binding", "failure": "binding_mismatch", "binding_target": "deployment_compatibility_manifest"}
       ]
     }

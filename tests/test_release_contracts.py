@@ -32,7 +32,7 @@ def _digest(*, sha256: str = SHA_A, length: int = 1) -> DigestRef:
 
 def _candidate(**overrides: Any) -> ProductionCandidateBinding:
     values: dict[str, Any] = {
-        "schema_version": "proofagent.candidate-binding.v1",
+        "schema_version": "proofagent.candidate-binding.v2",
         "source_commit": SOURCE_COMMIT,
         "clean_tree": True,
         "product_version": "0.1.0",
@@ -41,6 +41,13 @@ def _candidate(**overrides: Any) -> ProductionCandidateBinding:
         "dashboard_assets": _digest(),
         "operator_chat_assets": _digest(),
         "migration_set": _digest(),
+        "knowledge_source_service": {
+            "product_version": "0.1.0",
+            "oci_digest": f"sha256:{SHA_B}",
+            "python_distribution": _digest(sha256=SHA_B, length=2),
+            "migration_set": _digest(sha256=SHA_B, length=2),
+            "openapi_contract": _digest(sha256=SHA_B, length=2),
+        },
         "agent_id": "agent_management_insurance_specialist",
         "agent_version": "2026.07.12",
         "agent_bundle": _digest(),
@@ -220,6 +227,23 @@ def test_candidate_binding_requires_the_single_release_agent() -> None:
         _candidate(agent_id="another_agent")
 
 
+def test_candidate_binding_requires_exact_knowledge_service_artifacts() -> None:
+    payload = _candidate().model_dump(mode="json")
+
+    assert payload["schema_version"] == "proofagent.candidate-binding.v2"
+    assert payload["knowledge_source_service"] == {
+        "product_version": "0.1.0",
+        "oci_digest": f"sha256:{SHA_B}",
+        "python_distribution": {"sha256": SHA_B, "length": 2},
+        "migration_set": {"sha256": SHA_B, "length": 2},
+        "openapi_contract": {"sha256": SHA_B, "length": 2},
+    }
+
+    del payload["knowledge_source_service"]
+    with pytest.raises(ValidationError):
+        ProductionCandidateBinding.model_validate(payload)
+
+
 @pytest.mark.parametrize("sha256", ["A" * 64, "a" * 63, f"sha256:{SHA_A}"])
 def test_digest_ref_rejects_noncanonical_sha256(sha256: str) -> None:
     with pytest.raises(ValidationError):
@@ -364,6 +388,7 @@ def test_release_contract_json_schemas_are_closed_at_every_object_layer() -> Non
         "DigestRef",
         "EvidenceRef",
         "GateResult",
+        "KnowledgeServiceCandidateBinding",
         "ProductionCandidateBinding",
     ):
         assert manifest_schema["$defs"][definition]["additionalProperties"] is False
@@ -380,6 +405,7 @@ def test_release_package_exports_only_provider_neutral_contracts() -> None:
         "GateResult",
         "GateStatus",
         "INITIAL_PRIVATE_PILOT_REQUIRED_GATE_IDS",
+        "KnowledgeServiceCandidateBinding",
         "ProductionCandidateBinding",
         "ReleaseGateManifest",
         "Sha256",

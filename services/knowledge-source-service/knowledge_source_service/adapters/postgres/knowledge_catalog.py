@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import re
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import psycopg
 from psycopg import errors
@@ -28,8 +28,10 @@ from knowledge_source_service.domain.knowledge_catalog import (
     DocumentEvidenceUnit,
     DocumentSourceVersion,
     HtmlDomDocumentCitation,
+    KnowledgeBaseReleaseSummary,
     KnowledgeBaseReleaseSnapshot,
     KnowledgeSourceVersion,
+    KnowledgeSourceVersionSummary,
     OcrRegionDocumentCitation,
     PdfPageDocumentCitation,
     PptxShapeDocumentCitation,
@@ -124,6 +126,108 @@ class PostgresKnowledgeCatalog:
             knowledge_space_id=knowledge_space_id,
         )
 
+    def list_spaces(self) -> tuple[str, ...]:
+        with psycopg.connect(self._dsn) as connection:
+            rows = connection.execute(
+                "SELECT knowledge_space_id FROM knowledge_spaces ORDER BY knowledge_space_id"
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def list_sources(self, knowledge_space_id: str) -> tuple[str, ...]:
+        _validate_authority_id(knowledge_space_id, "knowledge_space_id")
+        with psycopg.connect(self._dsn) as connection:
+            rows = connection.execute(
+                """
+                SELECT knowledge_source_id
+                FROM knowledge_sources
+                WHERE knowledge_space_id = %s
+                ORDER BY knowledge_source_id
+                """,
+                (knowledge_space_id,),
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def list_bases(self, knowledge_space_id: str) -> tuple[str, ...]:
+        _validate_authority_id(knowledge_space_id, "knowledge_space_id")
+        with psycopg.connect(self._dsn) as connection:
+            rows = connection.execute(
+                """
+                SELECT knowledge_base_id
+                FROM knowledge_bases
+                WHERE knowledge_space_id = %s
+                ORDER BY knowledge_base_id
+                """,
+                (knowledge_space_id,),
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def list_source_versions(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_source_id: str,
+    ) -> tuple[KnowledgeSourceVersionSummary, ...]:
+        _validate_authority_id(knowledge_space_id, "knowledge_space_id")
+        _validate_authority_id(knowledge_source_id, "knowledge_source_id")
+        with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                SELECT knowledge_space_id, knowledge_source_id,
+                       knowledge_source_version_id, source_kind, media_type
+                FROM knowledge_source_versions
+                WHERE knowledge_space_id = %s AND knowledge_source_id = %s
+                ORDER BY created_at, knowledge_source_version_id
+                """,
+                (knowledge_space_id, knowledge_source_id),
+            ).fetchall()
+        return tuple(
+            KnowledgeSourceVersionSummary(
+                knowledge_space_id=str(row["knowledge_space_id"]),
+                knowledge_source_id=str(row["knowledge_source_id"]),
+                knowledge_source_version_id=str(row["knowledge_source_version_id"]),
+                source_kind=cast(Literal["document", "dataset"], row["source_kind"]),
+                media_type=str(row["media_type"]),
+            )
+            for row in rows
+        )
+
+    def list_releases(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+    ) -> tuple[KnowledgeBaseReleaseSummary, ...]:
+        _validate_authority_id(knowledge_space_id, "knowledge_space_id")
+        _validate_authority_id(knowledge_base_id, "knowledge_base_id")
+        with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                SELECT release.knowledge_space_id, release.knowledge_base_id,
+                       release.knowledge_base_version_id,
+                       release.knowledge_base_release_id, release.state,
+                       count(member.ordinal) AS source_version_count
+                FROM knowledge_base_releases AS release
+                LEFT JOIN knowledge_base_release_members AS member
+                  ON member.knowledge_base_release_id = release.knowledge_base_release_id
+                WHERE release.knowledge_space_id = %s
+                  AND release.knowledge_base_id = %s
+                GROUP BY release.knowledge_base_release_id
+                ORDER BY release.created_at, release.knowledge_base_release_id
+                """,
+                (knowledge_space_id, knowledge_base_id),
+            ).fetchall()
+        return tuple(
+            KnowledgeBaseReleaseSummary(
+                knowledge_space_id=str(row["knowledge_space_id"]),
+                knowledge_base_id=str(row["knowledge_base_id"]),
+                knowledge_base_version_id=str(row["knowledge_base_version_id"]),
+                knowledge_base_release_id=str(row["knowledge_base_release_id"]),
+                source_version_count=int(row["source_version_count"]),
+                state=cast(Literal["queryable", "retired"], row["state"]),
+            )
+            for row in rows
+        )
+
     def put_document_source_version(
         self,
         publication: PublishedDocumentSourceVersion,
@@ -137,9 +241,7 @@ class PostgresKnowledgeCatalog:
         artifact_payloads = {
             "original_artifact_json": asdict(publication.original_artifact),
             "canonical_artifact_json": asdict(publication.canonical_artifact),
-            "evidence_manifest_artifact_json": asdict(
-                publication.evidence_manifest_artifact
-            ),
+            "evidence_manifest_artifact_json": asdict(publication.evidence_manifest_artifact),
         }
         parameters = {
             "knowledge_source_version_id": version.knowledge_source_version_id,
@@ -281,9 +383,7 @@ class PostgresKnowledgeCatalog:
             "knowledge_base_id": release.knowledge_base_id,
             "knowledge_base_version_id": release.knowledge_base_version_id,
             "release_manifest_digest": release.release_manifest_digest,
-            "release_manifest_artifact_json": Jsonb(
-                asdict(publication.release_manifest_artifact)
-            ),
+            "release_manifest_artifact_json": Jsonb(asdict(publication.release_manifest_artifact)),
             "index_identity": projection.index_identity if projection else None,
             "index_mapping_digest": projection.mapping_digest if projection else None,
             "index_corpus_digest": projection.corpus_digest if projection else None,
@@ -456,9 +556,7 @@ class PostgresKnowledgeCatalog:
                 release_manifest_digest=str(row["release_manifest_digest"]),
                 retrieval_projection=_projection_binding_from_row(row),
             ),
-            release_manifest_artifact=_artifact_reference(
-                row["release_manifest_artifact_json"]
-            ),
+            release_manifest_artifact=_artifact_reference(row["release_manifest_artifact_json"]),
         )
         _verify_release_manifest(publication, self._artifacts)
         return publication.release
@@ -550,11 +648,9 @@ def _load_document_publication(
     )
     if (
         canonical["schema_version"] != "document-structure-graph.v2"
-        or canonical["knowledge_source_version_id"]
-        != proposed.knowledge_source_version_id
+        or canonical["knowledge_source_version_id"] != proposed.knowledge_source_version_id
         or canonical["media_type"] != proposed.media_type
-        or canonical["processing_lineage_digest"]
-        != publication.processing_lineage_digest
+        or canonical["processing_lineage_digest"] != publication.processing_lineage_digest
     ):
         raise KnowledgeCatalogIntegrityError("canonical document identity is invalid")
     nodes = canonical["nodes"]
@@ -568,19 +664,14 @@ def _load_document_publication(
             {"kind", "text", "citation_locator"},
             "canonical document node",
         )
-        if (
-            node["kind"] not in {"heading", "paragraph"}
-            or type(node["text"]) is not str
-        ):
+        if node["kind"] not in {"heading", "paragraph"} or type(node["text"]) is not str:
             raise KnowledgeCatalogIntegrityError("canonical document node is invalid")
         node_locator = _object(
             node["citation_locator"],
             "canonical document citation locator",
         )
         if node["kind"] == "paragraph":
-            paragraph_coordinates.add(
-                (_canonical_locator_key(node_locator), node["text"])
-            )
+            paragraph_coordinates.add((_canonical_locator_key(node_locator), node["text"]))
 
     expected_version_id = content_identifier(
         "source-version",
@@ -608,12 +699,9 @@ def _load_document_publication(
     )
     if (
         manifest["schema_version"] != "evidence-unit-manifest.v1"
-        or manifest["knowledge_source_version_id"]
-        != proposed.knowledge_source_version_id
-        or manifest["processing_lineage_digest"]
-        != publication.processing_lineage_digest
-        or manifest["canonical_artifact_sha256"]
-        != publication.canonical_artifact.sha256
+        or manifest["knowledge_source_version_id"] != proposed.knowledge_source_version_id
+        or manifest["processing_lineage_digest"] != publication.processing_lineage_digest
+        or manifest["canonical_artifact_sha256"] != publication.canonical_artifact.sha256
         or type(manifest["evidence_units"]) is not list
     ):
         raise KnowledgeCatalogIntegrityError("Evidence Unit manifest identity is invalid")
@@ -696,21 +784,15 @@ def _load_document_publication(
             row_number = locator["row_number"]
             column_number = locator["column_number"]
             if not all(
-                type(value) is int
-                and value >= 1
-                and (label == "table" or value <= 999)
+                type(value) is int and value >= 1 and (label == "table" or value <= 999)
                 for label, value in (
                     ("table", table_number),
                     ("row", row_number),
                     ("column", column_number),
                 )
             ):
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
-            start_line = (
-                table_number * 1_000_000 + row_number * 1_000 + column_number
-            )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
+            start_line = table_number * 1_000_000 + row_number * 1_000 + column_number
             end_line = start_line
             citation_locator = {
                 "kind": "docx_table_cell",
@@ -732,9 +814,7 @@ def _load_document_publication(
                 or type(shape_id) is not int
                 or not 1 <= shape_id <= 999_999
             ):
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             start_line = slide_number * 1_000_000 + shape_id
             end_line = start_line
             citation_locator = {
@@ -755,9 +835,7 @@ def _load_document_publication(
                 or len(dom_path) > 1_024
                 or any(character.isspace() for character in dom_path)
             ):
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             start_line = 1
             end_line = 1
             citation_locator = {
@@ -789,9 +867,7 @@ def _load_document_publication(
                 or x_max <= x_min
                 or y_max <= y_min
             ):
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             start_line = ocr_page_number
             end_line = ocr_page_number
             citation_locator = {
@@ -829,8 +905,7 @@ def _load_document_publication(
             or start_line < 1
             or end_line < start_line
             or locator_kind not in expected_locator_kinds
-            or (_canonical_locator_key(citation_locator), text)
-            not in paragraph_coordinates
+            or (_canonical_locator_key(citation_locator), text) not in paragraph_coordinates
         ):
             raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
         if locator_kind == "text_lines":
@@ -841,14 +916,10 @@ def _load_document_publication(
         elif locator_kind == "pdf_page":
             document_citation = PdfPageDocumentCitation(page_number=start_line)
         elif locator_kind == "docx_paragraph":
-            document_citation = DocxParagraphDocumentCitation(
-                paragraph_number=start_line
-            )
+            document_citation = DocxParagraphDocumentCitation(paragraph_number=start_line)
         elif locator_kind == "docx_table_cell":
             if table_number is None or row_number is None or column_number is None:
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             document_citation = DocxTableCellDocumentCitation(
                 table_number=table_number,
                 row_number=row_number,
@@ -856,18 +927,14 @@ def _load_document_publication(
             )
         elif locator_kind == "pptx_shape":
             if slide_number is None or shape_id is None:
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             document_citation = PptxShapeDocumentCitation(
                 slide_number=slide_number,
                 shape_id=shape_id,
             )
         elif locator_kind == "html_dom":
             if dom_path is None:
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             document_citation = HtmlDomDocumentCitation(dom_path=dom_path)
         else:
             if (
@@ -877,9 +944,7 @@ def _load_document_publication(
                 or x_max is None
                 or y_max is None
             ):
-                raise KnowledgeCatalogIntegrityError(
-                    "Evidence Unit citation is invalid"
-                )
+                raise KnowledgeCatalogIntegrityError("Evidence Unit citation is invalid")
             document_citation = OcrRegionDocumentCitation(
                 page_number=ocr_page_number,
                 x_min=x_min,
@@ -944,10 +1009,8 @@ def _load_dataset_publication(
     records_value = canonical["records"]
     if (
         canonical["schema_version"] != "structured-dataset-revision.v1"
-        or canonical["knowledge_source_version_id"]
-        != proposed.knowledge_source_version_id
-        or canonical["processing_lineage_digest"]
-        != publication.processing_lineage_digest
+        or canonical["knowledge_source_version_id"] != proposed.knowledge_source_version_id
+        or canonical["processing_lineage_digest"] != publication.processing_lineage_digest
         or type(fields_value) is not list
         or not fields_value
         or type(records_value) is not list
@@ -1077,8 +1140,7 @@ def _load_dataset_publication(
         manifest["schema_version"] != "dataset-record-manifest.v1"
         or manifest["knowledge_source_version_id"] != source_version_id
         or manifest["dataset_revision_id"] != dataset_revision_id
-        or manifest["canonical_artifact_sha256"]
-        != publication.canonical_artifact.sha256
+        or manifest["canonical_artifact_sha256"] != publication.canonical_artifact.sha256
         or manifest["records"] != manifest_records
     ):
         raise KnowledgeCatalogIntegrityError("Dataset Record manifest is invalid")
@@ -1191,9 +1253,7 @@ def _verify_release_manifest(
         "source_versions": list(release.knowledge_source_version_ids),
     }
     if projection is not None:
-        expected_manifest["retrieval_projection"] = _projection_manifest_payload(
-            projection
-        )
+        expected_manifest["retrieval_projection"] = _projection_manifest_payload(projection)
     expected_digest = sha256_json(expected_manifest)
     expected_release_id = content_identifier("release", expected_digest)
     if (
@@ -1221,8 +1281,7 @@ def _source_row_matches(
         and row["media_type"] == version.media_type
         and row["original_artifact_json"] == asdict(publication.original_artifact)
         and row["canonical_artifact_json"] == asdict(publication.canonical_artifact)
-        and row["evidence_manifest_artifact_json"]
-        == asdict(publication.evidence_manifest_artifact)
+        and row["evidence_manifest_artifact_json"] == asdict(publication.evidence_manifest_artifact)
         and row["processing_lineage_digest"] == publication.processing_lineage_digest
     )
 
@@ -1239,8 +1298,7 @@ def _dataset_source_row_matches(
         and row["media_type"] == publication.original_artifact.media_type
         and row["original_artifact_json"] == asdict(publication.original_artifact)
         and row["canonical_artifact_json"] == asdict(publication.canonical_artifact)
-        and row["evidence_manifest_artifact_json"]
-        == asdict(publication.evidence_manifest_artifact)
+        and row["evidence_manifest_artifact_json"] == asdict(publication.evidence_manifest_artifact)
         and row["processing_lineage_digest"] == publication.processing_lineage_digest
     )
 
@@ -1255,8 +1313,7 @@ def _release_row_matches(
         and row["knowledge_base_id"] == release.knowledge_base_id
         and row["knowledge_base_version_id"] == release.knowledge_base_version_id
         and row["release_manifest_digest"] == release.release_manifest_digest
-        and row["release_manifest_artifact_json"]
-        == asdict(publication.release_manifest_artifact)
+        and row["release_manifest_artifact_json"] == asdict(publication.release_manifest_artifact)
         and row["state"] == "queryable"
         and _projection_binding_from_row(row) == release.retrieval_projection
     )
@@ -1278,9 +1335,7 @@ def _projection_binding_from_row(
     if all(value is None for value in values):
         return None
     if any(value is None for value in values):
-        raise KnowledgeCatalogIntegrityError(
-            "persisted retrieval projection binding is incomplete"
-        )
+        raise KnowledgeCatalogIntegrityError("persisted retrieval projection binding is incomplete")
     (
         index_identity,
         mapping_digest,
@@ -1306,9 +1361,7 @@ def _projection_binding_from_row(
         or type(dimension) is not int
         or dimension < 1
     ):
-        raise KnowledgeCatalogIntegrityError(
-            "persisted retrieval projection binding is invalid"
-        )
+        raise KnowledgeCatalogIntegrityError("persisted retrieval projection binding is invalid")
     return RetrievalProjectionBinding(
         index_identity=index_identity,
         mapping_digest=mapping_digest,

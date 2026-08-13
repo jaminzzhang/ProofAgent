@@ -17,12 +17,25 @@ DeploymentComponentId = Literal[
     "secret_provider",
     "gateway",
     "model_provider",
+    "knowledge_source_service",
+    "opensearch",
+    "knowledge_model_plane",
     "read_only_tool",
 ]
 ToolMode = Literal["disabled", "read_only_https"]
 
 REQUIRED_COMPONENT_IDS = frozenset(
-    {"postgresql", "s3", "oidc", "secret_provider", "gateway", "model_provider"}
+    {
+        "postgresql",
+        "s3",
+        "oidc",
+        "secret_provider",
+        "gateway",
+        "model_provider",
+        "knowledge_source_service",
+        "opensearch",
+        "knowledge_model_plane",
+    }
 )
 REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
     "postgresql": frozenset({"transactions", "advisory_lock", "pitr"}),
@@ -34,6 +47,15 @@ REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
     "gateway": frozenset({"tls", "sse", "atomic_reload"}),
     "model_provider": frozenset(
         {"governed_calls", "timeout", "rate_limit", "provider_errors"}
+    ),
+    "knowledge_source_service": frozenset(
+        {"durable_queries", "exact_release", "client_grants", "readiness"}
+    ),
+    "opensearch": frozenset(
+        {"tls", "index_generation", "exact_generation_read", "rebuild"}
+    ),
+    "knowledge_model_plane": frozenset(
+        {"projection_encoding", "ocr", "agentic_control", "timeout"}
     ),
     "read_only_tool": frozenset({"read_only", "schema_validation", "authorization"}),
 }
@@ -202,7 +224,7 @@ class DeploymentCompatibilityManifest(StrictFrozenModel):
     tls_required: Literal[True]
     tool_mode: ToolMode
     components: tuple[DeploymentCompatibilityComponent, ...] = Field(
-        max_length=7,
+        max_length=10,
     )
 
     @field_validator("components", mode="before")

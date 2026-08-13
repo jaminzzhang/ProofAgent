@@ -54,8 +54,14 @@ from knowledge_source_service.application.synchronization_executor import (
     KnowledgeSourceSynchronizationExecutor,
 )
 from knowledge_source_service.bootstrap.runtime import compose_runtime
-from knowledge_source_service.configuration import ApiRuntimeConfiguration
-from knowledge_source_service.delivery.management_http import bearer_operator_authenticator
+from knowledge_source_service.configuration import (
+    ApiRuntimeConfiguration,
+    secret_environment_value,
+)
+from knowledge_source_service.delivery.management_http import (
+    AuthenticateKnowledgeOperator,
+    bearer_operator_authenticator,
+)
 
 
 def run_process_role(
@@ -91,15 +97,7 @@ def run_process_role(
     encoder = _projection_encoder(environment)
     agentic_controller = _agentic_controller(environment)
     ocr_extractor = _ocr_extractor(environment) if role == "api" else None
-    operator_token = environment.get("KSS_OPERATOR_BEARER_TOKEN", "").strip()
-    operator_authenticator = (
-        None
-        if not operator_token
-        else bearer_operator_authenticator(
-            operator_id=environment.get("KSS_OPERATOR_ID", "bootstrap-operator"),
-            expected_token=operator_token,
-        )
-    )
+    operator_authenticator = _operator_authenticator(role, environment)
     try:
         snapshot_connections = (
             ConfiguredSnapshotConnectionRegistry.from_environment(
@@ -204,16 +202,32 @@ def run_process_role(
         projection.close()
 
 
+def _operator_authenticator(
+    role: str,
+    environment: Mapping[str, str],
+) -> AuthenticateKnowledgeOperator | None:
+    if role != "api":
+        return None
+    operator_token = secret_environment_value(environment, "KSS_OPERATOR_BEARER_TOKEN")
+    if not operator_token:
+        return None
+    return bearer_operator_authenticator(
+        operator_id=environment.get("KSS_OPERATOR_ID", "bootstrap-operator"),
+        expected_token=operator_token,
+    )
+
+
 def _ocr_extractor(
     environment: Mapping[str, str],
 ) -> HttpDocumentOcrExtractor | None:
     fields = {
-        key: environment.get(key, "").strip()
-        for key in (
-            "KSS_OCR_ENDPOINT",
-            "KSS_OCR_BEARER_TOKEN",
-            "KSS_OCR_MODEL_REVISION",
-        )
+        "KSS_OCR_ENDPOINT": environment.get("KSS_OCR_ENDPOINT", "").strip(),
+        "KSS_OCR_BEARER_TOKEN": secret_environment_value(
+            environment, "KSS_OCR_BEARER_TOKEN"
+        ),
+        "KSS_OCR_MODEL_REVISION": environment.get(
+            "KSS_OCR_MODEL_REVISION", ""
+        ).strip(),
     }
     if any(fields.values()):
         missing = tuple(key for key, value in fields.items() if not value)
@@ -234,10 +248,9 @@ def _agentic_controller(
     environment: Mapping[str, str],
 ) -> HttpAgenticRetrievalController | None:
     endpoint = environment.get("KSS_AGENTIC_CONTROLLER_ENDPOINT", "").strip()
-    bearer_token = environment.get(
-        "KSS_AGENTIC_CONTROLLER_BEARER_TOKEN",
-        "",
-    ).strip()
+    bearer_token = secret_environment_value(
+        environment, "KSS_AGENTIC_CONTROLLER_BEARER_TOKEN"
+    )
     if bool(endpoint) != bool(bearer_token):
         raise ValueError(
             "KSS Agentic controller endpoint and credential are required together"
@@ -256,10 +269,9 @@ def _projection_encoder(
 ) -> ProjectionTextEncoder:
     remote_fields = {
         "endpoint": environment.get("KSS_PROJECTION_ENCODER_ENDPOINT", "").strip(),
-        "bearer_token": environment.get(
-            "KSS_PROJECTION_ENCODER_BEARER_TOKEN",
-            "",
-        ).strip(),
+        "bearer_token": secret_environment_value(
+            environment, "KSS_PROJECTION_ENCODER_BEARER_TOKEN"
+        ),
         "dense_revision": environment.get(
             "KSS_DENSE_ENCODER_REVISION",
             "",
@@ -467,8 +479,8 @@ def _s3_artifact_store(
             s3={"addressing_style": "path" if endpoint is not None else "auto"},
         ),
     }
-    access_key = environment.get("KSS_S3_ACCESS_KEY_ID", "").strip()
-    secret_key = environment.get("KSS_S3_SECRET_ACCESS_KEY", "").strip()
+    access_key = secret_environment_value(environment, "KSS_S3_ACCESS_KEY_ID")
+    secret_key = secret_environment_value(environment, "KSS_S3_SECRET_ACCESS_KEY")
     if bool(access_key) != bool(secret_key):
         raise ValueError("both KSS S3 static credential fields are required together")
     if access_key:

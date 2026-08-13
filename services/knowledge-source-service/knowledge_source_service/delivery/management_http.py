@@ -10,6 +10,7 @@ from typing import Annotated, Literal, cast
 
 from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse
+from pydantic import Field
 
 from knowledge_source_service.adapters.postgres.knowledge_catalog import (
     KnowledgeCatalogConflict,
@@ -107,6 +108,16 @@ class KnowledgeSpaceResource(StrictContract):
     knowledge_space_id: NonBlankText
 
 
+class ManagementCollectionSummary(StrictContract):
+    total: int = Field(ge=0, le=10_000)
+
+
+class KnowledgeSpaceCollectionResource(StrictContract):
+    schema_version: Literal["knowledge-space-collection.v1"] = "knowledge-space-collection.v1"
+    data: tuple[KnowledgeSpaceResource, ...] = Field(max_length=1_000)
+    summary: ManagementCollectionSummary
+
+
 class CreateKnowledgeSourceRequest(StrictContract):
     knowledge_source_id: NonBlankText
 
@@ -115,6 +126,12 @@ class KnowledgeSourceResource(StrictContract):
     schema_version: Literal["knowledge-source.v1"] = "knowledge-source.v1"
     knowledge_space_id: NonBlankText
     knowledge_source_id: NonBlankText
+
+
+class KnowledgeSourceCollectionResource(StrictContract):
+    schema_version: Literal["knowledge-source-collection.v1"] = "knowledge-source-collection.v1"
+    data: tuple[KnowledgeSourceResource, ...] = Field(max_length=10_000)
+    summary: ManagementCollectionSummary
 
 
 class CreateKnowledgeBaseRequest(StrictContract):
@@ -127,10 +144,14 @@ class KnowledgeBaseResource(StrictContract):
     knowledge_base_id: NonBlankText
 
 
+class KnowledgeBaseCollectionResource(StrictContract):
+    schema_version: Literal["knowledge-base-collection.v1"] = "knowledge-base-collection.v1"
+    data: tuple[KnowledgeBaseResource, ...] = Field(max_length=10_000)
+    summary: ManagementCollectionSummary
+
+
 class KnowledgeSourceVersionResource(StrictContract):
-    schema_version: Literal["knowledge-source-version.v1"] = (
-        "knowledge-source-version.v1"
-    )
+    schema_version: Literal["knowledge-source-version.v1"] = "knowledge-source-version.v1"
     knowledge_space_id: NonBlankText
     knowledge_source_id: NonBlankText
     knowledge_source_version_id: NonBlankText
@@ -146,14 +167,31 @@ class KnowledgeSourceVersionResource(StrictContract):
     record_count: int | None = None
 
 
+class KnowledgeSourceVersionSummaryResource(StrictContract):
+    schema_version: Literal["knowledge-source-version-summary.v1"] = (
+        "knowledge-source-version-summary.v1"
+    )
+    knowledge_space_id: NonBlankText
+    knowledge_source_id: NonBlankText
+    knowledge_source_version_id: NonBlankText
+    source_kind: Literal["document", "dataset"]
+    media_type: NonBlankText
+
+
+class KnowledgeSourceVersionCollectionResource(StrictContract):
+    schema_version: Literal["knowledge-source-version-collection.v1"] = (
+        "knowledge-source-version-collection.v1"
+    )
+    data: tuple[KnowledgeSourceVersionSummaryResource, ...] = Field(max_length=10_000)
+    summary: ManagementCollectionSummary
+
+
 class PublishKnowledgeBaseReleaseRequest(StrictContract):
     knowledge_source_version_ids: tuple[NonBlankText, ...]
 
 
 class KnowledgeBaseReleaseResource(StrictContract):
-    schema_version: Literal["knowledge-base-release.v1"] = (
-        "knowledge-base-release.v1"
-    )
+    schema_version: Literal["knowledge-base-release.v1"] = "knowledge-base-release.v1"
     knowledge_space_id: NonBlankText
     knowledge_base_id: NonBlankText
     knowledge_base_version_id: NonBlankText
@@ -161,6 +199,26 @@ class KnowledgeBaseReleaseResource(StrictContract):
     knowledge_source_version_ids: tuple[NonBlankText, ...]
     release_manifest_digest: Sha256Digest
     state: Literal["queryable"] = "queryable"
+
+
+class KnowledgeBaseReleaseSummaryResource(StrictContract):
+    schema_version: Literal["knowledge-base-release-summary.v1"] = (
+        "knowledge-base-release-summary.v1"
+    )
+    knowledge_space_id: NonBlankText
+    knowledge_base_id: NonBlankText
+    knowledge_base_version_id: NonBlankText
+    knowledge_base_release_id: NonBlankText
+    source_version_count: int = Field(ge=1, le=10_000)
+    state: Literal["queryable", "retired"]
+
+
+class KnowledgeBaseReleaseCollectionResource(StrictContract):
+    schema_version: Literal["knowledge-base-release-collection.v1"] = (
+        "knowledge-base-release-collection.v1"
+    )
+    data: tuple[KnowledgeBaseReleaseSummaryResource, ...] = Field(max_length=10_000)
+    summary: ManagementCollectionSummary
 
 
 def create_management_application(
@@ -273,8 +331,7 @@ def create_management_application(
             status_code=status.HTTP_409_CONFLICT,
             content={
                 "type": (
-                    "urn:knowledge-source-service:problem:"
-                    "knowledge-source-synchronization-conflict"
+                    "urn:knowledge-source-service:problem:knowledge-source-synchronization-conflict"
                 ),
                 "title": "Knowledge Source synchronization conflict",
                 "status": 409,
@@ -364,6 +421,22 @@ def create_management_application(
         catalog.create_space(body.knowledge_space_id)
         return KnowledgeSpaceResource(knowledge_space_id=body.knowledge_space_id)
 
+    @application.get(
+        "/v1/knowledge-spaces",
+        response_model=KnowledgeSpaceCollectionResource,
+    )
+    def list_spaces(
+        _operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> KnowledgeSpaceCollectionResource:
+        data = tuple(
+            KnowledgeSpaceResource(knowledge_space_id=knowledge_space_id)
+            for knowledge_space_id in catalog.list_spaces()
+        )
+        return KnowledgeSpaceCollectionResource(
+            data=data,
+            summary=ManagementCollectionSummary(total=len(data)),
+        )
+
     @application.post(
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-sources",
         response_model=KnowledgeSourceResource,
@@ -383,6 +456,26 @@ def create_management_application(
             knowledge_source_id=body.knowledge_source_id,
         )
 
+    @application.get(
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-sources",
+        response_model=KnowledgeSourceCollectionResource,
+    )
+    def list_sources(
+        knowledge_space_id: str,
+        _operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> KnowledgeSourceCollectionResource:
+        data = tuple(
+            KnowledgeSourceResource(
+                knowledge_space_id=knowledge_space_id,
+                knowledge_source_id=knowledge_source_id,
+            )
+            for knowledge_source_id in catalog.list_sources(knowledge_space_id)
+        )
+        return KnowledgeSourceCollectionResource(
+            data=data,
+            summary=ManagementCollectionSummary(total=len(data)),
+        )
+
     @application.post(
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases",
         response_model=KnowledgeBaseResource,
@@ -400,6 +493,26 @@ def create_management_application(
         return KnowledgeBaseResource(
             knowledge_space_id=knowledge_space_id,
             knowledge_base_id=body.knowledge_base_id,
+        )
+
+    @application.get(
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases",
+        response_model=KnowledgeBaseCollectionResource,
+    )
+    def list_bases(
+        knowledge_space_id: str,
+        _operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> KnowledgeBaseCollectionResource:
+        data = tuple(
+            KnowledgeBaseResource(
+                knowledge_space_id=knowledge_space_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+            for knowledge_base_id in catalog.list_bases(knowledge_space_id)
+        )
+        return KnowledgeBaseCollectionResource(
+            data=data,
+            summary=ManagementCollectionSummary(total=len(data)),
         )
 
     if synchronization_application is not None:
@@ -428,10 +541,7 @@ def create_management_application(
             return synchronization
 
         @application.get(
-            (
-                "/v1/knowledge-source-synchronizations/"
-                "{knowledge_source_synchronization_id}"
-            ),
+            ("/v1/knowledge-source-synchronizations/{knowledge_source_synchronization_id}"),
             response_model=KnowledgeSourceSynchronization,
         )
         def get_source_synchronization(
@@ -453,9 +563,7 @@ def create_management_application(
                         "title": "Knowledge Source synchronization not found",
                         "status": 404,
                         "code": "knowledge_source_synchronization_not_found",
-                        "detail": (
-                            "The synchronization does not exist or is not visible."
-                        ),
+                        "detail": ("The synchronization does not exist or is not visible."),
                     },
                     media_type="application/problem+json",
                 )
@@ -485,14 +593,8 @@ def create_management_application(
         filename = file.filename or "unnamed-source"
         if media_type in {
             "application/pdf",
-            (
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            ),
-            (
-                "application/vnd.openxmlformats-officedocument."
-                "presentationml.presentation"
-            ),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
             "text/html",
             "text/markdown",
             "text/plain",
@@ -514,9 +616,7 @@ def create_management_application(
             return KnowledgeSourceVersionResource(
                 knowledge_space_id=knowledge_space_id,
                 knowledge_source_id=knowledge_source_id,
-                knowledge_source_version_id=(
-                    published.version.knowledge_source_version_id
-                ),
+                knowledge_source_version_id=(published.version.knowledge_source_version_id),
                 source_kind="document",
                 media_type=published.version.media_type,
                 original_content_digest=published.original_artifact.sha256,
@@ -541,26 +641,18 @@ def create_management_application(
             return KnowledgeSourceVersionResource(
                 knowledge_space_id=knowledge_space_id,
                 knowledge_source_id=knowledge_source_id,
-                knowledge_source_version_id=(
-                    published_dataset.version.knowledge_source_version_id
-                ),
+                knowledge_source_version_id=(published_dataset.version.knowledge_source_version_id),
                 source_kind="dataset",
                 media_type="text/csv",
                 original_content_digest=published_dataset.original_artifact.sha256,
                 canonical_artifact_digest=published_dataset.canonical_artifact.sha256,
-                evidence_manifest_digest=(
-                    published_dataset.evidence_manifest_artifact.sha256
-                ),
-                processing_lineage_digest=(
-                    published_dataset.processing_lineage_digest
-                ),
+                evidence_manifest_digest=(published_dataset.evidence_manifest_artifact.sha256),
+                processing_lineage_digest=(published_dataset.processing_lineage_digest),
                 dataset_revision_id=published_dataset.version.dataset_revision_id,
                 schema_revision_id=published_dataset.version.schema_revision_id,
                 record_count=len(published_dataset.version.records),
             )
-        if media_type == (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ):
+        if media_type == ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
             if record_path is not None:
                 raise ValueError("XLSX intake does not accept record_path")
             published_xlsx = xlsx_dataset_intake.create_source_version(
@@ -575,19 +667,13 @@ def create_management_application(
             return KnowledgeSourceVersionResource(
                 knowledge_space_id=knowledge_space_id,
                 knowledge_source_id=knowledge_source_id,
-                knowledge_source_version_id=(
-                    published_xlsx.version.knowledge_source_version_id
-                ),
+                knowledge_source_version_id=(published_xlsx.version.knowledge_source_version_id),
                 source_kind="dataset",
                 media_type=published_xlsx.original_artifact.media_type,
                 original_content_digest=published_xlsx.original_artifact.sha256,
                 canonical_artifact_digest=published_xlsx.canonical_artifact.sha256,
-                evidence_manifest_digest=(
-                    published_xlsx.evidence_manifest_artifact.sha256
-                ),
-                processing_lineage_digest=(
-                    published_xlsx.processing_lineage_digest
-                ),
+                evidence_manifest_digest=(published_xlsx.evidence_manifest_artifact.sha256),
+                processing_lineage_digest=(published_xlsx.processing_lineage_digest),
                 dataset_revision_id=published_xlsx.version.dataset_revision_id,
                 schema_revision_id=published_xlsx.version.schema_revision_id,
                 record_count=len(published_xlsx.version.records),
@@ -607,21 +693,13 @@ def create_management_application(
             return KnowledgeSourceVersionResource(
                 knowledge_space_id=knowledge_space_id,
                 knowledge_source_id=knowledge_source_id,
-                knowledge_source_version_id=(
-                    published_parquet.version.knowledge_source_version_id
-                ),
+                knowledge_source_version_id=(published_parquet.version.knowledge_source_version_id),
                 source_kind="dataset",
                 media_type=published_parquet.original_artifact.media_type,
                 original_content_digest=published_parquet.original_artifact.sha256,
-                canonical_artifact_digest=(
-                    published_parquet.canonical_artifact.sha256
-                ),
-                evidence_manifest_digest=(
-                    published_parquet.evidence_manifest_artifact.sha256
-                ),
-                processing_lineage_digest=(
-                    published_parquet.processing_lineage_digest
-                ),
+                canonical_artifact_digest=(published_parquet.canonical_artifact.sha256),
+                evidence_manifest_digest=(published_parquet.evidence_manifest_artifact.sha256),
+                processing_lineage_digest=(published_parquet.processing_lineage_digest),
                 dataset_revision_id=published_parquet.version.dataset_revision_id,
                 schema_revision_id=published_parquet.version.schema_revision_id,
                 record_count=len(published_parquet.version.records),
@@ -641,30 +719,51 @@ def create_management_application(
             return KnowledgeSourceVersionResource(
                 knowledge_space_id=knowledge_space_id,
                 knowledge_source_id=knowledge_source_id,
-                knowledge_source_version_id=(
-                    published_json.version.knowledge_source_version_id
-                ),
+                knowledge_source_version_id=(published_json.version.knowledge_source_version_id),
                 source_kind="dataset",
                 media_type=published_json.original_artifact.media_type,
                 original_content_digest=published_json.original_artifact.sha256,
                 canonical_artifact_digest=published_json.canonical_artifact.sha256,
-                evidence_manifest_digest=(
-                    published_json.evidence_manifest_artifact.sha256
-                ),
-                processing_lineage_digest=(
-                    published_json.processing_lineage_digest
-                ),
+                evidence_manifest_digest=(published_json.evidence_manifest_artifact.sha256),
+                processing_lineage_digest=(published_json.processing_lineage_digest),
                 dataset_revision_id=published_json.version.dataset_revision_id,
                 schema_revision_id=published_json.version.schema_revision_id,
                 record_count=len(published_json.version.records),
             )
         raise ValueError("unsupported intake media type")
 
-    @application.post(
+    @application.get(
         (
-            "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/"
-            "{knowledge_base_id}/releases"
+            "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-sources/"
+            "{knowledge_source_id}/versions"
         ),
+        response_model=KnowledgeSourceVersionCollectionResource,
+    )
+    def list_source_versions(
+        knowledge_space_id: str,
+        knowledge_source_id: str,
+        _operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> KnowledgeSourceVersionCollectionResource:
+        data = tuple(
+            KnowledgeSourceVersionSummaryResource(
+                knowledge_space_id=item.knowledge_space_id,
+                knowledge_source_id=item.knowledge_source_id,
+                knowledge_source_version_id=item.knowledge_source_version_id,
+                source_kind=item.source_kind,
+                media_type=item.media_type,
+            )
+            for item in catalog.list_source_versions(
+                knowledge_space_id=knowledge_space_id,
+                knowledge_source_id=knowledge_source_id,
+            )
+        )
+        return KnowledgeSourceVersionCollectionResource(
+            data=data,
+            summary=ManagementCollectionSummary(total=len(data)),
+        )
+
+    @application.post(
+        ("/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases"),
         response_model=KnowledgeBaseReleaseResource,
         status_code=status.HTTP_201_CREATED,
     )
@@ -691,6 +790,34 @@ def create_management_application(
             release_manifest_digest=release.release_manifest_digest,
         )
 
+    @application.get(
+        ("/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases"),
+        response_model=KnowledgeBaseReleaseCollectionResource,
+    )
+    def list_releases(
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        _operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> KnowledgeBaseReleaseCollectionResource:
+        data = tuple(
+            KnowledgeBaseReleaseSummaryResource(
+                knowledge_space_id=item.knowledge_space_id,
+                knowledge_base_id=item.knowledge_base_id,
+                knowledge_base_version_id=item.knowledge_base_version_id,
+                knowledge_base_release_id=item.knowledge_base_release_id,
+                source_version_count=item.source_version_count,
+                state=item.state,
+            )
+            for item in catalog.list_releases(
+                knowledge_space_id=knowledge_space_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+        )
+        return KnowledgeBaseReleaseCollectionResource(
+            data=data,
+            summary=ManagementCollectionSummary(total=len(data)),
+        )
+
     return application
 
 
@@ -714,10 +841,7 @@ def _field_types(value: str | None) -> dict[str, StructuredValueType]:
         )
     ):
         raise ValueError("field_types declarations are invalid")
-    return {
-        field: cast(StructuredValueType, value_type)
-        for field, value_type in payload.items()
-    }
+    return {field: cast(StructuredValueType, value_type) for field, value_type in payload.items()}
 
 
 def _record_path(value: str | None) -> tuple[str, ...]:

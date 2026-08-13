@@ -102,11 +102,7 @@ class OcrRegionDocumentCitation:
     def __post_init__(self) -> None:
         if not 1 <= self.page_number <= 1_000:
             raise ValueError("OCR citation page is invalid")
-        if (
-            min(self.x_min, self.y_min) < 0
-            or self.x_max <= self.x_min
-            or self.y_max <= self.y_min
-        ):
+        if min(self.x_min, self.y_min) < 0 or self.x_max <= self.x_min or self.y_max <= self.y_min:
             raise ValueError("OCR citation bounding box is invalid")
 
 
@@ -168,6 +164,25 @@ class DatasetSourceVersion:
 
 
 KnowledgeSourceVersion = DocumentSourceVersion | DatasetSourceVersion
+
+
+@dataclass(frozen=True)
+class KnowledgeSourceVersionSummary:
+    knowledge_space_id: str
+    knowledge_source_id: str
+    knowledge_source_version_id: str
+    source_kind: Literal["document", "dataset"]
+    media_type: str
+
+
+@dataclass(frozen=True)
+class KnowledgeBaseReleaseSummary:
+    knowledge_space_id: str
+    knowledge_base_id: str
+    knowledge_base_version_id: str
+    knowledge_base_release_id: str
+    source_version_count: int
+    state: Literal["queryable", "retired"]
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,131 @@ from xlsx_fixture import claims_workbook
 pytestmark = pytest.mark.postgres_integration
 
 
+def test_management_api_lists_exact_space_catalog_for_dashboard_adapter(
+    kss_postgres_dsn: str,
+) -> None:
+    apply_knowledge_service_migrations(kss_postgres_dsn)
+    artifacts = InMemoryImmutableArtifactStore()
+    catalog = PostgresKnowledgeCatalog.from_dsn(
+        kss_postgres_dsn,
+        artifacts=artifacts,
+    )
+    client = TestClient(
+        create_management_application(
+            catalog=catalog,
+            artifacts=artifacts,
+            authenticate_operator=bearer_operator_authenticator(
+                operator_id="operator-test",
+                expected_token="operator-secret-token",
+            ),
+            document_pipeline_revision="document-pipeline-v1",
+            dataset_pipeline_revision="dataset-pipeline-v1",
+            max_upload_bytes=1024 * 1024,
+            max_dataset_records=1000,
+        )
+    )
+    headers = {"Authorization": "Bearer operator-secret-token"}
+    client.post(
+        "/v1/knowledge-spaces",
+        headers=headers,
+        json={"knowledge_space_id": "space-dashboard"},
+    ).raise_for_status()
+    client.post(
+        "/v1/knowledge-spaces/space-dashboard/knowledge-sources",
+        headers=headers,
+        json={"knowledge_source_id": "source-dashboard"},
+    ).raise_for_status()
+    client.post(
+        "/v1/knowledge-spaces/space-dashboard/knowledge-bases",
+        headers=headers,
+        json={"knowledge_base_id": "base-dashboard"},
+    ).raise_for_status()
+    version = client.post(
+        ("/v1/knowledge-spaces/space-dashboard/knowledge-sources/source-dashboard/versions:ingest"),
+        headers=headers,
+        files={
+            "file": (
+                "policy.md",
+                b"# Rule\nHospital delay benefit is 300 CNY.\n",
+                "text/markdown",
+            )
+        },
+    )
+    version.raise_for_status()
+    release = client.post(
+        ("/v1/knowledge-spaces/space-dashboard/knowledge-bases/base-dashboard/releases"),
+        headers=headers,
+        json={"knowledge_source_version_ids": [version.json()["knowledge_source_version_id"]]},
+    )
+    release.raise_for_status()
+
+    spaces = client.get("/v1/knowledge-spaces", headers=headers)
+    sources = client.get(
+        "/v1/knowledge-spaces/space-dashboard/knowledge-sources",
+        headers=headers,
+    )
+    bases = client.get(
+        "/v1/knowledge-spaces/space-dashboard/knowledge-bases",
+        headers=headers,
+    )
+    versions = client.get(
+        ("/v1/knowledge-spaces/space-dashboard/knowledge-sources/source-dashboard/versions"),
+        headers=headers,
+    )
+    releases = client.get(
+        ("/v1/knowledge-spaces/space-dashboard/knowledge-bases/base-dashboard/releases"),
+        headers=headers,
+    )
+
+    assert spaces.status_code == 200
+    assert spaces.json() == {
+        "schema_version": "knowledge-space-collection.v1",
+        "data": [
+            {
+                "schema_version": "knowledge-space.v1",
+                "knowledge_space_id": "space-dashboard",
+            }
+        ],
+        "summary": {"total": 1},
+    }
+    assert sources.json()["data"] == [
+        {
+            "schema_version": "knowledge-source.v1",
+            "knowledge_space_id": "space-dashboard",
+            "knowledge_source_id": "source-dashboard",
+        }
+    ]
+    assert bases.json()["data"] == [
+        {
+            "schema_version": "knowledge-base.v1",
+            "knowledge_space_id": "space-dashboard",
+            "knowledge_base_id": "base-dashboard",
+        }
+    ]
+    assert versions.json()["data"] == [
+        {
+            "schema_version": "knowledge-source-version-summary.v1",
+            "knowledge_space_id": "space-dashboard",
+            "knowledge_source_id": "source-dashboard",
+            "knowledge_source_version_id": version.json()["knowledge_source_version_id"],
+            "source_kind": "document",
+            "media_type": "text/markdown",
+        }
+    ]
+    assert releases.json()["data"] == [
+        {
+            "schema_version": "knowledge-base-release-summary.v1",
+            "knowledge_space_id": "space-dashboard",
+            "knowledge_base_id": "base-dashboard",
+            "knowledge_base_version_id": release.json()["knowledge_base_version_id"],
+            "knowledge_base_release_id": release.json()["knowledge_base_release_id"],
+            "source_version_count": 1,
+            "state": "queryable",
+        }
+    ]
+    catalog.close()
+
+
 def test_management_api_creates_and_polls_idempotent_source_synchronization(
     kss_postgres_dsn: str,
 ) -> None:
@@ -43,10 +168,8 @@ def test_management_api_creates_and_polls_idempotent_source_synchronization(
         kss_postgres_dsn,
         artifacts=artifacts,
     )
-    synchronization_repository = (
-        PostgresKnowledgeSourceSynchronizationRepository.from_dsn(
-            kss_postgres_dsn
-        )
+    synchronization_repository = PostgresKnowledgeSourceSynchronizationRepository.from_dsn(
+        kss_postgres_dsn
     )
     synchronization_application = KnowledgeSourceSynchronizationApplication(
         repository=synchronization_repository,
@@ -157,10 +280,7 @@ def test_management_api_ingests_reviewed_ocr_image_as_document(
     ).raise_for_status()
 
     response = client.post(
-        (
-            "/v1/knowledge-spaces/space-ocr/knowledge-sources/"
-            "source-ocr/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-ocr/knowledge-sources/source-ocr/versions:ingest"),
         headers=headers,
         files={"file": ("policy.png", blank_png(), "image/png")},
     )
@@ -239,18 +359,12 @@ def test_management_api_creates_document_dataset_and_exact_release_without_stora
         json={"knowledge_base_id": "base-managed"},
     )
     document_version = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-sources/"
-            "source-document/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-sources/source-document/versions:ingest"),
         headers=headers,
         files={"file": ("policy.md", b"# Rule\nDelay benefit is 300 CNY.\n", "text/markdown")},
     )
     dataset_version = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-sources/"
-            "source-dataset/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-sources/source-dataset/versions:ingest"),
         headers=headers,
         files={
             "file": (
@@ -259,15 +373,10 @@ def test_management_api_creates_document_dataset_and_exact_release_without_stora
                 "text/csv",
             )
         },
-        data={
-            "field_types": '{"claim_year":"integer","claim_total":"decimal"}'
-        },
+        data={"field_types": '{"claim_year":"integer","claim_total":"decimal"}'},
     )
     json_version = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-sources/"
-            "source-json/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-sources/source-json/versions:ingest"),
         headers=headers,
         files={
             "file": (
@@ -282,33 +391,21 @@ def test_management_api_creates_document_dataset_and_exact_release_without_stora
         },
     )
     xlsx_version = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-sources/"
-            "source-xlsx/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-sources/source-xlsx/versions:ingest"),
         headers=headers,
         files={
             "file": (
                 "claims.xlsx",
                 claims_workbook(),
-                (
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
+                ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             )
         },
         data={
-            "field_types": (
-                '{"claim_year":"integer","claim_total":"decimal",'
-                '"active":"boolean"}'
-            )
+            "field_types": ('{"claim_year":"integer","claim_total":"decimal","active":"boolean"}')
         },
     )
     parquet_version = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-sources/"
-            "source-parquet/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-sources/source-parquet/versions:ingest"),
         headers=headers,
         files={
             "file": (
@@ -318,17 +415,11 @@ def test_management_api_creates_document_dataset_and_exact_release_without_stora
             )
         },
         data={
-            "field_types": (
-                '{"claim_year":"integer","claim_total":"decimal",'
-                '"active":"boolean"}'
-            )
+            "field_types": ('{"claim_year":"integer","claim_total":"decimal","active":"boolean"}')
         },
     )
     release = client.post(
-        (
-            "/v1/knowledge-spaces/space-managed/knowledge-bases/"
-            "base-managed/releases"
-        ),
+        ("/v1/knowledge-spaces/space-managed/knowledge-bases/base-managed/releases"),
         headers=headers,
         json={
             "knowledge_source_version_ids": [
@@ -434,10 +525,7 @@ def test_management_api_ingests_native_pdf_docx_and_pptx_as_documents(
     ).raise_for_status()
 
     response = client.post(
-        (
-            "/v1/knowledge-spaces/space-pdf/knowledge-sources/"
-            "source-pdf/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-pdf/knowledge-sources/source-pdf/versions:ingest"),
         headers=headers,
         files={
             "file": (
@@ -448,36 +536,24 @@ def test_management_api_ingests_native_pdf_docx_and_pptx_as_documents(
         },
     )
     docx_response = client.post(
-        (
-            "/v1/knowledge-spaces/space-pdf/knowledge-sources/"
-            "source-docx/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-pdf/knowledge-sources/source-docx/versions:ingest"),
         headers=headers,
         files={
             "file": (
                 "policy.docx",
                 docx_with_paragraphs("Flight delay benefit is 300 CNY."),
-                (
-                    "application/vnd.openxmlformats-officedocument."
-                    "wordprocessingml.document"
-                ),
+                ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             )
         },
     )
     pptx_response = client.post(
-        (
-            "/v1/knowledge-spaces/space-pdf/knowledge-sources/"
-            "source-pptx/versions:ingest"
-        ),
+        ("/v1/knowledge-spaces/space-pdf/knowledge-sources/source-pptx/versions:ingest"),
         headers=headers,
         files={
             "file": (
                 "policy.pptx",
                 pptx_with_slide_shapes(((7, "Flight delay benefit is 300 CNY."),)),
-                (
-                    "application/vnd.openxmlformats-officedocument."
-                    "presentationml.presentation"
-                ),
+                ("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
             )
         },
     )

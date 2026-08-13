@@ -9,6 +9,7 @@
 - `deployment-compatibility-manifest.json` — ignored, environment-specific candidate input;
 - `Dockerfile` and `Dockerfile.dockerignore` — same-image API/Executor/Worker/static build;
 - `slot/compose.yaml` and `slot/slot.env.example` — one `blue` or `green` product slot plus a non-restarting explicit migration profile;
+- `knowledge/compose.yaml` and `knowledge/knowledge.env.example` — the independently released KSS API, Query Executor, Knowledge Worker, Scheduler and migration roles;
 - `gateway/compose.yaml` — stable Gateway outside both slots;
 - `gateway/nginx.conf` — safe checked-in template whose `proof-agent.invalid` host must be rendered to the exact DCM-bound stable host;
 - `gateway/active-upstreams.conf` — controller-owned atomic routing generation, initially pointing to blue.
@@ -29,6 +30,15 @@ proof-agent deployment validate-compatibility \
   --at 2026-07-25T12:00:00Z
 ```
 
+[KNOWN | HIGH] Candidate Binding v2 must identify both products. Generate the exact KSS contract artifacts from the candidate distribution, hash the emitted bytes, and bind those digests as `knowledge_source_service.openapi_contract` and `knowledge_source_service.migration_set`:
+
+```bash
+knowledge-source-service openapi-contract
+knowledge-source-service migration-contract
+```
+
+The same KSS binding also contains its product version, immutable OCI digest and Python distribution digest. The DCM must contain exact entries for `knowledge_source_service`, `opensearch` and `knowledge_model_plane`. Missing KSS identities fail Candidate Binding validation; placeholder digests are not admissible release Evidence.
+
 Build only with immutable `name@sha256:...` base references supplied by the candidate workflow:
 
 ```bash
@@ -43,12 +53,33 @@ docker buildx build \
 
 The build result must then be addressed by its registry digest; a mutable local tag is not an admissible Compose value.
 
+Build KSS from its independent lock and immutable build images:
+
+```bash
+docker buildx build \
+  --file services/knowledge-source-service/Dockerfile \
+  --build-arg UV_IMAGE="$KSS_UV_IMAGE" \
+  --build-arg RUNTIME_IMAGE="$KSS_RUNTIME_IMAGE" \
+  --tag proofagent-knowledge-source-service:candidate \
+  --load services/knowledge-source-service
+```
+
+`KSS_UV_IMAGE` and `KSS_RUNTIME_IMAGE` must be `name@sha256:...` references. The resulting KSS image must also be promoted and deployed by registry digest.
+
 Before starting a slot, create the external `proofagent-blue` and `proofagent-green` networks, external Vault/TLS secrets, candidate-local slot env file and exact config files. Validate rendering before mutation:
 
 ```bash
 docker compose -f deploy/production/slot/compose.yaml config --quiet
 docker compose -f deploy/production/gateway/compose.yaml config --quiet
 ```
+
+Render the independent KSS deployment with its immutable image, credential-free env file, external Secret names, private CA and external network before mutation:
+
+```bash
+docker compose -f deploy/production/knowledge/compose.yaml config --quiet
+```
+
+Run the KSS `migration` profile before starting its four online roles. KSS has an independent deployment lifecycle; do not add its roles to a ProofAgent Blue/Green slot merely to make them start together.
 
 Run the candidate migration job as a distinct step before starting any candidate service. `PROOF_AGENT_RELEASE_SCHEMA` must equal the Alembic head packaged in that exact image:
 
@@ -60,6 +91,25 @@ docker compose \
 ```
 
 The job uses the same immutable image, obtains the global PostgreSQL advisory lock, accepts only revisions in the reviewed expand-only allowlist, and never performs a downgrade. A failed job is a deployment stop condition; API and worker startup do not retry or hide it.
+
+## Metadata V2 maintenance cutover
+
+[KNOWN | HIGH] Revisions `0020_metadata_review_v2` and `0021_metadata_workbook_v2` are direct-cutover migrations, not expand-only migrations. The normal slot migration and Blue/Green driver reject a path containing either revision. Do not override that rejection or add the revisions back to the expand-only allowlist.
+
+When the installed schema is behind Metadata V2, the existing pipeline must orchestrate the maintenance-window sequence from ADR-0188: close Knowledge Source writes, stop API and Worker compute, verify a recoverable database and artifact backup plus restore-drill Evidence, then run the explicit command from the candidate image:
+
+```bash
+proof-agent database cutover-metadata-v2 \
+  --locked \
+  --maintenance-window-authorized \
+  --application-writes-stopped \
+  --workers-stopped \
+  --backup-evidence /approved/change/pre-cutover-backup-evidence.json \
+  --backup-evidence-sha256 replace-with-exact-lowercase-sha256 \
+  --target 0021_metadata_workbook_v2
+```
+
+The command verifies the exact backup Evidence file before running the locked non-expand migration. A successful database command is not sufficient to reopen traffic. Deploy the V2 Dashboard, API and Workers together, complete the full-flow verification, and record `deployment_metadata_v2_transition_safe=true` in candidate-bound Gate facts. If the database was already at `0021_metadata_workbook_v2`, the same metric means the pipeline verified that no Metadata V2 transition was required. Before the first V2 authority mutation, failure recovery restores the pre-cutover snapshot and old image. After that mutation, rollback to V1 is invalid and recovery proceeds forward.
 
 [KNOWN | HIGH] Candidate processes honor `PROOF_AGENT_ACTIVATION_STATE`: only an `ACTIVE` process holding the exact PostgreSQL role lease claims work; `STANDBY` and `DRAINING` do not start new claims. Run Executor and Knowledge Worker expose loopback `/readyz` on ports 8001 and 8002, and Compose marks a process unhealthy when dependencies or its exact role lease are unavailable.
 

@@ -122,6 +122,63 @@
         "length": 4096,
         "verified_at": "2026-07-25T10:00:00Z"
       }
+    },
+    {
+      "component_id": "knowledge_source_service",
+      "product": "Knowledge Source Service",
+      "product_version": "0.1.0",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "endpoint_origin": "https://knowledge.internal.example",
+      "authentication_method": "workload-identity",
+      "adapter_protocol_id": "knowledge-query-http-v1",
+      "tested_capabilities": ["durable_queries", "exact_release", "client_grants", "readiness"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/8888888888888888888888888888888888888888888888888888888888888888",
+        "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "opensearch",
+      "product": "OpenSearch",
+      "product_version": "3.1.0",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "endpoint_origin": "https://opensearch.internal.example",
+      "authentication_method": "workload-identity",
+      "adapter_protocol_id": "opensearch-hybrid-v1",
+      "tested_capabilities": ["tls", "index_generation", "exact_generation_read", "rebuild"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
+    },
+    {
+      "component_id": "knowledge_model_plane",
+      "product": "Private Knowledge Model Plane",
+      "product_version": "2026.08.1",
+      "immutable_reference": {
+        "kind": "sha256",
+        "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "endpoint_origin": "https://knowledge-models.internal.example",
+      "authentication_method": "secret-handle",
+      "adapter_protocol_id": "knowledge-model-http-v1",
+      "tested_capabilities": ["projection_encoding", "ocr", "agentic_control", "timeout"],
+      "evidence": {
+        "artifact_uri": "artifact://sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "length": 4096,
+        "verified_at": "2026-07-25T10:00:00Z"
+      }
     }
   ]
 }

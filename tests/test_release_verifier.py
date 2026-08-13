@@ -127,11 +127,16 @@ VALID_METRICS: dict[str, dict[str, bool | int | float | str]] = {
         "quality_required_integration_skips": 0,
         "distribution_clean_install_passed": True,
         "distribution_image_readiness_passed": True,
+        "distribution_knowledge_service_clean_install_passed": True,
+        "distribution_knowledge_service_image_readiness_passed": True,
         "security_unresolved_critical_findings": 0,
         "security_unresolved_high_findings": 0,
         "security_runtime_hardening_passed": True,
         "security_sbom_present": True,
         "security_provenance_verified": True,
+        "security_knowledge_service_runtime_hardening_passed": True,
+        "security_knowledge_service_sbom_present": True,
+        "security_knowledge_service_provenance_verified": True,
     },
     "access_security": {
         "identity_required_checks_passed": True,
@@ -151,8 +156,12 @@ VALID_METRICS: dict[str, dict[str, bool | int | float | str]] = {
         "compatibility_secret_provider_bound": True,
         "compatibility_gateway_bound": True,
         "compatibility_model_bound": True,
+        "compatibility_knowledge_source_service_bound": True,
+        "compatibility_opensearch_bound": True,
+        "compatibility_knowledge_model_plane_bound": True,
         "compatibility_tool_mode_bound": True,
         "compatibility_manifest_sha256": "d" * 64,
+        "compatibility_knowledge_service_openapi_sha256": "3" * 64,
         "capacity_online_sessions": 20,
         "capacity_active_attempts": 5,
         "capacity_queued_runs": 50,
@@ -181,12 +190,15 @@ VALID_METRICS: dict[str, dict[str, bool | int | float | str]] = {
         "recovery_topology_sha256": "f" * 64,
         "recovery_backup_policy_sha256": "1" * 64,
         "recovery_migration_set_sha256": "e" * 64,
+        "recovery_knowledge_service_migration_set_sha256": "2" * 64,
         "deployment_required_checks_passed": True,
+        "deployment_metadata_v2_transition_safe": True,
         "deployment_drain_seconds": 150,
         "deployment_soak_seconds": 1800,
         "deployment_topology_sha256": "f" * 64,
         "deployment_backup_policy_sha256": "1" * 64,
         "deployment_migration_set_sha256": "e" * 64,
+        "deployment_knowledge_service_migration_set_sha256": "2" * 64,
         "deployment_compatibility_manifest_sha256": "d" * 64,
     },
 }
@@ -232,7 +244,7 @@ MAX_AGES: dict[str, timedelta | None] = {
 def _candidate(**overrides: Any) -> ProductionCandidateBinding:
     profile_bytes = initial_private_pilot_profile_bytes()
     values: dict[str, Any] = {
-        "schema_version": "proofagent.candidate-binding.v1",
+        "schema_version": "proofagent.candidate-binding.v2",
         "source_commit": SOURCE_COMMIT,
         "clean_tree": True,
         "product_version": "0.1.0",
@@ -241,6 +253,13 @@ def _candidate(**overrides: Any) -> ProductionCandidateBinding:
         "dashboard_assets": DigestRef(sha256=SHA_A, length=1),
         "operator_chat_assets": DigestRef(sha256=SHA_A, length=1),
         "migration_set": DigestRef(sha256="e" * 64, length=1),
+        "knowledge_source_service": {
+            "product_version": "0.1.0",
+            "oci_digest": f"sha256:{SHA_B}",
+            "python_distribution": DigestRef(sha256=SHA_B, length=2),
+            "migration_set": DigestRef(sha256="2" * 64, length=2),
+            "openapi_contract": DigestRef(sha256="3" * 64, length=2),
+        },
         "agent_id": "agent_management_insurance_specialist",
         "agent_version": "2026.07.12",
         "agent_bundle": DigestRef(sha256=SHA_A, length=1),
@@ -836,7 +855,7 @@ def test_complete_policy_binding_has_versioned_canonical_golden() -> None:
     profile = INITIAL_PRIVATE_PILOT_PROFILE
 
     assert sha256_hex(profile.binding_bytes) == (
-        "89ffdf55f47ba6151ffa4478b3c51d88a137b51651b469a66bb7099776841d0c"
+        "d78828885a7b2ad43aedc2e941af8d607a1dc769a0b65fba5fdf9c2a50dc0898"
     )
     payload = json.loads(profile.binding_bytes)
     assert payload["schema_version"] == "proofagent.gate-profile.v2"
