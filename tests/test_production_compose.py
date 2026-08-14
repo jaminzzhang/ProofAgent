@@ -6,12 +6,21 @@ import yaml  # type: ignore[import-untyped]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION_DOCKERFILE = PROJECT_ROOT / "deploy/production/Dockerfile"
 SLOT_COMPOSE = PROJECT_ROOT / "deploy/production/slot/compose.yaml"
 KNOWLEDGE_COMPOSE = PROJECT_ROOT / "deploy/production/knowledge/compose.yaml"
 
 
 def _compose() -> dict[str, object]:
     return yaml.safe_load(SLOT_COMPOSE.read_text(encoding="utf-8"))
+
+
+def test_production_image_build_includes_shared_typescript_configuration() -> None:
+    dockerfile = PRODUCTION_DOCKERFILE.read_text(encoding="utf-8")
+
+    copy_instruction = "COPY tsconfig.base.json ./"
+    assert copy_instruction in dockerfile
+    assert dockerfile.index(copy_instruction) < dockerfile.index("RUN npm run build")
 
 
 def test_independent_knowledge_service_has_a_formal_five_role_deployment() -> None:

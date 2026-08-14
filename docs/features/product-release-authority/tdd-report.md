@@ -19,19 +19,28 @@
 | KSS 契约产物 | 流水线只能人工填写 KSS contract digest | `openapi-contract` 和 `migration-contract` 输出确定性规范字节，并由 golden digest 回归保护 |
 | Metadata V2 迁移安全 | `0020`、`0021` 被误列为 expand-only | Blue/Green 失败关闭；显式 maintenance cutover 命令要求停写、停 Worker 和精确备份 Evidence |
 | KSS 正式部署边界 | 只有 production-local Compose | 正式 Compose 使用同一不可变 KSS image 启动五角色，并通过外部 mode-`0400` Secret 文件注入凭据 |
+| ProofAgent 正式镜像构建 | `deploy/production/Dockerfile` 未复制根目录 `tsconfig.base.json`，`npm run build` 因共享 TypeScript 配置缺失而失败 | 增加构建上下文回归测试和最小 `COPY`；使用三个固定基础镜像摘要完成正式 Dockerfile 构建 |
 
 ## 验证命令
 
 - `uv run --extra dev python -m pytest tests/test_release_contracts.py tests/test_release_verifier.py tests/test_release_registry.py tests/test_release_bundle_download.py tests/test_product_release_authority.py tests/test_s3_artifact_store.py -q`
-- `uv run --extra dev python -m pytest tests/ -q`：3221 passed、135 skipped、13 deselected
+- `uv run --extra dev python -m pytest tests/ -q`：3222 passed、135 skipped、13 deselected
 - `npm --workspace dashboard test -- --run`：229 passed
+- `npm --workspace chat test -- --run`：35 passed
+- `npm run typecheck`：passed
 - `npm --workspace dashboard run build`：passed
 - `docker compose -f deploy/production/knowledge/compose.yaml config --quiet`：passed（使用非 Secret 占位配置完成静态展开）
 - `uv lock --check --project services/knowledge-source-service`：34 packages，lock 与项目配置一致
 - `uv run --extra dev ruff check proof_agent/release proof_agent/delivery/cli.py proof_agent/contracts/artifacts.py proof_agent/contracts/release_registry.py tests/test_product_release_authority.py tests/test_release_contracts.py tests/test_release_verifier.py tests/test_release_registry.py`
 - `uv run --extra dev --extra openai mypy proof_agent`：438 source files passed
 - `uv run --extra dev --extra openai mypy --strict services/knowledge-source-service/knowledge_source_service`：77 source files passed
+- `docker build --file deploy/production/Dockerfile ...`：passed；本地产物摘要为 `ee6efc7476fd8831be9767c16a3243d2bb220f96548be3df052c9c1b95ee78f2`
+- `docker run --rm --entrypoint proof-agent proof-agent:production-candidate-local --help`：passed；Dashboard 与 Operator Chat 静态入口文件存在
+- `docker run --rm --entrypoint id <image>`：ProofAgent 与 KSS 均以 `uid=10001`、`gid=10001` 运行
+- `docker run --rm proofagent-knowledge-source-service:production-local openapi-contract | shasum -a 256`：`5101269935f2aecaf985f673641a593db58c3afe98f5d6bf38acb33a995b2a7a`
+- `docker run --rm proofagent-knowledge-source-service:production-local migration-contract | shasum -a 256`：`707106a66e820852debf617f93ec3086f1e47241e07e9896afb749288bdc8101`
+- `docker compose -f deploy/production/slot/compose.yaml config --quiet`：passed（使用绝对配置路径和非 Secret 占位绑定）
 
 ## 未形成的生产证据
 
-[KNOWN | HIGH] 本次没有构建或扫描真实候选镜像，没有运行企业 OIDC、真实容量、浏览器、故障与恢复演练，也没有执行 Metadata V2 维护窗切换或把正式 Release Bundle 写入生产 S3/Registry。当前分支的精确提交也尚无远端 CI 和独立评审 Evidence。因此当前生产结论仍为 `NO-GO`。
+[KNOWN | HIGH] 本次已从未提交工作区构建正式 Dockerfile 的本地镜像，但该镜像没有绑定干净提交，也没有推送到候选镜像仓库。Docker Scout 扫描因可能向外部服务传输私有镜像或包元数据而未获授权，因此 SBOM、漏洞扫描和 Provenance 仍缺失。企业 OIDC、真实模型评估、容量、队列浸泡、多人浏览器试点、故障恢复、Blue/Green 浸泡、Phase F 四门和正式 Release Bundle 也没有形成候选绑定 Evidence。当前生产结论仍为 `NO-GO`。

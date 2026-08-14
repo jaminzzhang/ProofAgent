@@ -8,6 +8,7 @@ ARG RUNTIME_IMAGE
 FROM ${NODE_IMAGE} AS frontend-build
 WORKDIR /src
 COPY package.json package-lock.json ./
+COPY tsconfig.base.json ./
 COPY packages/ui/package.json packages/ui/package.json
 COPY dashboard/package.json dashboard/package.json
 COPY chat/package.json chat/package.json
