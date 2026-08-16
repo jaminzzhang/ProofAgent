@@ -16,10 +16,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
       - name: Sync dependencies (locked)
-        run: |
-          uv sync --frozen \
-            --extra dev --extra dashboard \
-            --extra ingestion --extra tree --extra openai --extra postgres
+        run: uv sync --frozen --all-extras
       - name: Lint
         run: uv run ruff check proof_agent tests
       - name: Type check
@@ -63,7 +60,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
       - name: Sync PostgreSQL test dependencies (locked)
-        run: uv sync --frozen --extra dev --extra postgres
+        run: uv sync --frozen --all-extras
       - name: Real PostgreSQL migration and repository tests
         run: >-
           uv run pytest

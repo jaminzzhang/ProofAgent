@@ -22,6 +22,7 @@
 | ProofAgent 正式镜像构建 | `deploy/production/Dockerfile` 未复制根目录 `tsconfig.base.json`，`npm run build` 因共享 TypeScript 配置缺失而失败 | 增加构建上下文回归测试和最小 `COPY`；使用三个固定基础镜像摘要完成正式 Dockerfile 构建 |
 | ProofAgent Python 依赖冻结 | 正式 Dockerfile 虽复制 `uv.lock`，但 `uv pip install` 重新解析 production extra；同一提交的两次构建得到不同 boto3、botocore 和 pypdf 版本 | 改用 `uv sync --frozen --no-dev --no-editable --extra production`；镜像和 SBOM 中的 boto3、botocore、pypdf 分别固定为 `1.43.47`、`1.43.47`、`6.12.2` |
 | 前端 High 漏洞 | 正式 `npm ci` 报告 4 个 High；构建日志定位到 react-router `7.18.0`、postcss `8.5.15` 和 nanoid `3.3.12` | 提升直接依赖安全下限，为传递依赖增加 override，并增加锁文件回归测试；全新正式 `npm ci` 审计 360 个包，结果为 0 个漏洞 |
+| CI Python 依赖完整性 | `python` job 在 Linux 缺少 `boto3`，`postgres-integration` job 在测试收集阶段缺少 `openpyxl` 和 `authlib` | 两个 Python job 统一执行 `uv sync --frozen --all-extras`；工作流契约测试、隔离 mypy 和 PostgreSQL 测试收集通过 |
 
 ## 验证命令
 
@@ -42,12 +43,16 @@
 - `.venv/bin/python -m pytest tests/test_production_image_layout.py tests/test_production_compose.py -q`：14 passed
 - `npm ci --ignore-scripts --audit=false`：本地冻结安装通过；随后 Dashboard 229 项、Operator Chat 35 项测试、typecheck 和两个 production build 均通过
 - `docker buildx build --sbom=true --provenance=mode=max --output type=oci ...`：全新容器内 `npm ci` 审计 360 个包，0 个漏洞；OCI image manifest 为 `sha256:b78778edc39aa4f59a2b1f2f23cfb582fca7c168595c5742a6b0dba2d130966a`
-- OCI attestation manifest 为 `sha256:33477f876c2eb225344587aeaa8dc6b6fea3d6b785e99203c951b8b53220b387`，其 subject 绑定上述 image manifest；SPDX SBOM 为 `sha256:46ecac34491741c9d6895c1fd1c56281ca5554c1cefaf8110d9b72be6fe9a7c7`，SLSA v1 Provenance 为 `sha256:1bad3f0933c87ac863cdbfcd8f5c83992b071954db3c9200edd093a21676c13a`
+- ProofAgent OCI attestation manifest 为 `sha256:0535024304968b824bcf29e0d48472dac4196e2c8432d50959c3b1ee11a0b20f`，其 subject 绑定上述 image manifest；SPDX SBOM 为 `sha256:46ecac34491741c9d6895c1fd1c56281ca5554c1cefaf8110d9b72be6fe9a7c7`，SLSA v1 Provenance 为 `sha256:7a7a226daf75edaf7630f5e74f4ca9bef375c29b63a87e6d1991636801251084`
+- KSS OCI image manifest 为 `sha256:caa5d26c4ae9ba12bc64ad08d8f25f0f733b2c3fcaf430de537738de890e3b28`；attestation manifest 为 `sha256:843e2fb6fe18190f303e18c982609f88f59d9b9edab6a74c46345234fb9e58af`
 - 本地 wheel：ProofAgent `sha256:8f55dad68f6053553da72c7552c978b68302bd3500a38215e5312cccb480ebbd`；KSS `sha256:c00161ded217da3725fb7f7451ee16fe381c0aede9e16f399d635b60c4847c1d`
 - `docker run --rm proofagent-knowledge-source-service:production-local openapi-contract | shasum -a 256`：`5101269935f2aecaf985f673641a593db58c3afe98f5d6bf38acb33a995b2a7a`
 - `docker run --rm proofagent-knowledge-source-service:production-local migration-contract | shasum -a 256`：`707106a66e820852debf617f93ec3086f1e47241e07e9896afb749288bdc8101`
 - `docker compose -f deploy/production/slot/compose.yaml config --quiet`：passed（使用绝对配置路径和非 Secret 占位绑定）
+- `uv run pytest tests/test_ci_workflow.py -q`：修复前稳定失败；修复后 1 passed
+- `uv run --isolated --all-extras mypy proof_agent`：438 source files passed
+- `uv run --isolated --all-extras pytest tests/test_postgres_configuration_uow.py tests/test_application_composition.py -m postgres_integration --collect-only -q`：3 tests collected、4 deselected；不再出现依赖导入错误
 
 ## 未形成的生产证据
 
-[KNOWN | HIGH] 当前 ProofAgent OCI 来自未提交工作区。BuildKit Provenance 记录的 VCS revision 仍为父提交 `a006e49b72853fe38c1041db4ebacdc9907ef4c0`，不能证明当前修改已绑定到干净提交；其 builder identity 为空，SBOM 和 Provenance 也未由流水线工作负载身份签名。OCI 仅保存在本机，没有推送为 registry digest。前端 `npm ci` 已报告 0 个漏洞，但最终镜像漏洞扫描、Secret scan 和 SAST 仍须由正式流水线生成候选绑定 Evidence。企业 OIDC、真实模型评估、容量、队列浸泡、多人浏览器试点、故障恢复、Blue/Green 浸泡、Phase F 四门和正式 Release Bundle 也尚未形成候选绑定 Evidence。当前生产结论仍为 `NO-GO`。
+[KNOWN | HIGH] 本地 ProofAgent 与 KSS OCI 绑定干净提交 `cc322f9bd2d8a820ee0667e51b99a7da152d1783`，但本次 CI 修复会形成新的候选提交，正式流水线必须从新提交重新生成 Provenance。当前本地 builder identity 为空，SBOM 和 Provenance 未由流水线工作负载身份签名，OCI 也未推送为 registry digest。前端 `npm ci` 已报告 0 个漏洞，但最终镜像漏洞扫描、Secret scan 和 SAST 仍须由正式流水线生成候选绑定 Evidence。企业 OIDC、真实模型评估、容量、队列浸泡、多人浏览器试点、故障恢复、Blue/Green 浸泡、Phase F 四门和正式 Release Bundle 也尚未形成候选绑定 Evidence。当前生产结论仍为 `NO-GO`。
