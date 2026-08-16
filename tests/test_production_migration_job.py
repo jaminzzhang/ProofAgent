@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from click import unstyle
 from typer.testing import CliRunner
 import yaml  # type: ignore[import-untyped]
 
@@ -274,9 +275,10 @@ def test_production_upgrade_cli_requires_explicit_safety_contract() -> None:
     result = CliRunner().invoke(app, ["database", "upgrade", "--help"])
 
     assert result.exit_code == 0
-    assert "--locked" in result.stdout
-    assert "--expand-only" in result.stdout
-    assert "--target" in result.stdout
+    help_text = unstyle(result.stdout)
+    assert "--locked" in help_text
+    assert "--expand-only" in help_text
+    assert "--target" in help_text
 
 
 def test_direct_cutover_migrations_are_not_declared_expand_only() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 import pytest
+from click import unstyle
 from click.testing import Result
 from typer.testing import CliRunner
 
@@ -1464,9 +1465,10 @@ def test_release_verify_cli_help() -> None:
     result = CliRunner().invoke(cli_module.app, ["release", "verify", "--help"])
 
     assert result.exit_code == 0
-    assert "--manifest" in result.stdout
-    assert "--evidence-root" in result.stdout
-    assert "--at" in result.stdout
+    help_text = unstyle(result.stdout)
+    assert "--manifest" in help_text
+    assert "--evidence-root" in help_text
+    assert "--at" in help_text
 
 
 def test_release_verify_cli_missing_all_contract_options_is_structured_input_error() -> None:

@@ -23,6 +23,8 @@
 | ProofAgent Python 依赖冻结 | 正式 Dockerfile 虽复制 `uv.lock`，但 `uv pip install` 重新解析 production extra；同一提交的两次构建得到不同 boto3、botocore 和 pypdf 版本 | 改用 `uv sync --frozen --no-dev --no-editable --extra production`；镜像和 SBOM 中的 boto3、botocore、pypdf 分别固定为 `1.43.47`、`1.43.47`、`6.12.2` |
 | 前端 High 漏洞 | 正式 `npm ci` 报告 4 个 High；构建日志定位到 react-router `7.18.0`、postcss `8.5.15` 和 nanoid `3.3.12` | 提升直接依赖安全下限，为传递依赖增加 override，并增加锁文件回归测试；全新正式 `npm ci` 审计 360 个包，结果为 0 个漏洞 |
 | CI Python 依赖完整性 | `python` job 在 Linux 缺少 `boto3`，`postgres-integration` job 在测试收集阶段缺少 `openpyxl` 和 `authlib` | 两个 Python job 统一执行 `uv sync --frozen --all-extras`；工作流契约测试、隔离 mypy 和 PostgreSQL 测试收集通过 |
+| GitHub Actions 彩色 CLI help | Rich ANSI 样式将 `--option` 拆成多个终端片段，两个 help 测试只在 runner 失败 | help 断言先使用 Click `unstyle` 还原可见文本；模拟 GitHub Actions 环境后测试通过 |
+| 历史数据库升级预期 | `0011 → head` 测试仍要求全路径 expand-only，与 Metadata V2 maintenance cutover 决策冲突 | 测试先断言 expand-only 失败关闭，再以专用 `metadata_v2_cutover` 模式完成真实 PostgreSQL 升级 |
 
 ## 验证命令
 
@@ -52,6 +54,8 @@
 - `uv run pytest tests/test_ci_workflow.py -q`：修复前稳定失败；修复后 1 passed
 - `uv run --isolated --all-extras mypy proof_agent`：438 source files passed
 - `uv run --isolated --all-extras pytest tests/test_postgres_configuration_uow.py tests/test_application_composition.py -m postgres_integration --collect-only -q`：3 tests collected、4 deselected；不再出现依赖导入错误
+- `CI=true GITHUB_ACTIONS=true TERM=xterm-256color uv run pytest tests/test_production_migration_job.py::test_production_upgrade_cli_requires_explicit_safety_contract tests/test_release_verifier.py::test_release_verify_cli_help -q`：修复前 2 failed；修复后 2 passed
+- `PROOF_AGENT_TEST_POSTGRES_DSN=<disposable-local-postgres> PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1 uv run --all-extras pytest tests/test_postgres_migrations.py::test_upgrade_adopts_released_model_credential_revision -q`：1 passed；一次性 PostgreSQL 16.9 容器已删除
 
 ## 未形成的生产证据
 

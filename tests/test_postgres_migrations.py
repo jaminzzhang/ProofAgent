@@ -13,6 +13,7 @@ from proof_agent.capabilities.persistence.postgres.database import (
     MIGRATION_LOCK_KEY,
     DatabaseSchemaTooNewError,
     MigrationLockUnavailableError,
+    UnsafeMigrationError,
     check_database,
     current_revision,
     head_revision,
@@ -143,10 +144,17 @@ def test_upgrade_adopts_released_model_credential_revision(postgres_dsn: str) ->
     finally:
         engine.dispose()
 
+    with pytest.raises(UnsafeMigrationError, match="not declared expand-only"):
+        upgrade_database(
+            postgres_dsn,
+            target_revision=head_revision(),
+            expand_only=True,
+        )
+
     revision = upgrade_database(
         postgres_dsn,
         target_revision=head_revision(),
-        expand_only=True,
+        metadata_v2_cutover=True,
     )
 
     engine = create_engine(postgres_dsn)
