@@ -8,6 +8,10 @@
     "dashboard",
     "chat"
   ],
+  "overrides": {
+    "nanoid": "3.3.18",
+    "postcss": "8.5.23"
+  },
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build:ui": "npm run build -w @proofagent/ui",

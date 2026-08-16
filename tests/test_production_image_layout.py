@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tomllib
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _numeric_version(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
 
 
 def test_production_dockerfile_builds_distributions_and_runs_non_root() -> None:
@@ -24,6 +29,39 @@ def test_production_dockerfile_builds_distributions_and_runs_non_root() -> None:
     assert 'CMD ["proof-agent", "demo"]' not in content
     assert "/opt/proofagent/static/dashboard" in content
     assert "/opt/proofagent/static/operator-chat" in content
+
+
+def test_production_image_installs_the_frozen_non_editable_environment() -> None:
+    dockerfile = PROJECT_ROOT / "deploy/production/Dockerfile"
+    content = dockerfile.read_text(encoding="utf-8")
+
+    assert "UV_PROJECT_ENVIRONMENT=/opt/proofagent/venv" in content
+    assert "uv sync --frozen --no-dev --no-editable --extra production" in content
+    assert "uv pip install" not in content
+
+
+def test_frontend_build_lock_excludes_known_high_severity_versions() -> None:
+    package = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        (PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8")
+    )
+    locked_packages = package_lock["packages"]
+
+    assert _numeric_version(package["overrides"]["nanoid"]) >= (3, 3, 18)
+    assert _numeric_version(package["overrides"]["postcss"]) >= (8, 5, 23)
+    assert _numeric_version(locked_packages["node_modules/nanoid"]["version"]) >= (
+        3,
+        3,
+        18,
+    )
+    assert _numeric_version(locked_packages["node_modules/postcss"]["version"]) >= (
+        8,
+        5,
+        23,
+    )
+    assert _numeric_version(
+        locked_packages["node_modules/react-router"]["version"]
+    ) >= (7, 18, 2)
 
 
 def test_production_docker_context_excludes_local_and_sensitive_content() -> None:

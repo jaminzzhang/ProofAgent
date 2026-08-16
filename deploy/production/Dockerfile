@@ -20,15 +20,12 @@ RUN npm run build
 
 FROM ${UV_IMAGE} AS python-build
 WORKDIR /src
+ENV UV_PROJECT_ENVIRONMENT=/opt/proofagent/venv
 COPY pyproject.toml uv.lock README.md ./
 COPY proof_agent proof_agent
 COPY examples/agent_management_insurance_specialist examples/agent_management_insurance_specialist
 RUN uv build --wheel --sdist
-RUN uv venv /opt/proofagent/venv
-RUN uv pip install \
-    --python /opt/proofagent/venv/bin/python \
-    --no-cache \
-    "$(find dist -name 'proof_agent-*.whl' -type f -print -quit)[production]"
+RUN uv sync --frozen --no-dev --no-editable --extra production
 
 FROM ${RUNTIME_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="Proof Agent production image"
