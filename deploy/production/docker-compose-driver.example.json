@@ -24,8 +24,7 @@
     "schema_revision": "0021_metadata_workbook_v2",
     "active_environment_file": "/approved/change/blue-active.env",
     "standby_environment_file": "/approved/change/blue-standby.env",
-    "run_executor_owner_id": "executor-blue",
-    "knowledge_worker_owner_id": "knowledge-blue"
+    "run_executor_owner_id": "executor-blue"
   },
   "candidate": {
     "slot": "green",
@@ -36,8 +35,7 @@
     "schema_revision": "0021_metadata_workbook_v2",
     "active_environment_file": "/approved/change/green-active.env",
     "standby_environment_file": "/approved/change/green-standby.env",
-    "run_executor_owner_id": "executor-green",
-    "knowledge_worker_owner_id": "knowledge-green"
+    "run_executor_owner_id": "executor-green"
   },
   "old_api_queue_fixtures": "/approved/change/contracts/old-api-requests.json",
   "candidate_api_queue_fixtures": "/approved/change/contracts/candidate-api-requests.json"

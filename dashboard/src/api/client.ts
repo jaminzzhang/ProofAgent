@@ -452,44 +452,6 @@ export function smokeTestModelConnection(
   )
 }
 
-export function bindKnowledgeSourceToDraft(
-  agentId: string,
-  draftId: string,
-  payload: {
-    source_id: string
-    binding_id?: string | null
-    retrieval_profile_revision_id?: string | null
-    alias?: string | null
-    failure_mode?: 'required' | 'advisory'
-    fusion_weight?: number
-    top_k?: number | null
-  },
-): Promise<ContractBundle> {
-  return fetchJson<ContractBundle>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-bindings`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function unbindKnowledgeSourceFromDraft(
-  agentId: string,
-  draftId: string,
-  bindingId: string,
-): Promise<ContractBundle> {
-  return fetchJson<ContractBundle>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-bindings/${bindingId}`,
-    {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    },
-  )
-}
-
 export function importConfigAgent(payload: {
   manifest_path: string
 }): Promise<DraftAgent> {

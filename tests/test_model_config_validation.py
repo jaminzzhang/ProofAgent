@@ -19,17 +19,8 @@ purpose: "Test model config."
 workflow:
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
-package_knowledge_sources:
-  - source_id: ks_local
-    name: Local Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge
-knowledge_bindings:
-  - binding_id: kb_local
-    source_ref:
-      scope: package
-      source_id: ks_local
+package_knowledge_sources: []
+knowledge_bindings: []
 retrieval:
   strategy: single_step
   top_k: 2
@@ -142,17 +133,8 @@ purpose: "Test DeepSeek model role config."
 workflow:
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
-package_knowledge_sources:
-  - source_id: ks_local
-    name: Local Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge
-knowledge_bindings:
-  - binding_id: kb_local
-    source_ref:
-      scope: package
-      source_id: ks_local
+package_knowledge_sources: []
+knowledge_bindings: []
 retrieval:
   strategy: single_step
   top_k: 2
@@ -223,17 +205,8 @@ purpose: "Test reviewer model usage cleanup."
 workflow:
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
-package_knowledge_sources:
-  - source_id: ks_local
-    name: Local Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge
-knowledge_bindings:
-  - binding_id: kb_local
-    source_ref:
-      scope: package
-      source_id: ks_local
+package_knowledge_sources: []
+knowledge_bindings: []
 retrieval:
   strategy: single_step
 model:

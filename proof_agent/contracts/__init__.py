@@ -88,10 +88,6 @@ from proof_agent.contracts.knowledge_source_api import (
     KnowledgeSourceProviderReadiness,
     KnowledgeSourceRevisionCommand,
 )
-from proof_agent.contracts.knowledge_operations import (
-    KnowledgeIngestionAttempt,
-    PreparedHybridKnowledgePublication,
-)
 from proof_agent.contracts.release_registry import (
     ReleaseBundleIndex,
     ReleaseBundleIndexMember,
@@ -168,10 +164,6 @@ from proof_agent.contracts.customer import (
 from proof_agent.contracts.knowledge_release import (
     KnowledgeReleaseEvidenceSet,
     KnowledgeReleaseRecord,
-)
-from proof_agent.contracts.knowledge_operations import (
-    KnowledgeOperationsHealthSources,
-    KnowledgeStageLatency,
 )
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceContribution, EvidenceStatus
 from proof_agent.contracts.evaluation import (
@@ -266,10 +258,10 @@ from proof_agent.contracts.insurance_rules import (
 )
 from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.knowledge_resolution import (
-    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBinding,
     ResolvedKnowledgeBindingItem,
     ResolvedKnowledgeBindingSet,
+    ResolvedKnowledgeSourceServiceBinding,
 )
 from proof_agent.contracts.knowledge_index import (
     ExactArtifactRef,
@@ -651,8 +643,6 @@ __all__ = [
     "KnowledgeBindingConfig",
     "KnowledgeDocument",
     "KnowledgeIngestionJob",
-    "KnowledgeIngestionAttempt",
-    "KnowledgeOperationsHealthSources",
     "KnowledgeIndexGeneration",
     "KnowledgeProjectionAttestation",
     "KnowledgePublicationAttempt",
@@ -699,7 +689,6 @@ __all__ = [
     "KnowledgeSourceReferenceSummary",
     "KnowledgeSourceSnapshotDocument",
     "KnowledgeSourceSnapshotManifest",
-    "KnowledgeStageLatency",
     "MCPToolSourcePublicationValidation",
     "MemoryConfig",
     "MemoryCapabilityConfig",
@@ -762,7 +751,6 @@ __all__ = [
     "PublishedAgentRuntimeFacts",
     "PublishedWorkflowStageConfigurationSnapshot",
     "QuarantinedKnowledgeUpload",
-    "PreparedHybridKnowledgePublication",
     "ReceiptOutcome",
     "ReleaseBundleIndex",
     "ReleaseBundleIndexMember",
@@ -782,10 +770,10 @@ __all__ = [
     "RuleUnitManifestRoot",
     "RuleUnitManifestShard",
     "RuleUnitManifestShardRef",
-    "ResolvedHybridKnowledgeBinding",
-    "ResolvedKnowledgeBinding",
     "ResolvedKnowledgeBindingItem",
+    "ResolvedKnowledgeBinding",
     "ResolvedKnowledgeBindingSet",
+    "ResolvedKnowledgeSourceServiceBinding",
     "ResolvedSharedAssetVersions",
     "ResolvedWorkflowStageRuntimeConfiguration",
     "RetrievalObservationTruth",

@@ -10,7 +10,7 @@
 | 实施计划 | `docs/superpowers/plans/2026-08-11-knowledge-source-service.md` |
 | 所属版本 | V1；具体发布版本未指定 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
-| 当前状态 | `VERIFIED_LOCAL`；2026-08-12 的 Goal 验收已通过，不代表生产发布批准 |
+| 当前状态 | `PARTIAL_VERIFICATION`；KSS 本体已在 2026-08-12 完成本地验收，KSS-only 破坏性切换已于 2026-08-19 通过完整默认本地回归，但生产门禁尚未执行 |
 
 ## 2. 需求目标与范围
 
@@ -81,6 +81,8 @@
 | KSS-R09 | Release 只在全部必需投影就绪后原子可见 | 失败构建不可被查询 | 已确认 |
 | KSS-R10 | KSS 排序与 lane-native score 不得直接变成 Evidence Admission Score | ProofAgent 只能通过显式组合、已批准且输出 0–1 有限值的评分器生成 Admission 输入；缺失或非法值失败关闭 | 已确认 |
 | KSS-R11 | Dashboard 不得绕过 ProofAgent BFF 直连 KSS 管理 API | operator token 只由服务器端 Vault Secret Handle 解析；KSS 仍是 Space、Source、Base、Version 和 Release 的唯一权威 | 已确认 |
+| KSS-R12 | knowledge-enabled Published Agent Version 必须拥有且只拥有一个 exact KSS binding | package、shared-source、Hybrid binding 均拒绝；缺少 KSS、grant、versioned secret 或 approved scorer 时失败关闭 | 已确认；ADR-0210 |
+| KSS-R13 | KSS 排名只用于候选顺序，ProofAgent Admission Scorer 是唯一准入分数权威 | scorer identity/revision 必须与 binding 精确一致；候选集合漂移或非法分数失败关闭 | 已确认；ADR-0210 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -93,7 +95,7 @@
 | 幂等与并发 | 是 | client-scoped fingerprint、lease 与 fencing | 无阻断项 | P1 |
 | 权限与审计 | 是 | service grant、Space scope、Plan Gate、稳定审计事件 | 无阻断项 | P1 |
 | 隐私与适用监管或合规 | 是 | 最小化日志、内容隔离、受控删除和保留 | 具体数据集监管标签由部署方提供 | P1 |
-| 生产变更与回滚 | 是 | shadow、pilot、gated cutover；生产无本地回退 | 正式阈值和发布批准不属于本地编码结论 | P1 |
+| 生产变更与回滚 | 是 | shadow、pilot、gated cutover；生产无本地回退；旧 Hybrid-bound Published Agent Version 已不再可执行 | 正式阈值和发布批准不属于本地编码结论；回滚只能选择另一 KSS-bound version | P1 |
 
 ## 6. 影响范围
 
@@ -102,8 +104,8 @@
 | 新服务 | `knowledge_source_service/` 与独立运行入口 | 新增 contracts、application、domain、ports、adapters 和 process roles | P1 |
 | 公共 API | `/v1/knowledge-queries` 与管理 API | 新增稳定资源、错误和幂等语义 | P1 |
 | 数据 | PostgreSQL schema、S3-compatible objects、search projections | 新增独立逻辑权威、迁移和重建路径 | P1 |
-| ProofAgent | bootstrap、knowledge provider registry 和 remote adapter | 生产查询改为远程服务；Control Plane 权限不变 | P1 |
-| Dashboard | Knowledge 配置页、同源 BFF 与 KSS 管理客户端 | 增加独立 KSS readiness、目录计数、Space/Source/Base 创建和 Version/Release 清单 | P1 |
+| ProofAgent | exact KSS binding、Candidate Service client、Admission Scorer client 和 Control Plane retrieval | 旧 provider registry、Hybrid/本地 provider、ingestion/publication worker、source API 与 repositories 已删除；Control Plane Admission 权限不变 | P1 |
+| Dashboard | KSS-only Knowledge 配置页、同源 BFF 与 KSS 管理客户端 | 只保留 KSS readiness、目录计数、Space/Source/Base 创建和 Version/Release 清单；旧 Source/Agent binding editor 已删除 | P1 |
 | 交付 | image、process commands、CI、migration、runbook | 新增多角色部署和故障恢复证据 | P1 |
 | 测试 | unit、contract、integration、fault、quality、security、E2E | 增加完整验收矩阵 | P1 |
 

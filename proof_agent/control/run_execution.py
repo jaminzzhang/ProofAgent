@@ -76,7 +76,6 @@ class RunExecutionSnapshotAuthority:
                         if version.resolved_knowledge_bindings is None
                         else version.resolved_knowledge_bindings.model_dump(mode="json")
                     ),
-                    "assets": _asset_refs(version, SharedAssetKind.KNOWLEDGE_SOURCE),
                 }
             ),
             model_configuration_sha256=_sha(

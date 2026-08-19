@@ -8,7 +8,6 @@ from proof_agent.contracts.ports.audit import AuditRepository
 from proof_agent.contracts.ports.case_memory import CaseMemoryRepository
 from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.contracts.ports.shared_assets import (
-    KnowledgeAssetRepository,
     ModelConnectionReader,
     ModelAssetRepository,
     ToolSourceReader,
@@ -41,7 +40,6 @@ __all__ = [
     "ConversationRepository",
     "ConfigurationUnitOfWork",
     "GuardedHttpClient",
-    "KnowledgeAssetRepository",
     "KnowledgeCandidateAdmissionScorer",
     "KnowledgeCandidateService",
     "KnowledgeSourceOperationRepository",

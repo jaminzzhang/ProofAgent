@@ -7,14 +7,7 @@ workflow:
 
 package_knowledge_sources: []
 
-knowledge_bindings:
-  - binding_id: insurance_hybrid
-    source_ref:
-      scope: shared
-      source_id: insurance-rules
-    retrieval_profile_revision_id: insurance-profile-v1
-    failure_mode: required
-    fusion_weight: 1.0
+knowledge_bindings: []
 
 retrieval:
   strategy: single_step

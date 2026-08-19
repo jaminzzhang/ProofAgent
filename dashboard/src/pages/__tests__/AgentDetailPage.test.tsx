@@ -5,7 +5,6 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from '@proofagent/ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  bindKnowledgeSourceToDraft,
   createModelConnection,
   fetchConfigDraftSkills,
   fetchRunDetail,
@@ -22,13 +21,11 @@ import {
   updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
-import { fetchKnowledgeSources } from '../../api/knowledgeSources'
 import type { DraftAgent, DraftValidationResponse, RunDetail } from '../../api/types'
 import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
 
 vi.mock('../../api/client', () => ({
-  bindKnowledgeSourceToDraft: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
   createConfigDraftSkillPack: vi.fn(),
@@ -54,16 +51,11 @@ vi.mock('../../api/client', () => ({
   previewWorkflowStageContext: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
-  unbindKnowledgeSourceFromDraft: vi.fn(),
   updateConfigDraft: vi.fn(),
   updateConfigDraftSkillPack: vi.fn(),
   updateConfigDraftContract: vi.fn(),
   updateWorkflowStages: vi.fn(),
   validateConfigDraft: vi.fn(),
-}))
-
-vi.mock('../../api/knowledgeSources', () => ({
-  fetchKnowledgeSources: vi.fn(),
 }))
 
 const refreshDraft = vi.fn()
@@ -227,7 +219,6 @@ describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     installTestLocalStorage()
-    vi.mocked(fetchKnowledgeSources).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
       enabled: true,
@@ -1451,155 +1442,6 @@ workflow:
       'href',
       'http://localhost:5174/operator/agents/agent-1/new',
     )
-  })
-
-  it('binds a shared knowledge source into the draft contract', async () => {
-    vi.mocked(fetchKnowledgeSources).mockResolvedValue({
-      data: [
-        {
-          source_id: 'ks_published',
-          name: 'Shared Published Policies',
-          provider: 'hybrid_index',
-          lifecycle_state: 'ACTIVE',
-          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-          source_draft_version_id: 'ksdraft_1',
-          latest_snapshot_id: 'kssnapshot_1',
-          published_snapshot_id: 'kssnapshot_1',
-          publication_count: 1,
-          document_count: 1,
-          ready_document_count: 1,
-        },
-        {
-          source_id: 'ks_unpublished',
-          name: 'Draft Policies',
-          provider: 'local_index',
-          lifecycle_state: 'ACTIVE',
-          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-          source_draft_version_id: 'ksdraft_2',
-          latest_snapshot_id: 'kssnapshot_2',
-          published_snapshot_id: null,
-          publication_count: 0,
-          document_count: 1,
-          ready_document_count: 1,
-        },
-        {
-          source_id: 'ks_local_published',
-          name: 'Shared Local Reference',
-          provider: 'local_index',
-          lifecycle_state: 'ACTIVE',
-          params: {},
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-          source_draft_version_id: 'ksdraft_local',
-          latest_snapshot_id: 'kssnapshot_local',
-          published_snapshot_id: 'kssnapshot_local',
-          publication_count: 1,
-          document_count: 1,
-          ready_document_count: 1,
-        },
-        {
-          source_id: 'ks_archived_published',
-          name: 'Archived Published Policies',
-          provider: 'local_index',
-          lifecycle_state: 'ARCHIVED',
-          params: { ingestion_model: { provider: 'deterministic', name: 'routing' } },
-          created_at: '2026-05-31T00:00:00Z',
-          updated_at: '2026-05-31T00:00:00Z',
-          source_draft_version_id: 'ksdraft_3',
-          latest_snapshot_id: 'kssnapshot_3',
-          published_snapshot_id: 'kssnapshot_3',
-          publication_count: 1,
-          document_count: 1,
-          ready_document_count: 1,
-        },
-      ],
-      meta: { total: 4 },
-    })
-    vi.mocked(bindKnowledgeSourceToDraft).mockResolvedValue({
-      ...mockContract,
-      agent_yaml: [
-        'name: insurance',
-        'package_knowledge_sources: []',
-        'knowledge_bindings:',
-        '- binding_id: ks_published_binding',
-        '  source_ref:',
-        '    scope: shared',
-        '    source_id: ks_published',
-        '  retrieval_profile_revision_id: insurance-profile-v1',
-        '  failure_mode: required',
-        '  fusion_weight: 1',
-        '',
-      ].join('\n'),
-    })
-
-    renderPage()
-    fireEvent.click(screen.getByText('Knowledge'))
-    expect(await screen.findByText(/Shared Published Policies/)).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /Draft Policies/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /Archived Published Policies/ })).not.toBeInTheDocument()
-    expect(screen.getByText('2 published available')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Knowledge Source'), {
-      target: { value: 'ks_local_published' },
-    })
-    expect(screen.queryByLabelText('Knowledge Retrieval Profile Revision')).not.toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Knowledge Source'), {
-      target: { value: 'ks_published' },
-    })
-    fireEvent.change(screen.getByLabelText('Knowledge Retrieval Profile Revision'), {
-      target: { value: 'insurance-profile-v1' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Bind Source' }))
-
-    await waitFor(() => {
-      expect(bindKnowledgeSourceToDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
-        source_id: 'ks_published',
-        retrieval_profile_revision_id: 'insurance-profile-v1',
-        alias: '',
-        failure_mode: 'required',
-        fusion_weight: 1,
-      })
-    })
-    expect(await screen.findByText('insurance-profile-v1')).toBeInTheDocument()
-    expect(refreshDraft).toHaveBeenCalled()
-  })
-
-  it('saves Knowledge retrieval settings through the draft contract API', async () => {
-    mockContract = {
-      ...mockContract,
-      agent_yaml: [
-        'name: insurance',
-        'retrieval:',
-        '  strategy: single_step',
-        '  top_k: 3',
-        '  min_score: 0.2',
-        '',
-      ].join('\n'),
-    }
-
-    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
-    expect(await screen.findByText('Global Retrieval Settings')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByDisplayValue('3'), {
-      target: { value: '8' },
-    })
-    fireEvent.change(screen.getByDisplayValue('single_step'), {
-      target: { value: 'agentic' },
-    })
-
-    expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Save Knowledge' }))
-
-    await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
-    })
-    const savedYaml = latestSavedAgentYaml()
-    expect(savedYaml).toContain('strategy: agentic')
-    expect(savedYaml).toContain('top_k: 8')
-    expect(savedYaml).toContain('max_steps: 3')
   })
 
   it.each([

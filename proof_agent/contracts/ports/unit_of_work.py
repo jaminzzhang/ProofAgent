@@ -6,7 +6,6 @@ from typing import Protocol, Self
 from proof_agent.contracts.ports.agent_lifecycle import AgentLifecycleRepository
 from proof_agent.contracts.ports.audit import AuditRepository
 from proof_agent.contracts.ports.shared_assets import (
-    KnowledgeAssetRepository,
     ModelAssetRepository,
     ToolAssetRepository,
 )
@@ -17,9 +16,6 @@ class ConfigurationUnitOfWork(Protocol):
 
     @property
     def agents(self) -> AgentLifecycleRepository: ...
-
-    @property
-    def knowledge(self) -> KnowledgeAssetRepository: ...
 
     @property
     def models(self) -> ModelAssetRepository: ...

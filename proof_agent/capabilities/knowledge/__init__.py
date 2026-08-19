@@ -1,48 +1,17 @@
-from __future__ import annotations
+"""External Knowledge adapters; KSS is the sole runtime authority."""
 
-from typing import Any
-
-from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
-from proof_agent.capabilities.knowledge.contracts import (
-    DocumentNode,
-    KnowledgeDocumentRoutingSelection,
-    RetrievalAction,
+from proof_agent.capabilities.knowledge.admission_scorer_client import (
+    HttpKnowledgeCandidateAdmissionScorer,
 )
-from proof_agent.capabilities.knowledge.local_provider import (
-    LocalKnowledgeProvider,
-    LocalMarkdownProvider,
+from proof_agent.capabilities.knowledge.source_service_client import (
+    KnowledgeSourceServiceClient,
 )
-from proof_agent.capabilities.knowledge.http_json import HttpJsonProvider, HttpJsonRequest
-from proof_agent.capabilities.knowledge.provider import (
-    KnowledgeProvider,
-    StructuredKnowledgeProvider,
+from proof_agent.capabilities.knowledge.source_service_management_client import (
+    KnowledgeSourceServiceManagementClient,
 )
-from proof_agent.capabilities.knowledge.registry import resolve_knowledge_provider
-from proof_agent.capabilities.knowledge.remote_search import RemoteSearchProvider
-
-
-def __getattr__(name: str) -> Any:
-    """Load the optional Local Index stack only when callers request it."""
-
-    if name == "LocalIndexProvider":
-        from proof_agent.capabilities.knowledge.local_index import LocalIndexProvider
-
-        return LocalIndexProvider
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 __all__ = [
-    "DocumentNode",
-    "HttpJsonProvider",
-    "HttpJsonRequest",
-    "KnowledgeDocumentRoutingSelection",
-    "KnowledgeProvider",
-    "LocalIndexProvider",
-    "LocalKnowledgeProvider",
-    "LocalMarkdownProvider",
-    "RemoteSearchProvider",
-    "RetrievalAction",
-    "RetrievalCapabilities",
-    "StructuredKnowledgeProvider",
-    "resolve_knowledge_provider",
+    "HttpKnowledgeCandidateAdmissionScorer",
+    "KnowledgeSourceServiceClient",
+    "KnowledgeSourceServiceManagementClient",
 ]

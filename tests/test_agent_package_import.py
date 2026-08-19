@@ -31,7 +31,7 @@ def test_import_agent_package_creates_draft_without_modifying_source(tmp_path: P
     assert draft.contract_bundle.agent_yaml == before_agent_yaml
     assert draft.contract_bundle.policy_yaml == before_policy_yaml
     assert draft.contract_bundle.tools_yaml == ""
-    assert "knowledge/customer-support-policy.md" in draft.contract_bundle.extra_files
+    assert not any(path.startswith("knowledge/") for path in draft.contract_bundle.extra_files)
     assert manifest_path.read_text(encoding="utf-8") == before_agent_yaml
     assert policy_path.read_text(encoding="utf-8") == before_policy_yaml
 
@@ -68,16 +68,15 @@ def test_compile_draft_agent_writes_valid_agent_package(tmp_path: Path) -> None:
         encoding="utf-8"
     ) == draft.contract_bundle.policy_yaml
     assert (package_dir / "tools.yaml").read_text(encoding="utf-8") == ""
-    assert (package_dir / "knowledge" / "customer-support-policy.md").exists()
+    assert not any(
+        path.is_file() for path in (package_dir / "knowledge").rglob("*")
+    )
 
     manifest = load_agent_manifest(package_dir / "agent.yaml")
 
     assert manifest.name == "react_enterprise_qa_v3"
-    assert manifest.package_knowledge_sources[0].provider == "local_markdown"
-    assert (
-        manifest.knowledge_bindings[0].source_ref.source_id
-        == manifest.package_knowledge_sources[0].source_id
-    )
+    assert manifest.package_knowledge_sources == ()
+    assert manifest.knowledge_bindings == ()
 
 
 def test_import_rejects_local_python_tool_handlers(tmp_path: Path) -> None:

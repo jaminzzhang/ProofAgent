@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 from types import SimpleNamespace
 
@@ -11,46 +10,12 @@ import proof_agent.bootstrap.production_roles as production_roles
 
 from proof_agent.bootstrap.production_roles import (
     ProductionKnowledgeReleaseAuthority,
-    ProductionOpenSearchSecretProvider,
     create_production_api_application,
     compose_production_run_executor,
 )
-from proof_agent.contracts import ProductionSecretHandle, SecretHandleValidation
+from proof_agent.contracts import ProductionSecretHandle
 from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
 from proof_agent.contracts.ports.secret_provider import ResolvedSecretMaterial
-
-
-@dataclass
-class Secrets:
-    protocol_id: str = "test-provider"
-
-    def resolve(self, handle: ProductionSecretHandle) -> ResolvedSecretMaterial:
-        assert handle.handle_id == "knowledge/opensearch"
-        assert handle.purpose.value == "knowledge_credential"
-        return ResolvedSecretMaterial(
-            value=b'{"authorization":"Bearer bounded-token"}',
-            provider_version_id="7",
-        )
-
-    def validate(
-        self,
-        handle: ProductionSecretHandle,
-        *,
-        checked_at: str,
-    ) -> SecretHandleValidation:
-        return SecretHandleValidation(
-            handle=handle,
-            resolvable=True,
-            provider_version_id="7",
-            checked_at=checked_at,
-        )
-
-
-def test_opensearch_secret_adapter_exposes_only_bounded_authorization_header() -> None:
-    material = ProductionOpenSearchSecretProvider(Secrets()).resolve("knowledge/opensearch")
-
-    assert material.headers == {"Authorization": "Bearer bounded-token"}
-    assert material.client_certificate_path is None
 
 
 def test_executor_composition_fails_without_postgres_and_never_falls_back_local() -> None:
@@ -111,7 +76,7 @@ def test_release_authority_uses_guarded_https_and_secret_handle_only() -> None:
     assert json.loads(request["body"]) == {"record": {"record_id": "release-1"}}
 
 
-def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
+def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) -> None:
     class Persistence:
         engine = object()
         models = object()
@@ -137,14 +102,6 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
             return None
 
     artifact_store = SimpleNamespace(check_ready=lambda: True, close=lambda: None)
-    hybrid_runtime = SimpleNamespace(
-        artifact_store=artifact_store,
-        model_graph=SimpleNamespace(build_config=object()),
-        repository=object(),
-        settings=SimpleNamespace(retrieval_profile_revision="profile-test"),
-        publication_api=lambda **kwargs: object(),
-        close=lambda: None,
-    )
     security = SimpleNamespace(
         operator_session_service=object(),
         stable_origin="https://proof-agent.example",
@@ -171,19 +128,6 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         production_roles, "compose_production_security", lambda *args, **kwargs: security
-    )
-    monkeypatch.setattr(
-        production_roles,
-        "compose_production_hybrid_runtime_from_env",
-        lambda *args, **kwargs: hybrid_runtime,
-    )
-    monkeypatch.setattr(
-        production_roles, "ProductionHybridKnowledgeIntakeService", lambda **kwargs: object()
-    )
-    monkeypatch.setattr(
-        production_roles,
-        "PostgresHybridPublicationConfigurationStore",
-        lambda **kwargs: object(),
     )
     monkeypatch.setattr(production_roles, "_artifact_store", lambda values: artifact_store)
     monkeypatch.setattr(production_roles, "_published_agent_authority", lambda *args: object())
@@ -224,28 +168,53 @@ def test_production_api_injects_the_guarded_hybrid_runtime(monkeypatch) -> None:
         {
             "PROOF_AGENT_MODE": "production",
             "PROOF_AGENT_POSTGRES_DSN": "postgresql+psycopg://proof@postgres/proof",
-            "HYBRID_POSTGRES_DSN": "postgresql://proof@postgres/proof",
-            "PROOF_AGENT_OPENSEARCH_SECRET_HANDLE": "knowledge/opensearch",
-            "PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT": ("https://proof-agent.example:8444"),
+            "PROOF_AGENT_KSS_ENDPOINT": ("https://proof-agent.example:8444"),
             "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE": ("knowledge/source-service/operator"),
             "PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR": "/tmp/release-bundles",
         }
     )
 
     assert isinstance(application, FastAPI)
-    assert captured["hybrid_runtime"] is hybrid_runtime
+    assert "hybrid_runtime" not in captured
+    assert "production_hybrid_intake_service" not in captured
+    assert "production_knowledge_repository" not in captured
+    assert "knowledge_source_configuration_application" not in captured
     assert isinstance(
         captured["knowledge_service_management_client"],
         production_roles.KnowledgeSourceServiceManagementClient,
     )
     assert isinstance(
-        captured["production_agent_configuration_application"],
-        production_roles.ProductionAgentConfigurationService,
+        captured["agent_configuration_workspace"],
+        production_roles.AgentConfigurationWorkspace,
     )
 
 
-def test_reference_profile_source_ids_are_explicit_exact_and_deduplicated() -> None:
-    assert production_roles._reference_profile_source_ids({}) == ()
-    assert production_roles._reference_profile_source_ids(
-        {"PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS": " ks_insurance,ks_other,ks_insurance "}
-    ) == ("ks_insurance", "ks_other")
+def test_embedded_reference_profile_source_selection_is_removed() -> None:
+    assert not hasattr(production_roles, "_reference_profile_source_ids")
+
+
+def test_publisher_binding_freezes_deployment_kss_authority() -> None:
+    provider = SimpleNamespace(protocol_id="vault-kv-v2")
+
+    binding = production_roles._production_kss_binding(
+        {
+            "PROOF_AGENT_KSS_BINDING_ID": "insurance-knowledge",
+            "PROOF_AGENT_KSS_RELEASE_ID": "release-insurance-2026-08-18",
+            "PROOF_AGENT_KSS_CLIENT_SECRET_HANDLE": (
+                "knowledge/source-service/agent-client"
+            ),
+            "PROOF_AGENT_KSS_CLIENT_SECRET_VERSION_ID": "credential-v7",
+            "PROOF_AGENT_KSS_ADMISSION_SCORER_ID": (
+                "insurance-evidence-admission"
+            ),
+            "PROOF_AGENT_KSS_ADMISSION_SCORER_REVISION": (
+                "insurance-evidence-admission.v3"
+            ),
+        },
+        provider,
+    )
+
+    assert binding.knowledge_base_release_id == "release-insurance-2026-08-18"
+    assert binding.client_credential_ref.protocol_id == "vault-kv-v2"
+    assert binding.client_credential_ref.version_id == "credential-v7"
+    assert binding.admission_scorer_revision == "insurance-evidence-admission.v3"

@@ -16,9 +16,7 @@ def test_verify_remote_chat_and_gateway_use_exact_same_base() -> None:
         gateway_port=18080,
         history_dir="runs/history",
         config_dir="runs/config",
-        worker_poll_interval_seconds=2.0,
         reload=False,
-        no_worker=False,
     )
     commands = dict(specs)
     chat_command = commands["chat"]

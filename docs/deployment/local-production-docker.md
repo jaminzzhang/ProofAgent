@@ -60,7 +60,7 @@ Open `https://proof-agent.localhost:8443`. KSS readiness is available at
 local CA, so a browser will warn until
 `docker/production-local/runtime/tls/ca.crt` is trusted locally.
 
-After login, open Dashboard `Knowledge`. The `Hybrid Knowledge Service` card reads
+After login, open Dashboard `Knowledge`. The `Knowledge Source Service` card reads
 the KSS catalog through `/api/config/knowledge-service`; it does not call port `8444`
 from the browser. The card reports readiness and catalog counts, lists Space, Source,
 Base, Source Version, and Release resources, and provides Space, Source, and Base

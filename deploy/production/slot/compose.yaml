@@ -98,33 +98,6 @@ services:
       retries: 6
       start_period: 30s
 
-  knowledge-worker:
-    <<: *product-service
-    command:
-      - proof-agent
-      - knowledge-worker
-      - --poll-interval
-      - "5"
-      - --health-host
-      - 127.0.0.1
-      - --health-port
-      - "8002"
-      - --slot
-      - "${SLOT_NUMBER:?set 1 for blue or 2 for green}"
-    cpus: "4.0"
-    mem_limit: 8g
-    stop_grace_period: 150s
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/readyz', timeout=3).read()"
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-
   dashboard:
     <<: *product-service
     command:

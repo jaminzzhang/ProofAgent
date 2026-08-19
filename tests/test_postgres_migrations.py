@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from uuid import uuid4
-
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
-from proof_agent.configuration.hybrid_migrations import apply_hybrid_migrations
 from proof_agent.capabilities.persistence.postgres.database import (
     MIGRATION_LOCK_KEY,
     DatabaseSchemaTooNewError,
@@ -18,17 +14,6 @@ from proof_agent.capabilities.persistence.postgres.database import (
     current_revision,
     head_revision,
     upgrade_database,
-)
-from proof_agent.capabilities.persistence.postgres.knowledge_repository import (
-    PostgresKnowledgeAssetRepository,
-)
-from proof_agent.capabilities.persistence.postgres.knowledge_source_operation_repository import (
-    PostgresKnowledgeSourceOperationRepository,
-)
-from proof_agent.contracts import (
-    KnowledgeSource,
-    KnowledgeSourceLifecycleState,
-    KnowledgeSourceOperation,
 )
 pytestmark = pytest.mark.postgres_integration
 pytest_plugins = ("postgres_fixtures",)
@@ -115,24 +100,6 @@ def test_upgrade_empty_database_to_head_and_repeat(postgres_dsn: str) -> None:
         engine.dispose()
 
 
-def test_upgrade_adopts_real_historical_hybrid_ddl(postgres_dsn: str) -> None:
-    psycopg_dsn = postgres_dsn.replace("postgresql+psycopg://", "postgresql://", 1)
-    historical = apply_hybrid_migrations(psycopg_dsn)
-
-    revision = upgrade_database(postgres_dsn)
-
-    engine = create_engine(postgres_dsn)
-    try:
-        tables = set(inspect(engine).get_table_names())
-        assert historical.migration_name == "0001_hybrid_knowledge.sql"
-        assert revision == head_revision()
-        assert "hybrid_knowledge_publication" in tables
-        assert "agent_drafts" in tables
-        assert check_database(engine).current_revision == revision
-    finally:
-        engine.dispose()
-
-
 def test_upgrade_adopts_released_model_credential_revision(postgres_dsn: str) -> None:
     _upgrade_to_revision(postgres_dsn, "0011_model_credential")
 
@@ -164,126 +131,6 @@ def test_upgrade_adopts_released_model_credential_revision(postgres_dsn: str) ->
         assert current_revision(engine) == revision
         assert "model_connection_credentials" in tables
         assert "production_worker_role_activations" in tables
-    finally:
-        engine.dispose()
-
-
-def test_ingestion_operation_link_migration_backfills_terminal_failure(
-    postgres_dsn: str,
-) -> None:
-    _upgrade_to_revision(postgres_dsn, "0018_publication_preparation")
-    engine = create_engine(postgres_dsn)
-    now = datetime(2026, 7, 28, 8, tzinfo=UTC)
-    source_id = f"ks_{uuid4().hex}"
-    job_id = uuid4()
-    operation_id = f"ksop_{uuid4().hex}"
-    try:
-        PostgresKnowledgeAssetRepository(engine).save_source(
-            KnowledgeSource(
-                source_id=source_id,
-                name="Migration backfill",
-                provider="hybrid_index",
-                lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
-                params={},
-                created_at=now.isoformat(),
-                updated_at=now.isoformat(),
-            ),
-            expected_revision=0,
-        )
-        PostgresKnowledgeSourceOperationRepository(engine).save(
-            KnowledgeSourceOperation(
-                operation_id=operation_id,
-                source_id=source_id,
-                command="upload_document",
-                status="queued",
-                stage="ingestion_queued",
-                source_revision=1,
-                poll_after_ms=1_000,
-                created_at=now.isoformat(),
-                updated_at=now.isoformat(),
-            )
-        )
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO hybrid_ingestion_jobs (
-                        job_id, idempotency_key, source_id, document_id, revision_id,
-                        request_identity, request_sha256, request_json, filename,
-                        uploaded_by, state, fencing_token, worker_id, auto_retry_count,
-                        max_auto_retries, next_attempt_initiation, next_attempt_at,
-                        claimed_at, lease_expires_at, safe_reason, failure_code,
-                        failure_classification, result_json, created_at, updated_at,
-                        completed_at, cancel_requested_at, cancel_requested_by, cancelled_at
-                    ) VALUES (
-                        :job_id, :idempotency_key, :source_id, :document_id, :revision_id,
-                        :request_identity, :request_sha256, '{}'::jsonb, 'failed.pdf',
-                        'operator-1', 'FAILED', 1, NULL, 0, 2, 'automatic', NULL,
-                        NULL, NULL, :safe_reason, 'PA_HYBRID_WORKER_INTEGRITY',
-                        'non_recoverable', NULL, :created_at, :updated_at,
-                        :completed_at, NULL, NULL, NULL
-                    )
-                    """
-                ),
-                {
-                    "job_id": job_id,
-                    "idempotency_key": str(job_id),
-                    "source_id": source_id,
-                    "document_id": uuid4(),
-                    "revision_id": uuid4(),
-                    "request_identity": f"{source_id}:document:revision",
-                    "request_sha256": "f" * 64,
-                    "safe_reason": (
-                        "Hybrid artifact build failed deterministic integrity validation."
-                    ),
-                    "created_at": now,
-                    "updated_at": now + timedelta(seconds=1),
-                    "completed_at": now + timedelta(seconds=1),
-                },
-            )
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO audit_events (
-                        audit_id, category, event_type, outcome, actor_json,
-                        target_type, target_id, metadata_json, occurred_at, expires_at
-                    ) VALUES (
-                        :audit_id, 'operations', 'hybrid_pdf.upload_document.admitted',
-                        'succeeded', '{}'::jsonb, 'hybrid_ingestion_job', :target_id,
-                        jsonb_build_object('operation_id', CAST(:operation_id AS text)),
-                        :occurred_at, :expires_at
-                    )
-                    """
-                ),
-                {
-                    "audit_id": uuid4(),
-                    "target_id": str(job_id),
-                    "operation_id": operation_id,
-                    "occurred_at": now,
-                    "expires_at": now + timedelta(days=365),
-                },
-            )
-    finally:
-        engine.dispose()
-
-    _upgrade_to_revision(postgres_dsn, "0019_ingestion_operation_link")
-
-    engine = create_engine(postgres_dsn)
-    try:
-        with engine.connect() as connection:
-            linked = connection.execute(
-                text(
-                    "SELECT operation_id FROM hybrid_ingestion_jobs WHERE job_id=:job_id"
-                ),
-                {"job_id": job_id},
-            ).scalar_one()
-        operation = PostgresKnowledgeSourceOperationRepository(engine).get(operation_id)
-        assert linked == operation_id
-        assert operation is not None
-        assert operation.status == "failed"
-        assert operation.stage == "ingestion_failed"
-        assert operation.outcome_code == "hybrid_ingestion_integrity_failed"
-        assert operation.completed_at is not None
     finally:
         engine.dispose()
 

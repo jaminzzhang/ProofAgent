@@ -26,7 +26,6 @@ from proof_agent.contracts.worker_roles import (
 _ROLE_LOCK_NAMESPACE = 0x5052574C00000000
 _ROLE_LOCK_IDS = {
     ProductionWorkerRole.RUN_EXECUTOR: _ROLE_LOCK_NAMESPACE + 1,
-    ProductionWorkerRole.KNOWLEDGE_WORKER: _ROLE_LOCK_NAMESPACE + 2,
 }
 _MAX_LEASE_SECONDS = 300
 

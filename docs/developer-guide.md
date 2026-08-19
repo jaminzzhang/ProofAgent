@@ -108,9 +108,19 @@ The definitions are not a completed release. PostgreSQL schema, OIDC discovery/J
 
 S3-first finalization intentionally accepts losing uncommitted partial progress: write and verify S3 objects/manifest first, then make them visible in one PostgreSQL transaction.
 
-## 7. Hybrid Knowledge release evidence
+## 7. KSS-only knowledge authority
 
-Hybrid Knowledge publication is fail closed. A Published Agent Version with a Hybrid binding must reference a registered `KnowledgeReleaseRecord` that binds the exact Contract Bundle and Resolved Hybrid Knowledge Bindings to four distinct immutable artifacts: live Shadow, Capacity, Sealed Acceptance and Recovery. Registration also requires an independently configured Release Evidence Authority.
+A knowledge-enabled Published Agent Version freezes exactly one KSS binding: exact
+Space, exact Release, client identity, versioned secret reference and ProofAgent
+Admission Scorer identity/revision. Package-local, shared-source and Hybrid bindings
+are rejected. KSS returns Candidate Evidence; ProofAgent alone performs Admission and
+answer governance. Missing KSS, grant, secret or scorer fails closed with no local
+fallback.
+
+The former ProofAgent Hybrid provider, source API, ingestion/publication worker,
+repository and CLI paths have been removed. KSS's independent Knowledge Worker is
+unchanged. Old Hybrid-bound Agent Versions are not replay or rollback targets; see
+`docs/deployment/kss-authority-cutover.md`.
 
 Production evaluation and operations adapters use the `private-http` entry point over an allowlisted HTTPS origin and pinned private-network resolution. Configure the driver selectors and verifier separately:
 

@@ -229,30 +229,11 @@ def test_model_connection_reference_summary_counts_configuration_references(
         validation_run_id="run_validation_001",
         actor="publisher",
     )
-    store.create_knowledge_source(
-        source_id="ks_policy",
-        name="Policies",
-        provider="local_index",
-        params={
-            "snapshot_path": "./snapshots/policy",
-            "artifact_root": "./artifacts",
-            "ingestion_model": {
-                "model_source": "shared",
-                "connection_id": "model_deepseek_default",
-            },
-            "routing_model": {
-                "model_source": "shared",
-                "connection_id": "other_model",
-            },
-        },
-        actor="operator",
-    )
-
     summary = store.get_model_connection_reference_summary("model_deepseek_default")
 
     assert summary.draft_agent_reference_count == 2
     assert summary.published_agent_version_reference_count == 1
-    assert summary.knowledge_source_reference_count == 1
+    assert summary.knowledge_source_reference_count == 0
 
 
 def test_physical_delete_blocks_model_connection_with_references(tmp_path: Path) -> None:

@@ -37,11 +37,10 @@ from scripts.deployment.command_runner import (
 BUILT_IN_DRIVER_NAME = "docker-compose-v1"
 _IMAGE_REFERENCE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SAFE_IDENTIFIER = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-_WORKER_SERVICES = ("run-executor", "knowledge-worker")
+_WORKER_SERVICES = ("run-executor",)
 _PRODUCT_SERVICES = (
     "api",
     "run-executor",
-    "knowledge-worker",
     "dashboard",
     "operator-chat",
 )
@@ -181,12 +180,6 @@ class ComposeSlotConfig(StrictFrozenModel):
         max_length=255,
         pattern=_SAFE_IDENTIFIER,
     )
-    knowledge_worker_owner_id: str = Field(
-        min_length=1,
-        max_length=255,
-        pattern=_SAFE_IDENTIFIER,
-    )
-
     @field_validator("image_reference")
     @classmethod
     def require_immutable_image(cls, value: str) -> str:
@@ -489,15 +482,6 @@ class DockerComposeBlueGreenOperations:
                 ),
             ),
             (
-                "knowledge-worker",
-                self._identity_probe_script(
-                    candidate,
-                    url="http://127.0.0.1:8002/readyz",
-                    role="knowledge_worker",
-                    activation="STANDBY",
-                ),
-            ),
-            (
                 "dashboard",
                 self._static_probe_script(
                     url=(
@@ -575,15 +559,6 @@ class DockerComposeBlueGreenOperations:
                     candidate,
                     url="http://127.0.0.1:8001/readyz",
                     role="run_executor",
-                    activation="ACTIVE",
-                ),
-            ),
-            (
-                "knowledge-worker",
-                self._identity_probe_script(
-                    candidate,
-                    url="http://127.0.0.1:8002/readyz",
-                    role="knowledge_worker",
                     activation="ACTIVE",
                 ),
             ),
@@ -1123,7 +1098,6 @@ class DockerComposeBlueGreenOperations:
                 "/run/configs/deployment-compatibility-manifest.json"
             ),
             "PROOF_AGENT_EXECUTOR_ID": slot.run_executor_owner_id,
-            "PROOF_AGENT_KNOWLEDGE_WORKER_ID": slot.knowledge_worker_owner_id,
         }
         if any(values.get(key) != value for key, value in expected.items()):
             raise DeploymentActionError("compose_environment_binding_mismatch")
@@ -1545,8 +1519,7 @@ class DockerComposeBlueGreenOperations:
                 timeout_seconds=15,
                 active=True,
             )
-            run_attempts, knowledge_jobs = self._parse_claim_counts(stdout)
-            if run_attempts == 0 and knowledge_jobs == 0:
+            if self._parse_claim_count(stdout) == 0:
                 return True
             if poll_number + 1 >= max_polls or self._now() >= deadline:
                 return False
@@ -1560,7 +1533,7 @@ import json
 import os
 import sqlalchemy as sa
 from proof_agent.capabilities.persistence.postgres.database import create_postgres_engine
-from proof_agent.capabilities.persistence.postgres.schema import hybrid_ingestion_jobs, run_attempts
+from proof_agent.capabilities.persistence.postgres.schema import run_attempts
 
 engine = create_postgres_engine(os.environ["PROOF_AGENT_POSTGRES_DSN"])
 with engine.connect() as connection:
@@ -1570,30 +1543,18 @@ with engine.connect() as connection:
             run_attempts.c.executor_id == {slot.run_executor_owner_id!r},
         )
     ).scalar_one()
-    knowledge_count = connection.execute(
-        sa.select(sa.func.count()).select_from(hybrid_ingestion_jobs).where(
-            hybrid_ingestion_jobs.c.state == "CLAIMED",
-            hybrid_ingestion_jobs.c.worker_id == {slot.knowledge_worker_owner_id!r},
-        )
-    ).scalar_one()
-print(json.dumps({{"run_attempts": int(run_count), "knowledge_jobs": int(knowledge_count)}}, separators=(",", ":"), sort_keys=True))
+print(json.dumps({{"run_attempts": int(run_count)}}, separators=(",", ":"), sort_keys=True))
 """
 
     @staticmethod
-    def _parse_claim_counts(stdout: str) -> tuple[int, int]:
+    def _parse_claim_count(stdout: str) -> int:
         payload = DockerComposeBlueGreenOperations._parse_bounded_json(stdout)
-        if not isinstance(payload, dict) or set(payload) != {
-            "run_attempts",
-            "knowledge_jobs",
-        }:
+        if not isinstance(payload, dict) or set(payload) != {"run_attempts"}:
             raise DeploymentActionError("claim_count_result_invalid")
-        counts = (payload["run_attempts"], payload["knowledge_jobs"])
-        if any(
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-            for value in counts
-        ):
+        count = payload["run_attempts"]
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             raise DeploymentActionError("claim_count_result_invalid")
-        return counts
+        return count
 
     def _wait_worker_epoch(
         self,
@@ -1642,7 +1603,6 @@ repository = PostgresWorkerRoleRepository(create_postgres_engine(os.environ["PRO
 now = datetime.now(UTC)
 expected = {{
     ProductionWorkerRole.RUN_EXECUTOR: ({slot.slot_number}, {slot.run_executor_owner_id!r}),
-    ProductionWorkerRole.KNOWLEDGE_WORKER: ({slot.slot_number}, {slot.knowledge_worker_owner_id!r}),
 }}
 rows = {{role: repository.get(role) for role in expected}}
 ready = all(
@@ -1655,31 +1615,23 @@ ready = all(
 print(json.dumps({{
     "ready": ready,
     "run_executor": rows[ProductionWorkerRole.RUN_EXECUTOR].activation_epoch,
-    "knowledge_worker": rows[ProductionWorkerRole.KNOWLEDGE_WORKER].activation_epoch,
 }}, separators=(",", ":"), sort_keys=True))
 """
 
     @staticmethod
     def _parse_worker_epoch(stdout: str, *, expected_epoch: int) -> bool:
         payload = DockerComposeBlueGreenOperations._parse_bounded_json(stdout)
-        if not isinstance(payload, dict) or set(payload) != {
-            "ready",
-            "run_executor",
-            "knowledge_worker",
-        }:
+        if not isinstance(payload, dict) or set(payload) != {"ready", "run_executor"}:
             raise DeploymentActionError("worker_epoch_result_invalid")
-        epochs = (payload["run_executor"], payload["knowledge_worker"])
+        epoch = payload["run_executor"]
         if (
             not isinstance(payload["ready"], bool)
-            or any(
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 0
-                for value in epochs
-            )
+            or not isinstance(epoch, int)
+            or isinstance(epoch, bool)
+            or epoch < 0
         ):
             raise DeploymentActionError("worker_epoch_result_invalid")
-        return bool(payload["ready"] and epochs == (expected_epoch, expected_epoch))
+        return bool(payload["ready"] and epoch == expected_epoch)
 
     @staticmethod
     def _fail_lost_attempts_script() -> str:

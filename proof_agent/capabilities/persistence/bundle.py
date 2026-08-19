@@ -10,7 +10,6 @@ from proof_agent.contracts.ports import (
     CaseMemoryRepository,
     ConfigurationUnitOfWork,
     ConversationRepository,
-    KnowledgeAssetRepository,
     ModelAssetRepository,
     RunMetadataRepository,
     ToolAssetRepository,
@@ -25,9 +24,6 @@ class PersistenceMode(str, Enum):
 class PersistenceBundle(Protocol):
     @property
     def agents(self) -> AgentLifecycleRepository: ...
-
-    @property
-    def knowledge(self) -> KnowledgeAssetRepository: ...
 
     @property
     def models(self) -> ModelAssetRepository: ...

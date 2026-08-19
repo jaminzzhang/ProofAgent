@@ -10,7 +10,7 @@ Read in this order:
 4. `developer-guide.md` — authoring, local operation and verification;
 5. `operations-deployment-development-guide.zh-CN.md` — Chinese newcomer runbook for local operation, deployment boundaries, development and incident triage;
 6. `development-progress.md` — implemented versus remaining work;
-7. `deployment/hybrid-knowledge-closed-loop.md` — Hybrid closed-loop deployment and Phase F;
+7. `deployment/kss-authority-cutover.md` — KSS-only runtime, production gates and rollback boundary;
 8. `deployment/local-production-docker.md` — local production-shaped Docker stack and verification;
 9. `../CONTEXT-MAP.md` — domain vocabulary routing.
 

@@ -16,7 +16,6 @@ from proof_agent.capabilities.persistence.postgres.schema import (
     agent_drafts,
     agent_version_shared_asset_refs,
     agent_versions,
-    knowledge_source_versions,
     model_connection_versions,
     tool_source_versions,
 )
@@ -37,7 +36,6 @@ from proof_agent.contracts.shared_assets import SharedAssetKind, SharedAssetVers
 
 
 _SHARED_VERSION_TABLES = {
-    SharedAssetKind.KNOWLEDGE_SOURCE: (knowledge_source_versions, "source_id"),
     SharedAssetKind.MODEL_CONNECTION: (model_connection_versions, "connection_id"),
     SharedAssetKind.TOOL_SOURCE: (tool_source_versions, "source_id"),
 }

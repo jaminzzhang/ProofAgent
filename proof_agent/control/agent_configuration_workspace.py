@@ -1,0 +1,1049 @@
+"""Deep application module for the Agent Configuration Workspace."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import Enum
+import hashlib
+from importlib.metadata import PackageNotFoundError, distribution
+import json
+from pathlib import Path
+from typing import Any, Protocol
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
+import yaml  # type: ignore[import-untyped]
+
+from proof_agent.configuration.importer import build_agent_package_contract_bundle
+from proof_agent.contracts import (
+    ActiveAgentPointerExpectation,
+    ActiveAgentVersion,
+    AgentDraftRecord,
+    AgentPublicationRecord,
+    AgentValidationRecord,
+    AuditActorFacts,
+    AuditCategory,
+    AuditMetadataRecord,
+    AuditOutcome,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
+    ContractBundle,
+    DraftAgent,
+    PersistenceConflictError,
+    PersistencePointerConflictError,
+    PublishedAgentVersion,
+    PublishedWorkflowStageConfigurationSnapshot,
+    ResolvedKnowledgeBindingSet,
+    SensitiveValidationCaptureArtifact,
+    WorkflowStageConfigurationRuntimeSource,
+    WorkflowStageConfigurationRuntimeSourceType,
+)
+from proof_agent.contracts.ports import ConfigurationUnitOfWork
+from proof_agent.control.production_agent_publication import SOLE_PRODUCTION_AGENT_ID
+from proof_agent.control.workflow.stage_configuration import (
+    resolve_workflow_stage_runtime_configuration,
+)
+
+
+_EXPECTED_WORKFLOW_TEMPLATE = "react_enterprise_qa_v3"
+_CREATE_FINGERPRINT_SCHEMA = "proofagent.production-agent-create.v1"
+_DRAFT_ID = str(
+    uuid5(
+        NAMESPACE_URL,
+        f"proofagent:{_CREATE_FINGERPRINT_SCHEMA}:{SOLE_PRODUCTION_AGENT_ID}",
+    )
+)
+_SERVER_TEMPLATE_MANIFEST = Path(
+    "examples/agent_management_insurance_specialist/agent.yaml"
+)
+
+
+@dataclass(frozen=True)
+class AgentConfigurationDraftMutation:
+    """A revisioned Draft result plus whether a create command was replayed."""
+
+    record: AgentDraftRecord
+    replayed: bool = False
+
+
+@dataclass(frozen=True)
+class AgentConfigurationSummary:
+    """Dashboard-safe summary computed inside the Workspace module."""
+
+    agent_id: str
+    display_name: str
+    purpose: str
+    draft_count: int
+    latest_draft_id: str | None
+    version_count: int
+    active_version_id: str | None
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
+class AgentConfigurationInventory:
+    """Current Agent inventory and initialization capability."""
+
+    agents: tuple[AgentConfigurationSummary, ...]
+    can_create: bool
+
+
+@dataclass(frozen=True)
+class AgentConfigurationVersions:
+    """Published history and active pointer for one Agent."""
+
+    versions: tuple[PublishedAgentVersion, ...]
+    active_version_id: str | None
+
+
+@dataclass(frozen=True)
+class AgentConfigurationValidationCaptureError:
+    """Stable trace-safe reason why an optional Full Capture was not stored."""
+
+    code: str
+    message: str
+    retryable: bool
+
+
+@dataclass(frozen=True)
+class AgentConfigurationValidationExecution:
+    """Trace-safe evidence returned by one Draft validation adapter."""
+
+    run_id: str
+    outcome: str
+    run_purpose: str
+    agent_id: str
+    draft_id: str
+    summary: str
+    trace_events: tuple[Mapping[str, Any], ...] = ()
+    validation_capture: SensitiveValidationCaptureArtifact | None = None
+    capture_error: AgentConfigurationValidationCaptureError | None = None
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
+
+
+@dataclass(frozen=True)
+class AgentConfigurationValidationResult:
+    """Revisioned Draft state and execution evidence from validation."""
+
+    record: AgentDraftRecord
+    validation: AgentValidationRecord
+    execution: AgentConfigurationValidationExecution
+
+
+class AgentConfigurationValidationExecutor(Protocol):
+    """Execute one Draft without owning lifecycle persistence rules."""
+
+    def validate(
+        self,
+        *,
+        draft: DraftAgent,
+        question: str,
+        full_capture: bool,
+        retain_for_audit: bool,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationValidationExecution: ...
+
+
+class AgentConfigurationPublicationValidator(Protocol):
+    """Validate adapter-owned package and live-asset publication constraints."""
+
+    def validate(
+        self,
+        *,
+        draft: DraftAgent,
+        validation: AgentValidationRecord,
+    ) -> None: ...
+
+
+class AgentConfigurationConflict(RuntimeError):
+    """Stable Agent configuration conflict."""
+
+    def __init__(self, *, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(detail)
+
+
+class AgentConfigurationNotFound(LookupError):
+    """A requested Agent configuration resource does not exist."""
+
+    def __init__(self, *, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(detail)
+
+
+class AgentConfigurationPublicationRejected(ValueError):
+    """Stable precondition rejection for one Draft publication command."""
+
+    def __init__(self, *, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(detail)
+
+
+class AgentConfigurationScope(str, Enum):
+    """Agent identity scope enforced inside the Workspace implementation."""
+
+    SOLE_AGENT = "sole_agent"
+    MULTI_AGENT = "multi_agent"
+
+
+class AgentConfigurationWorkspace:
+    """Own Draft inventory and mutation rules behind one stable interface."""
+
+    def __init__(
+        self,
+        *,
+        unit_of_work_factory: Callable[[], ConfigurationUnitOfWork],
+        template_bundle: ContractBundle,
+        validation_executor: AgentConfigurationValidationExecutor | None = None,
+        publication_validator: AgentConfigurationPublicationValidator | None = None,
+        scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        _validate_template_bundle(template_bundle)
+        self._unit_of_work_factory = unit_of_work_factory
+        self._template_bundle = template_bundle
+        self._validation_executor = validation_executor
+        self._publication_validator = publication_validator
+        self._scope = scope
+        self._clock = clock
+
+    def list_agents(self) -> AgentConfigurationInventory:
+        with self._unit_of_work_factory() as uow:
+            all_drafts = tuple(
+                uow.agents.list_drafts(
+                    SOLE_PRODUCTION_AGENT_ID
+                    if self._scope is AgentConfigurationScope.SOLE_AGENT
+                    else None
+                )
+            )
+            active_by_agent = {
+                item.agent_id: item for item in uow.agents.list_active()
+            }
+            agent_ids = (
+                (SOLE_PRODUCTION_AGENT_ID,)
+                if self._scope is AgentConfigurationScope.SOLE_AGENT
+                else tuple(
+                    sorted(
+                        {
+                            *(record.draft.agent_id for record in all_drafts),
+                            *active_by_agent,
+                        }
+                    )
+                )
+            )
+            summaries: list[AgentConfigurationSummary] = []
+            for agent_id in agent_ids:
+                drafts = tuple(
+                    record
+                    for record in all_drafts
+                    if record.draft.agent_id == agent_id
+                )
+                versions = tuple(uow.agents.list_published(agent_id))
+                if not drafts and not versions:
+                    continue
+                latest_draft = max(
+                    drafts,
+                    key=lambda record: record.draft.updated_at,
+                    default=None,
+                )
+                latest_version = versions[0] if versions else None
+                if latest_draft is not None:
+                    display_name = latest_draft.draft.display_name
+                    purpose = latest_draft.draft.purpose
+                    updated_at = latest_draft.draft.updated_at
+                else:
+                    assert latest_version is not None
+                    display_name = latest_version.display_name
+                    purpose = latest_version.purpose
+                    updated_at = latest_version.published_at
+                summaries.append(
+                    AgentConfigurationSummary(
+                        agent_id=agent_id,
+                        display_name=display_name,
+                        purpose=purpose,
+                        draft_count=len(drafts),
+                        latest_draft_id=(
+                            None
+                            if latest_draft is None
+                            else latest_draft.draft.draft_id
+                        ),
+                        version_count=len(versions),
+                        active_version_id=(
+                            None
+                            if agent_id not in active_by_agent
+                            else active_by_agent[agent_id].version_id
+                        ),
+                        updated_at=updated_at,
+                    )
+                )
+        return AgentConfigurationInventory(
+            agents=tuple(summaries),
+            can_create=(
+                self._scope is AgentConfigurationScope.MULTI_AGENT
+                or not summaries
+            ),
+        )
+
+    def get_draft(self, *, agent_id: str, draft_id: str) -> AgentDraftRecord:
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        with self._unit_of_work_factory() as uow:
+            record = uow.agents.get_draft(agent_id, draft_id)
+        if record is None:
+            raise AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            )
+        return record
+
+    def list_versions(self, *, agent_id: str) -> AgentConfigurationVersions:
+        self._require_agent_scope(agent_id)
+        with self._unit_of_work_factory() as uow:
+            versions = tuple(uow.agents.list_published(agent_id))
+            active = uow.agents.get_active(agent_id)
+        return AgentConfigurationVersions(
+            versions=versions,
+            active_version_id=None if active is None else active.version_id,
+        )
+
+    def create_draft(
+        self,
+        *,
+        display_name: str,
+        purpose: str,
+        idempotency_key: str,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationDraftMutation:
+        normalized_name = _nonblank(display_name, "display_name", maximum=200)
+        normalized_purpose = _bounded(purpose, "purpose", maximum=4_000)
+        normalized_key = _nonblank(idempotency_key, "idempotency_key", maximum=255)
+        fingerprint = _request_fingerprint(
+            display_name=normalized_name,
+            purpose=normalized_purpose,
+            template_bundle=self._template_bundle,
+        )
+        key_digest = _digest(f"{actor.subject}\0{normalized_key}")
+        now = _timestamp(self._clock())
+        metadata = {
+            "request_fingerprint": fingerprint,
+            "idempotency_key_sha256": key_digest,
+            "template_id": SOLE_PRODUCTION_AGENT_ID,
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(uuid5(NAMESPACE_URL, f"{_DRAFT_ID}:created:operation")),
+            operation=ConfigurationOperation.CREATED,
+            actor=actor.subject,
+            created_at=now,
+            summary="Initialized the sole production Agent Draft from the server template.",
+            metadata=metadata,
+        )
+        draft = DraftAgent(
+            agent_id=SOLE_PRODUCTION_AGENT_ID,
+            draft_id=_DRAFT_ID,
+            display_name=normalized_name,
+            purpose=normalized_purpose,
+            contract_bundle=self._template_bundle,
+            created_at=now,
+            updated_at=now,
+            created_by=actor.subject,
+            updated_by=actor.subject,
+            operation_audit=(operation,),
+        )
+        event = AuditMetadataRecord(
+            audit_id=str(uuid5(NAMESPACE_URL, f"{_DRAFT_ID}:created:audit")),
+            category=AuditCategory.CONFIGURATION,
+            event_type="agent.draft.created",
+            outcome=AuditOutcome.SUCCEEDED,
+            actor=actor,
+            occurred_at=now,
+            target_type="agent_draft",
+            target_id=_DRAFT_ID,
+            metadata=metadata,
+        )
+        try:
+            with self._unit_of_work_factory() as uow:
+                existing = tuple(uow.agents.list_drafts(SOLE_PRODUCTION_AGENT_ID))
+                if existing:
+                    return _resolve_existing_create(
+                        existing,
+                        request_fingerprint=fingerprint,
+                        idempotency_key_sha256=key_digest,
+                    )
+                saved = uow.agents.save_draft(draft, expected_revision=0)
+                uow.audit.append(event)
+                uow.commit()
+        except PersistenceConflictError as exc:
+            if exc.resource_type == "agent_draft" and exc.resource_id == _DRAFT_ID:
+                with self._unit_of_work_factory() as uow:
+                    existing = tuple(
+                        uow.agents.list_drafts(SOLE_PRODUCTION_AGENT_ID)
+                    )
+                if existing:
+                    return _resolve_existing_create(
+                        existing,
+                        request_fingerprint=fingerprint,
+                        idempotency_key_sha256=key_digest,
+                    )
+            raise AgentConfigurationConflict(
+                code="agent_creation_conflict",
+                detail="The production Agent could not be initialized concurrently.",
+            ) from exc
+        return AgentConfigurationDraftMutation(record=saved)
+
+    def update_draft(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        display_name: str | None,
+        purpose: str | None,
+        actor: AuditActorFacts,
+    ) -> AgentDraftRecord:
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        if display_name is None and purpose is None:
+            raise ValueError("at least one editable field is required")
+        now = _timestamp(self._clock())
+        try:
+            with self._unit_of_work_factory() as uow:
+                existing = uow.agents.get_draft(agent_id, draft_id)
+                if existing is None:
+                    raise AgentConfigurationNotFound(
+                        code="agent_draft_not_found",
+                        detail="The requested Agent Draft was not found.",
+                    )
+                next_name = (
+                    existing.draft.display_name
+                    if display_name is None
+                    else _nonblank(display_name, "display_name", maximum=200)
+                )
+                next_purpose = (
+                    existing.draft.purpose
+                    if purpose is None
+                    else _bounded(purpose, "purpose", maximum=4_000)
+                )
+                metadata = {"expected_revision": expected_revision}
+                operation = ConfigurationOperationAudit(
+                    operation_id=str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"{draft_id}:updated:{expected_revision + 1}:operation",
+                        )
+                    ),
+                    operation=ConfigurationOperation.UPDATED,
+                    actor=actor.subject,
+                    created_at=now,
+                    summary="Updated Agent Draft metadata.",
+                    metadata=metadata,
+                )
+                updated = existing.draft.model_copy(
+                    update={
+                        "display_name": next_name,
+                        "purpose": next_purpose,
+                        "updated_at": now,
+                        "updated_by": actor.subject,
+                        "operation_audit": (*existing.draft.operation_audit, operation),
+                    }
+                )
+                saved = uow.agents.save_draft(
+                    updated,
+                    expected_revision=expected_revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(
+                            uuid5(
+                                NAMESPACE_URL,
+                                f"{draft_id}:updated:{saved.revision}:audit",
+                            )
+                        ),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.draft.updated",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ) from exc
+        return saved
+
+    def validate_draft(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        question: str,
+        full_capture: bool,
+        retain_for_audit: bool,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationValidationResult:
+        """Execute and atomically attach one governed Validation Record."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if not question:
+            raise ValueError("validation question must not be empty")
+        if self._validation_executor is None:
+            raise RuntimeError("Agent Draft validation is unavailable")
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        execution = self._validation_executor.validate(
+            draft=current.draft,
+            question=question,
+            full_capture=full_capture,
+            retain_for_audit=retain_for_audit,
+            actor=actor,
+        )
+        _validate_execution_identity(
+            execution,
+            agent_id=agent_id,
+            draft_id=draft_id,
+            full_capture=full_capture,
+        )
+        warnings, publish_blockers = _validation_model_connection_warnings(
+            execution.trace_events
+        )
+        now = _timestamp(self._clock())
+        validation = AgentValidationRecord(
+            validation_id=f"validation_{uuid4().hex[:8]}",
+            draft_id=draft_id,
+            run_id=execution.run_id,
+            status=execution.outcome,
+            created_at=now,
+            validation_capture_id=_validation_capture_id(
+                execution.validation_capture
+            ),
+            summary=execution.summary[:500],
+            warnings=warnings,
+            publish_blockers=publish_blockers,
+            resolved_knowledge_bindings=execution.resolved_knowledge_bindings,
+        )
+        metadata = {
+            "run_id": validation.run_id,
+            "status": validation.status,
+            "draft_revision": current.revision,
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{validation.validation_id}:validated:operation",
+                )
+            ),
+            operation=ConfigurationOperation.VALIDATED,
+            actor=actor.subject,
+            created_at=now,
+            summary=f"Validated Agent Draft {draft_id}.",
+            metadata=metadata,
+        )
+        try:
+            with self._unit_of_work_factory() as uow:
+                latest = uow.agents.get_draft(agent_id, draft_id)
+                if latest is None:
+                    raise AgentConfigurationNotFound(
+                        code="agent_draft_not_found",
+                        detail="The requested Agent Draft was not found.",
+                    )
+                updated = latest.draft.model_copy(
+                    update={
+                        "updated_at": now,
+                        "updated_by": actor.subject,
+                        "validation_records": (
+                            *latest.draft.validation_records,
+                            validation,
+                        ),
+                        "operation_audit": (
+                            *latest.draft.operation_audit,
+                            operation,
+                        ),
+                    }
+                )
+                saved = uow.agents.save_draft(
+                    updated,
+                    expected_revision=current.revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(
+                            uuid5(
+                                NAMESPACE_URL,
+                                f"{validation.validation_id}:validated:audit",
+                            )
+                        ),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.draft.validated",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed during validation; reload it before retrying.",
+            ) from exc
+        return AgentConfigurationValidationResult(
+            record=saved,
+            validation=validation,
+            execution=execution,
+        )
+
+    def publish_draft(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        validation_run_id: str | None,
+        actor: AuditActorFacts,
+    ) -> PublishedAgentVersion:
+        """Publish and activate one currently validated Draft atomically."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if self._publication_validator is None:
+            raise RuntimeError("Agent Draft publication is unavailable")
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        validation = _current_publication_validation(
+            current,
+            validation_run_id=validation_run_id,
+        )
+        self._publication_validator.validate(
+            draft=current.draft,
+            validation=validation,
+        )
+        version_id = f"version_{uuid4().hex[:8]}"
+        published_at = _timestamp(self._clock())
+        stage_facts = resolve_workflow_stage_runtime_configuration(
+            current.draft.contract_bundle.agent_yaml,
+            source=WorkflowStageConfigurationRuntimeSource(
+                source_type=(
+                    WorkflowStageConfigurationRuntimeSourceType.PUBLISHED_AGENT_VERSION
+                ),
+                reference=(
+                    f"published_version:{version_id}:"
+                    "effective_workflow_stage_configuration"
+                ),
+            ),
+        )
+        if stage_facts is None:
+            raise AgentConfigurationPublicationRejected(
+                code="agent_publication_configuration_invalid",
+                detail="The Agent Draft has no publishable Workflow configuration.",
+            )
+        operation = ConfigurationOperationAudit(
+            operation_id=str(uuid4()),
+            operation=ConfigurationOperation.PUBLISHED,
+            actor=actor.subject,
+            created_at=published_at,
+            summary=f"Published Agent Draft {draft_id}.",
+            metadata={
+                "validation_run_id": validation.run_id,
+                "draft_revision": current.revision,
+            },
+        )
+        version = PublishedAgentVersion(
+            agent_id=agent_id,
+            version_id=version_id,
+            source_draft_id=draft_id,
+            validation_run_id=validation.run_id,
+            display_name=current.draft.display_name,
+            purpose=current.draft.purpose,
+            contract_bundle=current.draft.contract_bundle,
+            published_at=published_at,
+            published_by=actor.subject,
+            operation_audit=(operation,),
+            resolved_knowledge_bindings=validation.resolved_knowledge_bindings,
+            workflow_stage_availability=stage_facts.workflow_stage_availability,
+            effective_workflow_stage_configuration=(
+                PublishedWorkflowStageConfigurationSnapshot.model_validate(
+                    stage_facts.effective_stage_configuration.model_dump(mode="python")
+                )
+            ),
+        )
+        try:
+            with self._unit_of_work_factory() as uow:
+                latest = uow.agents.get_draft(agent_id, draft_id)
+                if latest is None:
+                    raise AgentConfigurationNotFound(
+                        code="agent_draft_not_found",
+                        detail="The requested Agent Draft was not found.",
+                    )
+                active = uow.agents.get_active(agent_id)
+                publication = AgentPublicationRecord(
+                    version=version,
+                    activation=ActiveAgentVersion(
+                        agent_id=agent_id,
+                        version_id=version_id,
+                        activated_at=published_at,
+                        activated_by=actor.subject,
+                    ),
+                    draft_revision=current.revision,
+                    active_pointer_expectation=ActiveAgentPointerExpectation(
+                        version_id=None if active is None else active.version_id
+                    ),
+                )
+                saved = uow.agents.publish_version(
+                    publication,
+                    expected_draft_revision=current.revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.version.published",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=published_at,
+                        target_type="agent_version",
+                        target_id=version_id,
+                        metadata={
+                            "agent_id": agent_id,
+                            "draft_id": draft_id,
+                            "draft_revision": current.revision,
+                            "validation_run_id": validation.run_id,
+                            "replaced_active_version_id": (
+                                None if active is None else active.version_id
+                            ),
+                        },
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail=(
+                    "The Agent Draft changed during publication; "
+                    "validate it again before retrying."
+                ),
+            ) from exc
+        except PersistencePointerConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="The Active Agent Version changed; reload before retrying.",
+            ) from exc
+        return saved.version
+
+    def _require_agent_scope(self, agent_id: str) -> None:
+        _require_safe_resource_id(agent_id, resource="Agent")
+        if (
+            self._scope is AgentConfigurationScope.SOLE_AGENT
+            and agent_id != SOLE_PRODUCTION_AGENT_ID
+        ):
+            raise AgentConfigurationNotFound(
+                code="agent_not_found",
+                detail="The requested Agent was not found.",
+            )
+
+    def _require_draft_scope(self, draft_id: str) -> None:
+        if self._scope is AgentConfigurationScope.SOLE_AGENT:
+            _require_draft_id(draft_id)
+            return
+        _require_safe_resource_id(draft_id, resource="Agent Draft")
+
+
+def load_server_owned_agent_template() -> ContractBundle:
+    """Load the immutable Agent template shipped in the installed server artifact."""
+
+    try:
+        package = distribution("proof-agent")
+    except PackageNotFoundError as exc:
+        raise RuntimeError("the proof-agent distribution is unavailable") from exc
+    manifest_path = Path(str(package.locate_file(_SERVER_TEMPLATE_MANIFEST))).resolve()
+    if not manifest_path.is_file():
+        raise RuntimeError("the server-owned production Agent template is unavailable")
+    return build_agent_package_contract_bundle(
+        manifest_path,
+        require_writable_artifacts=False,
+    )
+
+
+def _resolve_existing_create(
+    records: tuple[AgentDraftRecord, ...],
+    *,
+    request_fingerprint: str,
+    idempotency_key_sha256: str,
+) -> AgentConfigurationDraftMutation:
+    for record in records:
+        metadata = _creation_metadata(record.draft)
+        if metadata.get("idempotency_key_sha256") != idempotency_key_sha256:
+            continue
+        if metadata.get("request_fingerprint") != request_fingerprint:
+            raise AgentConfigurationConflict(
+                code="idempotency_key_mismatch",
+                detail="The Idempotency-Key was already used for a different request.",
+            )
+        return AgentConfigurationDraftMutation(record=record, replayed=True)
+    raise AgentConfigurationConflict(
+        code="sole_agent_already_exists",
+        detail="The sole production Agent has already been initialized.",
+    )
+
+
+def _creation_metadata(draft: DraftAgent) -> dict[str, Any]:
+    for operation in draft.operation_audit:
+        if operation.operation is ConfigurationOperation.CREATED:
+            return dict(operation.metadata)
+    return {}
+
+
+def _validate_template_bundle(bundle: ContractBundle) -> None:
+    try:
+        agent = yaml.safe_load(bundle.agent_yaml)
+    except yaml.YAMLError as exc:
+        raise ValueError("production Agent template YAML is invalid") from exc
+    if not isinstance(agent, dict) or agent.get("name") != SOLE_PRODUCTION_AGENT_ID:
+        raise ValueError("production Agent template must use the sole Agent identity")
+    workflow = agent.get("workflow")
+    if not isinstance(workflow, dict) or workflow.get("template") != _EXPECTED_WORKFLOW_TEMPLATE:
+        raise ValueError("production Agent template must use react_enterprise_qa_v3")
+
+
+def _require_draft_id(draft_id: str) -> None:
+    try:
+        UUID(draft_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise AgentConfigurationNotFound(
+            code="agent_draft_not_found",
+            detail="The requested Agent Draft was not found.",
+        ) from exc
+
+
+def _require_safe_resource_id(value: str, *, resource: str) -> None:
+    if (
+        not value
+        or value != value.strip()
+        or len(value) > 255
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+    ):
+        raise AgentConfigurationNotFound(
+            code=f"{resource.lower().replace(' ', '_')}_not_found",
+            detail=f"The requested {resource} was not found.",
+        )
+
+
+def _validate_execution_identity(
+    execution: AgentConfigurationValidationExecution,
+    *,
+    agent_id: str,
+    draft_id: str,
+    full_capture: bool,
+) -> None:
+    if (
+        execution.run_purpose != "validation"
+        or execution.agent_id != agent_id
+        or execution.draft_id != draft_id
+        or not execution.run_id
+        or not execution.outcome
+    ):
+        raise RuntimeError("Agent Draft validation returned inconsistent evidence")
+    capture = execution.validation_capture
+    capture_error = execution.capture_error
+    if capture is not None and capture_error is not None:
+        raise RuntimeError("Agent Draft validation returned inconsistent evidence")
+    if full_capture and capture is None and capture_error is None:
+        raise RuntimeError("Agent Draft validation returned inconsistent evidence")
+    if not full_capture and (capture is not None or capture_error is not None):
+        raise RuntimeError("Agent Draft validation returned inconsistent evidence")
+    if capture is not None and (
+        capture.run_id != execution.run_id
+        or capture.draft_id != execution.draft_id
+        or not capture.capture_id
+    ):
+        raise RuntimeError("Agent Draft validation returned inconsistent evidence")
+
+
+def _validation_capture_id(
+    capture: SensitiveValidationCaptureArtifact | None,
+) -> str | None:
+    return None if capture is None else capture.capture_id
+
+
+def _current_publication_validation(
+    record: AgentDraftRecord,
+    *,
+    validation_run_id: str | None,
+) -> AgentValidationRecord:
+    validations = record.draft.validation_records
+    selected_run_id = validation_run_id or (
+        None if not validations else validations[-1].run_id
+    )
+    if selected_run_id is None:
+        raise AgentConfigurationPublicationRejected(
+            code="agent_validation_required",
+            detail="A validation run is required before publication.",
+        )
+    validation = next(
+        (item for item in validations if item.run_id == selected_run_id),
+        None,
+    )
+    if validation is None or validation.draft_id != record.draft.draft_id:
+        raise AgentConfigurationPublicationRejected(
+            code="agent_validation_not_recorded",
+            detail="The requested validation run is not recorded for this Draft.",
+        )
+    latest_operation = (
+        None if not record.draft.operation_audit else record.draft.operation_audit[-1]
+    )
+    validated_revision = (
+        None
+        if latest_operation is None
+        else latest_operation.metadata.get("draft_revision")
+    )
+    if (
+        latest_operation is None
+        or latest_operation.operation is not ConfigurationOperation.VALIDATED
+        or latest_operation.metadata.get("run_id") != validation.run_id
+        or not isinstance(validated_revision, int)
+        or isinstance(validated_revision, bool)
+        or validated_revision + 1 != record.revision
+    ):
+        raise AgentConfigurationPublicationRejected(
+            code="agent_validation_stale",
+            detail="The Agent Draft changed after validation; validate it again.",
+        )
+    normalized_status = validation.status.strip().upper()
+    if (
+        not normalized_status
+        or normalized_status == "ERROR"
+        or normalized_status.startswith("FAILED")
+    ):
+        raise AgentConfigurationPublicationRejected(
+            code="agent_validation_failed",
+            detail="The Agent Draft validation did not complete successfully.",
+        )
+    if validation.errors or validation.publish_blockers:
+        raise AgentConfigurationPublicationRejected(
+            code="agent_validation_blocked",
+            detail="The Agent Draft validation contains publication blockers.",
+        )
+    return validation
+
+
+def _validation_model_connection_warnings(
+    trace_events: tuple[Mapping[str, Any], ...],
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    warnings: list[dict[str, Any]] = []
+    publish_blockers: list[dict[str, Any]] = []
+    seen_connections: set[tuple[str | None, str | None]] = set()
+    for event in trace_events:
+        if event.get("event_type") != "model_connection_resolution":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        event_warnings = payload.get("warnings")
+        if not isinstance(event_warnings, list | tuple):
+            continue
+        if "connection_archived" not in event_warnings:
+            continue
+        connection_id = payload.get("connection_id")
+        role = payload.get("role")
+        key = (
+            connection_id if isinstance(connection_id, str) else None,
+            role if isinstance(role, str) else None,
+        )
+        if key in seen_connections:
+            continue
+        seen_connections.add(key)
+        if not isinstance(connection_id, str) or not isinstance(role, str):
+            continue
+        warnings.append(
+            {
+                "code": "model_connection_archived",
+                "connection_id": connection_id,
+                "role": role,
+                "message": f"Shared Model Connection is archived: {connection_id}.",
+            }
+        )
+        publish_blockers.append(
+            {
+                "code": "archived_model_connection",
+                "connection_id": connection_id,
+                "role": role,
+                "message": (
+                    "Publish is blocked while Shared Model Connection "
+                    f"{connection_id} is archived."
+                ),
+            }
+        )
+    return tuple(warnings), tuple(publish_blockers)
+
+
+def _request_fingerprint(
+    *,
+    display_name: str,
+    purpose: str,
+    template_bundle: ContractBundle,
+) -> str:
+    payload = {
+        "schema": _CREATE_FINGERPRINT_SCHEMA,
+        "agent_id": SOLE_PRODUCTION_AGENT_ID,
+        "display_name": display_name,
+        "purpose": purpose,
+        "template_bundle": template_bundle.model_dump(mode="json"),
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _digest(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _nonblank(value: str, field: str, *, maximum: int) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > maximum:
+        raise ValueError(f"{field} is empty or outside its length limit")
+    return normalized
+
+
+def _bounded(value: str, field: str, *, maximum: int) -> str:
+    normalized = value.strip()
+    if len(normalized) > maximum:
+        raise ValueError(f"{field} is outside its length limit")
+    return normalized
+
+
+def _timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("production Agent configuration clock must be timezone-aware")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+__all__ = [
+    "SOLE_PRODUCTION_AGENT_ID",
+    "AgentConfigurationConflict",
+    "AgentConfigurationDraftMutation",
+    "AgentConfigurationInventory",
+    "AgentConfigurationNotFound",
+    "AgentConfigurationScope",
+    "AgentConfigurationSummary",
+    "AgentConfigurationVersions",
+    "AgentConfigurationWorkspace",
+    "load_server_owned_agent_template",
+]

@@ -150,11 +150,19 @@ The immutable release candidate binding pins source commit, clean tree, product 
 
 The `initial-private-pilot-v2` profile requires five top-level risk Gates covering 13 required check families. `proof-agent release verify` recomputes digests, binding, freshness, thresholds and status. Missing, stale, mismatched, unknown or non-passed required evidence returns NO-GO.
 
-### 10.1 Hybrid Knowledge release boundary
+### 10.1 KSS-only knowledge boundary
 
-Hybrid Knowledge resolves an immutable Source Publication, an immutable Index Generation and a separately pinned Retrieval Profile. Authorization filters run before retrieval; deterministic authority, precedence, citation and evidence-slot admission run after retrieval and cannot be overridden by ranking scores.
+KSS is the sole executable Source, version, Release and Candidate Evidence authority.
+A knowledge-enabled Published Agent Version freezes one exact KSS binding, including
+Space, Release, client, versioned secret and ProofAgent Admission Scorer identities.
+Package-local, shared-source and Hybrid binding shapes are invalid.
 
-Candidate publication requires a `KnowledgeReleaseRecord` bound to the exact Draft Contract Bundle and Resolved Hybrid Knowledge Bindings. Its Shadow, Capacity, Sealed Acceptance and Recovery references must be distinct exact artifact references and must be independently verified before the record can be registered. The Published Agent Version freezes the whole record.
+ProofAgent owns Admission, conflict governance, context assembly and final answers.
+KSS ranking remains provider-native relevance metadata and cannot override Evidence
+Admission. KSS, grant, credential or scorer failure is fail-closed with no local
+provider fallback. The old ProofAgent Hybrid worker, provider, API and persistence
+paths are removed; historical Agent Versions using them are not valid rollback or
+replay targets.
 
 Shadow suite v2 contains only question references and binding references. A trusted live driver executes both bindings and the control path verifies active pointers did not change. Sealed Acceptance receives aggregate facts only from an independent evaluator and verifies the canonical attestation digest, evaluator/key identity, signature, candidate, suite and Gate Profile before applying deterministic gates.
 
@@ -162,11 +170,11 @@ The built-in production adapter uses allowlisted HTTPS, validated and pinned pri
 
 ## 11. Deployment target
 
-Initial production is one hardened Linux host with a stable gateway and Blue/Green application slots. Gateway, API, Run Executor, Knowledge Worker, Dashboard and Operator Chat are separate Compose roles; API and Executor use the same product image.
+Initial production is one hardened Linux host with a stable gateway and Blue/Green application slots. Gateway, API, Run Executor, Dashboard and Operator Chat are separate ProofAgent Compose roles; API and Executor use the same product image. KSS has its own independently deployed API, Query Executor, Knowledge Worker, Scheduler and migration roles.
 
 External PostgreSQL, S3-compatible storage, OIDC, secret provider and model endpoints are deployment bindings. `/readyz` must verify their concrete compatibility, not merely process liveness. Migrations are explicit and backward-compatible across the rollback window.
 
-The readiness projection reports release ID, image digest, deployment slot, process role, activation state, schema revision/compatible range and Deployment Compatibility Manifest digest together with sanitized component status. The API verifies exact PostgreSQL schema compatibility, OIDC discovery/JWKS, a dedicated Secret Provider probe handle, versioned S3 plus a background exact write-read success no older than 60 seconds, active egress policy, the sole Published Agent and its referenced production configuration, and the durable run queue. Run Executor and Knowledge Worker own PostgreSQL-fenced role leases with monotonically increasing activation epochs, background heartbeats, explicit drain/release transitions and loopback `/livez`/`/readyz`; `STANDBY` and `DRAINING` do not claim new work, while in-flight work is fenced from committing after role ownership loss.
+The readiness projection reports release ID, image digest, deployment slot, process role, activation state, schema revision/compatible range and Deployment Compatibility Manifest digest together with sanitized component status. The API verifies exact PostgreSQL schema compatibility, OIDC discovery/JWKS, a dedicated Secret Provider probe handle, versioned S3 plus a background exact write-read success no older than 60 seconds, active egress policy, the sole Published Agent and its exact KSS binding, and the durable run queue. The Run Executor owns a PostgreSQL-fenced role lease with a monotonically increasing activation epoch, background heartbeat, explicit drain/release transitions and loopback `/livez`/`/readyz`; `STANDBY` and `DRAINING` do not claim new work, while in-flight work is fenced from committing after role ownership loss. KSS role readiness and fencing remain service-owned.
 
 Production migration is an explicit, non-restarting Compose profile. The candidate command must acknowledge the advisory lock and expand-only policy and bind the exact packaged schema head; API and worker composition never invokes migration code. Every shipped Alembic revision must be present in the code-owned reviewed expand-only allowlist, while downgrade/contract operations remain unavailable during the rollback window.
 

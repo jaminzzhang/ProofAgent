@@ -252,8 +252,7 @@ stage_prompt_addenda:
     business_context: "{admitted_context}"
     task_instructions:
       - "Prioritize the bound policy knowledge source before planning."
-knowledge_binding_refs:
-  - claims_sop_docs
+knowledge_binding_refs: []
 tool_contract_refs: []
 policy_rule_refs:
   - answering.require_evidence
@@ -315,8 +314,7 @@ intent_patterns:
 stage_prompt_addenda:
   plan:
     business_context: "{blocked_context}"
-knowledge_binding_refs:
-  - claims_sop_docs
+knowledge_binding_refs: []
 tool_contract_refs: []
 policy_rule_refs:
   - answering.require_evidence

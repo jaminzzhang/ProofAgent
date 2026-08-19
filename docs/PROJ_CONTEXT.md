@@ -8,11 +8,20 @@
   `services/knowledge-source-service/`; its public query resource is
   `/v1/knowledge-queries`, and its API, Query Executor, Knowledge Worker,
   Synchronization Scheduler, and migration roles have independent entry points.
-- `[KNOWN | HIGH]` ProofAgent integrates through the provider-neutral
-  `KnowledgeCandidateService` port and
-  `proof_agent/capabilities/knowledge/source_service_client.py`. The production
-  path fails closed and does not use the local Hybrid provider as an exception
-  fallback.
+- `[KNOWN | HIGH]` As of 2026-08-19, ADR-0210 makes KSS the only executable
+  knowledge authority. A knowledge-enabled Published Agent Version owns one
+  exact `ResolvedKnowledgeSourceServiceBinding`; ProofAgent queries through
+  `proof_agent/capabilities/knowledge/source_service_client.py` and applies its
+  own exact Admission Scorer. Package, shared-source and Hybrid bindings are
+  rejected, and production fails closed without a local fallback.
+- `[KNOWN | HIGH]` ProofAgent's old Hybrid provider, ingestion, publication,
+  worker, repository, source-management API, CLI and Dashboard paths have been
+  physically removed. KSS's own Knowledge Worker remains. Former Hybrid-bound
+  Published Agent Versions are historical records and no longer replayable or
+  usable as rollback targets.
+- `[COMPUTED | HIGH]` Final local cutover verification passed 1837 backend tests,
+  all 195 Dashboard tests and the Dashboard production build. Ruff, strict mypy,
+  domain-context and diff checks passed. This does not authorize production.
 - `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
   same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS
   operator credential from Vault and calls the independent service through the
@@ -50,17 +59,19 @@
   and `0021`; the explicit cutover command requires stopped writes, stopped
   Workers and exact pre-cutover backup Evidence.
 
-The existing Graphify map was queried on 2026-08-11 to locate the composition,
-knowledge-resolution, provider, retrieval, and local-index seams. It was not
-rebuilt, so code remains the authority for implementation decisions.
+The Graphify map was queried during the 2026-08-18 authority cutover to check the
+former composition, knowledge-resolution and provider seams. The cutover itself
+is governed by ADR-0210 and current code; Graphify is navigation evidence, not
+release approval.
 
 ## Feature index
 
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
-| `knowledge-source-service` | `VERIFIED_LOCAL` | `docs/features/knowledge-source-service/` | `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
+| `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
+| `agent-configuration-workspace` | `PARTIAL_VERIFICATION` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |
 
 ## Status vocabulary
 

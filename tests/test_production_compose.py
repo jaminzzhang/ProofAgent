@@ -74,7 +74,7 @@ def test_knowledge_service_data_plane_roles_receive_s3_secrets_as_files() -> Non
     assert "KSS_S3_SECRET_ACCESS_KEY=" not in example
 
 
-def test_slot_contains_five_same_image_product_roles() -> None:
+def test_slot_contains_four_same_image_product_roles() -> None:
     compose = _compose()
     services = compose["services"]
 
@@ -82,7 +82,6 @@ def test_slot_contains_five_same_image_product_roles() -> None:
         "migrate",
         "api",
         "run-executor",
-        "knowledge-worker",
         "dashboard",
         "operator-chat",
     }
@@ -91,10 +90,6 @@ def test_slot_contains_five_same_image_product_roles() -> None:
     }
     assert services["api"]["command"][:2] == ["proof-agent", "server"]
     assert services["run-executor"]["command"][:2] == ["proof-agent", "run-executor"]
-    assert services["knowledge-worker"]["command"][:2] == [
-        "proof-agent",
-        "knowledge-worker",
-    ]
     assert services["dashboard"]["command"][:4] == [
         "proof-agent",
         "serve-static",
@@ -137,7 +132,7 @@ def test_slot_uses_only_external_secret_free_environment_file() -> None:
         assert service["env_file"] == ["${SLOT_ENV_FILE:?set the candidate slot env file}"]
         assert "environment" not in service
     assert "PROOF_AGENT_VAULT_AGENT_TOKEN_FILE=/run/secrets/vault-agent-token" in example
-    assert "PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT=https://" in example
+    assert "PROOF_AGENT_KSS_ENDPOINT=https://" in example
     assert "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE=" in example
     assert "PASSWORD=" not in example
     assert "ACCESS_KEY=" not in example
@@ -152,11 +147,10 @@ def test_slot_network_is_internal_and_named_per_blue_green_slot() -> None:
     assert network["name"] == "proofagent-${SLOT:?set blue or green}"
 
 
-def test_worker_roles_have_loopback_readiness_healthchecks_and_exact_slot() -> None:
+def test_run_executor_has_loopback_readiness_healthcheck_and_exact_slot() -> None:
     services = _compose()["services"]
 
     executor = services["run-executor"]
-    knowledge = services["knowledge-worker"]
     assert executor["command"][-6:] == [
         "--health-host",
         "127.0.0.1",
@@ -165,13 +159,4 @@ def test_worker_roles_have_loopback_readiness_healthchecks_and_exact_slot() -> N
         "--slot",
         "${SLOT_NUMBER:?set 1 for blue or 2 for green}",
     ]
-    assert knowledge["command"][-6:] == [
-        "--health-host",
-        "127.0.0.1",
-        "--health-port",
-        "8002",
-        "--slot",
-        "${SLOT_NUMBER:?set 1 for blue or 2 for green}",
-    ]
     assert "127.0.0.1:8001/readyz" in executor["healthcheck"]["test"][-1]
-    assert "127.0.0.1:8002/readyz" in knowledge["healthcheck"]["test"][-1]

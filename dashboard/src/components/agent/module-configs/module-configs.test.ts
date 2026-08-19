@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { KNOWLEDGE_FIELDS } from './knowledge'
 import { MEMORY_FIELDS } from './memory'
 import { MODEL_FIELDS } from './model'
 import { WORKFLOW_FIELDS, WORKFLOW_TEMPLATE_FALLBACK } from './workflow'
@@ -15,19 +14,6 @@ function fieldPaths(fields: readonly { path: readonly string[] }[]): readonly st
 }
 
 describe('module configuration field options', () => {
-  it('uses backend-supported knowledge and retrieval values', () => {
-    expect(optionsFor(KNOWLEDGE_FIELDS, 'Retrieval Strategy')).toEqual([
-      'single_step',
-      'agentic',
-    ])
-    expect(fieldPaths(KNOWLEDGE_FIELDS)).toEqual(expect.arrayContaining([
-      'retrieval.strategy',
-      'retrieval.top_k',
-      'retrieval.min_score',
-      'retrieval.max_steps',
-    ]))
-  })
-
   it('uses backend-supported workflow, model, review, and memory values', () => {
     const modelProviders = ['deterministic', 'openai_compatible', 'openai', 'deepseek', 'azure_openai', 'anthropic']
 

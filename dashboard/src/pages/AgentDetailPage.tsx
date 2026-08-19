@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
-  bindKnowledgeSourceToDraft,
   chatUrl,
   createModelConnection,
   createConfigDraftSkillPack,
@@ -12,20 +11,17 @@ import {
   previewWorkflowStageContext,
   publishConfigDraft,
   rollbackConfigVersion,
-  unbindKnowledgeSourceFromDraft,
   updateConfigDraft,
   updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
   validateConfigDraft,
 } from '../api/client'
-import { fetchKnowledgeSources } from '../api/knowledgeSources'
 import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
   SharedModelConnection,
-  KnowledgeSource,
   WorkflowTemplateDescriptor,
 } from '../api/types'
 import { CodeBlock } from '../components/CodeBlock'
@@ -36,13 +32,11 @@ import { AgentDetailShell } from '../components/agent/AgentDetailShell'
 import { AgentMonitor, AgentMonitorSummary } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
-import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
-import { KNOWLEDGE_FIELDS } from '../components/agent/module-configs/knowledge'
 import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
@@ -57,7 +51,7 @@ import {
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
-type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
+type Tab = 'general' | 'workflow' | 'skills' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
 const SAFE_EDITABLE_MODULES: readonly Tab[] = ['general']
 const SAFE_LIFECYCLE_TABS: readonly Tab[] = []
@@ -92,9 +86,6 @@ export function AgentDetailPage() {
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([])
-  const [knowledgeSourcesLoaded, setKnowledgeSourcesLoaded] = useState(false)
-  const [knowledgeSourceError, setKnowledgeSourceError] = useState<string | null>(null)
   const [modelConnections, setModelConnections] = useState<SharedModelConnection[]>([])
   const [modelConnectionsLoaded, setModelConnectionsLoaded] = useState(false)
   const [workflowDescriptor, setWorkflowDescriptor] = useState<WorkflowTemplateDescriptor | null>(null)
@@ -114,25 +105,6 @@ export function AgentDetailPage() {
   useEffect(() => {
     if (contract) setAgentYaml(contract.agent_yaml)
   }, [contract])
-
-  useEffect(() => {
-    if (activeTab !== 'knowledge' || knowledgeSourcesLoaded) return
-    let mounted = true
-    fetchKnowledgeSources()
-      .then((response) => {
-        if (!mounted) return
-        setKnowledgeSources(response.data)
-        setKnowledgeSourcesLoaded(true)
-        setKnowledgeSourceError(null)
-      })
-      .catch((err) => {
-        if (!mounted) return
-        setKnowledgeSourceError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      mounted = false
-    }
-  }, [activeTab, knowledgeSourcesLoaded])
 
   useEffect(() => {
     if (activeTab !== 'model' || modelConnectionsLoaded) return
@@ -309,26 +281,6 @@ export function AgentDetailPage() {
     })
   }
 
-  async function bindKnowledgeSource(payload: Parameters<typeof bindKnowledgeSourceToDraft>[2]) {
-    if (!agentId || !draftId || !payload.source_id) return
-    await runAction('knowledge-binding', async () => {
-      const updated = await bindKnowledgeSourceToDraft(agentId, draftId, payload)
-      setAgentYaml(updated.agent_yaml)
-      setStatus(t('agentDetail.knowledgeBindingSaved'))
-      refresh()
-    })
-  }
-
-  async function unbindKnowledgeSource(bindingId: string) {
-    if (!agentId || !draftId || !bindingId) return
-    await runAction('knowledge-binding', async () => {
-      const updated = await unbindKnowledgeSourceFromDraft(agentId, draftId, bindingId)
-      setAgentYaml(updated.agent_yaml)
-      setStatus(t('agentDetail.knowledgeBindingRemoved'))
-      refresh()
-    })
-  }
-
   async function publishDraft() {
     if (!agentId || !draftId || !latestValidation || memoryReadinessBlockers.length > 0) return
     await runAction('publish', async () => {
@@ -363,7 +315,6 @@ export function AgentDetailPage() {
     { id: 'general', label: t('agentDetail.tabOverview') },
     { id: 'workflow', label: t('agentDetail.tabWorkflow') },
     { id: 'skills', label: t('agentDetail.tabSkills') },
-    { id: 'knowledge', label: t('agentDetail.tabKnowledge') },
     { id: 'tools', label: t('agentDetail.tabTools') },
     { id: 'policy', label: t('agentDetail.tabPolicy') },
     { id: 'model', label: t('agentDetail.tabModel') },
@@ -514,19 +465,6 @@ export function AgentDetailPage() {
           onCreatePack={createSkillPack}
           onUpdatePack={updateSkillPack}
           onDeletePack={deleteSkillPack}
-        />
-      )}
-
-      {activeTab === 'knowledge' && (
-        <KnowledgeModuleEditor
-          agentYaml={agentYaml}
-          knowledgeSources={knowledgeSources}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onBindSource={bindKnowledgeSource}
-          onUnbindSource={unbindKnowledgeSource}
-          onSave={() => saveAgentYaml(t('agentDetail.knowledgeSaved'))}
-          busy={busy === 'workflow' || busy === 'knowledge-binding'}
-          knowledgeSourceError={knowledgeSourceError}
         />
       )}
 
@@ -821,7 +759,6 @@ function agentDetailTab(value: string | null): Tab {
     'general',
     'workflow',
     'skills',
-    'knowledge',
     'tools',
     'policy',
     'model',

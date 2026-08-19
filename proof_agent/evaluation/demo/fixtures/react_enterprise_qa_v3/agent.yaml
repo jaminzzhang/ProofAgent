@@ -1,22 +1,12 @@
 name: react_enterprise_qa_v3
-purpose: "Answer enterprise knowledge questions through the governed Controlled ReAct Loop (ADR-0032): observation actions return to plan under a dual-axis budget and deterministic Convergence Check."
+purpose: "Exercise the governed Controlled ReAct Loop without an embedded Knowledge authority."
 
 workflow:
   template: react_enterprise_qa_v3
   template_descriptor_version: react_enterprise_qa.v3
 
-package_knowledge_sources:
-  - source_id: react_enterprise_qa_v3_knowledge
-    name: ReAct Enterprise QA V3 Knowledge
-    provider: local_markdown
-    params:
-      path: ./knowledge
-
-knowledge_bindings:
-  - binding_id: react_enterprise_qa_v3_knowledge_binding
-    source_ref:
-      scope: package
-      source_id: react_enterprise_qa_v3_knowledge
+package_knowledge_sources: []
+knowledge_bindings: []
 
 retrieval:
   strategy: single_step

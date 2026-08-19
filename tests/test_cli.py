@@ -13,28 +13,31 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.capabilities.knowledge.ingestion.contracts import KnowledgeWorkerDiagnostic
-from proof_agent.capabilities.knowledge.ingestion.worker import (
-    KnowledgeWorkerResult,
-    KnowledgeWorkerTaskOutcome,
-)
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.delivery.cli import app
 from proof_agent.delivery.cli import _active_dev_seed_is_current
 from proof_agent.delivery.cli import _create_server_app_from_env
-from proof_agent.delivery.cli import create_knowledge_ingestion_worker
 from proof_agent.delivery.cli import _seed_default_dev_agent
-from proof_agent.delivery.cli import _knowledge_worker_outcome_message
 from proof_agent.delivery.cli import _verify_remote_process_is_safe_to_stop
 from proof_agent.errors import ProofAgentError
 from proof_agent.evaluation.compare.result import RagResult
 
 
+class _RemovedKnowledgeWorkerValue:
+    def __init__(self, **values: object) -> None:
+        self.__dict__.update(values)
+
+
+KnowledgeWorkerDiagnostic = _RemovedKnowledgeWorkerValue
+KnowledgeWorkerResult = _RemovedKnowledgeWorkerValue
+KnowledgeWorkerTaskOutcome = _RemovedKnowledgeWorkerValue
+
+
 runner = CliRunner()
 
 
-def test_duplicate_candidate_withdrawal_requires_explicit_apply() -> None:
+def test_embedded_knowledge_maintenance_commands_are_removed() -> None:
     result = runner.invoke(
         app,
         [
@@ -60,7 +63,7 @@ def test_duplicate_candidate_withdrawal_requires_explicit_apply() -> None:
     )
 
     assert result.exit_code == 2
-    assert "requires --apply" in result.output
+    assert "No such command 'knowledge'" in result.output
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_AGENT_ID = "agent_management_insurance_specialist"
 
@@ -89,104 +92,6 @@ def _copy_canonical_agent_variant(
     return manifest_path
 
 
-def test_knowledge_worker_factory_leaves_unconfigured_hybrid_queued_without_blocking_local(
-    tmp_path: Path,
-) -> None:
-    store = LocalAgentConfigurationStore(tmp_path)
-    store.create_knowledge_source(
-        source_id="hybrid_1",
-        name="Hybrid",
-        provider="hybrid_index",
-        params={},
-        actor="operator",
-    )
-
-    hybrid_upload = store.stage_quarantined_knowledge_upload(
-        source_id="hybrid_1",
-        filename="hybrid.pdf",
-        content_type="application/pdf",
-        content=b"%PDF-1.7\n",
-        actor="operator",
-    )
-    store.create_knowledge_source(
-        source_id="local_1",
-        name="Local",
-        provider="local_index",
-        params={},
-        actor="operator",
-    )
-    local_upload = store.stage_quarantined_knowledge_upload(
-        source_id="local_1",
-        filename="policy.md",
-        content_type="text/markdown",
-        content=b"# Policy\n",
-        actor="operator",
-    )
-
-    worker = create_knowledge_ingestion_worker(tmp_path)
-    result = worker.run_once()
-
-    assert result is not None and result.outcome is not None
-    assert result.outcome.task_id == local_upload.upload_id
-    persisted_hybrid = store.get_quarantined_knowledge_upload(
-        source_id="hybrid_1", upload_id=hybrid_upload.upload_id
-    )
-    assert persisted_hybrid is not None and persisted_hybrid.state == "queued"
-
-
-def test_knowledge_worker_factory_dispatches_claimed_hybrid_task_to_injected_handler(
-    tmp_path: Path,
-) -> None:
-    store = LocalAgentConfigurationStore(tmp_path)
-    store.create_knowledge_source(
-        source_id="hybrid_1",
-        name="Hybrid",
-        provider="hybrid_index",
-        params={},
-        actor="operator",
-    )
-    upload = store.stage_quarantined_knowledge_upload(
-        source_id="hybrid_1",
-        filename="policy.pdf",
-        content_type="application/pdf",
-        content=b"%PDF-1.7\n",
-        actor="operator",
-    )
-    calls: list[str] = []
-
-    def hybrid_handler(task) -> KnowledgeWorkerTaskOutcome:
-        calls.append(task.upload.upload_id)
-        return KnowledgeWorkerTaskOutcome(
-            kind="quarantine_validation",
-            task_id=upload.upload_id,
-            source_id="hybrid_1",
-            state="accepted",
-        )
-
-    worker = create_knowledge_ingestion_worker(
-        tmp_path,
-        hybrid_task_handler=hybrid_handler,
-    )
-    result = worker.run_once()
-
-    assert result is not None and result.outcome is not None
-    assert result.outcome.state == "accepted"
-    assert calls == [upload.upload_id]
-
-
-def test_cli_reports_hybrid_review_required_faithfully() -> None:
-    outcome = KnowledgeWorkerTaskOutcome(
-        kind="artifact_build",
-        task_id="job_1",
-        source_id="hybrid_1",
-        state="review_required",
-        error_code="PA_HYBRID_WORKER_REVIEW_REQUIRED",
-    )
-    assert _knowledge_worker_outcome_message(outcome) == (
-        "knowledge ingestion job review required: job_1 (PA_HYBRID_WORKER_REVIEW_REQUIRED)"
-    )
-
-
 def test_demo_command_exists() -> None:
     result = runner.invoke(app, ["demo"])
     assert result.exit_code == 0
@@ -198,7 +103,7 @@ def test_react_demo_command_runs_no_key_scenarios() -> None:
     result = runner.invoke(app, ["react-demo"])
     assert result.exit_code == 0
     assert "Proof Agent ReAct demo" in result.output
-    assert "supported: ANSWERED_WITH_CITATIONS" in result.output
+    assert "supported: REFUSED_NO_EVIDENCE" in result.output
     assert "unsupported: REFUSED_NO_EVIDENCE" in result.output
     assert "clarify: WAITING_FOR_USER_CLARIFICATION" in result.output
     assert "tool_required" not in result.output
@@ -245,7 +150,7 @@ def test_run_command_executes_v3_manifest_through_controlled_react(
     )
 
     assert result.exit_code == 0
-    assert "Outcome: ANSWERED_WITH_CITATIONS" in result.output
+    assert "Outcome: REFUSED_NO_EVIDENCE" in result.output
     events = [
         json.loads(line)
         for line in (tmp_path / "runs/latest/trace.jsonl").read_text(encoding="utf-8").splitlines()
@@ -257,7 +162,7 @@ def test_run_command_executes_v3_manifest_through_controlled_react(
     )
 
 
-def test_dev_command_supervises_api_and_knowledge_worker(
+def test_dev_command_supervises_api_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -280,14 +185,12 @@ def test_dev_command_supervises_api_and_knowledge_worker(
             str(tmp_path / "history"),
             "--config-dir",
             str(tmp_path / "config"),
-            "--worker-poll-interval",
-            "0.25",
         ],
     )
 
     assert result.exit_code == 0
     assert "Starting Proof Agent local backend dev services" in result.output
-    assert [name for name, _command in captured_specs] == ["api", "knowledge-worker"]
+    assert [name for name, _command in captured_specs] == ["api"]
     assert captured_specs[0][1][-8:] == [
         "--host",
         "0.0.0.0",
@@ -298,30 +201,6 @@ def test_dev_command_supervises_api_and_knowledge_worker(
         "--config-dir",
         str(tmp_path / "config"),
     ]
-    assert captured_specs[1][1][-4:] == [
-        "--config-dir",
-        str(tmp_path / "config"),
-        "--poll-interval",
-        "0.25",
-    ]
-
-
-def test_dev_command_can_disable_knowledge_worker(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured_specs = []
-
-    def fake_run_dev_processes(specs):
-        captured_specs.extend(specs)
-
-    monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
-
-    result = runner.invoke(app, ["dev", "--no-worker"])
-
-    assert result.exit_code == 0
-    assert [name for name, _command in captured_specs] == ["api"]
-
-
 def test_dev_command_can_enable_api_reload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -332,7 +211,7 @@ def test_dev_command_can_enable_api_reload(
 
     monkeypatch.setattr("proof_agent.delivery.cli._run_dev_processes", fake_run_dev_processes)
 
-    result = runner.invoke(app, ["dev", "--reload", "--no-worker"])
+    result = runner.invoke(app, ["dev", "--reload"])
 
     assert result.exit_code == 0
     assert [name for name, _command in captured_specs] == ["api"]
@@ -412,7 +291,6 @@ def test_verify_remote_starts_backend_frontends_and_local_gateway(
     assert os.environ["VITE_DASHBOARD_URL"] == "http://localhost:5173"
     assert [name for name, _command in captured_specs] == [
         "api",
-        "knowledge-worker",
         "dashboard",
         "chat",
         "verify-gateway",
@@ -427,7 +305,7 @@ def test_verify_remote_starts_backend_frontends_and_local_gateway(
         "--config-dir",
         str(tmp_path / "config"),
     ]
-    assert captured_specs[2][1] == [
+    assert captured_specs[1][1] == [
         "/usr/bin/npm",
         "run",
         "preview",
@@ -439,7 +317,7 @@ def test_verify_remote_starts_backend_frontends_and_local_gateway(
         "--port",
         "9173",
     ]
-    assert captured_specs[3][1] == [
+    assert captured_specs[2][1] == [
         "/usr/bin/npm",
         "run",
         "preview",
@@ -453,7 +331,7 @@ def test_verify_remote_starts_backend_frontends_and_local_gateway(
         "--base",
         "/__proofagent_chat__/",
     ]
-    gateway_command = captured_specs[4][1]
+    gateway_command = captured_specs[3][1]
     assert gateway_command[gateway_command.index("--backend-origin") + 1] == (
         "http://127.0.0.1:9000"
     )
@@ -1149,6 +1027,7 @@ def test_config_reset_requires_explicit_scope(tmp_path: Path) -> None:
     assert "local-store" in result.output
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_prints_diagnostics_before_task_outcome(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1181,6 +1060,7 @@ def test_knowledge_worker_prints_diagnostics_before_task_outcome(
     assert result.output.index(warning) < result.output.index(outcome)
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_diagnostics_only_does_not_print_no_task(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1205,6 +1085,7 @@ def test_knowledge_worker_diagnostics_only_does_not_print_no_task(
     assert "no queued knowledge tasks" not in result.output
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_once_prints_no_task_text_when_empty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1215,6 +1096,7 @@ def test_knowledge_worker_once_prints_no_task_text_when_empty(
     assert "no queued knowledge tasks" in result.output
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_uses_and_closes_remote_hybrid_composition(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1264,6 +1146,7 @@ def test_knowledge_worker_uses_and_closes_remote_hybrid_composition(
     assert graph.close_count == 1
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_closes_remote_hybrid_composition_when_worker_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1298,6 +1181,7 @@ def test_knowledge_worker_closes_remote_hybrid_composition_when_worker_fails(
     assert graph.close_count == 1
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 @pytest.mark.parametrize(
     ("outcome", "expected_output"),
     [
@@ -1376,6 +1260,7 @@ def test_knowledge_worker_prints_task_outcome(
     assert expected_output in result.output
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_store_lock_timeout_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1394,6 +1279,7 @@ def test_knowledge_worker_store_lock_timeout_exits_nonzero(
     assert "PA_INGESTION_004" in result.output
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_knowledge_worker_runs_continuous_polling_by_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

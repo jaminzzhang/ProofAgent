@@ -133,9 +133,7 @@ def test_local_production_knowledge_service_uses_tls_authority_boundaries() -> N
         "postgresql://knowledge_source_service:${KSS_POSTGRES_PASSWORD}"
         "@postgres:5432/knowledge_source_service"
     )
-    assert (
-        api_environment["KSS_POSTGRES_DSN"] != services["api"]["environment"]["HYBRID_POSTGRES_DSN"]
-    )
+    assert "HYBRID_POSTGRES_DSN" not in services["api"]["environment"]
     assert api_environment["KSS_SEARCH_ENDPOINT"] == ("https://opensearch.internal:9200")
     assert api_environment["KSS_PROJECTION_ENCODER_ENDPOINT"] == (
         "https://models.internal:9449/v1/encode"
@@ -173,27 +171,12 @@ def test_local_production_verifier_covers_knowledge_service_authorities() -> Non
     assert "local/proof-agent-knowledge-local" in verifier
 
 
-def test_local_production_bootstraps_only_the_designated_reference_profile_source() -> None:
+def test_local_production_has_no_embedded_hybrid_bootstrap() -> None:
     services = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))["services"]
-    bootstrap = services["reference-metadata-bootstrap"]
 
-    assert bootstrap["restart"] == "no"
-    assert bootstrap["entrypoint"] == ["python"]
-    assert bootstrap["command"] == ["/opt/proof-agent-local/bootstrap_reference_metadata.py"]
-    assert bootstrap["depends_on"]["database-migrate"]["condition"] == (
-        "service_completed_successfully"
-    )
-    assert bootstrap["depends_on"]["hybrid-migrate"]["condition"] == (
-        "service_completed_successfully"
-    )
-    assert (
-        services["api"]["depends_on"]["reference-metadata-bootstrap"]["condition"]
-        == "service_completed_successfully"
-    )
-    assert (
-        services["knowledge-worker"]["environment"]["PA_KNOWLEDGE_REFERENCE_PROFILE_SOURCE_IDS"]
-        == "ks_insurance"
-    )
+    assert "reference-metadata-bootstrap" not in services
+    assert "hybrid-migrate" not in services
+    assert "knowledge-worker" not in services
 
 
 def test_local_production_supplies_current_api_startup_contract() -> None:
@@ -231,7 +214,7 @@ def test_local_production_connects_dashboard_bff_to_kss_without_browser_secret()
     vault_environment = services["vault-init"]["environment"]
     vault_command = services["vault-init"]["command"][0]
 
-    assert api_environment["PROOF_AGENT_KSS_MANAGEMENT_ENDPOINT"] == (
+    assert api_environment["PROOF_AGENT_KSS_ENDPOINT"] == (
         "https://proof-agent.localhost:8444"
     )
     handle_id = api_environment["PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"]

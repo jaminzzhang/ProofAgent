@@ -1,4 +1,4 @@
-"""Controlled production publication for the sole Hybrid insurance Agent."""
+"""Controlled production publication for the sole KSS-backed insurance Agent."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol
 from uuid import uuid4
 
 from proof_agent.bootstrap.loader import load_agent_manifest
@@ -31,10 +31,8 @@ from proof_agent.contracts import (
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
     ReceiptOutcome,
-    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
-    ResolvedSharedAssetVersions,
-    SharedAssetKind,
+    ResolvedKnowledgeSourceServiceBinding,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
 )
@@ -74,15 +72,6 @@ class ProductionAgentCandidateValidator(Protocol):
     ) -> ProductionAgentCandidateValidation: ...
 
 
-class HybridBindingAuthority(Protocol):
-    def resolve_binding_authority(
-        self,
-        *,
-        source_id: str,
-        profile_revision_id: str | None,
-    ) -> Any: ...
-
-
 class ProductionAgentPublicationService:
     """Stage a candidate, run it online, then atomically publish and activate it."""
 
@@ -90,7 +79,7 @@ class ProductionAgentPublicationService:
         self,
         *,
         unit_of_work_factory: Callable[[], Any],
-        binding_authority: HybridBindingAuthority,
+        knowledge_binding: ResolvedKnowledgeSourceServiceBinding,
         release_authority: KnowledgeReleaseEvidenceAuthority,
         configuration_store: ModelConnectionReader,
         model_credential_resolver: ModelCredentialResolver,
@@ -98,7 +87,7 @@ class ProductionAgentPublicationService:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
-        self._binding_authority = binding_authority
+        self._knowledge_binding = knowledge_binding
         self._release_authority = release_authority
         self._configuration_store = configuration_store
         self._model_credential_resolver = model_credential_resolver
@@ -120,55 +109,12 @@ class ProductionAgentPublicationService:
             raise ProductionAgentValidationError(
                 "production publication accepts only the sole insurance Agent"
             )
-        if len(manifest.knowledge_bindings) != 1:
+        if manifest.knowledge_bindings:
             raise ProductionAgentValidationError(
-                "initial production online runtime requires exactly one Hybrid binding"
-            )
-        configured_binding = manifest.knowledge_bindings[0]
-        if configured_binding.source_ref.scope != "shared":
-            raise ProductionAgentValidationError(
-                "production Agent Knowledge binding must reference a shared Source"
-            )
-        snapshot = self._binding_authority.resolve_binding_authority(
-            source_id=configured_binding.source_ref.source_id,
-            profile_revision_id=configured_binding.retrieval_profile_revision_id,
-        )
-        if snapshot is None:
-            raise ProductionAgentValidationError(
-                "production Agent Hybrid publication authority is unavailable"
-            )
-        publication = snapshot.publication
-        profile = snapshot.retrieval_profile
-        if (
-            publication.source_id != configured_binding.source_ref.source_id
-            or (
-                configured_binding.retrieval_profile_revision_id is not None
-                and profile.profile_revision_id
-                != configured_binding.retrieval_profile_revision_id
-            )
-        ):
-            raise ProductionAgentValidationError(
-                "production Agent Hybrid publication authority is stale"
+                "production Agent package cannot retain legacy Knowledge Source bindings"
             )
         resolved_bindings = ResolvedKnowledgeBindingSet(
-            bindings=(
-                ResolvedHybridKnowledgeBinding(
-                    binding_id=configured_binding.binding_id,
-                    source_id=publication.source_id,
-                    source_publication_id=publication.publication_id,
-                    source_snapshot_id=publication.source_snapshot_id,
-                    index_generation_id=publication.generation_id,
-                    source_publication_seq=publication.source_publication_seq,
-                    retrieval_profile_revision_id=profile.profile_revision_id,
-                    manifest_ref=publication.manifest_ref,
-                    publication_attestation_id=publication.attestation.attestation_id,
-                    failure_mode=cast(
-                        Literal["required", "advisory"],
-                        configured_binding.failure_mode,
-                    ),
-                    fusion_weight=configured_binding.fusion_weight,
-                ),
-            )
+            bindings=(self._knowledge_binding,)
         )
         bundle = build_agent_package_contract_bundle(manifest_path)
         now = _timestamp(self._clock())
@@ -245,11 +191,6 @@ class ProductionAgentPublicationService:
             expected_active_version_id = (
                 None if current_active is None else current_active.version_id
             )
-            source_version = uow.knowledge.resolve_version(publication.source_id)
-            if source_version is None or source_version.kind is not SharedAssetKind.KNOWLEDGE_SOURCE:
-                raise ProductionAgentValidationError(
-                    "published Hybrid Source has no immutable PostgreSQL asset version"
-                )
             draft_record = uow.agents.save_draft(draft, expected_revision=0)
             uow.audit.append(
                 _audit_event(
@@ -260,19 +201,18 @@ class ProductionAgentPublicationService:
                     metadata={
                         "draft_id": draft_id,
                         "knowledge_release_record_id": release_record.record_id,
-                        "source_publication_id": publication.publication_id,
+                        "knowledge_base_release_id": (
+                            self._knowledge_binding.knowledge_base_release_id
+                        ),
+                        "admission_scorer_revision": (
+                            self._knowledge_binding.admission_scorer_revision
+                        ),
                     },
                 )
             )
             uow.commit()
 
-        version = provisional_version.model_copy(
-            update={
-                "resolved_shared_asset_versions": ResolvedSharedAssetVersions(
-                    versions=(source_version,)
-                )
-            }
-        )
+        version = provisional_version
         agent = _published_agent(manifest_path, version)
         validate_production_agent_candidate(
             agent=agent,
@@ -291,7 +231,7 @@ class ProductionAgentPublicationService:
             operation=ConfigurationOperation.PUBLISHED,
             actor=actor.subject,
             created_at=_timestamp(self._clock()),
-            summary="Published the sole production Hybrid Agent after Phase F and online smoke.",
+            summary="Published the sole production KSS Agent after Phase F and online smoke.",
             metadata={
                 "validation_run_id": validation.run_id,
                 "validation_trace_ref": validation.trace_ref.model_dump(mode="json"),

@@ -7,9 +7,9 @@ from typing import Any
 from uuid import uuid4
 
 from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.bootstrap.hybrid_execution import (
-    HybridRunDependencies as HybridRunDependencies,
-    HybridRunRuntime,
+from proof_agent.bootstrap.knowledge_candidate_runtime import (
+    KnowledgeCandidateRunDependencies as KnowledgeCandidateRunDependencies,
+    KnowledgeCandidateRuntime,
 )
 from proof_agent.contracts import (
     AgentManifest,
@@ -42,7 +42,7 @@ class RunExecutionDependencies:
     controlled_react_snapshot_store: SnapshotStorePort | None = None
     controlled_react_observation_truth_store: ObservationTruthStorePort | None = None
     controlled_react_orchestrator: ControlledReActOrchestratorDependency | None = None
-    hybrid_runtime: HybridRunRuntime | None = None
+    knowledge_candidate_runtime: KnowledgeCandidateRuntime | None = None
     guarded_http_client: GuardedHttpClient | None = None
     secret_provider: SecretProvider | None = None
     model_credential_resolver: ModelCredentialResolver | None = None
@@ -76,24 +76,16 @@ def execute_published_agent_run(
         published_agent.manifest_path,
         require_writable_artifacts=False,
     )
-    hybrid_dependencies = None
-    if published_agent.resolved_knowledge_bindings is not None:
-        has_hybrid = any(
-            getattr(binding, "binding_kind", None) == "hybrid"
-            for binding in published_agent.resolved_knowledge_bindings.bindings
+    knowledge_candidate_dependencies = None
+    resolved_bindings = published_agent.resolved_knowledge_bindings
+    if resolved_bindings is not None and resolved_bindings.bindings:
+        if dependencies.knowledge_candidate_runtime is None:
+            raise RuntimeError(
+                "Published KSS Agent execution requires the production Candidate runtime"
+            )
+        knowledge_candidate_dependencies = dependencies.knowledge_candidate_runtime.bind_for_run(
+            resolved_bindings
         )
-        if has_hybrid:
-            if dependencies.hybrid_runtime is None:
-                raise RuntimeError(
-                    "Published Hybrid Agent execution requires the production Hybrid runtime"
-                )
-            hybrid_dependencies = dependencies.hybrid_runtime.bind_for_run(
-                published_agent.resolved_knowledge_bindings
-            )
-        elif dependencies.hybrid_runtime is not None:
-            hybrid_dependencies = dependencies.hybrid_runtime.bind_for_run(
-                published_agent.resolved_knowledge_bindings
-            )
     result = execute_agent_package_run(
         AgentPackageRunRequest(
             agent_yaml=published_agent.manifest_path,
@@ -117,14 +109,19 @@ def execute_published_agent_run(
             institution_authorization=(
                 institution_authorization or InstitutionAuthorizationContext()
             ),
-            hybrid_providers=(
-                hybrid_dependencies.hybrid_providers
-                if hybrid_dependencies is not None
+            knowledge_candidate_service=(
+                knowledge_candidate_dependencies.service
+                if knowledge_candidate_dependencies is not None
                 else None
             ),
-            governed_hybrid_request_factory=(
-                hybrid_dependencies.governed_request_factory
-                if hybrid_dependencies is not None
+            knowledge_candidate_query_factory=(
+                knowledge_candidate_dependencies.query_factory
+                if knowledge_candidate_dependencies is not None
+                else None
+            ),
+            knowledge_candidate_admission_scorer=(
+                knowledge_candidate_dependencies.admission_scorer
+                if knowledge_candidate_dependencies is not None
                 else None
             ),
             controlled_react_observation_truth_store=(

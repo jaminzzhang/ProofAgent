@@ -344,8 +344,8 @@
 
 | 位置 | 更新 |
 | --- | --- |
-| `docs/features/knowledge-source-service/feature_context.md` | Goal 状态改为 `VERIFIED_LOCAL`；保留生产批准边界 |
-| `docs/PROJ_CONTEXT.md` | feature index 改为 `VERIFIED_LOCAL` 并记录实际服务入口与验证事实 |
+| `docs/features/knowledge-source-service/feature_context.md` | 2026-08-12 KSS 本体 Goal 状态改为 `VERIFIED_LOCAL`；该历史状态已被 2026-08-18 cutover 增量状态覆盖 |
+| `docs/PROJ_CONTEXT.md` | 2026-08-12 feature index 曾改为 `VERIFIED_LOCAL`；当前见 2026-08-18 cutover 记录 |
 
 ## 11. 2026-08-13 Dashboard 管理接入与重新部署
 
@@ -358,7 +358,7 @@
 | RED-DASHBOARD-002 | Dashboard 不得持有 KSS operator token 或直连 `8444` | `tests/test_knowledge_service_management_{client,api}.py` | 失败符合预期：ProofAgent 尚无管理客户端和 BFF 模块 |
 | GREEN-DASHBOARD-002 | 增加 Vault-backed、guarded HTTPS 管理客户端和权限化同源 BFF | ProofAgent contracts、client、delivery、production composition | BFF 只返回 browser-safe projections；上游失败映射为安全 `503` |
 | RED-DASHBOARD-003 | Knowledge 配置页必须显示 KSS readiness、目录并提供 Space/Source/Base 创建动作 | `KnowledgePage.test.tsx` | 失败符合预期：前端管理 API 模块不存在 |
-| GREEN-DASHBOARD-003 | 增加独立 `Hybrid Knowledge Service` 卡片 | Dashboard API、types、component、i18n | 5 个页面交互测试和生产构建通过 |
+| GREEN-DASHBOARD-003 | 增加独立 `Knowledge Source Service` 卡片 | Dashboard API、types、component、i18n | 5 个页面交互测试和生产构建通过 |
 | RED-DEPLOY-004 | ProofAgent API 必须通过 Vault 和 Egress Policy 访问 KSS | Compose 与 security bootstrap tests | 失败符合预期：缺少 endpoint、Secret Handle locator、Vault material 和 `8444` Egress rule |
 | GREEN-DEPLOY-004 | 增加不可变 Egress revision、Vault 句柄和 `kss-api` 健康依赖 | `docker-compose.production-local.yml`、`bootstrap_security.py` | 部署契约通过；Egress Policy revision 3 激活 |
 | RED-IMAGE-003 | 固定基础镜像的 KSS Dockerfile 必须能在本地 Compose 构建和运行 console script | `./scripts/production-local-up.sh` | 首次缺少 build args；第二次因虚拟环境解释器路径漂移以 `127` 退出 |
@@ -383,3 +383,35 @@
 | RED-FORMAL-DEPLOY-001 | 正式 production topology 必须表达 KSS 五角色和 Secret 边界 | production Compose tests | 失败符合预期：只有 production-local 定义 |
 | GREEN-FORMAL-DEPLOY-001 | 新增独立 KSS production Compose，并使用 mode-`0400` Secret 文件 | `deploy/production/knowledge/` | Compose 静态展开和容器安全契约通过 |
 | VERIFY-RELEASE-001 | 当前组合工作区回归 | root Pytest、Ruff、strict mypy、Dashboard | 3221 passed、135 skipped、13 deselected；Dashboard 229 passed；ProofAgent 438 source files、KSS 77 source files 类型检查通过 |
+
+## 13. 2026-08-18 KSS 单一权威切换
+
+[KNOWN | HIGH] 本增量执行 ADR-0210 的破坏性切换。KSS 服务本体此前的本地验收
+仍有效，ProofAgent 旧 Hybrid 执行路径已删除，默认本地回归已经通过。Feature 仍为
+`PARTIAL_VERIFICATION`，因为真实生产切换门禁尚未执行。
+
+| 步骤 | 行为 | 结果 |
+| --- | --- | --- |
+| RED-CUTOVER-001 | CLI 与 production roles 不得再暴露 ProofAgent `knowledge-worker`、`hybrid-migrate` 或旧 knowledge management | 初始 cutover 测试发现旧 CLI 命令和 Knowledge Worker role 仍可达，按预期失败 |
+| RED-CUTOVER-002 | Published Agent Version 必须只接受 exact KSS binding | 旧 `ResolvedKnowledgeBindingSet` 仍接受 shared/Hybrid 形状，按预期失败 |
+| GREEN-CUTOVER-001 | 增加 exact KSS binding、versioned secret runtime、strict query client 与 exact Admission Scorer client | binding、secret、client、scorer identity/revision/candidate-set/score 均失败关闭 |
+| GREEN-CUTOVER-002 | Production execution 只执行 KSS Candidate Evidence → ProofAgent Evidence Admission | 无本地 fallback；KSS rank 不进入 Admission Score；demo 无 binding 时稳定无证据 |
+| GREEN-CUTOVER-003 | 删除 ProofAgent Hybrid provider、ingestion/publication worker、source API、repositories、CLI、deployment role 和 Dashboard editor | 活跃 ProofAgent 运行面仅保留 KSS clients、Control Plane Admission 和 KSS BFF；KSS 自有 Worker 保留 |
+| GREEN-CUTOVER-004 | 旧 Hybrid/shared/package binding 不再反序列化 | 历史 Published Agent Version 不可 replay/rollback；恢复目标必须是另一 exact KSS-bound version |
+
+### 增量验证
+
+| 检查 | 结果 |
+| --- | --- |
+| cutover、binding、client、runtime、execution、readiness、roles、Compose、CLI 定向后端套件 | 138 passed；17 skipped |
+| 2026-08-19 root Pytest | 1837 passed；120 skipped；2 deselected；无失败或 collection error |
+| Python Ruff | `proof_agent` 与 `tests` 全部通过 |
+| strict mypy | 346 个 ProofAgent source files 通过 |
+| Dashboard Vitest | 32 files、195 tests 全部通过 |
+| Dashboard production build | passed |
+| domain context 与 diff hygiene | `scripts/check-domain-contexts.py`、`git diff --check` 均通过 |
+
+[LIMIT | HIGH] 本轮没有构建或部署镜像，也没有连接真实生产 KSS。生产 scorer
+校准/批准、Client Grant、versioned secret provisioning、真实 KSS dependency
+readiness、shadow、pilot、recovery 和 Blue/Green Gate 均未执行。因此本增量不构成
+生产发布批准。

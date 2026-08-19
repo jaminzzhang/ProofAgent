@@ -13,8 +13,7 @@ intent_patterns:
 admission:
   min_confidence: 0.68
   require_authorization_context: false
-knowledge_binding_refs:
-  - underwriting_rule_docs
+knowledge_binding_refs: []
 policy_rule_refs:
   - answering.require_evidence
 stage_prompt_addenda:

@@ -7,7 +7,6 @@ import { AgentDetailPage } from './pages/AgentDetailPage'
 import { PoliciesPage } from './pages/PoliciesPage'
 import { ToolsPage } from './pages/ToolsPage'
 import { KnowledgePage } from './pages/KnowledgePage'
-import { KnowledgeDetailPage } from './pages/KnowledgeDetailPage'
 import { ModelsPage } from './pages/ModelsPage'
 import { ModelConnectionDetailPage } from './pages/ModelConnectionDetailPage'
 import { EvaluationLabPage } from './pages/EvaluationLabPage'
@@ -25,7 +24,6 @@ export function AppRoutes() {
       <Route path="/policies" element={<PoliciesPage />} />
       <Route path="/tools" element={<ToolsPage />} />
       <Route path="/knowledge" element={<KnowledgePage />} />
-      <Route path="/knowledge/:sourceId" element={<KnowledgeDetailPage />} />
       <Route path="/models" element={<ModelsPage />} />
       <Route path="/models/:connectionId" element={<ModelConnectionDetailPage />} />
       <Route path="/runs" element={<RunsListPage />} />

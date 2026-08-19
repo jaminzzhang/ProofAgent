@@ -13,9 +13,7 @@ intent_patterns:
 admission:
   min_confidence: 0.68
   require_authorization_context: false
-knowledge_binding_refs:
-  - claims_sop_docs
-  - product_clause_docs
+knowledge_binding_refs: []
 policy_rule_refs:
   - answering.require_evidence
   - response.no_coverage_or_payment_guarantee

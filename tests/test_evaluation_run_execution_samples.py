@@ -31,7 +31,7 @@ def test_campaign_uses_run_execution_api_adapter_for_evaluation_samples(
         sample_runner=RunExecutionApiEvaluationSampleRunner(app),
     )
 
-    assert summary.readiness_status == "ready"
+    assert summary.readiness_status == "blocked"
     subject_manifest_path = summary.artifact_dir / "subject_manifest.yaml"
     subject_manifest = yaml.safe_load(subject_manifest_path.read_text(encoding="utf-8"))
     run_id = subject_manifest["subjects"][0]["run_ref"]["run_id"]

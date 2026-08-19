@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib import parse
 from uuid import uuid4
 
 import yaml  # type: ignore[import-untyped]
@@ -29,13 +28,6 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "audit",
 }
 
-SUPPORTED_KNOWLEDGE_PROVIDERS = {
-    "http_json",
-    "hybrid_index",
-    "local_markdown",
-    "local_index",
-    "remote_search",
-}
 SUPPORTED_RETRIEVAL_STRATEGIES = {"single_step", "agentic"}
 SUPPORTED_MODEL_PROVIDERS = {
     "deterministic",
@@ -97,15 +89,28 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
     if "knowledge" in raw:
         raise ProofAgentError(
             "PA_CONFIG_001",
-            "legacy inline knowledge.provider is not supported; use package_knowledge_sources and knowledge_bindings",
-            f"Move provider params into package_knowledge_sources[] and reference them with knowledge_bindings[].source_ref in {manifest_path}.",
+            "legacy inline knowledge.provider was removed by the KSS authority cutover",
+            "Publish the Agent Version with one exact Knowledge Source Service binding.",
             artifact_path=manifest_path,
         )
     if "knowledge_sources" in raw:
         raise ProofAgentError(
             "PA_CONFIG_001",
-            "legacy knowledge_sources is not supported; use package_knowledge_sources",
-            f"Rename knowledge_sources[] to package_knowledge_sources[] and replace knowledge_bindings[].source_id with knowledge_bindings[].source_ref in {manifest_path}.",
+            "legacy knowledge_sources was removed by the KSS authority cutover",
+            "Create and publish the source in Knowledge Source Service, then bind it to the Agent Version.",
+            artifact_path=manifest_path,
+        )
+    removed_authority_fields = tuple(
+        field
+        for field in ("package_knowledge_sources", "knowledge_bindings")
+        if raw.get(field)
+    )
+    if removed_authority_fields:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Agent manifests cannot declare a Knowledge authority: "
+            + ", ".join(removed_authority_fields),
+            "Publish the Agent Version with one exact Knowledge Source Service binding.",
             artifact_path=manifest_path,
         )
     if "tools" in raw:
@@ -216,36 +221,6 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
     _require_sequence_of_mappings(raw, "knowledge_bindings", manifest_path=manifest_path)
     _require_workflow_stage_context_booleans(raw["workflow"], manifest_path=manifest_path)
     _require_capability_enabled_flags(raw["capabilities"], manifest_path=manifest_path)
-    for index, binding in enumerate(raw["knowledge_bindings"]):
-        if "source_id" in binding:
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"knowledge_bindings[{index}].source_id is not supported",
-                f"Replace knowledge_bindings[{index}].source_id with knowledge_bindings[{index}].source_ref in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        source_ref = binding.get("source_ref")
-        if not isinstance(source_ref, Mapping):
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"knowledge_bindings[{index}].source_ref must be a mapping",
-                f"Set knowledge_bindings[{index}].source_ref.scope and source_id in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        if source_ref.get("scope") not in {"package", "shared"}:
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"knowledge_bindings[{index}].source_ref.scope must be package or shared",
-                f"Set knowledge_bindings[{index}].source_ref.scope to package or shared in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        if not source_ref.get("source_id"):
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"knowledge_bindings[{index}].source_ref.source_id is required",
-                f"Set knowledge_bindings[{index}].source_ref.source_id in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
 
 
 def _require_workflow_stage_context_booleans(
@@ -399,8 +374,6 @@ def validate_manifest(
     _validate_workflow_stage_config(manifest, manifest_path=manifest_path)
     _validate_react_config(manifest, manifest_path=manifest_path)
     _validate_review_config(manifest, manifest_path=manifest_path)
-    _validate_knowledge_sources_and_bindings(manifest, manifest_path=manifest_path)
-    _reject_secret_knowledge_params(manifest, manifest_path=manifest_path)
     _validate_retrieval_config(manifest, manifest_path=manifest_path)
     _validate_model_role_config(manifest.model, "model", manifest_path=manifest_path)
     _reject_secret_model_params(manifest, manifest_path=manifest_path)
@@ -1066,311 +1039,6 @@ def _is_forbidden_model_param(key: str) -> bool:
     return any(part in normalized for part in FORBIDDEN_MODEL_PARAM_PARTS)
 
 
-def _validate_knowledge_sources_and_bindings(
-    manifest: AgentManifest, *, manifest_path: Path
-) -> None:
-    source_ids: set[str] = set()
-    for source in manifest.package_knowledge_sources:
-        if source.source_id in source_ids:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"duplicate knowledge source id: {source.source_id}",
-                "Use unique package_knowledge_sources[].source_id values.",
-                artifact_path=manifest_path,
-            )
-        source_ids.add(source.source_id)
-        if source.provider not in SUPPORTED_KNOWLEDGE_PROVIDERS:
-            raise ProofAgentError(
-                "PA_KNOWLEDGE_001",
-                f"unsupported knowledge provider: {source.provider}",
-                f"Supported providers: {', '.join(sorted(SUPPORTED_KNOWLEDGE_PROVIDERS))}.",
-                artifact_path=manifest_path,
-            )
-        _validate_knowledge_provider_params(
-            provider=source.provider,
-            params=source.params,
-            field_prefix=f"package_knowledge_sources[{source.source_id}].params",
-            manifest_path=manifest_path,
-        )
-
-    binding_ids: set[str] = set()
-    for binding in manifest.knowledge_bindings:
-        if binding.binding_id in binding_ids:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"duplicate knowledge binding id: {binding.binding_id}",
-                "Use unique knowledge_bindings[].binding_id values.",
-                artifact_path=manifest_path,
-            )
-        binding_ids.add(binding.binding_id)
-        ref = binding.source_ref
-        if ref.scope == "package" and ref.source_id not in source_ids:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"knowledge binding references unknown package source: {ref.source_id}",
-                "Bind package-scoped refs only to ids declared in package_knowledge_sources.",
-                artifact_path=manifest_path,
-            )
-        if binding.failure_mode not in {"required", "advisory"}:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                f"unsupported knowledge binding failure_mode: {binding.failure_mode}",
-                "Use failure_mode: required or advisory.",
-                artifact_path=manifest_path,
-            )
-        if binding.fusion_weight <= 0:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                "knowledge binding fusion_weight must be greater than 0",
-                "Set fusion_weight to a positive number.",
-                artifact_path=manifest_path,
-            )
-        if binding.top_k is not None and binding.top_k <= 0:
-            raise ProofAgentError(
-                "PA_CONFIG_002",
-                "knowledge binding top_k must be greater than 0",
-                "Set top_k to a positive integer.",
-                artifact_path=manifest_path,
-            )
-
-
-def _validate_knowledge_provider_params(
-    *,
-    provider: str,
-    params: Mapping[str, Any],
-    field_prefix: str,
-    manifest_path: Path,
-) -> None:
-    if provider == "hybrid_index":
-        validate_hybrid_index_params(
-            params,
-            field_prefix=field_prefix,
-            artifact_path=manifest_path,
-        )
-        return
-    if provider == "local_markdown":
-        path = _required_param(params, "path", provider, manifest_path, field_prefix=field_prefix)
-        require_directory(Path(path), f"{field_prefix}.path", manifest_path)
-        return
-    if provider == "local_index":
-        if "index_path" in params:
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"{field_prefix}.index_path is not supported for {provider}",
-                f"Replace {field_prefix}.index_path with {field_prefix}.snapshot_path and "
-                f"{field_prefix}.artifact_root in {manifest_path}.",
-                artifact_path=manifest_path,
-            )
-        _required_path_param(
-            params, "snapshot_path", provider, manifest_path, field_prefix=field_prefix
-        )
-        _required_path_param(
-            params, "artifact_root", provider, manifest_path, field_prefix=field_prefix
-        )
-        document_selection_budget = params.get("document_selection_budget", 8)
-        if (
-            isinstance(document_selection_budget, bool)
-            or not isinstance(document_selection_budget, int)
-            or not 1 <= document_selection_budget <= 20
-        ):
-            raise ProofAgentError(
-                "PA_CONFIG_001",
-                f"{field_prefix}.document_selection_budget must be an integer from 1 to 20",
-                f"Set {field_prefix}.document_selection_budget to an integer from 1 to 20.",
-                artifact_path=manifest_path,
-            )
-        return
-    if provider == "remote_search":
-        _required_param(params, "endpoint_env", provider, manifest_path, field_prefix=field_prefix)
-        _required_param(params, "api_key_env", provider, manifest_path, field_prefix=field_prefix)
-        _required_param(params, "index_name", provider, manifest_path, field_prefix=field_prefix)
-        mock_results_path = params.get("mock_results_path")
-        if mock_results_path is not None:
-            require_path(
-                Path(mock_results_path), f"{field_prefix}.mock_results_path", manifest_path
-            )
-        return
-    if provider == "http_json":
-        _validate_http_json_provider_params(
-            params=params,
-            field_prefix=field_prefix,
-            manifest_path=manifest_path,
-        )
-        return
-
-
-def validate_hybrid_index_params(
-    params: Mapping[str, Any],
-    *,
-    field_prefix: str,
-    artifact_path: Path | str | None = None,
-) -> None:
-    """Validate the provider-specific, secret-free Hybrid intake envelope."""
-
-    from pydantic import ValidationError
-
-    from proof_agent.capabilities.knowledge.ingestion.contracts import HybridIntakeLimits
-
-    validate_secret_safe_params(
-        params,
-        field_prefix=field_prefix,
-        artifact_path=artifact_path,
-    )
-    try:
-        HybridIntakeLimits.model_validate(dict(params), strict=True)
-    except ValidationError as exc:
-        invalid_fields = ", ".join(
-            f"{field_prefix}.{'.'.join(str(part) for part in error['loc'])}"
-            for error in exc.errors()
-        )
-        raise ProofAgentError(
-            "PA_CONFIG_001",
-            f"Invalid Hybrid Index intake parameter(s): {invalid_fields}.",
-            "Use only strict positive Hybrid intake limit integers within supported ceilings.",
-            artifact_path=artifact_path,
-        ) from exc
-
-
-def _validate_http_json_provider_params(
-    *,
-    params: Mapping[str, Any],
-    field_prefix: str,
-    manifest_path: Path,
-) -> None:
-    endpoint = _required_param(
-        params,
-        "endpoint",
-        "http_json",
-        manifest_path,
-        field_prefix=field_prefix,
-    )
-    if not isinstance(endpoint, str):
-        raise _invalid_http_json_param(
-            f"{field_prefix}.endpoint must be a string.",
-            manifest_path,
-        )
-    parsed = parse.urlparse(endpoint)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise _invalid_http_json_param(
-            f"{field_prefix}.endpoint must be an absolute http(s) URL.",
-            manifest_path,
-        )
-    method = params.get("method", "POST")
-    if not isinstance(method, str) or method.upper() not in {"GET", "POST"}:
-        raise _invalid_http_json_param(
-            f"{field_prefix}.method must be GET or POST.",
-            manifest_path,
-        )
-    timeout_seconds = params.get("timeout_seconds", 10)
-    if (
-        isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, int | float)
-        or timeout_seconds <= 0
-        or timeout_seconds > 60
-    ):
-        raise _invalid_http_json_param(
-            f"{field_prefix}.timeout_seconds must be greater than 0 and at most 60.",
-            manifest_path,
-        )
-    top_k = params.get("top_k", 5)
-    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 50:
-        raise _invalid_http_json_param(
-            f"{field_prefix}.top_k must be an integer from 1 through 50.",
-            manifest_path,
-        )
-    _validate_optional_sequence_of_mappings(
-        params,
-        "header_env_refs",
-        field_prefix=field_prefix,
-        manifest_path=manifest_path,
-    )
-    _validate_optional_sequence_of_mappings(
-        params,
-        "headers",
-        field_prefix=field_prefix,
-        manifest_path=manifest_path,
-    )
-    request_mapping = _optional_mapping(
-        params,
-        "request_mapping",
-        field_prefix=field_prefix,
-        manifest_path=manifest_path,
-    )
-    if request_mapping is not None:
-        for key in ("query_params", "json_body"):
-            if key in request_mapping and not isinstance(request_mapping[key], Mapping):
-                raise _invalid_http_json_param(
-                    f"{field_prefix}.request_mapping.{key} must be a mapping.",
-                    manifest_path,
-                )
-    response_mapping = _optional_mapping(
-        params,
-        "response_mapping",
-        field_prefix=field_prefix,
-        manifest_path=manifest_path,
-    )
-    if response_mapping is not None:
-        if "results" not in response_mapping:
-            raise _invalid_http_json_param(
-                f"{field_prefix}.response_mapping.results is required when response_mapping is set.",
-                manifest_path,
-            )
-        for key, value in response_mapping.items():
-            if (
-                not isinstance(key, str)
-                or not isinstance(value, str)
-                or (value and not value.startswith("/"))
-            ):
-                raise _invalid_http_json_param(
-                    f"{field_prefix}.response_mapping values must be JSON Pointer strings.",
-                    manifest_path,
-                )
-
-
-def _validate_optional_sequence_of_mappings(
-    params: Mapping[str, Any],
-    key: str,
-    *,
-    field_prefix: str,
-    manifest_path: Path,
-) -> None:
-    value = params.get(key)
-    if value is None:
-        return
-    if not isinstance(value, list | tuple) or not all(isinstance(item, Mapping) for item in value):
-        raise _invalid_http_json_param(
-            f"{field_prefix}.{key} must be a list of mappings.",
-            manifest_path,
-        )
-
-
-def _optional_mapping(
-    params: Mapping[str, Any],
-    key: str,
-    *,
-    field_prefix: str,
-    manifest_path: Path,
-) -> Mapping[str, Any] | None:
-    value = params.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, Mapping):
-        raise _invalid_http_json_param(
-            f"{field_prefix}.{key} must be a mapping.",
-            manifest_path,
-        )
-    return value
-
-
-def _invalid_http_json_param(message: str, manifest_path: Path) -> ProofAgentError:
-    return ProofAgentError(
-        "PA_CONFIG_001",
-        message,
-        "Configure http_json with endpoint, optional safe header_env_refs, and JSON Pointer mappings.",
-        artifact_path=manifest_path,
-    )
-
-
 def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) -> None:
     retrieval = manifest.retrieval
     if retrieval.strategy not in SUPPORTED_RETRIEVAL_STRATEGIES:
@@ -1401,54 +1069,6 @@ def _validate_retrieval_config(manifest: AgentManifest, *, manifest_path: Path) 
             "PA_CONFIG_002",
             "retrieval.max_steps is required for agentic retrieval",
             "Set retrieval.max_steps to a positive integer.",
-            artifact_path=manifest_path,
-        )
-
-
-def _required_param(
-    params: Mapping[str, Any],
-    key: str,
-    provider: str,
-    manifest_path: Path,
-    *,
-    field_prefix: str,
-) -> Any:
-    value = params.get(key)
-    if value in (None, ""):
-        raise ProofAgentError(
-            "PA_CONFIG_001",
-            f"missing {field_prefix}.{key} for {provider}",
-            f"Add {field_prefix}.{key} to {manifest_path}",
-            artifact_path=manifest_path,
-        )
-    return value
-
-
-def _required_path_param(
-    params: Mapping[str, Any],
-    key: str,
-    provider: str,
-    manifest_path: Path,
-    *,
-    field_prefix: str,
-) -> Path:
-    value = _required_param(params, key, provider, manifest_path, field_prefix=field_prefix)
-    if not isinstance(value, Path):
-        field_name = f"{field_prefix}.{key}"
-        raise ProofAgentError(
-            "PA_CONFIG_001",
-            f"{field_name} must be a filesystem path for {provider}",
-            f"Set {field_name} to a path string in {manifest_path}.",
-            artifact_path=manifest_path,
-        )
-    return value
-
-
-def _reject_secret_knowledge_params(manifest: AgentManifest, *, manifest_path: Path) -> None:
-    for source in manifest.package_knowledge_sources:
-        validate_secret_safe_params(
-            source.params,
-            field_prefix=f"package_knowledge_sources[{source.source_id}].params",
             artifact_path=manifest_path,
         )
 

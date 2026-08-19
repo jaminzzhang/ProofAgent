@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
-from proof_agent.bootstrap.knowledge_resolution import KnowledgeBindingResolver
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 from proof_agent.contracts import (
@@ -56,11 +55,9 @@ from proof_agent.observability.audit.trace import TraceWriter
 from proof_agent.observability.storage.run_store import RunStore
 
 if TYPE_CHECKING:
-    from proof_agent.capabilities.knowledge.hybrid.provider import HybridIndexProvider
     from proof_agent.control.knowledge.candidate_request import (
         KnowledgeCandidateQueryFactory,
     )
-    from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
     from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
     from proof_agent.contracts.ports.knowledge_candidates import (
         KnowledgeCandidateAdmissionScorer,
@@ -87,7 +84,6 @@ class AgentPackageRunRequest:
     run_id: str | None = None
     store: RunStore | None = None
     manifest: AgentManifest | None = None
-    knowledge_binding_resolver: KnowledgeBindingResolver | None = None
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
     configuration_store: RuntimeSharedAssetReader | None = None
     run_purpose: RunPurpose = RunPurpose.PRODUCTION
@@ -103,8 +99,6 @@ class AgentPackageRunRequest:
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
-    hybrid_providers: Mapping[str, "HybridIndexProvider"] | None = None
-    governed_hybrid_request_factory: "GovernedHybridRequestFactory" | None = None
     knowledge_candidate_service: "KnowledgeCandidateService" | None = None
     knowledge_candidate_query_factory: "KnowledgeCandidateQueryFactory" | None = None
     knowledge_candidate_admission_scorer: (
@@ -189,13 +183,10 @@ def _execute_controlled_react_v3_agent_package_run(
         invocation = compose_harness_invocation(
             request.agent_yaml,
             manifest=manifest,
-            knowledge_binding_resolver=request.knowledge_binding_resolver,
             resolved_knowledge_bindings=request.resolved_knowledge_bindings,
             configuration_store=request.configuration_store,
             context_budget_calibration_store=request.context_budget_calibration_store,
             institution_authorization=request.institution_authorization,
-            hybrid_providers=request.hybrid_providers,
-            governed_hybrid_request_factory=request.governed_hybrid_request_factory,
             knowledge_candidate_service=request.knowledge_candidate_service,
             knowledge_candidate_query_factory=(
                 request.knowledge_candidate_query_factory

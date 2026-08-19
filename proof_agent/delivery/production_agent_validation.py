@@ -34,7 +34,7 @@ class ProductionOnlineAgentCandidateValidator:
         self,
         *,
         configuration_store: Any,
-        hybrid_runtime: Any,
+        knowledge_candidate_runtime: Any,
         guarded_http_client: Any,
         secret_provider: Any,
         model_credential_resolver: Any,
@@ -44,7 +44,7 @@ class ProductionOnlineAgentCandidateValidator:
         execute: Callable[..., Any] = execute_published_agent_run,
     ) -> None:
         self._configuration_store = configuration_store
-        self._hybrid_runtime = hybrid_runtime
+        self._knowledge_candidate_runtime = knowledge_candidate_runtime
         self._guarded_http_client = guarded_http_client
         self._secret_provider = secret_provider
         self._model_credential_resolver = model_credential_resolver
@@ -76,7 +76,9 @@ class ProductionOnlineAgentCandidateValidator:
                     store=store,
                     runs_dir=root / "latest",
                     configuration_store=self._configuration_store,
-                    hybrid_runtime=self._hybrid_runtime,
+                    knowledge_candidate_runtime=(
+                        self._knowledge_candidate_runtime
+                    ),
                     guarded_http_client=self._guarded_http_client,
                     secret_provider=self._secret_provider,
                     model_credential_resolver=self._model_credential_resolver,

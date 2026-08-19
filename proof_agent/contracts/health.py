@@ -13,7 +13,6 @@ from proof_agent.contracts.run_execution import RoleActivationState
 ProductionRole = Literal[
     "api",
     "run_executor",
-    "knowledge_worker",
     "dashboard",
     "operator_chat",
 ]

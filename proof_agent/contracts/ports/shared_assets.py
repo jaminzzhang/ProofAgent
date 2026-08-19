@@ -16,17 +16,6 @@ from proof_agent.contracts.shared_assets import (
 from proof_agent.contracts.agent_configuration import SharedModelConnection, ToolSource
 
 
-class KnowledgeAssetRepository(Protocol):
-    """Resolve Knowledge Sources to immutable publication references."""
-
-    def resolve_version(
-        self,
-        asset_id: str,
-        *,
-        version_id: str | None = None,
-    ) -> SharedAssetVersionRef | None: ...
-
-
 class ModelConnectionReader(Protocol):
     """Read the live model connection needed by runtime configuration resolution."""
 
@@ -70,14 +59,12 @@ class RuntimeSharedAssetReader(ModelConnectionReader, ToolSourceReader, Protocol
 def resolve_shared_asset_versions(
     requests: Sequence[SharedAssetVersionRequest],
     *,
-    knowledge: KnowledgeAssetRepository,
     models: ModelAssetRepository,
     tools: ToolAssetRepository,
 ) -> ResolvedSharedAssetVersions:
     """Resolve a publication's heterogeneous asset set exactly and fail closed."""
 
-    repositories = {
-        SharedAssetKind.KNOWLEDGE_SOURCE: knowledge,
+    repositories: dict[SharedAssetKind, ModelAssetRepository | ToolAssetRepository] = {
         SharedAssetKind.MODEL_CONNECTION: models,
         SharedAssetKind.TOOL_SOURCE: tools,
     }

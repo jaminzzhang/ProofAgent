@@ -20,8 +20,8 @@ from proof_agent.contracts import (
 from proof_agent.contracts.health import ProductionDeploymentIdentity
 from proof_agent.contracts.run_execution import RoleActivationState
 from proof_agent.delivery.production_status import ProductionReadinessProbe
-from proof_agent.control.production_agent_configuration import (
-    ProductionAgentDraftMutation,
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationDraftMutation,
 )
 from proof_agent.control.security.sessions import SessionResolution
 from proof_agent.observability.api.security_middleware import SESSION_COOKIE_NAME
@@ -82,23 +82,10 @@ def _production_app(
         published_agent_registry=object(),
         guarded_http_client=object(),  # type: ignore[arg-type]
         production_readiness_probe=_readiness_probe(),
-        production_hybrid_intake_service=object(),
-        production_knowledge_repository=object(),
-        production_hybrid_ingestion_repository=object(),
-        production_metadata_review_repository=object(),
-        production_hybrid_publication_api=object(),
-        production_hybrid_artifact_store=object(),
         production_configuration_uow_factory=object(),
-        production_agent_configuration_application=(
+        agent_configuration_workspace=(
             agent_configuration_application or object()
         ),
-        knowledge_source_configuration_application=object(),
-        knowledge_source_ingestion_application=object(),
-        knowledge_source_operations_application=object(),
-        knowledge_source_publication_preparation_application=object(),
-        knowledge_source_publication_application=object(),
-        knowledge_source_workspace_application=object(),
-        knowledge_source_metadata_workbook_application=object(),
         knowledge_service_management_client=object(),
         release_registry_repository=object(),
         release_bundle_materializer=object(),
@@ -142,18 +129,8 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
         and "POST" in (route.methods or set())
         for route in application.routes
     )
-    assert (
-        sum(
-            route.path == "/api/config/knowledge-sources"
-            and "GET" in (route.methods or set())
-            for route in application.routes
-        )
-        == 1
-    )
-    assert any(
-        route.path
-        == "/api/config/knowledge-sources/{source_id}/publication-validations"
-        and "POST" in (route.methods or set())
+    assert not any(
+        route.path.startswith("/api/config/knowledge-sources")
         for route in application.routes
     )
     assert any(
@@ -275,9 +252,9 @@ class _RecordingAgentApplication:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def create_draft(self, **kwargs: Any) -> ProductionAgentDraftMutation:
+    def create_draft(self, **kwargs: Any) -> AgentConfigurationDraftMutation:
         self.calls.append(kwargs)
-        return ProductionAgentDraftMutation(
+        return AgentConfigurationDraftMutation(
             record=AgentDraftRecord(
                 revision=1,
                 draft=DraftAgent(

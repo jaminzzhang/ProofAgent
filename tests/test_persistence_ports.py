@@ -46,7 +46,6 @@ from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.contracts.ports.case_memory import CaseMemoryRepository
 from proof_agent.contracts.ports.run_metadata import RunMetadataRepository
 from proof_agent.contracts.ports.shared_assets import (
-    KnowledgeAssetRepository,
     ModelAssetRepository,
     ToolAssetRepository,
     resolve_shared_asset_versions,
@@ -302,7 +301,6 @@ class _InMemoryConfigurationUnitOfWork:
         self.agents: AgentLifecycleRepository = agent_repository
         self._agent_repository = agent_repository
         empty = _InMemorySharedAssetRepository(())
-        self.knowledge: KnowledgeAssetRepository = empty
         self.models: ModelAssetRepository = empty
         self.tools: ToolAssetRepository = empty
         audit_repository = _InMemoryAuditRepository()
@@ -451,13 +449,6 @@ def test_agent_lifecycle_port_publish_conflict_leaves_no_partial_version() -> No
 
 
 def test_shared_asset_ports_resolve_exact_immutable_versions() -> None:
-    knowledge_ref = SharedAssetVersionRef(
-        kind=SharedAssetKind.KNOWLEDGE_SOURCE,
-        asset_id="insurance-clauses",
-        version_id="snapshot-7",
-        revision=7,
-        content_digest="a" * 64,
-    )
     model_ref = SharedAssetVersionRef(
         kind=SharedAssetKind.MODEL_CONNECTION,
         asset_id="answer-model",
@@ -472,17 +463,11 @@ def test_shared_asset_ports_resolve_exact_immutable_versions() -> None:
         revision=2,
         content_digest="c" * 64,
     )
-    knowledge: KnowledgeAssetRepository = _InMemorySharedAssetRepository((knowledge_ref,))
     models: ModelAssetRepository = _InMemorySharedAssetRepository((model_ref,))
     tools: ToolAssetRepository = _InMemorySharedAssetRepository((tool_ref,))
 
     resolved = resolve_shared_asset_versions(
         (
-            SharedAssetVersionRequest(
-                kind=knowledge_ref.kind,
-                asset_id=knowledge_ref.asset_id,
-                version_id=knowledge_ref.version_id,
-            ),
             SharedAssetVersionRequest(
                 kind=model_ref.kind,
                 asset_id=model_ref.asset_id,
@@ -494,14 +479,11 @@ def test_shared_asset_ports_resolve_exact_immutable_versions() -> None:
                 version_id=tool_ref.version_id,
             ),
         ),
-        knowledge=knowledge,
         models=models,
         tools=tools,
     )
 
-    assert resolved == ResolvedSharedAssetVersions(
-        versions=(knowledge_ref, model_ref, tool_ref)
-    )
+    assert resolved == ResolvedSharedAssetVersions(versions=(model_ref, tool_ref))
 
 
 def test_shared_asset_resolution_fails_closed_when_version_is_missing() -> None:
@@ -511,18 +493,17 @@ def test_shared_asset_resolution_fails_closed_when_version_is_missing() -> None:
         resolve_shared_asset_versions(
             (
                 SharedAssetVersionRequest(
-                    kind=SharedAssetKind.KNOWLEDGE_SOURCE,
+                    kind=SharedAssetKind.MODEL_CONNECTION,
                     asset_id="missing",
-                    version_id="snapshot-1",
+                    version_id="model-1",
                 ),
             ),
-            knowledge=empty,
             models=empty,
             tools=empty,
         )
     except PersistenceNotFoundError as exc:
-        assert exc.resource_type == "knowledge_source_version"
-        assert exc.resource_id == "missing:snapshot-1"
+        assert exc.resource_type == "model_connection_version"
+        assert exc.resource_id == "missing:model-1"
     else:
         raise AssertionError("missing immutable asset version must fail closed")
 

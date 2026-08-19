@@ -22,11 +22,10 @@ from proof_agent.contracts import (
     PersistencePointerConflictError,
     PublishedAgentVersion,
     ReceiptOutcome,
-    ResolvedHybridKnowledgeBinding,
     ResolvedKnowledgeBindingSet,
+    ResolvedKnowledgeSourceServiceBinding,
+    SecretPurpose,
     SecretHandleValidation,
-    SharedAssetKind,
-    SharedAssetVersionRef,
     SharedModelConnection,
     SharedModelConnectionLifecycleState,
 )
@@ -139,17 +138,18 @@ def _artifact(kind: str) -> ExactArtifactRef:
     )
 
 
-def _binding() -> ResolvedHybridKnowledgeBinding:
-    return ResolvedHybridKnowledgeBinding(
-        binding_id="insurance_hybrid",
-        source_id="insurance-rules",
-        source_publication_id="publication-1",
-        source_snapshot_id="snapshot-1",
-        index_generation_id="generation-1",
-        source_publication_seq=1,
-        retrieval_profile_revision_id="profile-1",
-        manifest_ref=_artifact("manifest"),
-        publication_attestation_id="attestation-1",
+def _binding() -> ResolvedKnowledgeSourceServiceBinding:
+    return ResolvedKnowledgeSourceServiceBinding(
+        binding_id="insurance-knowledge",
+        knowledge_base_release_id="release-insurance-2026-08-18",
+        client_credential_ref=ProductionSecretHandle(
+            protocol_id="hashicorp-vault-2.0-kv-v2",
+            handle_id="knowledge/source-service/agent-client",
+            purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
+            version_id="credential-v7",
+        ),
+        admission_scorer_id="insurance-evidence-admission",
+        admission_scorer_revision="insurance-evidence-admission.v3",
     )
 
 
@@ -165,14 +165,7 @@ def _write_manifest(
     raw = yaml.safe_load(fixture.read_text(encoding="utf-8"))
     raw["name"] = AGENT_ID
     raw["package_knowledge_sources"] = []
-    raw["knowledge_bindings"] = [
-        {
-            "binding_id": "insurance_hybrid",
-            "source_ref": {"scope": "shared", "source_id": "insurance-rules"},
-            "retrieval_profile_revision_id": "profile-1",
-            "failure_mode": "required",
-        }
-    ]
+    raw["knowledge_bindings"] = []
     raw["model"] = (
         {
             "model_source": "shared",
@@ -284,7 +277,7 @@ def _candidate(
     )
 
 
-def test_accepts_exact_real_model_hybrid_phase_f_candidate(tmp_path: Path) -> None:
+def test_accepts_exact_real_model_kss_phase_f_candidate(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path)
     credentials = ModelCredentials()
 
@@ -303,9 +296,7 @@ def test_deployment_package_is_an_admissible_production_candidate() -> None:
         "deploy/production/agent_management_insurance_specialist/agent.yaml"
     ).resolve()
     bundle = build_agent_package_contract_bundle(manifest_path)
-    binding = _binding().model_copy(
-        update={"retrieval_profile_revision_id": "insurance-profile-v1"}
-    )
+    binding = _binding()
     bindings = ResolvedKnowledgeBindingSet(bindings=(binding,))
     release = seal_knowledge_release_record(
         record_id="production-package-release",
@@ -408,12 +399,12 @@ def test_rejects_unresolvable_postgres_model_credential(tmp_path: Path) -> None:
         )
 
 
-def test_rejects_more_than_one_frozen_hybrid_binding(tmp_path: Path) -> None:
+def test_rejects_more_than_one_frozen_kss_binding(tmp_path: Path) -> None:
     agent, version = _candidate(tmp_path)
     extra = _binding().model_copy(
         update={
-            "binding_id": "insurance_hybrid_extra",
-            "source_id": "insurance-rules-extra",
+            "binding_id": "insurance-knowledge-extra",
+            "knowledge_base_release_id": "release-insurance-extra-2026-08-18",
         }
     )
     bindings = ResolvedKnowledgeBindingSet(bindings=(_binding(), extra))
@@ -464,19 +455,6 @@ class Agents:
         return self.active
 
 
-class Knowledge:
-    def resolve_version(self, asset_id, *, version_id=None):
-        assert asset_id == "insurance-rules"
-        assert version_id is None
-        return SharedAssetVersionRef(
-            kind=SharedAssetKind.KNOWLEDGE_SOURCE,
-            asset_id=asset_id,
-            version_id="019ba001-1111-7000-8000-000000000010",
-            revision=7,
-            content_digest="5" * 64,
-        )
-
-
 class Audits:
     def __init__(self) -> None:
         self.events = []
@@ -488,7 +466,6 @@ class Audits:
 class UnitOfWork:
     def __init__(self, agents: Agents, audits: Audits) -> None:
         self.agents = agents
-        self.knowledge = Knowledge()
         self.audit = audits
         self.committed = False
 
@@ -534,28 +511,9 @@ def _publication_service(
     release_authority: ReleaseAuthority,
     runner: CandidateRunner,
 ) -> ProductionAgentPublicationService:
-    binding = _binding()
-    snapshot = SimpleNamespace(
-        publication=SimpleNamespace(
-            publication_id=binding.source_publication_id,
-            source_id=binding.source_id,
-            source_snapshot_id=binding.source_snapshot_id,
-            generation_id=binding.index_generation_id,
-            source_publication_seq=binding.source_publication_seq,
-            manifest_ref=binding.manifest_ref,
-            attestation=SimpleNamespace(
-                attestation_id=binding.publication_attestation_id,
-            ),
-        ),
-        retrieval_profile=SimpleNamespace(
-            profile_revision_id=binding.retrieval_profile_revision_id,
-        ),
-    )
     return ProductionAgentPublicationService(
         unit_of_work_factory=lambda: UnitOfWork(agents, audits),
-        binding_authority=SimpleNamespace(
-            resolve_binding_authority=lambda **kwargs: snapshot
-        ),
+        knowledge_binding=_binding(),
         release_authority=release_authority,
         configuration_store=ModelConnections(),
         model_credential_resolver=ModelCredentials(),
@@ -743,7 +701,7 @@ def test_online_candidate_validator_executes_real_path_and_retains_exact_artifac
 
     validator = ProductionOnlineAgentCandidateValidator(
         configuration_store=object(),
-        hybrid_runtime=object(),
+        knowledge_candidate_runtime=object(),
         guarded_http_client=object(),
         secret_provider=Secrets(),
         model_credential_resolver=ModelCredentials(),

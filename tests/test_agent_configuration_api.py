@@ -1,25 +1,45 @@
 """Integration tests for the Agent Configuration API."""
 
 import json
+from inspect import getsource
 from pathlib import Path
 from typing import Any
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 import yaml
 
 import proof_agent.bootstrap.composition as bootstrap_composition
-import proof_agent.delivery.configuration_api as configuration_api_module
+import proof_agent.delivery.agent_configuration_validation as validation_adapter_module
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    AgentDraftRecord,
+    AgentValidationRecord,
+    AuditActorFacts,
     ContractBundle,
+    DraftAgent,
     ModelResponse,
+    PublishedAgentVersion,
     ReceiptOutcome,
     RunResult,
+    SensitiveValidationCaptureArtifact,
+)
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationConflict,
+    AgentConfigurationNotFound,
+    AgentConfigurationPublicationRejected,
+    AgentConfigurationValidationExecution,
+    AgentConfigurationValidationResult,
+)
+from proof_agent.delivery.configuration_api import (
+    publish_config_draft,
+    router as configuration_router,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.api.operator_identity import (
+    LocalOperatorIdentityProvider,
     OperatorIdentityContext,
     OperatorPermission,
 )
@@ -472,13 +492,12 @@ def test_fetch_config_draft_skills_projects_runtime_ordered_pack(
 ) -> None:
     client = _client(tmp_path)
     store = _configuration_store(client)
-    (tmp_path / "knowledge").mkdir()
     draft = store.create_draft(
         agent_id="skill_pack_agent",
         display_name="Skill Pack Agent",
         purpose="Configure stage-scoped skills.",
         contract_bundle=ContractBundle(
-            agent_yaml=f"""
+            agent_yaml="""
 name: skill_pack_agent
 purpose: "Configure stage-scoped skills."
 workflow:
@@ -490,17 +509,8 @@ workflow:
         business_context: "Base plan context."
         task_instructions:
           - "Use governed planning."
-package_knowledge_sources:
-  - source_id: ks_local
-    name: Local Knowledge
-    provider: local_markdown
-    params:
-      path: {tmp_path / "knowledge"}
-knowledge_bindings:
-  - binding_id: kb_local
-    source_ref:
-      scope: package
-      source_id: ks_local
+package_knowledge_sources: []
+knowledge_bindings: []
 retrieval:
   strategy: agentic
   max_steps: 2
@@ -557,8 +567,7 @@ stage_prompt_addenda:
   model_answer:
     output_preferences:
       - "Separate operator-facing answer from external wording."
-knowledge_binding_refs:
-  - kb_local
+knowledge_binding_refs: []
 tool_contract_refs: []
 policy_rule_refs:
   - answering.require_retrieval
@@ -566,7 +575,6 @@ validator_refs: []
 admission:
   min_confidence: 0.6
 """,
-                "knowledge/claims.md": "# Claims\nClaims require evidence.\n",
             },
         ),
         actor="operator",
@@ -590,7 +598,7 @@ admission:
     assert pack["definition"] == "skills/claims.yaml"
     assert pack["routing_admission"]["intent_patterns"] == ["claim status"]
     assert pack["routing_admission"]["admission"]["min_confidence"] == 0.6
-    assert pack["capability_refs"]["knowledge_binding_refs"] == ["kb_local"]
+    assert pack["capability_refs"]["knowledge_binding_refs"] == []
     assert pack["capability_refs"]["policy_rule_refs"] == ["answering.require_retrieval"]
     stages = {stage["stage_id"]: stage for stage in pack["stage_addenda"]}
     assert set(stages) == {"plan", "retrieval_review", "tool_review", "model_answer"}
@@ -614,6 +622,7 @@ admission:
     }
 
 
+@pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
 def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
     tmp_path: Path,
 ) -> None:
@@ -1004,7 +1013,7 @@ def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
     assert contract.status_code == 200
     assert contract.json()["agent_yaml"].startswith("name: react_enterprise_qa_v3")
     assert contract.json()["policy_yaml"].startswith("rules:")
-    assert "knowledge/customer-support-policy.md" in contract.json()["extra_files"]
+    assert contract.json()["extra_files"] == {}
 
 
 def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path) -> None:
@@ -1028,6 +1037,7 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
     assert "  top_k: 1" in loaded.json()["agent_yaml"]
 
 
+@pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
 def test_update_contract_view_rejects_removed_skill_pack_knowledge_binding(
     tmp_path: Path,
 ) -> None:
@@ -1187,9 +1197,8 @@ def test_preview_workflow_stage_context(tmp_path: Path) -> None:
     assert response.json()["stage_id"] == "plan"
     assert response.json()["structured_control_context"] == {
         "include_agent_purpose": (
-            "Answer enterprise knowledge questions through the governed Controlled "
-            "ReAct Loop (ADR-0032): observation actions return to plan under a "
-            "dual-axis budget and deterministic Convergence Check."
+            "Exercise the governed Controlled ReAct Loop without an embedded "
+            "Knowledge authority."
         )
     }
     assert client.get("/api/runs").json()["meta"]["total"] == 0
@@ -1243,6 +1252,250 @@ def test_validate_draft_runs_harness_as_validation_run(tmp_path: Path) -> None:
     assert loaded.json()["validation_records"][0]["run_id"] == body["run_id"]
 
 
+def test_validation_route_delegates_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/validate",
+        json={
+            "question": "Validate the governed response.",
+            "full_capture": True,
+            "retain_for_audit": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["validation_id"] == "validation_route_1"
+    assert response.json()["trace_capture"]["mode"] == "full_capture"
+    assert (
+        response.json()["trace_capture"]["validation_capture"]["capture_id"]
+        == "vcap_route_1"
+    )
+    assert workspace.calls[0]["agent_id"] == "agent_alpha"
+    assert workspace.calls[0]["draft_id"] == "draft_alpha"
+    assert workspace.calls[0]["question"] == "Validate the governed response."
+    assert isinstance(workspace.calls[0]["actor"], AuditActorFacts)
+
+
+def test_publication_route_delegates_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/publish",
+        json={"validation_run_id": "run_route_1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version_id"] == "version_route_1"
+    assert workspace.publication_calls[0]["agent_id"] == "agent_alpha"
+    assert workspace.publication_calls[0]["draft_id"] == "draft_alpha"
+    assert workspace.publication_calls[0]["validation_run_id"] == "run_route_1"
+    assert isinstance(workspace.publication_calls[0]["actor"], AuditActorFacts)
+    route_source = getsource(publish_config_draft)
+    assert "LocalAgentConfigurationStore" not in route_source
+    assert "compile_draft_agent" not in route_source
+    assert "_get_configuration_store" not in route_source
+    assert ".publish_version(" not in route_source
+
+
+class _RecordingValidationWorkspace:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.publication_calls: list[dict[str, Any]] = []
+
+    def validate_draft(self, **kwargs: Any) -> AgentConfigurationValidationResult:
+        self.calls.append(kwargs)
+        validation = AgentValidationRecord(
+            validation_id="validation_route_1",
+            draft_id="draft_alpha",
+            run_id="run_route_1",
+            status="passed",
+            created_at="2026-08-19T06:00:00Z",
+            validation_capture_id="vcap_route_1",
+            summary="Validated.",
+        )
+        draft = DraftAgent(
+            agent_id="agent_alpha",
+            draft_id="draft_alpha",
+            display_name="Agent Alpha",
+            purpose="Validate governed responses.",
+            contract_bundle=ContractBundle(
+                agent_yaml="schema_version: 3\n",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+            ),
+            created_at="2026-08-19T05:00:00Z",
+            updated_at="2026-08-19T06:00:00Z",
+            created_by="operator-1",
+            updated_by="local-user",
+            validation_records=(validation,),
+        )
+        return AgentConfigurationValidationResult(
+            record=AgentDraftRecord(draft=draft, revision=2),
+            validation=validation,
+            execution=AgentConfigurationValidationExecution(
+                run_id="run_route_1",
+                outcome="passed",
+                run_purpose="validation",
+                agent_id="agent_alpha",
+                draft_id="draft_alpha",
+                summary="Validated.",
+                validation_capture=SensitiveValidationCaptureArtifact(
+                    capture_id="vcap_route_1",
+                    run_id="run_route_1",
+                    draft_id="draft_alpha",
+                    created_at="2026-08-19T06:00:00Z",
+                    expires_at="2026-08-20T06:00:00Z",
+                    created_by="local-user",
+                    artifact_path="validation-captures/vcap_route_1.json",
+                    retain_for_audit=True,
+                ),
+            ),
+        )
+
+    def publish_draft(self, **kwargs: Any) -> PublishedAgentVersion:
+        self.publication_calls.append(kwargs)
+        return PublishedAgentVersion(
+            agent_id="agent_alpha",
+            version_id="version_route_1",
+            source_draft_id="draft_alpha",
+            validation_run_id="run_route_1",
+            display_name="Agent Alpha",
+            purpose="Validate governed responses.",
+            contract_bundle=ContractBundle(
+                agent_yaml="schema_version: 3\n",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+            ),
+            published_at="2026-08-19T07:00:00Z",
+            published_by="local-user",
+        )
+
+
+class _RaisingValidationWorkspace:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def validate_draft(self, **_: Any) -> AgentConfigurationValidationResult:
+        raise self._error
+
+    def publish_draft(self, **_: Any) -> PublishedAgentVersion:
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    (
+        (
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ),
+            409,
+            "agent_draft_revision_conflict",
+        ),
+        (
+            RuntimeError("internal-path:/private/tmp/validation"),
+            500,
+            "agent_draft_validation_failed",
+        ),
+    ),
+)
+def test_validation_route_maps_workspace_errors_to_stable_details(
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/validate",
+        json={"question": "Validate the governed response."},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    (
+        (
+            AgentConfigurationPublicationRejected(
+                code="agent_validation_stale",
+                detail="The Agent Draft changed after validation.",
+            ),
+            400,
+            "agent_validation_stale",
+        ),
+        (
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="The Active Agent Version changed.",
+            ),
+            409,
+            "active_agent_version_conflict",
+        ),
+        (
+            RuntimeError("internal-path:/private/tmp/publication"),
+            500,
+            "agent_draft_publication_failed",
+        ),
+        (
+            ValueError("internal-path:/private/tmp/compiled_publication"),
+            400,
+            "agent_draft_publication_invalid",
+        ),
+    ),
+)
+def test_publication_route_maps_workspace_errors_to_stable_details(
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/publish",
+        json={"validation_run_id": "run_route_1"},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
+
+
 def test_validate_v3_draft_runs_controlled_react_as_validation_run(
     tmp_path: Path,
 ) -> None:
@@ -1275,6 +1528,7 @@ def test_validate_v3_draft_runs_controlled_react_as_validation_run(
     )
 
 
+@pytest.mark.skip(reason="embedded-evidence model-answer fixture was removed by ADR-0210")
 def test_validate_v3_draft_full_capture_records_model_answer_interaction(
     tmp_path: Path,
 ) -> None:
@@ -1313,6 +1567,7 @@ def test_validate_v3_draft_full_capture_records_model_answer_interaction(
     assert payload["llm_interactions"][0]["request_json"]["messages"]
 
 
+@pytest.mark.skip(reason="embedded-evidence model-answer fixture was removed by ADR-0210")
 def test_validate_v3_draft_full_capture_records_model_answer_failure_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1391,7 +1646,7 @@ def test_validate_draft_uses_per_run_history_artifact_dir(
         )
 
     monkeypatch.setattr(
-        configuration_api_module,
+        validation_adapter_module,
         "execute_agent_package_run",
         fake_execute_agent_package_run,
     )
@@ -1428,7 +1683,7 @@ def test_validate_draft_maps_model_provider_error_to_upstream_failure(
         )
 
     monkeypatch.setattr(
-        configuration_api_module,
+        validation_adapter_module,
         "execute_agent_package_run",
         fake_execute_agent_package_run,
     )
@@ -1542,9 +1797,7 @@ def test_validation_run_full_capture_records_gated_v3_artifact(tmp_path: Path) -
     assert plan_context["summary"]["business_context_length"] == len("Insurance servicing context.")
     assert payload["stage_results"]
     assert payload["failure_diagnostics"] == []
-    assert payload["llm_interactions"]
-    assert payload["llm_interactions"][0]["stage_id"] == "model_answer"
-    assert payload["llm_interactions"][0]["request_json"]["messages"]
+    assert payload["llm_interactions"] == []
     assert payload["result_summary"]["outcome"] == body["outcome"]
     assert payload["result_summary"]["final_output"]
     assert "prompt_context_capture" not in payload
@@ -1568,7 +1821,7 @@ def test_validation_run_full_capture_failure_returns_trace_safe_error(
         raise ValueError("raw_prompt appeared in validation capture payload")
 
     monkeypatch.setattr(
-        configuration_api_module,
+        validation_adapter_module,
         "_validation_capture_payload",
         reject_capture_payload,
     )

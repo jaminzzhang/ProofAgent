@@ -14,7 +14,6 @@ class ProductionWorkerRole(StrEnum):
     """Production worker roles with one database-authoritative active slot."""
 
     RUN_EXECUTOR = "run_executor"
-    KNOWLEDGE_WORKER = "knowledge_worker"
 
 
 class WorkerRoleActivation(StrictFrozenModel):

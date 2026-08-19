@@ -14,7 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.run_queue_api import router as run_queue_router
 from proof_agent.delivery.configuration_api import router as configuration_router
-from proof_agent.delivery.knowledge_source_api import router as knowledge_source_router
+from proof_agent.delivery.agent_configuration_validation import (
+    LocalAgentConfigurationValidationAdapter,
+)
+from proof_agent.delivery.agent_configuration_publication import (
+    LocalAgentConfigurationPublicationAdapter,
+)
 from proof_agent.delivery.knowledge_service_management_api import (
     router as knowledge_service_management_router,
 )
@@ -29,11 +34,15 @@ from proof_agent.delivery.production_agent_configuration import (
 )
 from proof_agent.delivery.published_agents import PublishedAgentRegistry
 from proof_agent.delivery.static_server import create_static_application
-from proof_agent.contracts import KnowledgeOperationsHealthSources
 from proof_agent.capabilities.memory.local_store import LocalMemoryStore
 from proof_agent.capabilities.memory.mem0_store import Mem0MemoryStore
+from proof_agent.capabilities.persistence.local.bundle import LocalPersistenceBundle
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.configuration.knowledge_release import KnowledgeReleaseEvidenceAuthority
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationScope,
+    AgentConfigurationWorkspace,
+    load_server_owned_agent_template,
+)
 from proof_agent.evaluation.campaign_store import EvaluationCampaignStore
 from proof_agent.evaluation.production_sample_store import ProductionSampleCurationStore
 from proof_agent.evaluation.store import EvaluationStore
@@ -55,7 +64,6 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
 )
 
 if TYPE_CHECKING:
-    from proof_agent.bootstrap.hybrid_execution import HybridRunRuntime
     from proof_agent.control.security.sessions import OperatorSessionService
     from proof_agent.contracts.ports.secret_provider import SecretProvider
     from proof_agent.contracts.ports.security_configuration import (
@@ -81,9 +89,6 @@ def create_app(
     mem0_memory_store: Mem0MemoryStore | None = None,
     agent_configuration_store: LocalAgentConfigurationStore | None = None,
     agent_configuration_dir: Path = Path("runs/config"),
-    knowledge_operations_provider: Callable[[str], KnowledgeOperationsHealthSources] | None = None,
-    knowledge_release_evidence_authority: KnowledgeReleaseEvidenceAuthority | None = None,
-    hybrid_runtime: "HybridRunRuntime" | None = None,
     mode: str | None = None,
     operator_session_service: "OperatorSessionService" | None = None,
     stable_origin: str | None = None,
@@ -96,21 +101,8 @@ def create_app(
     guarded_http_client: "GuardedHttpClient" | None = None,
     published_agent_registry: object | None = None,
     production_readiness_probe: Callable[[], object] | None = None,
-    production_hybrid_intake_service: object | None = None,
-    production_knowledge_repository: object | None = None,
-    production_hybrid_ingestion_repository: object | None = None,
-    production_metadata_review_repository: object | None = None,
-    production_hybrid_publication_api: object | None = None,
-    production_hybrid_artifact_store: object | None = None,
     production_configuration_uow_factory: object | None = None,
-    production_agent_configuration_application: object | None = None,
-    knowledge_source_configuration_application: object | None = None,
-    knowledge_source_ingestion_application: object | None = None,
-    knowledge_source_operations_application: object | None = None,
-    knowledge_source_publication_preparation_application: object | None = None,
-    knowledge_source_publication_application: object | None = None,
-    knowledge_source_workspace_application: object | None = None,
-    knowledge_source_metadata_workbook_application: object | None = None,
+    agent_configuration_workspace: object | None = None,
     knowledge_service_management_client: object | None = None,
     release_registry_repository: object | None = None,
     release_bundle_materializer: object | None = None,
@@ -166,50 +158,10 @@ def create_app(
                 ("PostgreSQL Published Agent authority", published_agent_registry),
                 ("active Egress Policy client", guarded_http_client),
                 ("production readiness probe", production_readiness_probe),
-                ("Hybrid PDF intake service", production_hybrid_intake_service),
-                ("PostgreSQL Knowledge repository", production_knowledge_repository),
-                (
-                    "PostgreSQL Hybrid ingestion repository",
-                    production_hybrid_ingestion_repository,
-                ),
-                (
-                    "PostgreSQL metadata review repository",
-                    production_metadata_review_repository,
-                ),
-                ("Hybrid publication API", production_hybrid_publication_api),
-                ("Hybrid exact artifact store", production_hybrid_artifact_store),
                 ("PostgreSQL configuration unit of work", production_configuration_uow_factory),
                 (
-                    "production Agent configuration application",
-                    production_agent_configuration_application,
-                ),
-                (
-                    "Knowledge Source configuration application",
-                    knowledge_source_configuration_application,
-                ),
-                (
-                    "Knowledge Source ingestion application",
-                    knowledge_source_ingestion_application,
-                ),
-                (
-                    "Knowledge Source operations application",
-                    knowledge_source_operations_application,
-                ),
-                (
-                    "Knowledge Source publication preparation application",
-                    knowledge_source_publication_preparation_application,
-                ),
-                (
-                    "Knowledge Source publication application",
-                    knowledge_source_publication_application,
-                ),
-                (
-                    "Knowledge Source workspace application",
-                    knowledge_source_workspace_application,
-                ),
-                (
-                    "Knowledge Source Metadata Workbook application",
-                    knowledge_source_metadata_workbook_application,
+                    "Agent Configuration Workspace",
+                    agent_configuration_workspace,
                 ),
                 (
                     "Knowledge Source Service management client",
@@ -239,43 +191,10 @@ def create_app(
     application.state.conversation_repository = conversation_repository
     application.state.guarded_http_client = guarded_http_client
     application.state.production_readiness_probe = production_readiness_probe
-    application.state.production_hybrid_intake_service = production_hybrid_intake_service
-    application.state.production_knowledge_repository = production_knowledge_repository
-    application.state.production_hybrid_ingestion_repository = (
-        production_hybrid_ingestion_repository
-    )
-    application.state.production_metadata_review_repository = (
-        production_metadata_review_repository
-    )
-    application.state.production_hybrid_publication_api = production_hybrid_publication_api
-    application.state.production_hybrid_artifact_store = production_hybrid_artifact_store
     application.state.production_configuration_uow_factory = (
         production_configuration_uow_factory
     )
-    application.state.production_agent_configuration_application = (
-        production_agent_configuration_application
-    )
-    application.state.knowledge_source_configuration_application = (
-        knowledge_source_configuration_application
-    )
-    application.state.knowledge_source_ingestion_application = (
-        knowledge_source_ingestion_application
-    )
-    application.state.knowledge_source_operations_application = (
-        knowledge_source_operations_application
-    )
-    application.state.knowledge_source_publication_preparation_application = (
-        knowledge_source_publication_preparation_application
-    )
-    application.state.knowledge_source_publication_application = (
-        knowledge_source_publication_application
-    )
-    application.state.knowledge_source_workspace_application = (
-        knowledge_source_workspace_application
-    )
-    application.state.knowledge_source_metadata_workbook_application = (
-        knowledge_source_metadata_workbook_application
-    )
+    application.state.agent_configuration_workspace = agent_configuration_workspace
     application.state.knowledge_service_management_client = (
         knowledge_service_management_client
     )
@@ -330,21 +249,6 @@ def create_app(
         )
 
     application.state.runs_dir = runs_dir
-    application.state.knowledge_operations_provider = knowledge_operations_provider
-    application.state.hybrid_knowledge_runtime = hybrid_runtime
-    hybrid_runtime_close = getattr(hybrid_runtime, "close", None)
-    if callable(hybrid_runtime_close):
-        application.router.add_event_handler("shutdown", hybrid_runtime_close)
-    provider_close = getattr(knowledge_operations_provider, "close", None)
-    if callable(provider_close):
-        application.router.add_event_handler("shutdown", provider_close)
-    release_authority_close = getattr(knowledge_release_evidence_authority, "close", None)
-    release_authority_object: object | None = knowledge_release_evidence_authority
-    operations_provider_object: object | None = knowledge_operations_provider
-    if release_authority_object is not operations_provider_object and callable(
-        release_authority_close
-    ):
-        application.router.add_event_handler("shutdown", release_authority_close)
     if selected_mode == "development":
         store = RunStore(history_dir)
         application.state.store = store
@@ -362,23 +266,32 @@ def create_app(
             conversations_dir.with_name(f"{conversations_dir.name}_memory")
         )
         application.state.mem0_memory_store = mem0_memory_store
-        runtime_hybrid_authority = (
-            getattr(hybrid_runtime, "repository", None) if hybrid_runtime is not None else None
-        )
         configuration_store = agent_configuration_store or LocalAgentConfigurationStore(
             agent_configuration_dir,
-            hybrid_binding_authority=runtime_hybrid_authority,
-            knowledge_release_evidence_authority=knowledge_release_evidence_authority,
         )
         application.state.agent_configuration_store = configuration_store
-        publication_api_factory = getattr(hybrid_runtime, "publication_api_for", None)
-        if callable(publication_api_factory):
-            application.state.hybrid_knowledge_publication_api = publication_api_factory(
-                configuration_store
+        if agent_configuration_workspace is None:
+            workspace_persistence = LocalPersistenceBundle.create(
+                configuration_store.root_dir.parent
+                / f".{configuration_store.root_dir.name}-workspace",
+                configuration_root=configuration_store.root_dir,
             )
-            application.state.hybrid_knowledge_artifact_store = getattr(
-                hybrid_runtime, "artifact_store"
+            agent_configuration_workspace = AgentConfigurationWorkspace(
+                unit_of_work_factory=workspace_persistence.configuration_uow,
+                template_bundle=load_server_owned_agent_template(),
+                validation_executor=LocalAgentConfigurationValidationAdapter(
+                    configuration_store=configuration_store,
+                    run_store=store,
+                ),
+                publication_validator=LocalAgentConfigurationPublicationAdapter(
+                    configuration_store=configuration_store,
+                ),
+                scope=AgentConfigurationScope.MULTI_AGENT,
             )
+            application.state.agent_configuration_workspace_persistence = (
+                workspace_persistence
+            )
+        application.state.agent_configuration_workspace = agent_configuration_workspace
         controlled_react_store_root = history_dir.parent / "controlled_react"
         application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(
             controlled_react_store_root
@@ -400,7 +313,6 @@ def create_app(
     application.include_router(auth_router, prefix="/api")
     application.include_router(security_router, prefix="/api")
     application.include_router(release_bundle_router, prefix="/api")
-    application.include_router(knowledge_source_router, prefix="/api")
     application.include_router(knowledge_service_management_router, prefix="/api")
     if selected_mode == "development":
         application.include_router(configuration_router, prefix="/api")

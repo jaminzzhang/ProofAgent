@@ -10,7 +10,7 @@ from proof_agent.configuration.knowledge_release import require_knowledge_releas
 from proof_agent.contracts import (
     PostgresEncryptedModelCredentialReference,
     PublishedAgentVersion,
-    ResolvedHybridKnowledgeBinding,
+    ResolvedKnowledgeSourceServiceBinding,
     SharedModelConnectionLifecycleState,
 )
 from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
@@ -40,7 +40,7 @@ def validate_production_agent_candidate(
     configuration_store: ModelConnectionReader,
     model_credential_resolver: ModelCredentialResolver,
 ) -> None:
-    """Validate identity, immutable release, Hybrid binding and model authority."""
+    """Validate identity, immutable KSS binding and model authority."""
 
     if (
         agent.source != "postgres_publication"
@@ -98,46 +98,32 @@ def validate_production_agent_candidate(
     bindings = version.resolved_knowledge_bindings
     if bindings is None or len(bindings.bindings) != 1:
         raise ProductionAgentValidationError(
-            "initial production Agent requires exactly one frozen Hybrid Knowledge binding"
+            "initial production Agent requires exactly one frozen KSS binding"
         )
     if agent.resolved_knowledge_bindings != bindings:
         raise ProductionAgentValidationError(
             "materialized production Agent has stale Knowledge bindings"
         )
     if not all(
-        isinstance(binding, ResolvedHybridKnowledgeBinding)
+        isinstance(binding, ResolvedKnowledgeSourceServiceBinding)
         for binding in bindings.bindings
     ):
         raise ProductionAgentValidationError(
-            "production Agent permits only published Hybrid Knowledge bindings"
+            "production Agent permits only published KSS bindings"
         )
     if not any(binding.failure_mode == "required" for binding in bindings.bindings):
         raise ProductionAgentValidationError(
             "production Agent requires at least one fail-closed Knowledge binding"
         )
-    manifest_bindings = {binding.binding_id: binding for binding in manifest.knowledge_bindings}
-    if set(manifest_bindings) != {binding.binding_id for binding in bindings.bindings}:
+    if manifest.knowledge_bindings:
         raise ProductionAgentValidationError(
-            "production Agent manifest and frozen Knowledge bindings diverge"
+            "production Agent manifest cannot retain legacy Knowledge Source bindings"
         )
-    for binding in bindings.bindings:
-        assert isinstance(binding, ResolvedHybridKnowledgeBinding)
-        configured = manifest_bindings[binding.binding_id]
-        if (
-            configured.source_ref.scope != "shared"
-            or configured.source_ref.source_id != binding.source_id
-            or configured.retrieval_profile_revision_id
-            != binding.retrieval_profile_revision_id
-            or configured.failure_mode != binding.failure_mode
-        ):
-            raise ProductionAgentValidationError(
-                "production Agent Hybrid binding does not match its manifest contract"
-            )
 
     release_record = version.knowledge_release_record
     if release_record is None:
         raise ProductionAgentValidationError(
-            "production Hybrid Agent requires a Phase F Knowledge Release Record"
+            "production KSS Agent requires a Phase F Knowledge Release Record"
         )
     try:
         require_knowledge_release_record(

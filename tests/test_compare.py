@@ -45,5 +45,5 @@ def test_harness_compare_executes_v3_agent_package() -> None:
         ),
     )
 
-    assert result.outcome == "ANSWERED_WITH_CITATIONS"
-    assert "Travel meals" in result.message
+    assert result.outcome == "REFUSED_NO_EVIDENCE"
+    assert "no governed evidence" in result.message

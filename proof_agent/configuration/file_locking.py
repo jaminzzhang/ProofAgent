@@ -18,6 +18,13 @@ def store_lock_path(store_root: Path) -> Path:
     return store_root / ".locks" / "store.lock"
 
 
+def replaceable_store_lock_path(store_root: Path) -> Path:
+    """Return a stable lock outside a store root that may be atomically replaced."""
+
+    authority_root = store_root.parent / f".{store_root.name}-authority"
+    return store_lock_path(authority_root)
+
+
 def artifact_lock_path(store_root: Path, artifact_key: str) -> Path:
     """Return a content-keyed artifact lock outside atomically renamed directories."""
 

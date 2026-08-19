@@ -1,14 +1,18 @@
+"""Composition root for the ProofAgent harness and its external authorities."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from threading import Lock
-from collections.abc import Callable
-from typing import Mapping, cast
 
-from proof_agent.capabilities.knowledge import KnowledgeProvider
-from proof_agent.capabilities.knowledge.blended import resolve_blended_knowledge_provider
+from proof_agent.bootstrap.knowledge_resolution import (
+    ManifestKnowledgeAuthorityGuard,
+)
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.model_resolution import resolve_model_role_config
+from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
 from proof_agent.capabilities.memory.session import SessionMemory
 from proof_agent.capabilities.models import ModelProvider, resolve_provider
 from proof_agent.capabilities.react import (
@@ -19,437 +23,36 @@ from proof_agent.capabilities.react import (
 )
 from proof_agent.capabilities.review import HarnessReviewSubagent, resolve_review_subagent
 from proof_agent.capabilities.tools.gateway import ToolGateway
-from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
 from proof_agent.contracts import (
     AgentManifest,
     BusinessFlowSkillPackDefinition,
-    ModelCallRole,
-    ModelConnectionResolutionRecord,
-    ModelConfig,
     InstitutionAuthorizationContext,
+    ModelCallRole,
+    ModelConfig,
+    ModelConnectionResolutionRecord,
     ReActPlannerConfig,
     ResolvedKnowledgeBindingSet,
+    ResolvedKnowledgeSourceServiceBinding,
     ReviewSubagentConfig,
 )
-from proof_agent.control.policy.engine import PolicyEngine
-from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
-from proof_agent.control.knowledge.hybrid_request import GovernedHybridRequestFactory
-from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
-from proof_agent.bootstrap.loader import load_agent_manifest
-from proof_agent.bootstrap.knowledge_resolution import (
-    KnowledgeBindingResolver,
-    PackageKnowledgeBindingResolver,
-)
-from proof_agent.bootstrap.model_resolution import resolve_model_role_config
-from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
-from proof_agent.capabilities.knowledge.hybrid.model_clients import (
-    BoundedSocketPrivateAddressResolver,
-    GuardedEmbeddingTransport,
-    GuardedKnowledgeModelSchedulerTransport,
-    GuardedRerankerTransport,
-    PrivateEmbeddingClient,
-    PrivateHostPolicy,
-    PrivateAddressResolver,
-    PrivateNetworkPolicy,
-    PrivateKnowledgeModelWorkSchedulerClient,
-    PrivateRerankerClient,
-    _private_https_endpoint,
-)
-from proof_agent.capabilities.knowledge.hybrid.parser_clients import (
-    GuardedParserTransport,
-    PrivateDoclingClient,
-    PrivatePaddleClient,
-)
-from proof_agent.capabilities.knowledge.hybrid.pipeline import PrivateHybridParserPipeline
-from proof_agent.capabilities.knowledge.hybrid.provider import (
-    HybridIndexProvider,
-    HybridRetrievalAuthority,
-)
-from proof_agent.capabilities.knowledge.hybrid.ports import HybridSearchIndex
-from proof_agent.capabilities.knowledge.hybrid.ports import KnowledgeArtifactStore
-from proof_agent.capabilities.knowledge.hybrid.publication import (
-    HybridProjectionWriter,
-    HybridPublicationRepository,
-    HybridPublicationService,
-)
-from proof_agent.capabilities.knowledge.ingestion.hybrid_worker import (
-    HybridKnowledgeWorkerFactory,
-    HybridPrivateParserBuildConfig,
-)
-from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
-from proof_agent.contracts.ports.secret_provider import SecretProvider
-from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 from proof_agent.contracts.ports.knowledge_candidates import (
     KnowledgeCandidateAdmissionScorer,
     KnowledgeCandidateService,
 )
+from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
+from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.contracts.ports.shared_assets import RuntimeSharedAssetReader
+from proof_agent.control.context_budget import InMemoryContextBudgetCalibrationStore
 from proof_agent.control.knowledge.candidate_request import KnowledgeCandidateQueryFactory
+from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.control.workflow.templates import WorkflowTemplate, resolve_workflow_template
 from proof_agent.errors import ProofAgentError
 
 
-DEFAULT_MEMORY_DENY_FIELDS = frozenset({"access_token", "customer_phone", "provider_api_key"})
-
-
-@dataclass(frozen=True)
-class HybridKnowledgeModelSettings:
-    """Secret-free internal service origins for private Knowledge processing."""
-
-    scheduler_endpoint: str
-    scheduler_namespace: str
-    docling_endpoint: str
-    paddle_endpoint: str
-    embedding_endpoint: str
-    reranker_endpoint: str
-    allowed_hosts: tuple[str, ...]
-    allowed_cidrs: tuple[str, ...]
-    parser_revision: str
-    model_digests: tuple[str, ...]
-    parser_configuration_sha256: str
-    require_insurance_metadata_drafts: bool = False
-    host_policy: PrivateHostPolicy = field(init=False, repr=False)
-    network_policy: PrivateNetworkPolicy = field(init=False, repr=False)
-    build_config: HybridPrivateParserBuildConfig = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        policy = PrivateHostPolicy.from_entries(self.allowed_hosts)
-        object.__setattr__(self, "host_policy", policy)
-        object.__setattr__(
-            self,
-            "network_policy",
-            PrivateNetworkPolicy.from_entries(self.allowed_cidrs),
-        )
-        object.__setattr__(
-            self,
-            "build_config",
-            HybridPrivateParserBuildConfig(
-                parser_revision=self.parser_revision,
-                model_digests=self.model_digests,
-                configuration_sha256=self.parser_configuration_sha256,
-            ),
-        )
-        for field_name in (
-            "scheduler_endpoint",
-            "docling_endpoint",
-            "paddle_endpoint",
-            "embedding_endpoint",
-            "reranker_endpoint",
-        ):
-            object.__setattr__(
-                self,
-                field_name,
-                _private_https_endpoint(
-                    getattr(self, field_name),
-                    field=field_name,
-                    allowed_hosts=policy,
-                ),
-            )
-
-
-@dataclass(frozen=True)
-class HybridKnowledgeTransportBundle:
-    scheduler: GuardedKnowledgeModelSchedulerTransport
-    docling: GuardedParserTransport
-    paddle: GuardedParserTransport
-    embedding: GuardedEmbeddingTransport
-    reranker: GuardedRerankerTransport
-    resolver: PrivateAddressResolver | None = None
-
-
-class HybridKnowledgeComposition:
-    """One process graph sharing one remote, namespace-scoped scheduler client."""
-
-    def __init__(
-        self,
-        *,
-        scheduler: PrivateKnowledgeModelWorkSchedulerClient,
-        parser: PrivateHybridParserPipeline,
-        embedding: PrivateEmbeddingClient,
-        reranker: PrivateRerankerClient,
-        ingestion_worker: HybridKnowledgeWorkerFactory,
-        build_config: HybridPrivateParserBuildConfig,
-        transports: HybridKnowledgeTransportBundle,
-    ) -> None:
-        self.scheduler = scheduler
-        self.parser = parser
-        self.embedding = embedding
-        self.reranker = reranker
-        self.ingestion_worker = ingestion_worker
-        self.build_config = build_config
-        self._transports = transports
-        self._close_lock = Lock()
-        self._pending_closers: dict[str, Callable[[], None]] = {
-            "scheduler": self.scheduler.close,
-            "docling": getattr(self._transports.docling, "close", lambda: None),
-            "paddle": getattr(self._transports.paddle, "close", lambda: None),
-            "embedding": getattr(self._transports.embedding, "close", lambda: None),
-            "reranker": getattr(self._transports.reranker, "close", lambda: None),
-        }
-        if self._transports.resolver is not None:
-            self._pending_closers["resolver"] = self._transports.resolver.close
-        self._closed = False
-
-    def close(self) -> None:
-        """Close the complete graph once; FastAPI owns this single hook."""
-
-        with self._close_lock:
-            if self._closed:
-                return
-            failures: list[Exception] = []
-            for name, close in tuple(self._pending_closers.items()):
-                try:
-                    close()
-                except Exception as exc:
-                    exc.add_note(f"Hybrid composition close failed for {name}")
-                    failures.append(exc)
-                else:
-                    self._pending_closers.pop(name, None)
-            if failures:
-                raise ExceptionGroup("Hybrid Knowledge composition close failed", failures)
-            self._closed = True
-
-    def compose_publication_service(
-        self,
-        *,
-        repository: HybridPublicationRepository,
-        artifact_store: KnowledgeArtifactStore,
-        index: HybridProjectionWriter,
-    ) -> HybridPublicationService:
-        """Attach publication to this graph without adding a second scheduler owner."""
-
-        return HybridPublicationService(
-            repository=repository,
-            artifact_store=artifact_store,
-            index=index,
-            embedding=self.embedding,
-        )
-
-    def compose_retrieval_provider(
-        self,
-        *,
-        authority: HybridRetrievalAuthority,
-        index: HybridSearchIndex,
-    ) -> HybridIndexProvider:
-        """Attach online retrieval to the same scheduler-owned model clients."""
-
-        return HybridIndexProvider(
-            authority=authority,
-            search=index,
-            embedding=self.embedding,
-            reranker=self.reranker,
-        )
-
-
-def compose_hybrid_knowledge(
-    *,
-    settings: HybridKnowledgeModelSettings,
-    transports: HybridKnowledgeTransportBundle | None = None,
-) -> HybridKnowledgeComposition:
-    """Compose production private-model clients without any in-memory queue."""
-
-    resolved_transports = transports or _default_hybrid_transports(settings)
-    scheduler = PrivateKnowledgeModelWorkSchedulerClient(
-        endpoint=settings.scheduler_endpoint,
-        namespace=settings.scheduler_namespace,
-        allowed_hosts=settings.host_policy,
-        transport=resolved_transports.scheduler,
-    )
-    parser = PrivateHybridParserPipeline(
-        docling=PrivateDoclingClient(
-            transport=resolved_transports.docling,
-            scheduler=scheduler,
-        ),
-        paddle=PrivatePaddleClient(
-            transport=resolved_transports.paddle,
-            scheduler=scheduler,
-        ),
-        require_insurance_metadata_drafts=settings.require_insurance_metadata_drafts,
-    )
-    return HybridKnowledgeComposition(
-        scheduler=scheduler,
-        parser=parser,
-        embedding=PrivateEmbeddingClient(
-            transport=resolved_transports.embedding,
-            scheduler=scheduler,
-        ),
-        reranker=PrivateRerankerClient(
-            transport=resolved_transports.reranker,
-            scheduler=scheduler,
-        ),
-        ingestion_worker=HybridKnowledgeWorkerFactory(scheduler=scheduler),
-        build_config=settings.build_config,
-        transports=resolved_transports,
-    )
-
-
-def compose_hybrid_knowledge_from_env(
-    environ: Mapping[str, str] | None = None,
-    *,
-    guarded_http_client: GuardedHttpsClient | None = None,
-) -> HybridKnowledgeComposition | None:
-    """Activate Hybrid production composition only through an explicit flag."""
-
-    source = os.environ if environ is None else environ
-    enabled = source.get("PA_HYBRID_KNOWLEDGE_MODELS_ENABLED", "").strip().lower()
-    if enabled in {"", "0", "false", "no"}:
-        return None
-    if enabled not in {"1", "true", "yes"}:
-        raise ValueError("PA_HYBRID_KNOWLEDGE_MODELS_ENABLED must be a boolean flag")
-    keys = {
-        "scheduler_endpoint": "PA_KNOWLEDGE_MODEL_SCHEDULER_ENDPOINT",
-        "scheduler_namespace": "PA_KNOWLEDGE_MODEL_SCHEDULER_NAMESPACE",
-        "docling_endpoint": "PA_KNOWLEDGE_DOCLING_ENDPOINT",
-        "paddle_endpoint": "PA_KNOWLEDGE_PADDLE_ENDPOINT",
-        "embedding_endpoint": "PA_KNOWLEDGE_EMBEDDING_ENDPOINT",
-        "reranker_endpoint": "PA_KNOWLEDGE_RERANKER_ENDPOINT",
-    }
-    values: dict[str, str] = {}
-    for field_name, key in keys.items():
-        value = source.get(key, "").strip()
-        if not value:
-            raise ValueError(f"{key} is required when private Knowledge models are enabled")
-        values[field_name] = value
-    allowed_hosts_value = source.get("PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS", "").strip()
-    if not allowed_hosts_value:
-        raise ValueError(
-            "PA_KNOWLEDGE_MODEL_ALLOWED_HOSTS is required when private Knowledge models are enabled"
-        )
-    allowed_hosts = tuple(item.strip() for item in allowed_hosts_value.split(",") if item.strip())
-    allowed_cidrs_value = source.get("PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS", "").strip()
-    if not allowed_cidrs_value:
-        raise ValueError(
-            "PA_KNOWLEDGE_MODEL_ALLOWED_CIDRS is required when private Knowledge models are enabled"
-        )
-    allowed_cidrs = tuple(item.strip() for item in allowed_cidrs_value.split(",") if item.strip())
-    parser_revision = source.get("PA_KNOWLEDGE_PARSER_REVISION", "").strip()
-    if not parser_revision:
-        raise ValueError(
-            "PA_KNOWLEDGE_PARSER_REVISION is required when private Knowledge models are enabled"
-        )
-    model_digests_value = source.get("PA_KNOWLEDGE_MODEL_DIGESTS", "").strip()
-    model_digests = tuple(item.strip() for item in model_digests_value.split(",") if item.strip())
-    if not model_digests:
-        raise ValueError(
-            "PA_KNOWLEDGE_MODEL_DIGESTS is required when private Knowledge models are enabled"
-        )
-    parser_configuration_sha256 = source.get("PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256", "").strip()
-    if not parser_configuration_sha256:
-        raise ValueError(
-            "PA_KNOWLEDGE_PARSER_CONFIGURATION_SHA256 is required when private Knowledge models "
-            "are enabled"
-        )
-    settings = HybridKnowledgeModelSettings(
-            **values,
-            allowed_hosts=allowed_hosts,
-            allowed_cidrs=allowed_cidrs,
-            parser_revision=parser_revision,
-            model_digests=model_digests,
-        parser_configuration_sha256=parser_configuration_sha256,
-        require_insurance_metadata_drafts=(
-            source.get("PA_KNOWLEDGE_REQUIRE_INSURANCE_METADATA_DRAFTS", "")
-            .strip()
-            .lower()
-            in {"1", "true", "yes"}
-        ),
-        )
-    production_mode = source.get("PROOF_AGENT_MODE", "development").strip() == "production"
-    if production_mode and guarded_http_client is None:
-        raise ValueError(
-            "production Hybrid Knowledge requires the active Egress Policy guarded client"
-        )
-    return compose_hybrid_knowledge(
-        settings=settings,
-        transports=(
-            _guarded_hybrid_transports(settings, guarded_http_client)
-            if guarded_http_client is not None
-            else None
-        ),
-    )
-
-
-def _guarded_hybrid_transports(
-    settings: HybridKnowledgeModelSettings,
-    client: GuardedHttpsClient,
-) -> HybridKnowledgeTransportBundle:
-    from proof_agent.capabilities.knowledge.hybrid.guarded_transports import (
-        GuardedEmbeddingHttpTransport,
-        GuardedParserHttpTransport,
-        GuardedRerankerHttpTransport,
-        GuardedSchedulerTransport,
-    )
-
-    strict_client = client.restricted(
-        max_redirects=0,
-        max_attempts_per_hop=1,
-        max_response_bytes=64 * 1024 * 1024,
-    )
-    return HybridKnowledgeTransportBundle(
-        scheduler=GuardedSchedulerTransport(strict_client),
-        docling=GuardedParserHttpTransport(
-            strict_client,
-            endpoint=settings.docling_endpoint,
-        ),
-        paddle=GuardedParserHttpTransport(
-            strict_client,
-            endpoint=settings.paddle_endpoint,
-        ),
-        embedding=GuardedEmbeddingHttpTransport(
-            strict_client,
-            endpoint=settings.embedding_endpoint,
-        ),
-        reranker=GuardedRerankerHttpTransport(
-            strict_client,
-            endpoint=settings.reranker_endpoint,
-        ),
-    )
-
-
-def _default_hybrid_transports(
-    settings: HybridKnowledgeModelSettings,
-) -> HybridKnowledgeTransportBundle:
-    from proof_agent.capabilities.knowledge.hybrid.model_clients import (
-        HttpEmbeddingTransport,
-        HttpKnowledgeModelSchedulerTransport,
-        HttpRerankerTransport,
-    )
-    from proof_agent.capabilities.knowledge.hybrid.parser_clients import HttpParserTransport
-
-    resolver = BoundedSocketPrivateAddressResolver()
-    try:
-        return HybridKnowledgeTransportBundle(
-            scheduler=HttpKnowledgeModelSchedulerTransport(
-                network_policy=settings.network_policy,
-                resolver=resolver,
-            ),
-            docling=HttpParserTransport(
-                endpoint=settings.docling_endpoint,
-                allowed_hosts=settings.host_policy,
-                network_policy=settings.network_policy,
-                resolver=resolver,
-            ),
-            paddle=HttpParserTransport(
-                endpoint=settings.paddle_endpoint,
-                allowed_hosts=settings.host_policy,
-                network_policy=settings.network_policy,
-                resolver=resolver,
-            ),
-            embedding=HttpEmbeddingTransport(
-                endpoint=settings.embedding_endpoint,
-                allowed_hosts=settings.host_policy,
-                network_policy=settings.network_policy,
-                resolver=resolver,
-            ),
-            reranker=HttpRerankerTransport(
-                endpoint=settings.reranker_endpoint,
-                allowed_hosts=settings.host_policy,
-                network_policy=settings.network_policy,
-                resolver=resolver,
-            ),
-            resolver=resolver,
-        )
-    except BaseException:
-        resolver.close()
-        raise
+DEFAULT_MEMORY_DENY_FIELDS = frozenset(
+    {"access_token", "customer_phone", "provider_api_key"}
+)
 
 
 @dataclass(frozen=True)
@@ -460,7 +63,6 @@ class HarnessInvocation:
     manifest: AgentManifest
     template: WorkflowTemplate
     policy: PolicyEngine
-    knowledge_provider: KnowledgeProvider
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet
     model_provider: ModelProvider
     tool_gateway: ToolGateway
@@ -478,7 +80,6 @@ class HarnessInvocation:
     institution_authorization: InstitutionAuthorizationContext = field(
         default_factory=InstitutionAuthorizationContext
     )
-    governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None
     knowledge_candidate_service: KnowledgeCandidateService | None = None
     knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None
     knowledge_candidate_admission_scorer: (
@@ -488,8 +89,6 @@ class HarnessInvocation:
     cancellation_check: Callable[[], None] = lambda: None
 
     def create_memory(self) -> SessionMemory:
-        """Create per-run memory with the configured sensitivity boundary."""
-
         return SessionMemory(deny_fields=self.memory_deny_fields)
 
 
@@ -497,31 +96,35 @@ def compose_harness_invocation(
     agent_yaml: Path | str,
     *,
     manifest: AgentManifest | None = None,
-    knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
     configuration_store: RuntimeSharedAssetReader | None = None,
     require_runtime_credentials: bool = True,
     context_budget_calibration_store: InMemoryContextBudgetCalibrationStore | None = None,
     institution_authorization: InstitutionAuthorizationContext | None = None,
-    governed_hybrid_request_factory: GovernedHybridRequestFactory | None = None,
     knowledge_candidate_service: KnowledgeCandidateService | None = None,
     knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None,
     knowledge_candidate_admission_scorer: (
         KnowledgeCandidateAdmissionScorer | None
     ) = None,
-    hybrid_providers: Mapping[str, HybridIndexProvider] | None = None,
     guarded_http_client: GuardedHttpClient | None = None,
     secret_provider: SecretProvider | None = None,
     model_credential_resolver: ModelCredentialResolver | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> HarnessInvocation:
-    """Resolve an Agent Contract into the dependencies needed to run it."""
+    """Resolve one Agent Contract with KSS as its only Knowledge authority."""
 
-    if (knowledge_candidate_service is None) != (knowledge_candidate_query_factory is None):
+    candidate_dependencies = (
+        knowledge_candidate_service,
+        knowledge_candidate_query_factory,
+        knowledge_candidate_admission_scorer,
+    )
+    if any(item is not None for item in candidate_dependencies) and any(
+        item is None for item in candidate_dependencies
+    ):
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "Knowledge Candidate service and exact Query factory must be composed together.",
-            "Configure both dependencies for the Published Agent Version or neither.",
+            "KSS service, exact Query factory and Evidence Admission scorer must be composed together.",
+            "Configure the complete Published Agent Version Candidate runtime.",
         )
 
     model_provider_resolver = _model_provider_resolver(
@@ -540,26 +143,22 @@ def compose_harness_invocation(
         require_runtime_credentials=require_runtime_credentials,
     )
     model_resolution_records.append(resolved_answer_model.resolution_record)
-    resolved_retrieval_planner_model = None
-    if resolved_manifest.retrieval.planner_model is not None:
-        resolved = resolve_model_role_config(
-            resolved_manifest.retrieval.planner_model,
-            role=ModelCallRole.RETRIEVAL_PLANNER,
-            configuration_store=configuration_store,
-            require_runtime_credentials=require_runtime_credentials,
-        )
-        resolved_retrieval_planner_model = resolved.model_config
-        model_resolution_records.append(resolved.resolution_record)
-    resolved_retrieval_evaluator_model = None
-    if resolved_manifest.retrieval.evaluator_model is not None:
-        resolved = resolve_model_role_config(
-            resolved_manifest.retrieval.evaluator_model,
-            role=ModelCallRole.RETRIEVAL_EVALUATOR,
-            configuration_store=configuration_store,
-            require_runtime_credentials=require_runtime_credentials,
-        )
-        resolved_retrieval_evaluator_model = resolved.model_config
-        model_resolution_records.append(resolved.resolution_record)
+
+    resolved_retrieval_planner_model = _resolve_optional_model(
+        resolved_manifest.retrieval.planner_model,
+        role=ModelCallRole.RETRIEVAL_PLANNER,
+        configuration_store=configuration_store,
+        require_runtime_credentials=require_runtime_credentials,
+        records=model_resolution_records,
+    )
+    resolved_retrieval_evaluator_model = _resolve_optional_model(
+        resolved_manifest.retrieval.evaluator_model,
+        role=ModelCallRole.RETRIEVAL_EVALUATOR,
+        configuration_store=configuration_store,
+        require_runtime_credentials=require_runtime_credentials,
+        records=model_resolution_records,
+    )
+
     react_planner = None
     intent_resolver = None
     if resolved_manifest.react is not None:
@@ -570,12 +169,13 @@ def compose_harness_invocation(
             require_runtime_credentials=require_runtime_credentials,
         )
         model_resolution_records.append(resolved_planner_model.resolution_record)
+        planner_config = ReActPlannerConfig(
+            provider=resolved_planner_model.model_config.provider,
+            name=resolved_planner_model.model_config.name,
+            params=resolved_planner_model.model_config.params,
+        )
         react_planner = resolve_react_planner(
-            ReActPlannerConfig(
-                provider=resolved_planner_model.model_config.provider,
-                name=resolved_planner_model.model_config.name,
-                params=resolved_planner_model.model_config.params,
-            ),
+            planner_config,
             guarded_http_client=guarded_http_client,
             secret_provider=secret_provider,
             model_credential_resolver=model_credential_resolver,
@@ -598,6 +198,7 @@ def compose_harness_invocation(
             secret_provider=secret_provider,
             model_credential_resolver=model_credential_resolver,
         )
+
     review_subagent = None
     if resolved_manifest.review is not None and resolved_manifest.review.subagent is not None:
         resolved_review_model = resolve_model_role_config(
@@ -618,29 +219,21 @@ def compose_harness_invocation(
             secret_provider=secret_provider,
             model_credential_resolver=model_credential_resolver,
         )
+
     resolved_bindings = resolved_knowledge_bindings
     if resolved_bindings is None:
-        resolver = knowledge_binding_resolver or PackageKnowledgeBindingResolver()
-        resolved_bindings = resolver.resolve(resolved_manifest)
-    policy = PolicyEngine.from_file(resolved_manifest.policy.file)
-    business_flow_skill_packs = load_business_flow_skill_pack_set(
-        resolved_manifest,
-        template=template,
-        manifest_path=manifest_path,
+        resolved_bindings = ManifestKnowledgeAuthorityGuard().resolve(resolved_manifest)
+    _validate_knowledge_authority(
+        resolved_bindings,
+        candidate_runtime_configured=knowledge_candidate_service is not None,
     )
+
+    policy = PolicyEngine.from_file(resolved_manifest.policy.file)
     return HarnessInvocation(
         manifest_path=manifest_path,
         manifest=resolved_manifest,
         template=template,
         policy=policy,
-        knowledge_provider=cast(
-            KnowledgeProvider,
-            resolve_blended_knowledge_provider(
-                resolved_bindings,
-                configuration_store=configuration_store,
-                hybrid_providers=hybrid_providers,
-            ),
-        ),
         resolved_knowledge_bindings=resolved_bindings,
         model_provider=model_provider_resolver(resolved_answer_model.model_config),
         tool_gateway=_tool_gateway_for_manifest(
@@ -653,21 +246,75 @@ def compose_harness_invocation(
         review_subagent=review_subagent,
         retrieval_planner_model=resolved_retrieval_planner_model,
         retrieval_evaluator_model=resolved_retrieval_evaluator_model,
-        business_flow_skill_packs=business_flow_skill_packs,
+        business_flow_skill_packs=load_business_flow_skill_pack_set(
+            resolved_manifest,
+            template=template,
+            manifest_path=manifest_path,
+        ),
         model_resolution_records=tuple(model_resolution_records),
         context_budget_calibration_store=(
             context_budget_calibration_store
             if context_budget_calibration_store is not None
             else InMemoryContextBudgetCalibrationStore()
         ),
-        institution_authorization=(institution_authorization or InstitutionAuthorizationContext()),
+        institution_authorization=(
+            institution_authorization or InstitutionAuthorizationContext()
+        ),
         knowledge_candidate_service=knowledge_candidate_service,
         knowledge_candidate_query_factory=knowledge_candidate_query_factory,
         knowledge_candidate_admission_scorer=knowledge_candidate_admission_scorer,
-        governed_hybrid_request_factory=governed_hybrid_request_factory,
         model_resolver=model_provider_resolver,
         cancellation_check=cancellation_check or (lambda: None),
     )
+
+
+def _resolve_optional_model(
+    config: ModelConfig | None,
+    *,
+    role: ModelCallRole,
+    configuration_store: RuntimeSharedAssetReader | None,
+    require_runtime_credentials: bool,
+    records: list[ModelConnectionResolutionRecord],
+) -> ModelConfig | None:
+    if config is None:
+        return None
+    resolved = resolve_model_role_config(
+        config,
+        role=role,
+        configuration_store=configuration_store,
+        require_runtime_credentials=require_runtime_credentials,
+    )
+    records.append(resolved.resolution_record)
+    return resolved.model_config
+
+
+def _validate_knowledge_authority(
+    bindings: ResolvedKnowledgeBindingSet,
+    *,
+    candidate_runtime_configured: bool,
+) -> None:
+    if not bindings.bindings:
+        if candidate_runtime_configured:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "The Candidate runtime requires one exact Published KSS binding.",
+                "Publish the Agent Version with its KSS release binding.",
+            )
+        return
+    if len(bindings.bindings) != 1 or not isinstance(
+        bindings.bindings[0], ResolvedKnowledgeSourceServiceBinding
+    ):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Embedded and legacy Knowledge bindings were removed by the KSS authority cutover.",
+            "Use exactly one Published Knowledge Source Service binding.",
+        )
+    if not candidate_runtime_configured:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "The Published KSS binding has no executable Candidate runtime.",
+            "Compose the exact KSS client, Query factory and Evidence Admission scorer.",
+        )
 
 
 def _model_provider_resolver(
@@ -697,9 +344,7 @@ def _tool_gateway_for_manifest(
     guarded_http_client: GuardedHttpClient | None = None,
 ) -> ToolGateway:
     tools = manifest.capabilities.tools
-    if not tools.enabled:
-        return ToolGateway({})
-    if tools.file is None:
+    if not tools.enabled or tools.file is None:
         return ToolGateway({})
     return ToolGateway.from_file(
         tools.file,
@@ -707,3 +352,6 @@ def _tool_gateway_for_manifest(
         tool_source_env=os.environ,
         guarded_http_client=guarded_http_client,
     )
+
+
+__all__ = ["HarnessInvocation", "compose_harness_invocation"]

@@ -21,7 +21,10 @@ not a second glossary.
   sequence, not implementation status.
 - `docs/adr/0192-separate-knowledge-source-service-from-agent-evidence-admission.md`
   through `docs/adr/0207-deploy-one-knowledge-service-with-isolated-process-roles.md`
-  — accepted boundary and runtime decisions.
+  — accepted service boundary and runtime decisions.
+- `docs/adr/0210-make-kss-the-only-executable-knowledge-authority.md` — current
+  execution authority. It supersedes executable Hybrid, package-local and shared
+  knowledge binding paths in ProofAgent.
 
 ## High-risk implementation scenes
 
@@ -37,6 +40,11 @@ not a second glossary.
   external tools, expand access, admit evidence, or answer for ProofAgent.
 - `[FRAME | HIGH]` Base Versions are immutable and Knowledge Base Releases become
   visible atomically.
+- `[FRAME | HIGH]` A knowledge-enabled Published Agent Version has exactly one
+  exact KSS binding; unavailable KSS, grant, secret or Admission Scorer fails
+  closed, with no local provider fallback.
+- `[FRAME | HIGH]` Old Hybrid-bound Published Agent Versions are historical
+  records only and are not valid replay or rollback targets after ADR-0210.
 
 When implementation exposes an unrecorded domain decision, update the owning
 context or add an ADR before encoding the choice in code.

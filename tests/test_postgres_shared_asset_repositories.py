@@ -7,9 +7,6 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import Engine
 
-from proof_agent.capabilities.persistence.postgres.knowledge_repository import (
-    PostgresKnowledgeAssetRepository,
-)
 from proof_agent.capabilities.persistence.postgres.model_repository import (
     PostgresModelAssetRepository,
 )
@@ -19,18 +16,12 @@ from proof_agent.capabilities.persistence.postgres.schema import (
     agent_versions,
     knowledge_sources,
 )
-from proof_agent.capabilities.persistence.postgres.tool_repository import (
-    PostgresToolAssetRepository,
-)
 from proof_agent.contracts import (
     EnvironmentModelCredentialReference,
-    KnowledgeSource,
-    KnowledgeSourceLifecycleState,
     PersistenceConflictError,
     SharedAssetKind,
     SharedModelConnection,
     SharedModelConnectionLifecycleState,
-    ToolSource,
 )
 
 
@@ -152,81 +143,3 @@ review:
     assert summary.knowledge_source_reference_count == 1
     assert summary.in_flight_operation_count == 0
     assert summary.audit_retention_blocked is True
-
-
-def test_postgres_knowledge_and_tool_repositories_resolve_exact_versions(
-    postgres_engine: Engine,
-) -> None:
-    knowledge = PostgresKnowledgeAssetRepository(postgres_engine)
-    tools = PostgresToolAssetRepository(postgres_engine)
-    source = KnowledgeSource(
-        source_id="insurance-clauses",
-        name="Insurance Clauses",
-        provider="hybrid_index",
-        lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
-        params={"publication_authority": "postgres_s3_opensearch"},
-        created_at="2026-07-15T00:00:00Z",
-        updated_at="2026-07-15T00:00:00Z",
-        source_draft_version_id="source-draft-1",
-    )
-    tool = ToolSource(
-        source_id="policy-lookup",
-        name="Policy Lookup",
-        source_type="http",
-        provider="http_json",
-        tool_contract_ids=("policy.lookup",),
-        params={"base_url": "https://tools.internal.example"},
-        config_revision=1,
-        created_at="2026-07-15T00:00:00Z",
-        updated_at="2026-07-15T00:00:00Z",
-    )
-
-    knowledge_ref = knowledge.save_source(source, expected_revision=0)
-    tool_ref = tools.save_source(tool, expected_revision=0)
-
-    assert knowledge.get_knowledge_source(source.source_id) == source
-    assert tools.get_tool_source(tool.source_id) == tool
-    assert knowledge.resolve_version(
-        source.source_id, version_id=knowledge_ref.version_id
-    ) == knowledge_ref
-    assert tools.resolve_version(tool.source_id, version_id=tool_ref.version_id) == tool_ref
-
-
-def test_postgres_knowledge_source_record_exposes_revision_and_rejects_stale_cas(
-    postgres_engine: Engine,
-) -> None:
-    repository = PostgresKnowledgeAssetRepository(postgres_engine)
-    source = KnowledgeSource(
-        source_id="hybrid-cas",
-        name="Hybrid CAS",
-        provider="hybrid_index",
-        lifecycle_state=KnowledgeSourceLifecycleState.ACTIVE,
-        params={},
-        created_at="2026-07-27T00:00:00Z",
-        updated_at="2026-07-27T00:00:00Z",
-    )
-    repository.save_source(source, expected_revision=0)
-    updated = source.model_copy(
-        update={
-            "name": "Hybrid CAS Updated",
-            "updated_at": "2026-07-27T00:01:00Z",
-        }
-    )
-    repository.save_source(updated, expected_revision=1)
-
-    record = repository.get_source_record(source.source_id)
-
-    assert record is not None
-    assert record.source == updated
-    assert record.revision == 2
-    with pytest.raises(PersistenceConflictError) as caught:
-        repository.save_source(
-            source.model_copy(
-                update={
-                    "name": "Stale write",
-                    "updated_at": "2026-07-27T00:02:00Z",
-                }
-            ),
-            expected_revision=1,
-        )
-    assert caught.value.actual_revision == 2

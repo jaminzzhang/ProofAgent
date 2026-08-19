@@ -6,6 +6,7 @@ import signal
 
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
+import pytest
 
 from proof_agent.bootstrap import production_roles
 from proof_agent.contracts.health import ProductionDeploymentIdentity
@@ -102,6 +103,7 @@ def test_active_executor_once_may_claim(monkeypatch) -> None:
     assert composition.closed is True
 
 
+@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
 def test_standby_knowledge_worker_once_never_claims(monkeypatch) -> None:
     worker = RecordingKnowledgeWorker()
     composition = Composition(worker=worker)

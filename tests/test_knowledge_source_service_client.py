@@ -6,9 +6,11 @@ from typing import Any
 
 import pytest
 
-from proof_agent.capabilities.knowledge.capabilities import RetrievalCapabilities
 from proof_agent.capabilities.knowledge.source_service_client import (
     KnowledgeSourceServiceClient,
+)
+from proof_agent.capabilities.knowledge.admission_scorer_client import (
+    HttpKnowledgeCandidateAdmissionScorer,
 )
 from proof_agent.contracts.knowledge_candidates import (
     KnowledgeCandidateQuery,
@@ -370,27 +372,99 @@ class StaticCandidateAdmissionScorer:
         return self.scores
 
 
-class ForbiddenLegacyProvider:
-    provider_name = "legacy-must-not-run"
-    capabilities = RetrievalCapabilities(supports_parallel_retrieval=True)
-
+class AdmissionScorerHttpClient:
     def __init__(self) -> None:
-        self.calls = 0
+        self.calls: list[dict[str, Any]] = []
 
-    def retrieve(self, query: str, *, top_k: int | None = None) -> tuple[Any, ...]:
-        self.calls += 1
-        raise AssertionError("local Knowledge fallback must not run")
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Any = None,
+        body: bytes | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> GuardedHttpResponse:
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "body": body,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return GuardedHttpResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(
+                {
+                    "schema_version": "knowledge-admission-score-response.v1",
+                    "scorer_id": "insurance-evidence-admission",
+                    "scorer_revision": "insurance-evidence-admission.v3",
+                    "scores": [
+                        {
+                            "candidate_evidence_id": "candidate-doc-1",
+                            "admission_score": 0.84,
+                        }
+                    ],
+                }
+            ).encode(),
+        )
+
+
+def test_http_admission_scorer_uses_its_approved_contract_without_reusing_rank() -> None:
+    http = AdmissionScorerHttpClient()
+    scorer = HttpKnowledgeCandidateAdmissionScorer(
+        endpoint="https://knowledge-models.internal.example",
+        http_client=http,
+        authorization_header_factory=lambda: "Bearer scorer-token",
+        scorer_id="insurance-evidence-admission",
+        scorer_revision="insurance-evidence-admission.v3",
+    )
+    query = KnowledgeCandidateQuery.model_validate(
+        {
+            "idempotency_key": "run-1:retrieval-1:attempt-1",
+            "knowledge_base_release_id": "release-1",
+            "question": "航班延误需要哪些材料？",
+            "strategy": "single_pass",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 10,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 1000,
+            },
+            "deadline_at": "2026-08-12T09:01:00Z",
+        }
+    )
+    result = KnowledgeCandidateResult.model_validate(
+        {"knowledge_query_id": "query-1", **_result_payload()}
+    )
+
+    scores = scorer.score_candidates(query=query, result=result)
+
+    assert scores == {"candidate-doc-1": 0.84}
+    request = http.calls[0]
+    assert request["method"] == "POST"
+    assert request["url"].endswith("/v1/evidence-admission-scores")
+    assert request["headers"]["Authorization"] == "Bearer scorer-token"
+    payload = json.loads(request["body"])
+    assert payload["scorer_revision"] == "insurance-evidence-admission.v3"
+    candidate = payload["candidates"][0]
+    assert candidate["candidate_evidence_id"] == "candidate-doc-1"
+    assert "admission_score" not in candidate
+    assert "fused_rank" not in candidate
+    assert "reranked_rank" not in candidate
 
 
 def test_control_plane_routes_exact_query_without_flattening_structured_groups(
     tmp_path: Any,
 ) -> None:
     candidate_service = StaticCandidateService()
-    legacy_provider = ForbiddenLegacyProvider()
     service = KnowledgeRetrievalService(
         trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
         policy=PolicyEngine(()),
-        knowledge_provider=legacy_provider,
         knowledge_candidate_service=candidate_service,
     )
     candidate_query = KnowledgeCandidateQuery.model_validate(
@@ -421,7 +495,6 @@ def test_control_plane_routes_exact_query_without_flattening_structured_groups(
     )
 
     assert candidate_service.requests == [candidate_query]
-    assert legacy_provider.calls == 0
     assert result.candidate_result is not None
     assert [group.group_type for group in result.candidate_result.evidence_groups] == [
         "relevance_ranked",
@@ -446,7 +519,6 @@ def test_control_plane_applies_an_explicit_candidate_admission_scorer(
     service = KnowledgeRetrievalService(
         trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
         policy=PolicyEngine(()),
-        knowledge_provider=ForbiddenLegacyProvider(),
         knowledge_candidate_service=candidate_service,
         knowledge_candidate_admission_scorer=admission_scorer,
     )
@@ -495,7 +567,6 @@ def test_control_plane_rejects_an_invalid_candidate_admission_score(
     service = KnowledgeRetrievalService(
         trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
         policy=PolicyEngine(()),
-        knowledge_provider=ForbiddenLegacyProvider(),
         knowledge_candidate_service=candidate_service,
         knowledge_candidate_admission_scorer=admission_scorer,
     )
@@ -585,7 +656,6 @@ def test_control_plane_preserves_document_locator_in_candidate_citation(
     service = KnowledgeRetrievalService(
         trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-pdf"),
         policy=PolicyEngine(()),
-        knowledge_provider=ForbiddenLegacyProvider(),
         knowledge_candidate_service=candidate_service,
     )
     candidate_query = KnowledgeCandidateQuery.model_validate(

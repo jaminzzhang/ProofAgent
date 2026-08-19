@@ -1669,10 +1669,6 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-hybrid = [
-    { name = "httpx" },
-    { name = "openpyxl" },
-]
 ingestion = [
     { name = "pypdf" },
 ]
@@ -1723,7 +1719,6 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'production'", specifier = ">=0.111.0" },
     { name = "filelock", specifier = ">=3.29.0,<4" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
-    { name = "httpx", marker = "extra == 'hybrid'", specifier = ">=0.27.0,<1" },
     { name = "httpx", marker = "extra == 'production'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'security'", specifier = ">=0.27,<1" },
     { name = "jinja2", specifier = ">=3.1.0" },
@@ -1732,10 +1727,9 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.30.0" },
     { name = "openai", marker = "extra == 'production'", specifier = ">=1.30.0" },
-    { name = "openpyxl", marker = "extra == 'hybrid'", specifier = ">=3.1.5,<4" },
     { name = "openpyxl", marker = "extra == 'production'", specifier = ">=3.1.5,<4" },
     { name = "pillow", marker = "extra == 'production'", specifier = ">=11,<13" },
-    { name = "proof-agent", extras = ["hybrid", "ingestion", "openai", "production", "security", "tree"], marker = "extra == 'all'" },
+    { name = "proof-agent", extras = ["ingestion", "openai", "production", "security", "tree"], marker = "extra == 'all'" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'production'", specifier = ">=3.2,<4" },
     { name = "pyarrow", marker = "extra == 'production'", specifier = ">=18,<24" },
@@ -1754,7 +1748,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30.0" },
     { name = "uvicorn", marker = "extra == 'production'", specifier = ">=0.30.0" },
 ]
-provides-extras = ["dev", "dashboard", "openai", "tree", "ingestion", "hybrid", "postgres", "security", "production", "all"]
+provides-extras = ["dev", "dashboard", "openai", "tree", "ingestion", "postgres", "security", "production", "all"]
 
 [[package]]
 name = "propcache"

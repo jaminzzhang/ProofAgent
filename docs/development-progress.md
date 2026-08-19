@@ -1,12 +1,38 @@
 # Development Progress
 
-Updated: 2026-08-13
+Updated: 2026-08-19
 
 ## Current decision
 
-[KNOWN | HIGH] The Hybrid Knowledge happy path is code-complete and deployment-executable from PDF upload through controlled production Agent publication. S6 foundations now include compatibility binding, image/Compose definitions, deep API/Worker readiness, PostgreSQL-fenced Worker role leases, an explicit locked expand-only migration job, provider-neutral Blue/Green choreography, atomic multi-surface nginx switching, a first built-in `docker-compose-v1` operations driver, and a finalized Release Registry with authenticated exact bundle downloads. Formal production release remains **NO-GO**: no immutable candidate image has been built or scanned here, the driver has not run against disposable or real Docker/nginx infrastructure, no real release bundle has been finalized/downloaded, the workspace has no real private parser/embedding/reranker/answer-model/evaluator execution, S6 operational evidence is incomplete, and none of the five candidate-bound risk Gates covering the 13 required check families has a formal passing Evidence result.
+[KNOWN | HIGH] ADR-0210 makes KSS the only executable knowledge authority. A
+knowledge-enabled Published Agent Version owns one exact KSS binding and ProofAgent
+keeps only the KSS client, exact Admission Scorer client and Control Plane Admission.
+The former Hybrid provider, source-management API, ingestion/publication worker,
+repositories, CLI and Dashboard paths are deleted. Old Hybrid-bound Agent Versions
+cannot replay or roll back. Formal production release remains **NO-GO** until an
+approved scorer revision, exact grant and versioned secret, real dependency readiness,
+shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-08-18 KSS authority cutover
+
+- [KNOWN | HIGH] `ResolvedKnowledgeBindingSet` now accepts only an exact
+  `ResolvedKnowledgeSourceServiceBinding`; package/shared bindings are rejected and
+  published manifests contribute no knowledge authority.
+- [KNOWN | HIGH] Production runtime resolves the versioned KSS client secret lazily,
+  submits an exact-Space/exact-Release query and applies an exact ProofAgent-owned
+  scorer. Identity, revision, candidate-set or score drift fails closed.
+- [KNOWN | HIGH] ProofAgent Hybrid runtime, source API, worker, persistence and UI
+  surfaces were physically removed. KSS's service-owned worker remains.
+- [COMPUTED | HIGH] Final local verification on 2026-08-19 passed 1837 backend tests
+  with 120 environment-dependent skips and two explicit deselections. Dashboard passed
+  all 195 tests across 32 files and its production build. Ruff passed for `proof_agent`
+  and `tests`; strict mypy passed over 346 product source files; domain-context and
+  `git diff --check` checks passed.
+- [LIMIT | HIGH] These are local checks, not live cutover evidence. No image was built
+  or deployed in this increment, and no real production KSS, grant, secret, scorer,
+  shadow, pilot, recovery or Product Release Gate was exercised.
 
 ## 2026-08-13 Product Release Authority
 

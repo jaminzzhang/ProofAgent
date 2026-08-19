@@ -10,7 +10,6 @@ from proof_agent.contracts._base import FrozenModel
 class SharedAssetKind(str, Enum):
     """Versioned shared-configuration families referenced by Agent publication."""
 
-    KNOWLEDGE_SOURCE = "knowledge_source"
     MODEL_CONNECTION = "model_connection"
     TOOL_SOURCE = "tool_source"
 

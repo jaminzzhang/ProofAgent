@@ -14,11 +14,11 @@ from proof_agent.contracts import (
     DraftAgent,
 )
 from proof_agent.contracts.persistence import PersistenceConflictError
-from proof_agent.control.production_agent_configuration import (
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationConflict,
+    AgentConfigurationNotFound,
+    AgentConfigurationWorkspace,
     SOLE_PRODUCTION_AGENT_ID,
-    ProductionAgentConfigurationConflict,
-    ProductionAgentConfigurationNotFound,
-    ProductionAgentConfigurationService,
 )
 
 
@@ -68,6 +68,9 @@ class InMemoryAgentRepository:
         del agent_id
         return None
 
+    def list_active(self) -> tuple[object, ...]:
+        return ()
+
 
 class InMemoryAuditRepository:
     def __init__(self) -> None:
@@ -114,8 +117,8 @@ class UnitOfWorkFactory:
         return unit
 
 
-def _service(factory: UnitOfWorkFactory) -> ProductionAgentConfigurationService:
-    return ProductionAgentConfigurationService(
+def _service(factory: UnitOfWorkFactory) -> AgentConfigurationWorkspace:
+    return AgentConfigurationWorkspace(
         unit_of_work_factory=factory,
         template_bundle=ContractBundle(
             agent_yaml=(
@@ -281,14 +284,14 @@ def test_create_draft_rejects_idempotency_mismatch_and_second_initialization() -
         actor=_actor(),
     )
 
-    with pytest.raises(ProductionAgentConfigurationConflict) as mismatch:
+    with pytest.raises(AgentConfigurationConflict) as mismatch:
         service.create_draft(
             display_name="Different name",
             purpose="Answer governed insurance questions.",
             idempotency_key="create-agent-attempt-1",
             actor=_actor(),
         )
-    with pytest.raises(ProductionAgentConfigurationConflict) as duplicate:
+    with pytest.raises(AgentConfigurationConflict) as duplicate:
         service.create_draft(
             display_name="Insurance Specialist",
             purpose="Answer governed insurance questions.",
@@ -317,7 +320,7 @@ def test_read_history_and_revision_conflicts_are_stable_application_results() ->
     ) == created.record
     assert service.list_versions(agent_id=SOLE_PRODUCTION_AGENT_ID).versions == ()
 
-    with pytest.raises(ProductionAgentConfigurationConflict) as stale:
+    with pytest.raises(AgentConfigurationConflict) as stale:
         service.update_draft(
             agent_id=SOLE_PRODUCTION_AGENT_ID,
             draft_id=created.record.draft.draft_id,
@@ -326,9 +329,9 @@ def test_read_history_and_revision_conflicts_are_stable_application_results() ->
             purpose=None,
             actor=_actor(),
         )
-    with pytest.raises(ProductionAgentConfigurationNotFound) as unknown:
+    with pytest.raises(AgentConfigurationNotFound) as unknown:
         service.get_draft(agent_id="unknown", draft_id=created.record.draft.draft_id)
-    with pytest.raises(ProductionAgentConfigurationNotFound) as malformed:
+    with pytest.raises(AgentConfigurationNotFound) as malformed:
         service.get_draft(
             agent_id=SOLE_PRODUCTION_AGENT_ID,
             draft_id="not-a-production-draft-id",

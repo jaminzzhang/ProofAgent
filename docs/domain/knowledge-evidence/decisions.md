@@ -2,6 +2,15 @@
 
 ## Ambiguity Resolutions
 
+- [FRAME | HIGH] "KSS 权威切换" could mean preferring KSS while retaining Hybrid
+  fallback, dual-reading during migration, or making KSS the only executable
+  authority. Resolved by ADR-0210: a knowledge-enabled Published Agent Version
+  owns exactly one exact KSS binding; package, shared-source and Hybrid binding
+  shapes are invalid. ProofAgent keeps Admission and answer authority, but its
+  old provider, ingestion, publication, worker, repository, API and Dashboard
+  paths are deleted. KSS, exact Client Grant, versioned credential or approved
+  Admission Scorer failure is fail-closed. Former Hybrid-bound versions cannot
+  replay or roll back; recovery selects another KSS-bound version.
 - "V2 public example stage coverage" could mean copying every Workflow Template Stage into every Agent Contract or configuring only business-meaningful stages. Resolved: the customer-facing public example configures key business stages only, while the specialist public example keeps its broader stage configuration and adds `intent_resolution`; descriptor defaults cover execution-oriented stages that do not need business Prompt addenda, and non-Prompt-editable stages such as `response` may only configure descriptor-allowed context.
 - "Analysis" could mean evidence-bound explanation or unsupported reasoning beyond the source. Resolved: customer-facing analysis stays inside the evidence boundary and every business claim remains validated.
 - "`capabilities.knowledge`" could mean treating retrieval as an optional stage-availability capability. Resolved: keep `knowledge_bindings[]` as the separate Agent Knowledge Binding domain; React Enterprise QA retrieval stages remain available and fail through validation or retrieval when knowledge config is missing or invalid.

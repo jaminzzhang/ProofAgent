@@ -2,7 +2,6 @@ import { afterEach, expect, test, vi } from 'vitest'
 import {
   ApiError,
   archiveModelConnection,
-  bindKnowledgeSourceToDraft,
   createConfigAgent,
   createModelConnection,
   deleteModelConnection,
@@ -566,39 +565,6 @@ test('model connection client methods use shared model endpoints', async () => {
   )
   expect(fetchMock.mock.calls[10][0]).toBe(
     '/api/config/model-connections/model_deepseek_default/smoke-test',
-  )
-})
-
-test('bindKnowledgeSourceToDraft posts a Hybrid shared source binding request', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ agent_yaml: 'name: enterprise_qa' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  await bindKnowledgeSourceToDraft('enterprise_qa', 'draft_1', {
-    source_id: 'ks_hybrid_index',
-    retrieval_profile_revision_id: 'insurance-profile-v1',
-    alias: 'policies',
-    failure_mode: 'advisory',
-    fusion_weight: 0.75,
-    top_k: 3,
-  })
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/config/agents/enterprise_qa/drafts/draft_1/knowledge-bindings',
-    sameOriginRequest({
-      method: 'POST',
-      body: JSON.stringify({
-        source_id: 'ks_hybrid_index',
-        retrieval_profile_revision_id: 'insurance-profile-v1',
-        alias: 'policies',
-        failure_mode: 'advisory',
-        fusion_weight: 0.75,
-        top_k: 3,
-      }),
-    }),
   )
 })
 

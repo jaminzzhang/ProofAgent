@@ -76,6 +76,22 @@ _Avoid_: Dashboard read API, direct model endpoint
 The configuration boundary for Draft Agents, reusable configuration assets, validation, publication, rollback, import, and export.
 _Avoid_: Dashboard read API, production run execution API, arbitrary manifest runner
 
+**Agent Configuration Workspace Module**:
+The Control-owned application module that presents one stable interface for Agent configuration lifecycle use cases and keeps scope, concurrency, audit, and lifecycle rules out of Delivery and persistence adapters.
+_Avoid_: Router-owned workflow, Local store facade, production-only configuration service
+
+**Agent Lifecycle Persistence Seam**:
+The focused `ConfigurationUnitOfWork` and `AgentLifecycleRepository` boundary used by the Agent Configuration Workspace Module for revisioned Draft, Published Version, active pointer, and audit persistence without exposing Local or PostgreSQL mechanics.
+_Avoid_: Concrete store import in Delivery, filesystem path contract, database session in Control
+
+**Agent Configuration Validation Executor**:
+An injected adapter that compiles and executes one Draft Agent and returns trace-safe validation evidence; the Agent Configuration Workspace Module remains responsible for revision CAS, Validation Record creation, lifecycle audit, and publication separation.
+_Avoid_: Route-owned Harness orchestration, executor-owned Draft overwrite, validation means publication
+
+**Agent Configuration Publication Validator**:
+An injected adapter that checks package materialization and live local-asset publication constraints without writing a Published Agent Version, changing the Active Agent Version, or appending lifecycle audit; the Agent Configuration Workspace Module remains the ordinary Draft publication authority.
+_Avoid_: Validator-owned activation, Delivery-owned publication transaction, formal production Phase F publisher
+
 **Draft Agent**:
 An editable Agent configuration version inside the Agent Configuration Workspace that may be saved, validated, and test-run before publication.
 _Avoid_: Published Agent, arbitrary runtime manifest, unvalidated production Agent

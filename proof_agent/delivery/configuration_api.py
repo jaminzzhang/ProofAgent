@@ -12,7 +12,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
@@ -23,53 +23,35 @@ from proof_agent.bootstrap.skills import (
 from proof_agent.bootstrap.validation import (
     validate_workflow_stage_prompt_config,
 )
-from proof_agent.bootstrap.knowledge_resolution import (
-    ConfigurationStoreKnowledgeBindingResolver,
-    PackageKnowledgeBindingResolver,
-)
 from proof_agent.capabilities.tools.source_descriptors import (
     get_tool_source_descriptor,
     list_tool_source_descriptors,
 )
 from proof_agent.configuration.compiler import compile_draft_agent
-from proof_agent.configuration.knowledge_release import seal_knowledge_release_record
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import (
     LocalAgentConfigurationStore,
 )
 from proof_agent.contracts import (
-    AgentValidationRecord,
+    AuditActorFacts,
     ContractBundle,
     DraftAgent,
     EnvironmentModelCredentialReference,
-    KnowledgeSource,
-    KnowledgeSourceLifecycleState,
     ModelConnectionSmokeTestRecord,
     ModelConnectionValidationRecord,
-    ResolvedKnowledgeBindingSet,
-    RunPurpose,
     SharedModelConnection,
     ToolSource,
-    ValidationCaptureExclusionSummary,
-    ValidationCaptureResultSummary,
-    ValidationCaptureSourceReference,
-    ValidationCaptureV2Payload,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
-    WorkflowStageContextApplicationProjection,
-    WorkflowStageContextConfigurationCapture,
-    WorkflowStageFailureDiagnosticProjection,
-    WorkflowStageLlmInteractionCapture,
     WorkflowStagePromptConfig,
-    WorkflowStagePromptValueCapture,
-    WorkflowStageResultVerificationProjection,
-    WorkflowTemplateExecutionInput,
-    WorkflowTemplateExecutionResult,
 )
-from proof_agent.contracts.knowledge_release import KnowledgeReleaseEvidenceSet
-from proof_agent.control.production_agent_configuration import (
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationConflict,
+    AgentConfigurationNotFound,
+    AgentConfigurationPublicationRejected,
+    AgentConfigurationWorkspace,
     SOLE_PRODUCTION_AGENT_ID,
-    load_server_owned_production_agent_template,
+    load_server_owned_agent_template,
 )
 from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.stage_configuration import (
@@ -78,10 +60,6 @@ from proof_agent.control.workflow.stage_configuration import (
 from proof_agent.control.workflow.templates import (
     list_workflow_templates,
     resolve_workflow_template,
-)
-from proof_agent.delivery.agent_package_execution import (
-    AgentPackageRunRequest,
-    execute_agent_package_run,
 )
 from proof_agent.delivery.http_errors import proof_agent_http_exception
 from proof_agent.errors import ProofAgentError
@@ -97,13 +75,6 @@ from proof_agent.observability.storage.run_store import RunStore
 
 router = APIRouter(tags=["configuration"])
 
-SUPPORTED_KNOWLEDGE_SOURCE_PROVIDERS = {
-    "http_json",
-    "hybrid_index",
-    "local_markdown",
-    "local_index",
-    "remote_search",
-}
 SUPPORTED_SHARED_MODEL_CONNECTION_PROVIDERS = {
     "openai",
     "openai_compatible",
@@ -275,17 +246,6 @@ class DraftPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validation_run_id: str | None = None
-    knowledge_release_record_id: str | None = None
-
-
-class KnowledgeReleaseRegistrationRequest(BaseModel):
-    """Server-sealed release authority for one exact validated Hybrid candidate."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    record_id: str = Field(min_length=1, max_length=255)
-    validation_run_id: str = Field(min_length=1, max_length=255)
-    evidence: KnowledgeReleaseEvidenceSet
 
 
 class RollbackRequest(BaseModel):
@@ -410,26 +370,6 @@ class ToolSourceRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str | None = None
-
-
-class KnowledgeBindingAttachRequest(BaseModel):
-    """Request body for binding a shared Knowledge Source into a Draft Agent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source_id: str = Field(min_length=1)
-    binding_id: str | None = None
-    retrieval_profile_revision_id: str | None = Field(default=None, min_length=1)
-    alias: str | None = None
-    failure_mode: str = "required"
-    fusion_weight: float = 1.0
-    top_k: int | None = None
-
-
-class KnowledgeBindingDetachRequest(BaseModel):
-    """Request body for removing a Knowledge Source binding from a Draft Agent."""
-
-    model_config = ConfigDict(extra="forbid")
 
 
 @router.get("/config/model-connections")
@@ -829,19 +769,33 @@ def list_config_agents(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """List Agent identities managed by the local configuration store."""
+    """List Agent identities through the Agent Configuration Workspace."""
 
     _require_operator(identity, OperatorPermission.AGENT_VIEW)
-    store = _get_configuration_store(app_request)
-    agent_ids = _configuration_agent_ids(store)
-    data = [_agent_summary_payload(store, agent_id) for agent_id in agent_ids]
+    inventory = _get_agent_configuration_workspace(app_request).list_agents()
+    data = [
+        {
+            "agent_id": item.agent_id,
+            "display_name": item.display_name,
+            "purpose": item.purpose,
+            "draft_count": item.draft_count,
+            "latest_draft_id": item.latest_draft_id,
+            "version_count": item.version_count,
+            "active_version_id": item.active_version_id,
+            "updated_at": item.updated_at,
+        }
+        for item in inventory.agents
+    ]
     return {
         "data": data,
         "meta": {
             "total": len(data),
             "capabilities": {
                 "mode": "development",
-                "can_create": OperatorPermission.AGENT_EDIT in identity.permissions,
+                "can_create": (
+                    inventory.can_create
+                    and OperatorPermission.AGENT_EDIT in identity.permissions
+                ),
                 "can_import_manifest": (
                     OperatorPermission.AGENT_EDIT in identity.permissions
                 ),
@@ -865,7 +819,7 @@ def create_config_agent(
             agent_id=SOLE_PRODUCTION_AGENT_ID,
             display_name=request.display_name.strip(),
             purpose=request.purpose.strip(),
-            contract_bundle=load_server_owned_production_agent_template(),
+            contract_bundle=load_server_owned_agent_template(),
             actor=actor,
         )
     except (RuntimeError, ValueError) as exc:
@@ -911,8 +865,14 @@ def get_config_draft(
     """Return editable Draft Agent metadata."""
 
     _require_operator(identity, OperatorPermission.AGENT_VIEW)
-    draft = _require_draft(_get_configuration_store(app_request), agent_id, draft_id)
-    return _draft_payload(draft)
+    try:
+        record = _get_agent_configuration_workspace(app_request).get_draft(
+            agent_id=agent_id,
+            draft_id=draft_id,
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    return _draft_payload(record.draft)
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}")
@@ -925,17 +885,23 @@ def update_config_draft(
 ) -> dict[str, Any]:
     """Update editable Draft Agent fields."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
-    store = _get_configuration_store(app_request)
-    _require_draft(store, agent_id, draft_id)
-    draft = store.update_draft(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        display_name=request.display_name,
-        purpose=request.purpose,
-        actor=actor,
-    )
-    return _draft_payload(draft)
+    _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    workspace = _get_agent_configuration_workspace(app_request)
+    try:
+        current = workspace.get_draft(agent_id=agent_id, draft_id=draft_id)
+        updated = workspace.update_draft(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=current.revision,
+            display_name=request.display_name,
+            purpose=request.purpose,
+            actor=_workspace_audit_actor(identity),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _draft_payload(updated.draft)
 
 
 @router.get("/config/workflow-templates")
@@ -981,116 +947,6 @@ def get_config_draft_contract(
     return draft.contract_bundle.model_dump(mode="json")
 
 
-@router.post("/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings")
-def bind_knowledge_source_to_draft(
-    agent_id: str,
-    draft_id: str,
-    request: KnowledgeBindingAttachRequest,
-    app_request: Request,
-    identity: OperatorIdentityContext = Depends(get_operator_identity),
-) -> dict[str, Any]:
-    """Bind a shared Knowledge Source into a Draft Agent contract."""
-
-    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
-    source = _require_active_knowledge_source(store, request.source_id)
-    if source.published_snapshot_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Knowledge Source must be published before binding.",
-        )
-    if request.failure_mode not in {"required", "advisory"}:
-        raise HTTPException(status_code=400, detail="failure_mode must be required or advisory.")
-    if request.fusion_weight <= 0:
-        raise HTTPException(status_code=400, detail="fusion_weight must be greater than 0.")
-    if request.top_k is not None and request.top_k <= 0:
-        raise HTTPException(status_code=400, detail="top_k must be greater than 0.")
-    if request.retrieval_profile_revision_id is not None and source.provider != "hybrid_index":
-        raise HTTPException(
-            status_code=400,
-            detail="retrieval_profile_revision_id requires a hybrid_index Source.",
-        )
-
-    agent_yaml = _bind_source_in_agent_yaml(
-        draft.contract_bundle.agent_yaml,
-        source=source,
-        request=request,
-    )
-    bundle = ContractBundle(
-        agent_yaml=agent_yaml,
-        policy_yaml=draft.contract_bundle.policy_yaml,
-        tools_yaml=draft.contract_bundle.tools_yaml,
-        extra_files=draft.contract_bundle.extra_files,
-        advanced_fields=draft.contract_bundle.advanced_fields,
-    )
-    candidate = _draft_with_contract_bundle(draft, bundle)
-    try:
-        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-    updated = store.update_draft(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        contract_bundle=bundle,
-        actor=actor,
-    )
-    return updated.contract_bundle.model_dump(mode="json")
-
-
-@router.delete("/config/agents/{agent_id}/drafts/{draft_id}/knowledge-bindings/{binding_id}")
-def unbind_knowledge_source_from_draft(
-    agent_id: str,
-    draft_id: str,
-    binding_id: str,
-    request: KnowledgeBindingDetachRequest,
-    app_request: Request,
-    identity: OperatorIdentityContext = Depends(get_operator_identity),
-) -> dict[str, Any]:
-    """Remove a shared Knowledge Source binding from a Draft Agent contract."""
-
-    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
-
-    agent_yaml = _unbind_source_in_agent_yaml(
-        draft.contract_bundle.agent_yaml,
-        binding_id=binding_id,
-    )
-    extra_files = _remove_business_flow_skill_pack_knowledge_binding_refs(
-        agent_yaml,
-        extra_files=draft.contract_bundle.extra_files,
-        binding_id=binding_id,
-    )
-    bundle = ContractBundle(
-        agent_yaml=agent_yaml,
-        policy_yaml=draft.contract_bundle.policy_yaml,
-        tools_yaml=draft.contract_bundle.tools_yaml,
-        extra_files=extra_files,
-        advanced_fields=draft.contract_bundle.advanced_fields,
-    )
-    candidate = _draft_with_contract_bundle(draft, bundle)
-    try:
-        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-    updated = store.update_draft(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        contract_bundle=bundle,
-        actor=actor,
-    )
-    return updated.contract_bundle.model_dump(mode="json")
-
-
 @router.get("/config/agents/{agent_id}/drafts/{draft_id}/skills")
 def fetch_config_draft_skills(
     agent_id: str,
@@ -1134,7 +990,6 @@ def create_config_draft_business_flow_skill_pack(
             template=resolve_workflow_template(manifest.workflow.template),
             manifest_path=package_dir / "agent.yaml",
         )
-        _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1172,7 +1027,6 @@ def update_config_draft_business_flow_skill_pack(
             template=resolve_workflow_template(manifest.workflow.template),
             manifest_path=package_dir / "agent.yaml",
         )
-        _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1209,7 +1063,6 @@ def delete_config_draft_business_flow_skill_pack(
             template=resolve_workflow_template(manifest.workflow.template),
             manifest_path=package_dir / "agent.yaml",
         )
-        _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1237,9 +1090,7 @@ def update_config_draft_contract(
     store = _get_configuration_store(app_request)
     draft = _require_draft(store, agent_id, draft_id)
     agent_yaml = (
-        _normalize_shared_knowledge_agent_yaml(request.agent_yaml)
-        if request.agent_yaml is not None
-        else draft.contract_bundle.agent_yaml
+        request.agent_yaml if request.agent_yaml is not None else draft.contract_bundle.agent_yaml
     )
     bundle = ContractBundle(
         agent_yaml=agent_yaml,
@@ -1257,7 +1108,6 @@ def update_config_draft_contract(
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
         manifest = load_agent_manifest(package_dir / "agent.yaml")
         _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
-        _resolve_draft_knowledge_bindings(store, manifest)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1297,7 +1147,6 @@ def update_config_draft_workflow_stages(
         workflow["stages"] = [_workflow_stage_request_payload(item) for item in request.stages]
         workflow.pop("nodes", None)
         raw["workflow"] = workflow
-        _normalize_shared_knowledge_mode(raw)
         agent_yaml = _dump_agent_yaml(raw)
         bundle = ContractBundle(
             agent_yaml=agent_yaml,
@@ -1308,8 +1157,7 @@ def update_config_draft_workflow_stages(
         )
         candidate = _draft_with_contract_bundle(draft, bundle)
         package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        _resolve_draft_knowledge_bindings(store, manifest)
+        load_agent_manifest(package_dir / "agent.yaml")
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
@@ -1373,420 +1221,66 @@ def validate_config_draft(
 ) -> dict[str, Any]:
     """Run a Draft Agent through the governed Harness as a validation run."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
-    config_store = _get_configuration_store(app_request)
-    draft = _require_draft(config_store, agent_id, draft_id)
+    _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
     try:
-        package_dir = compile_draft_agent(draft, config_store.root_dir / "compiled")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        resolved_knowledge_bindings = _resolve_draft_knowledge_bindings(
-            config_store,
-            manifest,
+        result = _get_agent_configuration_workspace(app_request).validate_draft(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            question=request.question,
+            full_capture=request.full_capture,
+            retain_for_audit=request.retain_for_audit,
+            actor=_workspace_audit_actor(identity),
         )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
-    run_store = _get_run_store(app_request)
-    run_id = f"run_{uuid4().hex[:8]}"
-    run_artifact_dir = run_store.create_run_dir(run_id)
-    try:
-        result = execute_agent_package_run(
-            AgentPackageRunRequest(
-                agent_yaml=package_dir / "agent.yaml",
-                question=request.question,
-                runs_dir=run_artifact_dir,
-                run_id=run_id,
-                store=run_store,
-                manifest=manifest,
-                resolved_knowledge_bindings=resolved_knowledge_bindings,
-                configuration_store=config_store,
-                run_purpose=RunPurpose.VALIDATION,
-                agent_id=agent_id,
-                draft_id=draft_id,
-            )
-        )
-    except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-    detail = run_store.get_run_detail(run_id)
-    if detail is None:
-        raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
-    validation_capture: dict[str, Any] | None = None
-    capture_error: dict[str, Any] | None = None
-    if request.full_capture:
-        try:
-            artifact = config_store.record_sensitive_validation_capture_artifact(
-                run_id=run_id,
-                draft_id=draft_id,
-                payload=_validation_capture_payload(
-                    detail=detail,
-                    execution_input=result.workflow_template_execution_input,
-                    execution_result=result.workflow_template_execution_result,
-                ),
-                actor=actor,
-                retain_for_audit=request.retain_for_audit,
-            )
-            if not run_store.attach_validation_capture(run_id, artifact.capture_id):
-                raise HTTPException(
-                    status_code=500,
-                    detail="Validation capture artifact was not attached to the run.",
-                )
-            detail = run_store.get_run_detail(run_id)
-            if detail is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Validation run artifacts disappeared after capture attachment.",
-                )
-            validation_capture = artifact.model_dump(mode="json")
-        except (ValueError, ValidationError):
-            capture_error = _validation_capture_failure_projection()
-    if detail is None:
-        raise HTTPException(status_code=500, detail="Validation run artifacts were not persisted.")
-    warnings, publish_blockers = _validation_model_connection_warnings(detail.trace_events)
-    record = AgentValidationRecord(
-        validation_id=f"validation_{uuid4().hex[:8]}",
-        draft_id=draft_id,
-        run_id=run_id,
-        status=detail.outcome.value,
-        created_at=_now(),
-        validation_capture_id=validation_capture.get("capture_id") if validation_capture else None,
-        summary=result.final_output[:500],
-        warnings=warnings,
-        publish_blockers=publish_blockers,
-        resolved_knowledge_bindings=resolved_knowledge_bindings,
-    )
-    config_store.record_validation(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        record=record,
-        actor=actor,
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_draft_validation_failed",
+        ) from exc
+    record = result.validation
+    execution = result.execution
+    validation_capture = (
+        None
+        if execution.validation_capture is None
+        else execution.validation_capture.model_dump(mode="json")
     )
     links = {
-        "run_detail": f"/api/runs/{detail.run_id}",
-        "trace": f"/api/runs/{detail.run_id}/trace",
-        "receipt": f"/api/runs/{detail.run_id}/receipt",
+        "run_detail": f"/api/runs/{execution.run_id}",
+        "trace": f"/api/runs/{execution.run_id}/trace",
+        "receipt": f"/api/runs/{execution.run_id}/receipt",
     }
     if validation_capture is not None:
-        links["validation_capture"] = f"/api/runs/{detail.run_id}/validation-capture"
+        links["validation_capture"] = (
+            f"/api/runs/{execution.run_id}/validation-capture"
+        )
     trace_capture = {
         "mode": "full_capture" if request.full_capture else "summary_only",
         "validation_capture": validation_capture,
     }
-    if capture_error is not None:
-        trace_capture["capture_error"] = capture_error
+    if execution.capture_error is not None:
+        trace_capture["capture_error"] = {
+            "code": execution.capture_error.code,
+            "message": execution.capture_error.message,
+            "retryable": execution.capture_error.retryable,
+        }
     return {
         "validation_id": record.validation_id,
-        "run_id": detail.run_id,
+        "run_id": execution.run_id,
         "status": record.status,
-        "outcome": detail.outcome.value,
-        "run_purpose": detail.run_purpose.value,
-        "agent_id": detail.agent_id,
-        "draft_id": detail.draft_id,
-        "warnings": list(warnings),
-        "publish_blockers": list(publish_blockers),
+        "outcome": execution.outcome,
+        "run_purpose": execution.run_purpose,
+        "agent_id": execution.agent_id,
+        "draft_id": execution.draft_id,
+        "warnings": list(record.warnings),
+        "publish_blockers": list(record.publish_blockers),
         "trace_capture": trace_capture,
         "links": links,
     }
-
-
-def _validation_model_connection_warnings(
-    trace_events: tuple[dict[str, Any], ...],
-) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
-    warnings: list[dict[str, Any]] = []
-    publish_blockers: list[dict[str, Any]] = []
-    seen_connections: set[tuple[str | None, str | None]] = set()
-    for event in trace_events:
-        if event.get("event_type") != "model_connection_resolution":
-            continue
-        payload = event.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        event_warnings = payload.get("warnings")
-        if not isinstance(event_warnings, list | tuple):
-            continue
-        if "connection_archived" not in event_warnings:
-            continue
-        connection_id = payload.get("connection_id")
-        role = payload.get("role")
-        key = (
-            connection_id if isinstance(connection_id, str) else None,
-            role if isinstance(role, str) else None,
-        )
-        if key in seen_connections:
-            continue
-        seen_connections.add(key)
-        if not isinstance(connection_id, str) or not isinstance(role, str):
-            continue
-        warnings.append(
-            {
-                "code": "model_connection_archived",
-                "connection_id": connection_id,
-                "role": role,
-                "message": f"Shared Model Connection is archived: {connection_id}.",
-            }
-        )
-        publish_blockers.append(
-            {
-                "code": "archived_model_connection",
-                "connection_id": connection_id,
-                "role": role,
-                "message": (
-                    f"Publish is blocked while Shared Model Connection {connection_id} is archived."
-                ),
-            }
-        )
-    return tuple(warnings), tuple(publish_blockers)
-
-
-def _validation_capture_payload(
-    *,
-    detail: Any,
-    execution_input: WorkflowTemplateExecutionInput | None,
-    execution_result: WorkflowTemplateExecutionResult | None,
-) -> dict[str, Any]:
-    if execution_input is None or execution_result is None:
-        raise ValueError("validation capture requires workflow execution input and result")
-    stage_labels = {
-        stage.id: stage.label for stage in execution_input.effective_stage_configuration.stages
-    }
-    payload = ValidationCaptureV2Payload(
-        source=_validation_capture_source(detail, execution_input),
-        stage_prompt_values=tuple(
-            _workflow_stage_prompt_value_capture(stage)
-            for stage in execution_input.effective_stage_configuration.stages
-        ),
-        context_configuration=tuple(
-            _workflow_stage_context_configuration_capture(stage)
-            for stage in execution_input.effective_stage_configuration.stages
-        ),
-        context_applications=tuple(
-            _workflow_stage_context_application_projection(item, stage_labels=stage_labels)
-            for item in execution_result.stage_context_applications
-        ),
-        stage_results=tuple(
-            WorkflowStageResultVerificationProjection(
-                stage_id=stage_result.stage_id,
-                stage_label=stage_labels.get(stage_result.stage_id),
-                status=stage_result.status,
-                outcome=stage_result.outcome,
-                summary=stage_result.summary,
-                produced_fact_refs=stage_result.produced_fact_refs,
-            )
-            for stage_result in execution_result.stage_results
-        ),
-        failure_diagnostics=tuple(
-            WorkflowStageFailureDiagnosticProjection(
-                stage_id=diagnostic.stage_id,
-                stage_label=diagnostic.stage_label or stage_labels.get(diagnostic.stage_id),
-                event_type=diagnostic.event_type,
-                status=diagnostic.status,
-                error_code=diagnostic.error_code,
-                role=diagnostic.role,
-                raw_content_length=diagnostic.raw_content_length,
-                related_event_id=diagnostic.related_event_id,
-                contract_name=diagnostic.contract_name,
-                violation_codes=diagnostic.violation_codes,
-                field_paths=diagnostic.field_paths,
-                violation_count=diagnostic.violation_count,
-            )
-            for diagnostic in execution_result.stage_failure_diagnostics
-        ),
-        llm_interactions=tuple(
-            WorkflowStageLlmInteractionCapture(
-                stage_id=interaction.stage_id,
-                stage_label=interaction.stage_label or stage_labels.get(interaction.stage_id),
-                role=interaction.role,
-                provider=interaction.provider,
-                model=interaction.model,
-                request_json=interaction.request_json,
-                response_json=interaction.response_json,
-                response_content_length=interaction.response_content_length,
-                response_json_parse_error_code=interaction.response_json_parse_error_code,
-            )
-            for interaction in execution_result.stage_llm_interactions
-        ),
-        result_summary=ValidationCaptureResultSummary(
-            outcome=execution_result.outcome,
-            final_output=execution_result.final_output,
-            final_output_length=len(execution_result.final_output),
-            fact_refs=_execution_result_fact_refs(execution_result),
-            approval_pause=(
-                execution_result.approval_pause.model_dump(mode="json")
-                if execution_result.approval_pause is not None
-                else None
-            ),
-            clarification_need=(
-                execution_result.clarification_need.model_dump(mode="json")
-                if execution_result.clarification_need is not None
-                else None
-            ),
-        ),
-        exclusions=ValidationCaptureExclusionSummary(
-            excluded_categories=(
-                "raw_prompt",
-                "raw_context",
-                "raw_evidence",
-                "tool_payload",
-                "complete_provider_response",
-                "runtime_state",
-                "chain_of_thought",
-            ),
-            sanitizer_version="validation_capture.v2",
-            redacted_secret_count=0,
-            dropped_unsafe_key_count=0,
-            redaction_applied=False,
-        ),
-    )
-    return payload.model_dump(mode="json")
-
-
-def _validation_capture_source(
-    detail: Any,
-    execution_input: WorkflowTemplateExecutionInput,
-) -> ValidationCaptureSourceReference:
-    source = execution_input.stage_configuration_source
-    return ValidationCaptureSourceReference(
-        run_id=detail.run_id,
-        run_purpose=detail.run_purpose.value,
-        agent_id=execution_input.agent_id or detail.agent_id,
-        agent_version_id=execution_input.agent_version_id or detail.agent_version_id,
-        draft_id=execution_input.draft_id or detail.draft_id,
-        template_name=execution_input.template_name,
-        template_descriptor_version=execution_input.template_descriptor_version,
-        stage_configuration_source_type=source.source_type.value,
-        stage_configuration_source_reference=source.reference,
-        effective_stage_configuration_ref=execution_input.effective_stage_configuration_ref,
-    )
-
-
-def _workflow_stage_prompt_value_capture(
-    stage: Any,
-) -> WorkflowStagePromptValueCapture:
-    prompt_values = dict(stage.prompt)
-    return WorkflowStagePromptValueCapture(
-        stage_id=stage.id,
-        stage_label=stage.label,
-        prompt_values=prompt_values,
-        prompt_field_names=tuple(str(key) for key in prompt_values),
-        prompt_character_count=_prompt_character_count(prompt_values),
-        redaction_applied=False,
-        source="run_start_workflow_template_execution_input",
-    )
-
-
-def _workflow_stage_context_configuration_capture(
-    stage: Any,
-) -> WorkflowStageContextConfigurationCapture:
-    return WorkflowStageContextConfigurationCapture(
-        stage_id=stage.id,
-        stage_label=stage.label,
-        selected_context_options=tuple(
-            str(key) for key, enabled in stage.context.items() if enabled
-        ),
-        available_context_options=tuple(str(key) for key in stage.available_context_options),
-    )
-
-
-def _workflow_stage_context_application_projection(
-    item: Mapping[str, Any],
-    *,
-    stage_labels: Mapping[str, str],
-) -> WorkflowStageContextApplicationProjection:
-    stage_id = str(item.get("stage_id") or "unknown")
-    return WorkflowStageContextApplicationProjection(
-        stage_id=stage_id,
-        stage_label=str(item.get("stage_label") or stage_labels.get(stage_id) or ""),
-        summary=item,
-    )
-
-
-def _execution_result_fact_refs(
-    execution_result: WorkflowTemplateExecutionResult,
-) -> tuple[str, ...]:
-    refs: list[str] = []
-    for stage_result in execution_result.stage_results:
-        refs.extend(stage_result.produced_fact_refs)
-    return tuple(refs)
-
-
-def _prompt_character_count(prompt_values: Mapping[str, Any]) -> int:
-    total = 0
-    for value in prompt_values.values():
-        if isinstance(value, str):
-            total += len(value)
-        elif isinstance(value, list | tuple):
-            total += sum(len(item) for item in value if isinstance(item, str))
-    return total
-
-
-def _validation_capture_failure_projection() -> dict[str, Any]:
-    return {
-        "code": "VALIDATION_CAPTURE_REJECTED",
-        "message": (
-            "Validation capture artifact was not created because the v2 safety "
-            "gate rejected unsafe fields."
-        ),
-        "retryable": False,
-    }
-
-
-@router.post(
-    "/config/agents/{agent_id}/drafts/{draft_id}/knowledge-release-records"
-)
-def register_knowledge_release_record(
-    agent_id: str,
-    draft_id: str,
-    request: KnowledgeReleaseRegistrationRequest,
-    app_request: Request,
-    identity: OperatorIdentityContext = Depends(get_operator_identity),
-) -> dict[str, Any]:
-    """Seal and independently verify the four Phase F artifacts for one candidate."""
-
-    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
-    validation = next(
-        (
-            item
-            for item in draft.validation_records
-            if item.run_id == request.validation_run_id
-        ),
-        None,
-    )
-    if (
-        validation is None
-        or validation.status != "passed"
-        or validation.publish_blockers
-        or validation.resolved_knowledge_bindings is None
-        or not any(
-            binding.provider == "hybrid_index"
-            for binding in validation.resolved_knowledge_bindings.bindings
-        )
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="A passed, publishable Hybrid validation run is required.",
-        )
-    record = seal_knowledge_release_record(
-        record_id=request.record_id,
-        contract_bundle=draft.contract_bundle,
-        resolved_knowledge_bindings=validation.resolved_knowledge_bindings,
-        shadow_artifact=request.evidence.shadow,
-        capacity_artifact=request.evidence.capacity,
-        acceptance_artifact=request.evidence.acceptance,
-        recovery_artifact=request.evidence.recovery,
-        created_at=datetime.now(UTC).isoformat(),
-        created_by=actor,
-    )
-    try:
-        persisted = store.record_knowledge_release(
-            record=record,
-            contract_bundle=draft.contract_bundle,
-            resolved_knowledge_bindings=validation.resolved_knowledge_bindings,
-        )
-    except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-    return persisted.model_dump(mode="json")
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/publish")
@@ -1799,37 +1293,30 @@ def publish_config_draft(
 ) -> dict[str, Any]:
     """Publish a validated Draft Agent as an immutable version."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
-    validation_run_id = request.validation_run_id or _latest_validation_run_id(draft)
-    if validation_run_id is None:
-        raise HTTPException(status_code=400, detail="A validation run is required before publish.")
-    validation_record = next(
-        (record for record in draft.validation_records if record.run_id == validation_run_id),
-        None,
-    )
-    if validation_record is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Validation run is not recorded for this draft: {validation_run_id}",
-        )
+    _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
     try:
-        package_dir = compile_draft_agent(draft, store.root_dir / "compiled_publication")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        _resolve_draft_knowledge_bindings(store, manifest)
-        version = store.publish_version(
+        version = _get_agent_configuration_workspace(app_request).publish_draft(
             agent_id=agent_id,
             draft_id=draft_id,
-            validation_run_id=validation_run_id,
-            actor=actor,
-            resolved_knowledge_bindings=validation_record.resolved_knowledge_bindings,
-            knowledge_release_record_id=request.knowledge_release_record_id,
+            validation_run_id=request.validation_run_id,
+            actor=_workspace_audit_actor(identity),
         )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except AgentConfigurationPublicationRejected as exc:
+        raise HTTPException(status_code=400, detail=exc.code) from exc
     except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="agent_draft_publication_invalid",
+        ) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_draft_publication_failed",
+        ) from exc
     return _version_payload(version)
 
 
@@ -1842,14 +1329,17 @@ def list_config_versions(
     """List immutable Published Agent Versions for one Agent identity."""
 
     _require_operator(identity, OperatorPermission.AGENT_VIEW)
-    store = _get_configuration_store(app_request)
-    versions = store.list_versions(agent_id)
-    active = store.get_active_version(agent_id)
+    try:
+        history = _get_agent_configuration_workspace(app_request).list_versions(
+            agent_id=agent_id
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
     return {
-        "data": [_version_payload(version) for version in versions],
+        "data": [_version_payload(version) for version in history.versions],
         "meta": {
-            "total": len(versions),
-            "active_version_id": active.version_id if active else None,
+            "total": len(history.versions),
+            "active_version_id": history.active_version_id,
         },
     }
 
@@ -1878,26 +1368,6 @@ def rollback_config_version(
     if restored is None:  # guarded by rollback_active_version; preserves fail-closed typing.
         raise HTTPException(status_code=409, detail="Restored Agent Version disappeared.")
     return serialize_agent_version_rollback(active, restored)
-
-
-def _agent_summary_payload(
-    store: LocalAgentConfigurationStore,
-    agent_id: str,
-) -> dict[str, Any]:
-    drafts = store.list_drafts(agent_id)
-    versions = store.list_versions(agent_id)
-    active = store.get_active_version(agent_id)
-    latest_draft = max(drafts, key=lambda draft: draft.updated_at) if drafts else None
-    return {
-        "agent_id": agent_id,
-        "display_name": latest_draft.display_name if latest_draft else agent_id,
-        "purpose": latest_draft.purpose if latest_draft else "",
-        "draft_count": len(drafts),
-        "latest_draft_id": latest_draft.draft_id if latest_draft else None,
-        "version_count": len(versions),
-        "active_version_id": active.version_id if active else None,
-        "updated_at": latest_draft.updated_at if latest_draft else None,
-    }
 
 
 def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:
@@ -1937,9 +1407,7 @@ def _workflow_stage_sample_context(manifest: Any) -> dict[str, Any]:
     )
     return {
         "agent_purpose": manifest.purpose,
-        "bound_knowledge_sources": [
-            binding.source_ref.source_id for binding in manifest.knowledge_bindings
-        ],
+        "bound_knowledge_sources": [],
         "bound_tools": tool_contract_path,
         "policy_outline": str(manifest.policy.file),
         "response_disclosure_policy": (
@@ -2446,114 +1914,6 @@ def _tool_source_payload(source: ToolSource) -> dict[str, Any]:
 
 
 
-def _bind_source_in_agent_yaml(
-    agent_yaml: str,
-    *,
-    source: KnowledgeSource,
-    request: KnowledgeBindingAttachRequest,
-) -> str:
-    raw = yaml.safe_load(agent_yaml)
-    if not isinstance(raw, dict):
-        raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
-
-    # Shared Source bindings reference Configuration Store state. They do not
-    # copy provider params into the Agent Contract.
-    raw.pop("knowledge", None)
-    raw.pop("knowledge_sources", None)
-
-    knowledge_bindings = raw.setdefault("knowledge_bindings", [])
-    if not isinstance(knowledge_bindings, list):
-        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
-    binding_id = request.binding_id or f"{source.source_id}_binding"
-    binding_entry: dict[str, Any] = {
-        "binding_id": binding_id,
-        "source_ref": {"scope": "shared", "source_id": source.source_id},
-        "failure_mode": request.failure_mode,
-        "fusion_weight": request.fusion_weight,
-    }
-    if request.alias:
-        binding_entry["alias"] = request.alias
-    if request.retrieval_profile_revision_id is not None:
-        binding_entry["retrieval_profile_revision_id"] = request.retrieval_profile_revision_id
-    if request.top_k is not None:
-        binding_entry["top_k"] = request.top_k
-    _upsert_by_key(knowledge_bindings, "binding_id", binding_id, binding_entry)
-    _normalize_shared_knowledge_mode(raw)
-
-    return _dump_agent_yaml(raw)
-
-
-def _unbind_source_in_agent_yaml(
-    agent_yaml: str,
-    *,
-    binding_id: str,
-) -> str:
-    raw = yaml.safe_load(agent_yaml)
-    if not isinstance(raw, dict):
-        raise HTTPException(status_code=400, detail="agent_yaml must be a mapping.")
-
-    raw.pop("knowledge", None)
-    raw.pop("knowledge_sources", None)
-    package_knowledge_sources = raw.setdefault("package_knowledge_sources", [])
-    if not isinstance(package_knowledge_sources, list):
-        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
-
-    knowledge_bindings = raw.get("knowledge_bindings", [])
-    if not isinstance(knowledge_bindings, list):
-        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
-
-    for binding in list(knowledge_bindings):
-        if isinstance(binding, dict) and binding.get("binding_id") == binding_id:
-            knowledge_bindings.remove(binding)
-            break
-
-    return _dump_agent_yaml(raw)
-
-
-def _remove_business_flow_skill_pack_knowledge_binding_refs(
-    agent_yaml: str,
-    *,
-    extra_files: Mapping[str, str],
-    binding_id: str,
-) -> dict[str, str]:
-    raw = yaml.safe_load(agent_yaml)
-    if not isinstance(raw, dict):
-        return dict(extra_files)
-    capabilities = raw.get("capabilities")
-    if not isinstance(capabilities, Mapping):
-        return dict(extra_files)
-    skills = capabilities.get("skills")
-    if not isinstance(skills, Mapping):
-        return dict(extra_files)
-    business_flows = skills.get("business_flows")
-    if not isinstance(business_flows, list):
-        return dict(extra_files)
-
-    updated_extra_files = dict(extra_files)
-    for flow_binding in business_flows:
-        if not isinstance(flow_binding, Mapping):
-            continue
-        definition_path = _package_extra_file_path(str(flow_binding.get("definition", "")))
-        definition_yaml = updated_extra_files.get(definition_path)
-        if definition_yaml is None:
-            continue
-        definition = yaml.safe_load(definition_yaml)
-        if not isinstance(definition, dict):
-            continue
-        knowledge_binding_refs = definition.get("knowledge_binding_refs")
-        if not isinstance(knowledge_binding_refs, list) or binding_id not in knowledge_binding_refs:
-            continue
-        definition["knowledge_binding_refs"] = [
-            reference for reference in knowledge_binding_refs if reference != binding_id
-        ]
-        updated_extra_files[definition_path] = yaml.safe_dump(
-            definition,
-            sort_keys=False,
-            allow_unicode=True,
-        )
-    return updated_extra_files
-
-
 def _dump_agent_yaml(raw: dict[str, Any]) -> str:
     return cast(
         str,
@@ -2564,81 +1924,6 @@ def _dump_agent_yaml(raw: dict[str, Any]) -> str:
             width=1000,
         ),
     )
-
-
-def _normalize_shared_knowledge_agent_yaml(agent_yaml: str) -> str:
-    try:
-        raw = yaml.safe_load(agent_yaml)
-    except yaml.YAMLError:
-        return agent_yaml
-    if not isinstance(raw, dict):
-        return agent_yaml
-    if not _normalize_shared_knowledge_mode(raw):
-        return agent_yaml
-    return _dump_agent_yaml(raw)
-
-
-def _normalize_shared_knowledge_mode(raw: dict[str, Any]) -> bool:
-    knowledge_bindings = raw.get("knowledge_bindings", [])
-    if not isinstance(knowledge_bindings, list):
-        raise HTTPException(status_code=400, detail="knowledge_bindings must be a list.")
-    has_shared_binding = any(
-        _knowledge_binding_scope(binding) == "shared" for binding in knowledge_bindings
-    )
-    if not has_shared_binding:
-        return False
-    package_knowledge_sources = raw.get("package_knowledge_sources", [])
-    if not isinstance(package_knowledge_sources, list):
-        raise HTTPException(status_code=400, detail="package_knowledge_sources must be a list.")
-    return False
-
-
-def _knowledge_binding_scope(binding: Any) -> str | None:
-    if not isinstance(binding, dict):
-        return None
-    source_ref = binding.get("source_ref")
-    if not isinstance(source_ref, dict):
-        return None
-    scope = source_ref.get("scope")
-    return scope if isinstance(scope, str) else None
-
-
-def _upsert_by_key(
-    items: list[Any],
-    key: str,
-    value: str,
-    replacement: dict[str, Any],
-) -> None:
-    for index, item in enumerate(items):
-        if isinstance(item, dict) and item.get(key) == value:
-            items[index] = replacement
-            return
-    items.append(replacement)
-
-
-def _configuration_agent_ids(store: LocalAgentConfigurationStore) -> tuple[str, ...]:
-    agents_root = store.root_dir / "agents"
-    if not agents_root.exists():
-        return ()
-    return tuple(sorted(entry.name for entry in agents_root.iterdir() if entry.is_dir()))
-
-
-def _latest_validation_run_id(draft: DraftAgent) -> str | None:
-    if not draft.validation_records:
-        return None
-    return draft.validation_records[-1].run_id
-
-
-def _resolve_draft_knowledge_bindings(
-    store: LocalAgentConfigurationStore,
-    manifest: Any,
-) -> ResolvedKnowledgeBindingSet:
-    has_shared_binding = any(
-        binding.source_ref.scope == "shared" for binding in manifest.knowledge_bindings
-    )
-    if has_shared_binding:
-        return ConfigurationStoreKnowledgeBindingResolver(store).resolve(manifest)
-    return PackageKnowledgeBindingResolver().resolve(manifest)
 
 
 def _validate_business_flow_skill_packs(manifest: Any, manifest_path: Path) -> None:
@@ -2658,19 +1943,6 @@ def _require_draft(
     if draft is None:
         raise HTTPException(status_code=404, detail=f"Draft Agent not found: {agent_id}/{draft_id}")
     return draft
-
-
-def _require_knowledge_source(
-    store: LocalAgentConfigurationStore,
-    source_id: str,
-) -> KnowledgeSource:
-    try:
-        source = store.get_knowledge_source(source_id)
-    except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Knowledge Source not found: {source_id}")
-    return source
 
 
 def _require_model_connection(
@@ -2702,18 +1974,33 @@ def _require_tool_source(
     return source
 
 
-def _require_active_knowledge_source(
-    store: LocalAgentConfigurationStore,
-    source_id: str,
-) -> KnowledgeSource:
-    source = _require_knowledge_source(store, source_id)
-    if source.lifecycle_state is not KnowledgeSourceLifecycleState.ACTIVE:
-        raise HTTPException(status_code=400, detail="Knowledge Source is archived.")
-    return source
-
-
 def _get_configuration_store(request: Request) -> LocalAgentConfigurationStore:
     return cast(LocalAgentConfigurationStore, request.app.state.agent_configuration_store)
+
+
+def _get_agent_configuration_workspace(request: Request) -> AgentConfigurationWorkspace:
+    return cast(
+        AgentConfigurationWorkspace,
+        request.app.state.agent_configuration_workspace,
+    )
+
+
+def _workspace_audit_actor(identity: OperatorIdentityContext) -> AuditActorFacts:
+    return AuditActorFacts(
+        subject=identity.operator_id,
+        identity_provider="local-development",
+        session_id="local-dashboard",
+        permissions=tuple(sorted(item.value for item in identity.permissions)),
+    )
+
+
+def _configuration_workspace_exception(
+    error: AgentConfigurationConflict | AgentConfigurationNotFound,
+) -> HTTPException:
+    return HTTPException(
+        status_code=409 if isinstance(error, AgentConfigurationConflict) else 404,
+        detail=error.code,
+    )
 
 
 def _get_run_store(request: Request) -> RunStore:
@@ -2726,16 +2013,6 @@ def _get_runs_dir(request: Request) -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _source_id(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower().replace("-", "_"))
-    normalized = re.sub(r"_+", "_", normalized).strip("_")
-    if not normalized:
-        normalized = f"ks_{uuid4().hex[:8]}"
-    if not normalized.startswith("ks_"):
-        normalized = f"ks_{normalized}"
-    return normalized
 
 
 def _model_connection_id(value: str) -> str:

@@ -64,10 +64,7 @@ class RecordingRunner:
             return CommandResult(stdout="gateway-container-id\n")
         if "PostgresWorkerRoleRepository" in " ".join(argv):
             return CommandResult(
-                stdout=(
-                    '{"ready":true,"run_executor":7,'
-                    '"knowledge_worker":7}\n'
-                )
+                stdout='{"ready":true,"run_executor":7}\n'
             )
         if "proof_agent.contracts.run_execution" in " ".join(argv):
             return CommandResult(stdout='{"compatible":true,"count":1}\n')
@@ -82,7 +79,6 @@ def _write_env(
     release_id: str,
     image_digest: str,
     executor_id: str,
-    knowledge_worker_id: str,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -95,7 +91,6 @@ def _write_env(
                 f"PROOF_AGENT_ACTIVATION_STATE={activation}",
                 "PROOF_AGENT_DEPLOYMENT_COMPATIBILITY_MANIFEST=/run/configs/deployment-compatibility-manifest.json",
                 f"PROOF_AGENT_EXECUTOR_ID={executor_id}",
-                f"PROOF_AGENT_KNOWLEDGE_WORKER_ID={knowledge_worker_id}",
             )
         )
         + "\n",
@@ -166,7 +161,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
         release_id="release-old",
         image_digest="9" * 64,
         executor_id="executor-blue",
-        knowledge_worker_id="knowledge-blue",
     )
     _write_env(
         old_standby,
@@ -175,7 +169,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
         release_id="release-old",
         image_digest="9" * 64,
         executor_id="executor-blue",
-        knowledge_worker_id="knowledge-blue",
     )
     _write_env(
         candidate_active,
@@ -184,7 +177,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
         release_id="release-candidate",
         image_digest="a" * 64,
         executor_id="executor-green",
-        knowledge_worker_id="knowledge-green",
     )
     _write_env(
         candidate_standby,
@@ -193,7 +185,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
         release_id="release-candidate",
         image_digest="a" * 64,
         executor_id="executor-green",
-        knowledge_worker_id="knowledge-green",
     )
 
     queue_fixtures = Path("tests/fixtures/run_execution_contract/v1")
@@ -222,7 +213,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
             "active_environment_file": str(old_active),
             "standby_environment_file": str(old_standby),
             "run_executor_owner_id": "executor-blue",
-            "knowledge_worker_owner_id": "knowledge-blue",
         },
         "candidate": {
             "slot": "green",
@@ -234,7 +224,6 @@ def _arrange(tmp_path: Path) -> tuple[dict[str, object], BlueGreenDeploymentRequ
             "active_environment_file": str(candidate_active),
             "standby_environment_file": str(candidate_standby),
             "run_executor_owner_id": "executor-green",
-            "knowledge_worker_owner_id": "knowledge-green",
         },
         "old_api_queue_fixtures": str(queue_fixtures / "old_api_requests.json"),
         "candidate_api_queue_fixtures": str(
@@ -343,12 +332,11 @@ def test_candidate_slot_starts_all_product_roles_as_standby(tmp_path: Path) -> N
     operations.start_candidate_standby(request)
 
     call = runner.calls[-1]
-    assert call.argv[-7:] == (
+    assert call.argv[-6:] == (
         "up",
         "-d",
         "api",
         "run-executor",
-        "knowledge-worker",
         "dashboard",
         "operator-chat",
     )
@@ -371,7 +359,7 @@ def test_candidate_readiness_checks_exact_identity_for_every_product_role(
 
     calls = runner.calls
     assert [call.argv[-4] for call in calls] == list(
-        ("api", "run-executor", "knowledge-worker", "dashboard", "operator-chat")
+        ("api", "run-executor", "dashboard", "operator-chat")
     )
     assert all(call.argv[-3:-1] == ("python", "-c") for call in calls)
     assert all(call.env is not None for call in calls)
@@ -478,7 +466,7 @@ class RuntimeStateRunner(RecordingRunner):
     def __init__(
         self,
         *,
-        claim_counts: Sequence[tuple[int, int]] = (),
+        claim_counts: Sequence[int] = (),
         epoch: int = 8,
     ) -> None:
         super().__init__()
@@ -500,15 +488,9 @@ class RuntimeStateRunner(RecordingRunner):
             env=env,
         )
         command = " ".join(argv)
-        if "hybrid_ingestion_jobs" in command:
-            run_attempts, knowledge_jobs = self.claim_counts.popleft()
+        if "run_attempts" in command:
             return CommandResult(
-                stdout=json.dumps(
-                    {
-                        "run_attempts": run_attempts,
-                        "knowledge_jobs": knowledge_jobs,
-                    }
-                )
+                stdout=json.dumps({"run_attempts": self.claim_counts.popleft()})
                 + "\n"
             )
         if "PostgresWorkerRoleRepository" in command:
@@ -517,7 +499,6 @@ class RuntimeStateRunner(RecordingRunner):
                     {
                         "ready": True,
                         "run_executor": self.epoch,
-                        "knowledge_worker": self.epoch,
                     }
                 )
                 + "\n"
@@ -540,17 +521,15 @@ def test_old_workers_drain_and_resume_in_place_with_same_epoch(tmp_path: Path) -
     operations.restore_old_workers_active(request, expected_epoch=7)
 
     drain, draining_authority, resume, active_authority = runner.calls
-    assert drain.argv[-4:] == (
+    assert drain.argv[-3:] == (
         "--signal",
         "SIGUSR1",
         "run-executor",
-        "knowledge-worker",
     )
-    assert resume.argv[-4:] == (
+    assert resume.argv[-3:] == (
         "--signal",
         "SIGUSR2",
         "run-executor",
-        "knowledge-worker",
     )
     assert drain.env is not None and drain.env["SLOT"] == "blue"
     assert resume.env is not None and resume.env["SLOT"] == "blue"
@@ -558,9 +537,9 @@ def test_old_workers_drain_and_resume_in_place_with_same_epoch(tmp_path: Path) -
     assert "RoleActivationState.ACTIVE" in " ".join(active_authority.argv)
 
 
-def test_claim_drain_polls_both_authoritative_queues_until_zero(tmp_path: Path) -> None:
+def test_claim_drain_polls_authoritative_run_queue_until_zero(tmp_path: Path) -> None:
     config, request = _arrange(tmp_path)
-    runner = RuntimeStateRunner(claim_counts=((2, 1), (0, 0)))
+    runner = RuntimeStateRunner(claim_counts=(2, 0))
     sleeps: list[float] = []
     operations = DockerComposeBlueGreenOperations.from_mapping(
         config,
@@ -574,7 +553,7 @@ def test_claim_drain_polls_both_authoritative_queues_until_zero(tmp_path: Path) 
     assert sleeps == [2.0]
     assert len(runner.calls) == 2
     assert all(call.argv[-4] == "api" for call in runner.calls)
-    assert all("hybrid_ingestion_jobs" in " ".join(call.argv) for call in runner.calls)
+    assert all("run_attempts" in " ".join(call.argv) for call in runner.calls)
 
 
 def test_candidate_promotion_stops_old_workers_and_recreates_candidate_active(
@@ -591,21 +570,19 @@ def test_candidate_promotion_stops_old_workers_and_recreates_candidate_active(
     assert operations.activate_candidate_workers(request, previous_epoch=7) == 8
 
     stop_old, start_candidate, authority = runner.calls
-    assert stop_old.argv[-5:] == (
+    assert stop_old.argv[-4:] == (
         "stop",
         "--timeout",
         "30",
         "run-executor",
-        "knowledge-worker",
     )
     assert stop_old.env is not None
     assert stop_old.env["SLOT_ENV_FILE"].endswith("blue-active.env")
-    assert start_candidate.argv[-5:] == (
+    assert start_candidate.argv[-4:] == (
         "up",
         "-d",
         "--force-recreate",
         "run-executor",
-        "knowledge-worker",
     )
     assert start_candidate.env is not None
     assert start_candidate.env["SLOT_ENV_FILE"].endswith("green-active.env")
@@ -642,7 +619,7 @@ def test_rollback_drains_candidate_then_fences_for_one_full_lease_window(
     tmp_path: Path,
 ) -> None:
     config, request = _arrange(tmp_path)
-    runner = RuntimeStateRunner(claim_counts=((1, 0), (0, 0)))
+    runner = RuntimeStateRunner(claim_counts=(1, 0))
     sleeps: list[float] = []
     operations = DockerComposeBlueGreenOperations.from_mapping(
         config,
@@ -657,19 +634,17 @@ def test_rollback_drains_candidate_then_fences_for_one_full_lease_window(
 
     drain = runner.calls[0]
     fence = runner.calls[-1]
-    assert drain.argv[-4:] == (
+    assert drain.argv[-3:] == (
         "--signal",
         "SIGUSR1",
         "run-executor",
-        "knowledge-worker",
     )
     assert drain.env is not None and drain.env["SLOT"] == "green"
-    assert fence.argv[-5:] == (
+    assert fence.argv[-4:] == (
         "stop",
         "--timeout",
         "0",
         "run-executor",
-        "knowledge-worker",
     )
     assert sleeps == [2.0, 20.0]
 
@@ -689,19 +664,17 @@ def test_rollback_reactivates_old_at_higher_epoch_and_fails_lost_attempts(
     operations.fail_lost_candidate_attempts(request)
 
     stop_candidate, start_old, authority, fail_lost = runner.calls
-    assert stop_candidate.argv[-5:] == (
+    assert stop_candidate.argv[-4:] == (
         "stop",
         "--timeout",
         "30",
         "run-executor",
-        "knowledge-worker",
     )
-    assert start_old.argv[-5:] == (
+    assert start_old.argv[-4:] == (
         "up",
         "-d",
         "--force-recreate",
         "run-executor",
-        "knowledge-worker",
     )
     assert start_old.env is not None
     assert start_old.env["SLOT_ENV_FILE"].endswith("blue-active.env")

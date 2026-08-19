@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from proof_agent.contracts import AgentDraftRecord, AuditActorFacts, Permission
-from proof_agent.control.production_agent_configuration import (
-    ProductionAgentConfigurationConflict,
-    ProductionAgentConfigurationNotFound,
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationConflict,
+    AgentConfigurationNotFound,
 )
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -116,7 +116,7 @@ def create_production_agent(
             idempotency_key=idempotency_key,
             actor=_audit_actor(request, identity),
         )
-    except (ProductionAgentConfigurationConflict, ProductionAgentConfigurationNotFound) as exc:
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -140,7 +140,7 @@ def get_production_agent_draft(
                 draft_id=draft_id,
             ),
         )
-    except (ProductionAgentConfigurationConflict, ProductionAgentConfigurationNotFound) as exc:
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
     return _draft_payload(record)
 
@@ -163,7 +163,7 @@ def update_production_agent_draft(
             purpose=body.purpose,
             actor=_audit_actor(request, identity),
         )
-    except (ProductionAgentConfigurationConflict, ProductionAgentConfigurationNotFound) as exc:
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -186,7 +186,7 @@ def get_production_agent_contract(
                 draft_id=draft_id,
             ),
         )
-    except (ProductionAgentConfigurationConflict, ProductionAgentConfigurationNotFound) as exc:
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
     return record.draft.contract_bundle.model_dump(mode="json")
 
@@ -200,7 +200,7 @@ def list_production_agent_versions(
     require_operator_permission(identity, Permission.AGENT_VIEW)
     try:
         history = _application(request).list_versions(agent_id=agent_id)
-    except (ProductionAgentConfigurationConflict, ProductionAgentConfigurationNotFound) as exc:
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
     data = [_version_payload(version) for version in history.versions]
     return {
@@ -215,7 +215,7 @@ def list_production_agent_versions(
 def _application(request: Request) -> Any:
     application = getattr(
         request.app.state,
-        "production_agent_configuration_application",
+        "agent_configuration_workspace",
         None,
     )
     if application is None:
@@ -293,9 +293,9 @@ def _version_payload(version: Any) -> dict[str, Any]:
 
 
 def _configuration_exception(
-    error: ProductionAgentConfigurationConflict | ProductionAgentConfigurationNotFound,
+    error: AgentConfigurationConflict | AgentConfigurationNotFound,
 ) -> HTTPException:
     status_code = (
-        409 if isinstance(error, ProductionAgentConfigurationConflict) else 404
+        409 if isinstance(error, AgentConfigurationConflict) else 404
     )
     return HTTPException(status_code=status_code, detail=error.code)

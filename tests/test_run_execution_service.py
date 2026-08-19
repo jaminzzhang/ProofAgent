@@ -4,8 +4,11 @@ from typing import Any
 import proof_agent.delivery.run_execution_service as run_execution_service
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    ProductionSecretHandle,
     ReceiptOutcome,
     ResolvedKnowledgeBindingSet,
+    ResolvedKnowledgeSourceServiceBinding,
+    SecretPurpose,
     WorkflowTemplateExecutionResult,
 )
 from proof_agent.delivery.published_agents import PublishedAgent
@@ -58,6 +61,7 @@ def test_published_agent_run_uses_per_run_history_artifact_dir(
             customer_facing=False,
             agent_version_id="version_003",
             source_draft_id="draft_003",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(bindings=()),
         ),
         question="What is the reimbursement rule for travel meals?",
     )
@@ -110,6 +114,7 @@ def test_v3_published_agent_run_uses_controlled_react_orchestrator(
             customer_facing=False,
             agent_version_id="version_003",
             source_draft_id="draft_003",
+            resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(bindings=()),
         ),
         question="What is the reimbursement rule for travel meals?",
     )
@@ -126,23 +131,40 @@ def test_v3_published_agent_run_uses_controlled_react_orchestrator(
     assert (store.history_dir / execution.detail.run_id / "governance_receipt.md").exists()
 
 
-def test_published_agent_run_propagates_exact_hybrid_runtime_dependencies(
+def test_published_agent_run_propagates_exact_kss_runtime_dependencies(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
     store = RunStore(tmp_path / "history")
     configuration_store = LocalAgentConfigurationStore(tmp_path / "config")
-    bindings = ResolvedKnowledgeBindingSet(bindings=())
-    provider = object()
+    bindings = ResolvedKnowledgeBindingSet(
+        bindings=(
+            ResolvedKnowledgeSourceServiceBinding(
+                binding_id="insurance-knowledge",
+                knowledge_base_release_id="release-insurance-2026-08-18",
+                client_credential_ref=ProductionSecretHandle(
+                    protocol_id="vault-kv-v2",
+                    handle_id="knowledge/source-service/agent-client",
+                    purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
+                    version_id="credential-v7",
+                ),
+                admission_scorer_id="insurance-evidence-admission",
+                admission_scorer_revision="insurance-evidence-admission.v3",
+            ),
+        )
+    )
+    service = object()
     factory = object()
+    scorer = object()
     captured: list[Any] = []
 
     class Runtime:
         def bind_for_run(self, resolved: ResolvedKnowledgeBindingSet) -> Any:
             assert resolved is bindings
-            return run_execution_service.HybridRunDependencies(
-                hybrid_providers={"binding-1": provider},
-                governed_request_factory=factory,
+            return run_execution_service.KnowledgeCandidateRunDependencies(
+                service=service,
+                query_factory=factory,
+                admission_scorer=scorer,
             )
 
     def execute(request: Any) -> Any:
@@ -157,7 +179,7 @@ def test_published_agent_run_propagates_exact_hybrid_runtime_dependencies(
             store=store,
             runs_dir=tmp_path / "latest",
             configuration_store=configuration_store,
-            hybrid_runtime=Runtime(),
+            knowledge_candidate_runtime=Runtime(),
         ),
         published_agent=PublishedAgent(
             agent_id="react_enterprise_qa_v3",
@@ -172,5 +194,6 @@ def test_published_agent_run_propagates_exact_hybrid_runtime_dependencies(
         question="What is the insurance rule?",
     )
 
-    assert captured[0].hybrid_providers == {"binding-1": provider}
-    assert captured[0].governed_hybrid_request_factory is factory
+    assert captured[0].knowledge_candidate_service is service
+    assert captured[0].knowledge_candidate_query_factory is factory
+    assert captured[0].knowledge_candidate_admission_scorer is scorer

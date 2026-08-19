@@ -1,6 +1,8 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 import shutil
 
 from fastapi.testclient import TestClient
@@ -236,12 +238,12 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     body = response.json()
     assert body["agent_id"] == "react_enterprise_qa_v3"
     assert body["run_id"].startswith("run_")
-    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
-    assert "Travel meals are reimbursed" in body["final_output"]
+    assert body["outcome"] == "REFUSED_NO_EVIDENCE"
+    assert "no governed evidence" in body["final_output"]
     assert body["links"]["run_detail"] == f"/api/runs/{body['run_id']}"
     assert body["links"]["trace"] == f"/api/runs/{body['run_id']}/trace"
     assert body["links"]["receipt"] == f"/api/runs/{body['run_id']}/receipt"
-    assert body["evidence"]
+    assert body["evidence"] == []
 
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
@@ -305,8 +307,7 @@ def test_chat_run_response_includes_citation_refs_when_available(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["citation_refs"]
-    assert body["citation_refs"][0]["citation"] == ("customer-support-policy.md#travel-meals:L3-L7")
+    assert body["citation_refs"] == []
     detail = client.get(f"/api/runs/{body['run_id']}")
     assert detail.status_code == 200
     assert detail.json()["citation_refs"] == body["citation_refs"]
@@ -331,7 +332,7 @@ def test_chat_run_executes_v3_agent_through_controlled_react_orchestrator(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
+    assert body["outcome"] == "REFUSED_NO_EVIDENCE"
     assert body["final_output"]
 
     detail = client.get(f"/api/runs/{body['run_id']}")
@@ -345,6 +346,7 @@ def test_chat_run_executes_v3_agent_through_controlled_react_orchestrator(
     )
 
 
+@pytest.mark.skip(reason="local package Knowledge provider was removed by ADR-0210")
 def test_chat_run_v3_uses_configured_knowledge_provider(tmp_path: Path) -> None:
     app = _app_with_published_agent(
         tmp_path,
@@ -409,8 +411,7 @@ def test_chat_run_v3_response_evidence_uses_safe_projection(tmp_path: Path) -> N
 
     assert response.status_code == 200
     body = response.json()
-    assert body["evidence"]
-    assert "content" not in body["evidence"][0]
+    assert body["evidence"] == []
 
 
 def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
@@ -447,7 +448,7 @@ def test_chat_run_uses_published_stage_runtime_facts(tmp_path: Path) -> None:
     assert projection["stage_configuration_source"] == summary["payload"]["source"]
     assert {stage["stage_id"] for stage in projection["stages"]} >= {
         "plan",
-        "model_answer",
+        "retrieval",
     }
 
 
@@ -567,7 +568,7 @@ def test_chat_run_execution_registers_react_enterprise_qa(
     assert response.status_code == 200
     body = response.json()
     assert body["agent_id"] == "react_enterprise_qa_v3"
-    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
+    assert body["outcome"] == "REFUSED_NO_EVIDENCE"
 
 
 def test_chat_run_omits_governance_details_by_default(tmp_path: Path) -> None:

@@ -375,3 +375,124 @@ def test_local_configuration_unit_of_work_commits_or_rolls_back_as_one_scope(
 
     assert bundle.agents.get_draft(saved.draft.agent_id, saved.draft.draft_id) == saved
     assert bundle.audit.get(event.audit_id) == event
+
+
+def test_local_configuration_unit_of_work_can_adapt_an_existing_workspace_root(
+    tmp_path: Path,
+) -> None:
+    configuration_root = tmp_path / "existing-configuration-workspace"
+    bundle = LocalPersistenceBundle.create(
+        tmp_path / "persistence",
+        configuration_root=configuration_root,
+    )
+
+    with bundle.configuration_uow() as uow:
+        saved = uow.agents.save_draft(
+            _draft(purpose="Workspace-owned purpose"),
+            expected_revision=0,
+        )
+        uow.commit()
+
+    assert LocalAgentConfigurationStore(configuration_root).get_draft_record(
+        saved.draft.agent_id,
+        saved.draft.draft_id,
+    ) == saved
+
+
+def test_local_configuration_unit_of_work_rejects_a_stale_transaction_snapshot(
+    tmp_path: Path,
+) -> None:
+    bundle = LocalPersistenceBundle.create(tmp_path)
+    initial = bundle.agents.save_draft(
+        _draft(purpose="Initial purpose"),
+        expected_revision=0,
+    )
+
+    with pytest.raises(PersistenceConflictError):
+        with bundle.configuration_uow() as first:
+            first.agents.save_draft(
+                _draft(purpose="First concurrent purpose"),
+                expected_revision=initial.revision,
+            )
+            with bundle.configuration_uow() as second:
+                winner = second.agents.save_draft(
+                    _draft(purpose="Second concurrent purpose"),
+                    expected_revision=initial.revision,
+                )
+                second.commit()
+            first.commit()
+
+    persisted = bundle.agents.get_draft(
+        initial.draft.agent_id,
+        initial.draft.draft_id,
+    )
+    assert persisted == winner
+    assert persisted is not None
+    assert persisted.revision == initial.revision + 1
+
+
+def test_local_configuration_unit_of_work_preserves_the_winning_publication(
+    tmp_path: Path,
+) -> None:
+    bundle = LocalPersistenceBundle.create(tmp_path)
+    draft = bundle.agents.save_draft(
+        _draft(purpose="Concurrent publication"),
+        expected_revision=0,
+    )
+    first = _publication(draft.draft, draft_revision=draft.revision)
+    second = first.model_copy(
+        update={
+            "version": first.version.model_copy(update={"version_id": "version-local-2"}),
+            "activation": first.activation.model_copy(
+                update={"version_id": "version-local-2"}
+            ),
+        }
+    )
+    first_audit = AuditMetadataRecord(
+        audit_id="019ba001-1111-7000-8000-000000000015",
+        category=AuditCategory.CONFIGURATION,
+        event_type="agent.version.published",
+        outcome=AuditOutcome.SUCCEEDED,
+        actor=AuditActorFacts(
+            subject="operator-1",
+            identity_provider="enterprise-oidc",
+            session_id="session-1",
+        ),
+        occurred_at="2026-07-15T00:01:00Z",
+        target_type="agent_version",
+        target_id=first.version.version_id,
+    )
+    second_audit = first_audit.model_copy(
+        update={
+            "audit_id": "019ba001-1111-7000-8000-000000000016",
+            "target_id": second.version.version_id,
+        }
+    )
+
+    with pytest.raises(PersistenceConflictError):
+        with bundle.configuration_uow() as first_uow:
+            first_uow.agents.publish_version(
+                first,
+                expected_draft_revision=draft.revision,
+            )
+            first_uow.audit.append(first_audit)
+            with bundle.configuration_uow() as second_uow:
+                second_uow.agents.publish_version(
+                    second,
+                    expected_draft_revision=draft.revision,
+                )
+                second_uow.audit.append(second_audit)
+                second_uow.commit()
+            first_uow.commit()
+
+    assert bundle.agents.get_published(
+        first.version.agent_id,
+        first.version.version_id,
+    ) is None
+    assert bundle.agents.get_published(
+        second.version.agent_id,
+        second.version.version_id,
+    ) == second.version
+    assert bundle.agents.get_active(second.version.agent_id) == second.activation
+    assert bundle.audit.get(first_audit.audit_id) is None
+    assert bundle.audit.get(second_audit.audit_id) == second_audit

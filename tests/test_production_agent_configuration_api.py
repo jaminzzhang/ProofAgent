@@ -13,12 +13,12 @@ from proof_agent.contracts import (
     DraftAgent,
 )
 from proof_agent.delivery.production_agent_configuration import router
-from proof_agent.control.production_agent_configuration import (
-    ProductionAgentConfigurationConflict,
-    ProductionAgentConfigurationNotFound,
-    ProductionAgentInventory,
-    ProductionAgentSummary,
-    ProductionAgentVersions,
+from proof_agent.control.agent_configuration_workspace import (
+    AgentConfigurationConflict,
+    AgentConfigurationInventory,
+    AgentConfigurationNotFound,
+    AgentConfigurationSummary,
+    AgentConfigurationVersions,
 )
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
 
@@ -51,11 +51,11 @@ class RecordingApplication:
         )
         return CreateResult(record=_draft_record(), replayed=False)
 
-    def list_agents(self) -> ProductionAgentInventory:
+    def list_agents(self) -> AgentConfigurationInventory:
         draft = _draft_record().draft
-        return ProductionAgentInventory(
+        return AgentConfigurationInventory(
             agents=(
-                ProductionAgentSummary(
+                AgentConfigurationSummary(
                     agent_id=draft.agent_id,
                     display_name=draft.display_name,
                     purpose=draft.purpose,
@@ -105,16 +105,16 @@ class RecordingApplication:
             revision=expected_revision + 1,
         )
 
-    def list_versions(self, *, agent_id: str) -> ProductionAgentVersions:
+    def list_versions(self, *, agent_id: str) -> AgentConfigurationVersions:
         self.calls.append({"agent_id": agent_id, "operation": "versions"})
-        return ProductionAgentVersions(versions=(), active_version_id=None)
+        return AgentConfigurationVersions(versions=(), active_version_id=None)
 
 
 def _application() -> tuple[FastAPI, RecordingApplication]:
     application = FastAPI()
     service = RecordingApplication()
     application.state.proof_agent_mode = "development"
-    application.state.production_agent_configuration_application = service
+    application.state.agent_configuration_workspace = service
     application.include_router(router, prefix="/api")
     return application, service
 
@@ -347,7 +347,7 @@ def test_production_agent_commands_enforce_permissions_and_stable_conflicts() ->
     application.state.operator_identity_provider = _StaticIdentityProvider(
         frozenset(_all_permissions())
     )
-    application.state.production_agent_configuration_application = _ConflictApplication()
+    application.state.agent_configuration_workspace = _ConflictApplication()
     conflict = TestClient(application).post(
         "/api/config/agents",
         headers={"Idempotency-Key": "create-agent-attempt-1"},
@@ -378,14 +378,14 @@ class _StaticIdentityProvider:
 class _ConflictApplication(RecordingApplication):
     def create_draft(self, **kwargs: Any) -> CreateResult:
         del kwargs
-        raise ProductionAgentConfigurationConflict(
+        raise AgentConfigurationConflict(
             code="sole_agent_already_exists",
             detail="Already initialized.",
         )
 
     def get_draft(self, *, agent_id: str, draft_id: str) -> AgentDraftRecord:
         del agent_id, draft_id
-        raise ProductionAgentConfigurationNotFound(
+        raise AgentConfigurationNotFound(
             code="agent_draft_not_found",
             detail="Not found.",
         )
