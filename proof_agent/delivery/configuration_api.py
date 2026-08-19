@@ -1354,20 +1354,29 @@ def rollback_config_version(
 ) -> dict[str, Any]:
     """Switch the Active Agent Version pointer to a previous version."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
-    store = _get_configuration_store(app_request)
+    _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
+    del request
     try:
-        active = store.rollback_active_version(
+        result = _get_agent_configuration_workspace(app_request).rollback_version(
             agent_id=agent_id,
             version_id=version_id,
-            actor=actor,
+            actor=_workspace_audit_actor(identity),
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    restored = store.get_version(agent_id, version_id)
-    if restored is None:  # guarded by rollback_active_version; preserves fail-closed typing.
-        raise HTTPException(status_code=409, detail="Restored Agent Version disappeared.")
-    return serialize_agent_version_rollback(active, restored)
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_version_rollback_invalid",
+        ) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_version_rollback_failed",
+        ) from exc
+    return serialize_agent_version_rollback(result.activation, result.restored)
 
 
 def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:

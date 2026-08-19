@@ -8,6 +8,7 @@ import pytest
 
 from proof_agent.contracts import (
     ActiveAgentVersion,
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     AgentValidationRecord,
@@ -15,11 +16,16 @@ from proof_agent.contracts import (
     AuditMetadataRecord,
     ContractBundle,
     DraftAgent,
+    ProductionSecretHandle,
     PublishedAgentVersion,
+    ResolvedKnowledgeBindingSet,
+    ResolvedKnowledgeSourceServiceBinding,
+    SecretPurpose,
     SensitiveValidationCaptureArtifact,
 )
 from proof_agent.contracts.persistence import (
     PersistenceConflictError,
+    PersistenceNotFoundError,
     PersistencePointerConflictError,
 )
 from proof_agent.control.agent_configuration_workspace import (
@@ -41,6 +47,7 @@ class InMemoryAgentLifecycleRepository:
         }
         self.published: dict[tuple[str, str], PublishedAgentVersion] = {}
         self.active: dict[str, ActiveAgentVersion] = {}
+        self.activations: list[AgentActivationRecord] = []
 
     def list_drafts(self, agent_id: str | None = None) -> tuple[AgentDraftRecord, ...]:
         records = tuple(self.records.values())
@@ -109,6 +116,30 @@ class InMemoryAgentLifecycleRepository:
         self.active[version.agent_id] = publication.activation
         return publication
 
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        value = activation.activation
+        if (value.agent_id, value.version_id) not in self.published:
+            raise PersistenceNotFoundError(
+                resource_type="agent_version",
+                resource_id=value.version_id,
+            )
+        current = self.active.get(value.agent_id)
+        actual_pointer = None if current is None else current.version_id
+        expected_pointer = activation.active_pointer_expectation.version_id
+        if actual_pointer != expected_pointer:
+            raise PersistencePointerConflictError(
+                resource_type="active_agent_version",
+                resource_id=value.agent_id,
+                expected_pointer=expected_pointer,
+                actual_pointer=actual_pointer,
+            )
+        self.active[value.agent_id] = value
+        self.activations.append(activation)
+        return activation
+
     def get_published(
         self,
         agent_id: str,
@@ -156,6 +187,7 @@ class InMemoryConfigurationUnitOfWork:
         self._records_snapshot = dict(agents.records)
         self._published_snapshot = dict(agents.published)
         self._active_snapshot = dict(agents.active)
+        self._activation_count = len(agents.activations)
         self._audit_length = len(audit.events)
 
     def __enter__(self) -> "InMemoryConfigurationUnitOfWork":
@@ -172,6 +204,7 @@ class InMemoryConfigurationUnitOfWork:
             self.agents.records = self._records_snapshot
             self.agents.published = self._published_snapshot
             self.agents.active = self._active_snapshot
+            del self.agents.activations[self._activation_count :]
             del self.audit.events[self._audit_length :]
 
     def commit(self) -> None:
@@ -399,6 +432,19 @@ class PointerConflictAgentRepository(InMemoryAgentLifecycleRepository):
         )
 
 
+class PointerConflictActivationRepository(InMemoryAgentLifecycleRepository):
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        raise PersistencePointerConflictError(
+            resource_type="active_agent_version",
+            resource_id=activation.activation.agent_id,
+            expected_pointer=activation.active_pointer_expectation.version_id,
+            actual_pointer="version_concurrent_winner",
+        )
+
+
 def _draft(agent_id: str, draft_id: str, *, updated_at: str) -> AgentDraftRecord:
     return AgentDraftRecord(
         revision=1,
@@ -431,6 +477,47 @@ def _template_bundle(agent_id: str = "agent_management_insurance_specialist") ->
         ),
         policy_yaml="rules: []\n",
         tools_yaml="tools: []\n",
+    )
+
+
+def _published_version(
+    *,
+    agent_id: str,
+    draft_id: str,
+    version_id: str,
+    published_at: str,
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None,
+) -> PublishedAgentVersion:
+    return PublishedAgentVersion(
+        agent_id=agent_id,
+        version_id=version_id,
+        source_draft_id=draft_id,
+        validation_run_id=f"run_{version_id}",
+        display_name=f"{agent_id} display",
+        purpose=f"{agent_id} purpose",
+        contract_bundle=_template_bundle(agent_id),
+        published_at=published_at,
+        published_by="operator-1",
+        resolved_knowledge_bindings=resolved_knowledge_bindings,
+    )
+
+
+def _kss_bindings() -> ResolvedKnowledgeBindingSet:
+    return ResolvedKnowledgeBindingSet(
+        bindings=(
+            ResolvedKnowledgeSourceServiceBinding(
+                binding_id="insurance-knowledge",
+                knowledge_base_release_id="release-insurance-2026-08-18",
+                client_credential_ref=ProductionSecretHandle(
+                    protocol_id="hashicorp-vault-2.0-kv-v2",
+                    handle_id="knowledge/source-service/agent-client",
+                    purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
+                    version_id="credential-v7",
+                ),
+                admission_scorer_id="insurance-evidence-admission",
+                admission_scorer_revision="insurance-evidence-admission.v3",
+            ),
+        )
     )
 
 
@@ -586,6 +673,232 @@ def test_workspace_publication_atomically_activates_the_current_validated_draft(
     assert active.version_id == published.version_id
     assert factory.audit.events[-1].event_type == "agent.version.published"
     assert factory.units[-1].committed is True
+
+
+def test_workspace_rollback_atomically_switches_pointer_and_audits_target() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000831",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target_bindings = _kss_bindings()
+    version_one = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_one",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=target_bindings,
+    )
+    version_two = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_two",
+        published_at="2026-08-19T06:00:00Z",
+    )
+    factory.agents.published = {
+        (current.draft.agent_id, version_one.version_id): version_one,
+        (current.draft.agent_id, version_two.version_id): version_two,
+    }
+    factory.agents.active[current.draft.agent_id] = ActiveAgentVersion(
+        agent_id=current.draft.agent_id,
+        version_id=version_two.version_id,
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 19, 7, tzinfo=UTC),
+    )
+
+    result = workspace.rollback_version(
+        agent_id=current.draft.agent_id,
+        version_id=version_one.version_id,
+        actor=_actor(),
+    )
+
+    assert result.restored == version_one
+    assert result.restored.resolved_knowledge_bindings == target_bindings
+    assert result.activation.version_id == version_one.version_id
+    assert result.activation.rollback_from_version_id == version_two.version_id
+    assert factory.agents.get_active(current.draft.agent_id) == result.activation
+    assert factory.agents.activations[-1].active_pointer_expectation.version_id == (
+        version_two.version_id
+    )
+    assert factory.agents.list_published(current.draft.agent_id) == (
+        version_one,
+        version_two,
+    )
+    event = factory.audit.events[-1]
+    assert event.event_type == "agent.version.rolled_back"
+    assert event.target_id == version_one.version_id
+    assert event.metadata["replaced_active_version_id"] == version_two.version_id
+    assert factory.units[-1].committed is True
+
+
+@pytest.mark.parametrize("initial_pointer", (None, "version_target"))
+def test_workspace_rollback_preserves_empty_and_already_active_pointer_compatibility(
+    initial_pointer: str | None,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000836",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    if initial_pointer is not None:
+        factory.agents.active[target.agent_id] = ActiveAgentVersion(
+            agent_id=target.agent_id,
+            version_id=initial_pointer,
+            activated_at="2026-08-19T06:00:00Z",
+            activated_by="operator-1",
+        )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 19, 7, tzinfo=UTC),
+    )
+
+    result = workspace.rollback_version(
+        agent_id=target.agent_id,
+        version_id=target.version_id,
+        actor=_actor(),
+    )
+
+    assert result.activation.version_id == target.version_id
+    assert result.activation.rollback_from_version_id == initial_pointer
+    assert factory.agents.activations[-1].active_pointer_expectation.version_id == (
+        initial_pointer
+    )
+
+
+def test_workspace_rollback_rejects_a_version_outside_the_agent() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000832",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    other = _published_version(
+        agent_id="agent_beta",
+        draft_id="019ba001-1111-7000-8000-000000000833",
+        version_id="version_other",
+        published_at="2026-08-19T05:00:00Z",
+    )
+    factory.agents.published[(other.agent_id, other.version_id)] = other
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationNotFound) as missing:
+        workspace.rollback_version(
+            agent_id=current.draft.agent_id,
+            version_id=other.version_id,
+            actor=_actor(),
+        )
+
+    assert missing.value.code == "agent_version_not_found"
+    assert factory.agents.get_active(current.draft.agent_id) is None
+    assert factory.audit.events == []
+
+
+def test_workspace_rollback_rejects_an_active_pointer_conflict() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000834",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    version = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+    )
+    agents = PointerConflictActivationRepository((current,))
+    agents.published[(version.agent_id, version.version_id)] = version
+    agents.active[version.agent_id] = ActiveAgentVersion(
+        agent_id=version.agent_id,
+        version_id="version_before",
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    factory = UnitOfWorkFactory((current,), agents=agents)
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=version.agent_id,
+            version_id=version.version_id,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "active_agent_version_conflict"
+    active = factory.agents.get_active(version.agent_id)
+    assert active is not None
+    assert active.version_id == "version_before"
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("failure", ("audit", "commit"))
+def test_workspace_rollback_rolls_back_when_atomic_persistence_fails(
+    failure: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000835",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory(
+        (current,),
+        fail_audit=failure == "audit",
+        fail_commit=failure == "commit",
+    )
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    previous = ActiveAgentVersion(
+        agent_id=target.agent_id,
+        version_id="version_before",
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    factory.agents.active[target.agent_id] = previous
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(RuntimeError, match=f"simulated {failure}"):
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            actor=_actor(),
+        )
+
+    assert factory.agents.get_active(target.agent_id) == previous
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
 
 
 def test_workspace_publication_requires_a_recorded_current_validation() -> None:

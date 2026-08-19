@@ -16,6 +16,7 @@ from proof_agent.capabilities.persistence.postgres.model_repository import (
 from proof_agent.contracts import (
     ActiveAgentPointerExpectation,
     ActiveAgentVersion,
+    AgentActivationRecord,
     AgentPublicationRecord,
     ContractBundle,
     DraftAgent,
@@ -88,6 +89,26 @@ def _publication(
             activated_by=version.published_by,
         ),
         draft_revision=draft_revision,
+    )
+
+
+def _publish_second_version(
+    repository: PostgresAgentLifecycleRepository,
+) -> AgentPublicationRecord:
+    draft_value = _draft(
+        purpose="Second version",
+        draft_id="019ba001-1111-7000-8000-000000000104",
+        updated_at="2026-07-15T00:02:00Z",
+    )
+    draft = repository.save_draft(draft_value, expected_revision=0)
+    publication = _publication(
+        draft.draft,
+        draft_revision=draft.revision,
+        version_id="019ba001-1111-7000-8000-000000000105",
+    )
+    return repository.publish_version(
+        publication,
+        expected_draft_revision=draft.revision,
     )
 
 
@@ -239,6 +260,105 @@ def test_postgres_agent_publication_allows_only_one_active_pointer_cas_winner(
         for item in candidates
     ]
     assert sum(item is not None for item in persisted) == 1
+
+
+def test_postgres_agent_repository_rolls_back_with_exact_active_pointer_cas(
+    postgres_engine: Engine,
+) -> None:
+    repository = PostgresAgentLifecycleRepository(postgres_engine)
+    draft = repository.save_draft(_draft(), expected_revision=0)
+    first = _publication(draft.draft, draft_revision=draft.revision)
+    repository.publish_version(first, expected_draft_revision=draft.revision)
+    second = _publish_second_version(repository)
+    rollback = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=_AGENT_ID,
+            version_id=first.version.version_id,
+            activated_at="2026-07-15T00:03:00Z",
+            activated_by="operator-2",
+            rollback_from_version_id=second.version.version_id,
+        ),
+        active_pointer_expectation=ActiveAgentPointerExpectation(
+            version_id=second.version.version_id
+        ),
+    )
+
+    assert repository.activate_version(rollback) == rollback
+    assert repository.get_active(_AGENT_ID) == rollback.activation
+    assert repository.get_published(_AGENT_ID, first.version.version_id) == (
+        first.version
+    )
+    assert repository.get_published(_AGENT_ID, second.version.version_id) == (
+        second.version
+    )
+
+    with pytest.raises(PersistencePointerConflictError):
+        repository.activate_version(
+            rollback.model_copy(
+                update={
+                    "activation": rollback.activation.model_copy(
+                        update={
+                            "version_id": second.version.version_id,
+                            "rollback_from_version_id": second.version.version_id,
+                        }
+                    )
+                }
+            )
+        )
+
+    missing = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=_AGENT_ID,
+            version_id="019ba001-1111-7000-8000-000000000199",
+            activated_at="2026-07-15T00:04:00Z",
+            activated_by="operator-2",
+            rollback_from_version_id=first.version.version_id,
+        ),
+        active_pointer_expectation=ActiveAgentPointerExpectation(
+            version_id=first.version.version_id
+        ),
+    )
+    with pytest.raises(PersistenceNotFoundError):
+        repository.activate_version(missing)
+
+    assert repository.get_active(_AGENT_ID) == rollback.activation
+
+
+def test_postgres_agent_rollback_allows_only_one_pointer_cas_winner(
+    postgres_engine: Engine,
+) -> None:
+    repository = PostgresAgentLifecycleRepository(postgres_engine)
+    draft = repository.save_draft(_draft(), expected_revision=0)
+    first = _publication(draft.draft, draft_revision=draft.revision)
+    repository.publish_version(first, expected_draft_revision=draft.revision)
+    second = _publish_second_version(repository)
+    rollback = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=_AGENT_ID,
+            version_id=first.version.version_id,
+            activated_at="2026-07-15T00:03:00Z",
+            activated_by="operator-2",
+            rollback_from_version_id=second.version.version_id,
+        ),
+        active_pointer_expectation=ActiveAgentPointerExpectation(
+            version_id=second.version.version_id
+        ),
+    )
+    barrier = Barrier(2)
+
+    def activate(_: int) -> str:
+        barrier.wait(timeout=5)
+        try:
+            repository.activate_version(rollback)
+        except PersistencePointerConflictError:
+            return "conflict"
+        return "activated"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(activate, range(2)))
+
+    assert sorted(results) == ["activated", "conflict"]
+    assert repository.get_active(_AGENT_ID) == rollback.activation
 
 
 def test_postgres_agent_publication_freezes_only_existing_exact_shared_versions(

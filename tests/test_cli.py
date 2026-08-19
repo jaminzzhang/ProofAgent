@@ -15,6 +15,11 @@ from typer.testing import CliRunner
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.importer import import_agent_package
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts import (
+    ActiveAgentPointerExpectation,
+    ActiveAgentVersion,
+    AgentActivationRecord,
+)
 from proof_agent.delivery.cli import app
 from proof_agent.delivery.cli import _active_dev_seed_is_current
 from proof_agent.delivery.cli import _create_server_app_from_env
@@ -443,10 +448,18 @@ def test_canonical_seed_authority_blocks_legacy_version_rollback(tmp_path: Path)
     assert _seed_default_dev_agent(store) is True
 
     with pytest.raises(ProofAgentError) as exc:
-        store.rollback_active_version(
-            agent_id=legacy_draft.agent_id,
-            version_id=legacy_version.version_id,
-            actor="test-user",
+        store.activate_version_record(
+            AgentActivationRecord(
+                activation=ActiveAgentVersion(
+                    agent_id=legacy_draft.agent_id,
+                    version_id=legacy_version.version_id,
+                    activated_at="2026-08-19T07:00:00Z",
+                    activated_by="test-user",
+                ),
+                active_pointer_expectation=ActiveAgentPointerExpectation(
+                    version_id=None
+                ),
+            )
         )
 
     assert exc.value.code == "PA_CONFIG_002"

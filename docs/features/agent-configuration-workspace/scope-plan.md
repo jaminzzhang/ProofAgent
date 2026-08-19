@@ -4,20 +4,20 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 3 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 建议结论 | Slice 4 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
 | 最高风险等级 | P1 |
-| 一句话依据 | 架构评审已固定目标 seam；现有 Local/PostgreSQL lifecycle adapters、Configuration UoW、sole-Agent policy 和 API 行为提供了完整证据 |
-| 下一步建议 | Slice 3 收口；下一切片重新 Scope rollback authority，不复用本切片生产结论 |
+| 一句话依据 | ADR-0009 与领域上下文已固定指针回滚语义；现有 Local/PostgreSQL lifecycle adapters、Configuration UoW、active-pointer CAS 和 API 行为提供了完整输入 |
+| 下一步建议 | Slice 4 收口；下一切片重新 Scope Contract/Workflow/Skill 编辑权威，不复用本切片生产结论 |
 
 ## 2. 依据与输入缺口
 
 | 材料 | 来源 | 是否读取 | 关键证据 | 缺口 |
 | --- | --- | --- | --- | --- |
-| 用户请求 | 当前对话 | 是 | 同意继续 publication authority 切片；每个切片完成后由子 Agent 按明确流程验证 | Slice 1、2 已完成；当前为 Slice 3 |
+| 用户请求 | 当前对话 | 是 | 提交检查点并实施下一独立切片；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 4 |
 | 架构评审 | `architecture-review-20260818-220308.html` | 是 | Delivery 与 concrete store 耦合；推荐 deep application module 与 focused ports | Graphify 图较旧，只作导航 |
 | 项目规则 | `AGENTS-COMMON.md`、hicode coding rules | 是 | production PostgreSQL 权威、原子审计、TDD、无兼容 facade | 无 |
 | 领域与 ADR | Agent Configuration context、ADR-0009、ADR-0011 | 是 | Workspace、Draft、Published Version、模块/lifecycle 分离 | context 含已退役知识术语，后续单独清理 |
-| 当前实现 | configuration routers、Workspace、production application、Local/PostgreSQL adapters | 是 | development publish route 已改走 Workspace；rollback、编辑与 canonical seed bootstrap 仍是后续切片 | 无 |
+| 当前实现 | configuration routers、Workspace、production application、Local/PostgreSQL adapters | 是 | development rollback route 已改走 Workspace；Local/PostgreSQL port 实现 exact pointer activation，旧 direct-store rollback 已删除 | Contract/Workflow/Skill 编辑与 canonical seed bootstrap 仍待后续切片 |
 
 ## 3. 需求准入评审
 
@@ -25,19 +25,19 @@
 | --- | --- |
 | 准入结论 | `NO_BLOCKING_GAPS` |
 | 需求分析输入 | 用户请求、架构报告、现有稳定 API、两个真实 persistence adapters、生命周期规则 |
-| 证据缺口 | 正式生产 Phase F publisher 与 development Draft publisher 的 Gate 不同；本切片只迁移后者 |
+| 证据缺口 | 正式生产发布、部署 Blue/Green rollback 与 Agent Version pointer rollback 是不同权威；本切片只迁移最后一项 |
 
 ## 4. 需求分析与范围边界
 
 | 项 | 内容 |
 | --- | --- |
-| 需求目标 | 用一个 Control-owned deep module 隐藏 Draft lifecycle、validation 和 development publication 的 persistence、evidence 与 policy 细节 |
-| 范围内 | Slice 1/2 已有能力；Slice 3 development publish interface、validation outcome/freshness/blocker Gate、immutable version、Draft/pointer CAS、activation/audit、Local transaction baseline CAS、Local publication validator、API 回归、文档 |
-| 范围外 | production validation/publish endpoint、正式 Phase F publisher、rollback、Contract/Workflow/Skill 编辑、schema、部署 |
+| 需求目标 | 让 Control-owned Workspace 成为普通 Agent Version pointer rollback 的唯一应用权威 |
+| 范围内 | Workspace rollback interface、existing Published Version 校验、active-pointer expectation、activation/audit 原子提交、Local/PostgreSQL lifecycle adapters、development API 路由、稳定错误映射、旧 direct-store rollback 删除、文档 |
+| 范围外 | production validation/publish endpoint、正式 Phase F publisher、Blue/Green 应用部署 rollback、Source rollback-Draft、Contract/Workflow/Skill 编辑、schema、部署 |
 | 非目标 | 新增 facade 后保留旧调用；统一 development 与 production 能力；把本地验证描述为生产批准 |
-| 验收标准 | Workspace 行为与负向契约测试、API 回归、Local/PostgreSQL persistence 回归、Ruff/Mypy/Dashboard 与全量后端通过；publish route 不直接组合 compiler 或具体 store；独立子 Agent 复验 |
+| 验收标准 | Workspace 行为与负向契约测试、API 回归、Local/PostgreSQL persistence 回归、Ruff/Mypy/Dashboard 与全量后端通过；rollback route 不直接调用具体 store；并发只允许一个 active-pointer winner；独立子 Agent 复验 |
 | `feature_context.md` 更新 | 已创建 |
-| ADR 处理 | 不需要；ADR-0009、ADR-0011 与架构评审已固定 seam，当前切片可逆且不改变权威 |
+| ADR 处理 | 不需要；ADR-0009、ADR-0210 与 Agent Configuration 领域上下文已固定 immutable-version pointer rollback 和精确 KSS binding 规则 |
 
 ## 5. 设计树方案
 
@@ -234,3 +234,48 @@
 
 - 主代理执行聚焦、全量、静态和 Dashboard 门禁。
 - 切片完成后启动独立子 Agent，验证 scope→diff、freshness/blocker Gate、CAS、audit、删除目标、错误映射和无 rollback/Phase F 调用。
+
+## 20. Slice 4 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | `TDD_INPUT_READY` |
+| 最高风险等级 | P1 |
+| 公开 interface | `AgentConfigurationWorkspace.rollback_version(...)` |
+| 可观察行为 | 选择一个既有 immutable Published Agent Version，精确比较并切换 Active Agent Version pointer，同时提交全局 configuration audit；返回恢复后的不可变 KSS binding 投影 |
+| 兼容边界 | 保持既有 HTTP method、path、权限、空 request body 和成功响应字段；当前指针为空或目标已 active 的既有行为不在本切片改变 |
+| 范围外 | 正式 Phase F publisher、production publication endpoint、Blue/Green deployment rollback、Source rollback-Draft、Contract/Workflow/Skill 编辑、schema、部署 |
+| ADR 判断 | 不需要；执行 ADR-0009、ADR-0210 和既有 Agent Version Rollback 领域规则 |
+
+## 21. Slice 4 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-RB-ROOT | Operator 以 `agent.publish` 请求回滚一个 Agent Version | Delivery 只调用 Workspace interface | 返回 rollback projection | HTTP interface 与 AST 删除测试 | P1 |
+| ACW-RB-MAIN-1 | target Published Version 存在 | Workspace 在同一 UoW 读取 target 与当前 active pointer | 构建 activation command 与 exact pointer expectation | module contract test | P1 |
+| ACW-RB-MAIN-2 | pointer expectation 匹配 | lifecycle repository 原子写入新的 Active Agent Version；Workspace 同事务追加 `agent.version.rolled_back` audit | activation 与 audit 同时可见 | UoW、Local、PostgreSQL adapter tests | P1 |
+| ACW-RB-MAIN-3 | target version 含不可变 KSS binding | 不重算、不降级、不恢复已删除 Hybrid 运行时；响应投影来自 target Published Version | 精确恢复 target binding | KSS-bound response regression | P1 |
+| ACW-RB-BRANCH-1 | target 不存在或不属于 Agent | Workspace 返回稳定 not-found | pointer/audit 不变 | not-found test | P1 |
+| ACW-RB-BRANCH-2 | pointer 在读取后被并发推进 | repository exact CAS 拒绝第二个 writer | 并发赢家不被覆盖 | fake conflict、real Local interleaving、PostgreSQL concurrency test | P1 |
+| ACW-RB-BRANCH-3 | audit append 或 UoW commit 失败 | 整个业务事件回滚 | pointer 与 audit 均不产生部分写入 | fault tests | P1 |
+| ACW-RB-BOUND-1 | rollback 成功 | 不修改或删除任何 Published Agent Version，不创建 Draft，不调用 Phase F 或部署 rollback | history immutable | negative assertions 与 import/AST 检查 | P1 |
+
+## 22. Slice 4 TDD 任务
+
+### Task ACW-RB1：Workspace rollback authority
+
+- RED：从 Workspace interface 证明 target 校验、active-pointer expectation、activation、KSS binding 恢复投影和 audit 原子性。
+- GREEN：引入 adapter-neutral activation command，通过 Configuration UoW 与 `AgentLifecycleRepository` 提交。
+- 停止条件：需要改变 public HTTP contract、数据库 schema 或正式生产 release evidence。
+
+### Task ACW-RB2：双 adapter 与 Delivery 删除测试
+
+- RED：当前 route 仍直接调用 `LocalAgentConfigurationStore.rollback_active_version(...)`，PostgreSQL lifecycle port 无等价能力。
+- GREEN：Local/PostgreSQL adapter 实现同一 exact-pointer activation port；route 只做权限、请求和响应映射；删除旧 direct-store rollback 方法。
+- 停止条件：需要迁移 canonical seed bootstrap 或其他 configuration edit routes。
+
+### Task ACW-RB3：验证与独立复核
+
+- 主代理执行聚焦测试、真实 Local 交错事务、可用 PostgreSQL 集成测试、全量后端、Ruff、Mypy、Dashboard/Chat 与领域检查。
+- 切片完成后启动独立子 Agent，按 scope→diff、权限、target identity、CAS、事务/audit、KSS binding、旧实现删除、错误映射和范围隔离清单复验。
+- 子 Agent 发现问题时，主代理先补 RED 再修正并重跑相关门禁。

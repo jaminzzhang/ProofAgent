@@ -7,6 +7,7 @@ from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
     ActiveAgentPointerExpectation,
     ActiveAgentVersion,
+    AgentActivationRecord,
     AgentPublicationRecord,
     AuditActorFacts,
     AuditCategory,
@@ -23,6 +24,7 @@ from proof_agent.contracts import (
     MemoryQuery,
     MemoryScope,
     PersistenceConflictError,
+    PersistenceNotFoundError,
     PersistencePointerConflictError,
     PublishedAgentVersion,
     ReceiptOutcome,
@@ -170,6 +172,64 @@ def test_local_bundle_rejects_stale_active_pointer_expectation(tmp_path: Path) -
         second.version.agent_id, second.version.version_id
     ) is None
     assert bundle.agents.get_active(first.version.agent_id) == first.activation
+
+
+def test_local_bundle_activates_only_an_existing_version_with_exact_pointer(
+    tmp_path: Path,
+) -> None:
+    bundle = LocalPersistenceBundle.create(tmp_path)
+    draft = bundle.agents.save_draft(_draft(purpose="Purpose"), expected_revision=0)
+    publication = _publication(draft.draft, draft_revision=draft.revision)
+    bundle.agents.publish_version(
+        publication,
+        expected_draft_revision=draft.revision,
+    )
+    rollback = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=publication.version.agent_id,
+            version_id=publication.version.version_id,
+            activated_at="2026-07-15T00:02:00Z",
+            activated_by="operator-2",
+            rollback_from_version_id=publication.version.version_id,
+        ),
+        active_pointer_expectation=ActiveAgentPointerExpectation(
+            version_id=publication.version.version_id
+        ),
+    )
+
+    assert bundle.agents.activate_version(rollback) == rollback
+    assert bundle.agents.get_active(publication.version.agent_id) == (
+        rollback.activation
+    )
+
+    stale = rollback.model_copy(
+        update={
+                "activation": rollback.activation.model_copy(
+                    update={
+                        "rollback_from_version_id": "stale-version",
+                    }
+                ),
+            "active_pointer_expectation": ActiveAgentPointerExpectation(
+                version_id="stale-version"
+            ),
+        }
+    )
+    with pytest.raises(PersistencePointerConflictError):
+        bundle.agents.activate_version(stale)
+
+    missing = rollback.model_copy(
+        update={
+            "activation": rollback.activation.model_copy(
+                update={"version_id": "missing-version"}
+            )
+        }
+    )
+    with pytest.raises(PersistenceNotFoundError):
+        bundle.agents.activate_version(missing)
+
+    assert bundle.agents.get_active(publication.version.agent_id) == (
+        rollback.activation
+    )
 
 
 def test_local_bundle_resolves_current_model_connection_to_content_addressed_version(
@@ -494,5 +554,78 @@ def test_local_configuration_unit_of_work_preserves_the_winning_publication(
         second.version.version_id,
     ) == second.version
     assert bundle.agents.get_active(second.version.agent_id) == second.activation
+    assert bundle.audit.get(first_audit.audit_id) is None
+    assert bundle.audit.get(second_audit.audit_id) == second_audit
+
+
+def test_local_configuration_unit_of_work_preserves_one_rollback_winner(
+    tmp_path: Path,
+) -> None:
+    bundle = LocalPersistenceBundle.create(tmp_path)
+    draft = bundle.agents.save_draft(
+        _draft(purpose="Concurrent rollback"),
+        expected_revision=0,
+    )
+    publication = _publication(draft.draft, draft_revision=draft.revision)
+    bundle.agents.publish_version(
+        publication,
+        expected_draft_revision=draft.revision,
+    )
+    expectation = ActiveAgentPointerExpectation(
+        version_id=publication.version.version_id
+    )
+    first = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=publication.version.agent_id,
+            version_id=publication.version.version_id,
+            activated_at="2026-07-15T00:02:00Z",
+            activated_by="operator-1",
+            rollback_from_version_id=publication.version.version_id,
+        ),
+        active_pointer_expectation=expectation,
+    )
+    second = first.model_copy(
+        update={
+            "activation": first.activation.model_copy(
+                update={
+                    "activated_at": "2026-07-15T00:03:00Z",
+                    "activated_by": "operator-2",
+                }
+            )
+        }
+    )
+    first_audit = AuditMetadataRecord(
+        audit_id="019ba001-1111-7000-8000-000000000017",
+        category=AuditCategory.CONFIGURATION,
+        event_type="agent.version.rolled_back",
+        outcome=AuditOutcome.SUCCEEDED,
+        actor=AuditActorFacts(
+            subject="operator-1",
+            identity_provider="enterprise-oidc",
+            session_id="session-1",
+        ),
+        occurred_at=first.activation.activated_at,
+        target_type="agent_version",
+        target_id=first.activation.version_id,
+    )
+    second_audit = first_audit.model_copy(
+        update={
+            "audit_id": "019ba001-1111-7000-8000-000000000018",
+            "actor": first_audit.actor.model_copy(update={"subject": "operator-2"}),
+            "occurred_at": second.activation.activated_at,
+        }
+    )
+
+    with pytest.raises(PersistenceConflictError):
+        with bundle.configuration_uow() as first_uow:
+            first_uow.agents.activate_version(first)
+            first_uow.audit.append(first_audit)
+            with bundle.configuration_uow() as second_uow:
+                second_uow.agents.activate_version(second)
+                second_uow.audit.append(second_audit)
+                second_uow.commit()
+            first_uow.commit()
+
+    assert bundle.agents.get_active(publication.version.agent_id) == second.activation
     assert bundle.audit.get(first_audit.audit_id) is None
     assert bundle.audit.get(second_audit.audit_id) == second_audit

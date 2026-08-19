@@ -19,6 +19,14 @@
   physically removed. KSS's own Knowledge Worker remains. Former Hybrid-bound
   Published Agent Versions are historical records and no longer replayable or
   usable as rollback targets.
+- `[KNOWN | HIGH]` As of 2026-08-19, Agent Configuration Workspace local slices
+  cover Draft inventory/read/update, validation, development publication, and
+  Agent Version pointer rollback. Rollback now owns target identity, exact
+  active-pointer CAS, immutable KSS binding restoration, and atomic audit behind
+  the shared Local/PostgreSQL lifecycle port; the old direct Local-store rollback
+  path is removed. Slice 4 passed independent local review with no open P0-P3
+  findings. Real PostgreSQL concurrency tests remain unexecuted because no test
+  DSN was configured, so this is not production approval.
 - `[COMPUTED | HIGH]` Final local cutover verification passed 1837 backend tests,
   all 195 Dashboard tests and the Dashboard production build. Ruff, strict mypy,
   domain-context and diff checks passed. This does not authorize production.

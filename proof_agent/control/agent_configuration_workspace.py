@@ -19,6 +19,7 @@ from proof_agent.configuration.importer import build_agent_package_contract_bund
 from proof_agent.contracts import (
     ActiveAgentPointerExpectation,
     ActiveAgentVersion,
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     AgentValidationRecord,
@@ -31,6 +32,7 @@ from proof_agent.contracts import (
     ContractBundle,
     DraftAgent,
     PersistenceConflictError,
+    PersistenceNotFoundError,
     PersistencePointerConflictError,
     PublishedAgentVersion,
     PublishedWorkflowStageConfigurationSnapshot,
@@ -95,6 +97,23 @@ class AgentConfigurationVersions:
 
     versions: tuple[PublishedAgentVersion, ...]
     active_version_id: str | None
+
+
+@dataclass(frozen=True)
+class AgentConfigurationRollback:
+    """The activation command result and exact immutable version it restored."""
+
+    activation: ActiveAgentVersion
+    restored: PublishedAgentVersion
+
+    def __post_init__(self) -> None:
+        if (
+            self.activation.agent_id != self.restored.agent_id
+            or self.activation.version_id != self.restored.version_id
+        ):
+            raise ValueError(
+                "rollback activation must identify the restored Agent Version"
+            )
 
 
 @dataclass(frozen=True)
@@ -741,6 +760,78 @@ class AgentConfigurationWorkspace:
             ) from exc
         return saved.version
 
+    def rollback_version(
+        self,
+        *,
+        agent_id: str,
+        version_id: str,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationRollback:
+        """Atomically point one Agent at an existing immutable Published Version."""
+
+        self._require_agent_scope(agent_id)
+        _require_safe_resource_id(version_id, resource="Agent Version")
+        activated_at = _timestamp(self._clock())
+        try:
+            with self._unit_of_work_factory() as uow:
+                restored = uow.agents.get_published(agent_id, version_id)
+                if restored is None:
+                    raise AgentConfigurationNotFound(
+                        code="agent_version_not_found",
+                        detail="The requested Published Agent Version was not found.",
+                    )
+                current = uow.agents.get_active(agent_id)
+                replaced_version_id = (
+                    None if current is None else current.version_id
+                )
+                activation = AgentActivationRecord(
+                    activation=ActiveAgentVersion(
+                        agent_id=agent_id,
+                        version_id=version_id,
+                        activated_at=activated_at,
+                        activated_by=actor.subject,
+                        rollback_from_version_id=replaced_version_id,
+                    ),
+                    active_pointer_expectation=ActiveAgentPointerExpectation(
+                        version_id=replaced_version_id
+                    ),
+                )
+                saved = uow.agents.activate_version(activation)
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.version.rolled_back",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=activated_at,
+                        target_type="agent_version",
+                        target_id=version_id,
+                        metadata={
+                            "agent_id": agent_id,
+                            "replaced_active_version_id": replaced_version_id,
+                            "restored_validation_run_id": (
+                                restored.validation_run_id
+                            ),
+                        },
+                    )
+                )
+                uow.commit()
+        except PersistenceNotFoundError as exc:
+            raise AgentConfigurationNotFound(
+                code="agent_version_not_found",
+                detail="The requested Published Agent Version was not found.",
+            ) from exc
+        except (PersistencePointerConflictError, PersistenceConflictError) as exc:
+            raise AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="The Active Agent Version changed; reload before retrying.",
+            ) from exc
+        return AgentConfigurationRollback(
+            activation=saved.activation,
+            restored=restored,
+        )
+
     def _require_agent_scope(self, agent_id: str) -> None:
         _require_safe_resource_id(agent_id, resource="Agent")
         if (
@@ -1041,6 +1132,7 @@ __all__ = [
     "AgentConfigurationDraftMutation",
     "AgentConfigurationInventory",
     "AgentConfigurationNotFound",
+    "AgentConfigurationRollback",
     "AgentConfigurationScope",
     "AgentConfigurationSummary",
     "AgentConfigurationVersions",

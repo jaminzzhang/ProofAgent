@@ -9,7 +9,11 @@ from proof_agent.contracts.agent_configuration import (
     DraftAgent,
     PublishedAgentVersion,
 )
-from proof_agent.contracts.persistence import AgentDraftRecord, AgentPublicationRecord
+from proof_agent.contracts.persistence import (
+    AgentActivationRecord,
+    AgentDraftRecord,
+    AgentPublicationRecord,
+)
 
 
 class AgentLifecycleRepository(Protocol):
@@ -35,6 +39,11 @@ class AgentLifecycleRepository(Protocol):
         *,
         expected_draft_revision: int,
     ) -> AgentPublicationRecord: ...
+
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord: ...
 
     def get_published(
         self,

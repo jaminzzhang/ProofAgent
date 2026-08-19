@@ -16,6 +16,9 @@ from proof_agent.capabilities.tools.mcp_discovery import (
 )
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    ActiveAgentPointerExpectation,
+    ActiveAgentVersion,
+    AgentActivationRecord,
     ConfigurationOperation,
     ConfigurationOperationAudit,
     ContractBundle,
@@ -899,15 +902,24 @@ def test_rollback_changes_active_pointer_without_mutating_versions(tmp_path: Pat
         actor="publisher",
     )
 
-    rollback = store.rollback_active_version(
-        agent_id="enterprise_qa",
-        version_id=version_one.version_id,
-        actor="publisher",
+    rollback = store.activate_version_record(
+        AgentActivationRecord(
+            activation=ActiveAgentVersion(
+                agent_id="enterprise_qa",
+                version_id=version_one.version_id,
+                activated_at="2026-08-19T07:00:00Z",
+                activated_by="publisher",
+                rollback_from_version_id=version_two.version_id,
+            ),
+            active_pointer_expectation=ActiveAgentPointerExpectation(
+                version_id=version_two.version_id
+            ),
+        )
     )
 
-    assert rollback.version_id == version_one.version_id
-    assert rollback.rollback_from_version_id == version_two.version_id
-    assert store.get_active_version("enterprise_qa") == rollback
+    assert rollback.activation.version_id == version_one.version_id
+    assert rollback.activation.rollback_from_version_id == version_two.version_id
+    assert store.get_active_version("enterprise_qa") == rollback.activation
     assert store.get_version("enterprise_qa", version_one.version_id) == version_one
     assert store.get_version("enterprise_qa", version_two.version_id) == version_two
     assert (

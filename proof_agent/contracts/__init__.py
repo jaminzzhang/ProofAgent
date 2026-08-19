@@ -348,6 +348,7 @@ from proof_agent.contracts.policy import (
 )
 from proof_agent.contracts.persistence import (
     ActiveAgentPointerExpectation,
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     AuditActorFacts,
@@ -467,6 +468,7 @@ __all__ = [
     "AgentManifest",
     "ActiveAgentVersion",
     "ActiveAgentPointerExpectation",
+    "AgentActivationRecord",
     "AgentDraftRecord",
     "AgentPublicationRecord",
     "ALLOWED_REVIEW_DECISIONS",

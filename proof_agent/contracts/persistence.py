@@ -95,6 +95,24 @@ class ActiveAgentPointerExpectation(FrozenModel):
     version_id: str | None
 
 
+class AgentActivationRecord(FrozenModel):
+    """An existing Published Agent Version activation guarded by exact pointer CAS."""
+
+    activation: ActiveAgentVersion
+    active_pointer_expectation: ActiveAgentPointerExpectation
+
+    @model_validator(mode="after")
+    def require_matching_rollback_origin(self) -> "AgentActivationRecord":
+        if (
+            self.activation.rollback_from_version_id
+            != self.active_pointer_expectation.version_id
+        ):
+            raise ValueError(
+                "activation rollback origin must match active pointer expectation"
+            )
+        return self
+
+
 class AgentPublicationRecord(FrozenModel):
     """The immutable version and active pointer committed in one transaction."""
 

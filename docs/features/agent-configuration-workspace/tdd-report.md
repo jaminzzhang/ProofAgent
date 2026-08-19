@@ -6,15 +6,15 @@
 | --- | --- |
 | 建议结论 | `PARTIAL_VERIFICATION` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1、2、3 已完成本地验证与独立复验 |
+| 模式 | 行为保护重构；Slice 1、2、3、4 已完成本地验证与独立复验 |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation 与 development publication |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation、development publication 与 Agent Version pointer rollback |
 | 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication adapters |
-| 不覆盖范围 | production validation/publish endpoint、正式 Phase F publisher、rollback、Contract/Workflow/Skill 编辑、生产部署 |
+| 不覆盖范围 | production validation/publish endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、Contract/Workflow/Skill 编辑、生产部署 |
 
 ## 3. 测试场景
 
@@ -31,6 +31,10 @@
 | ACW-T09 | publication 只接受当前 Draft revision 的成功且无 blocker validation | authority/consistency | P1 | P1 |
 | ACW-T10 | version、activation 与 audit 原子提交并受 Draft/pointer CAS 保护 | consistency/concurrency | P1 | P1 |
 | ACW-T11 | publish route 只依赖 Workspace | architecture | P1 | P1 |
+| ACW-T12 | rollback target 必须是同一 Agent 的 immutable Published Version | authority | P1 | P1 |
+| ACW-T13 | rollback activation 与 audit 原子提交并受 exact pointer CAS 保护 | consistency/concurrency | P1 | P1 |
+| ACW-T14 | rollback route 只依赖 Workspace，错误 detail 稳定 | architecture/security | P1 | P1 |
+| ACW-T15 | rollback 不修改 version history，不重算 target KSS binding | authority/negative | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -47,6 +51,10 @@
 | ACW-T09 | Draft 有失败 outcome、缺失、旧 revision 或带 blocker 的 Validation Record | 调用 `publish_draft` | 返回稳定 precondition error，不创建 version 或 activation |
 | ACW-T10 | Draft 与 active pointer expectation 均匹配 | 发布 | immutable version、activation 与 audit 同事务提交；冲突不覆盖赢家 |
 | ACW-T11 | 应用只注入 recording Workspace | 调用 publish route | route 不需要 Local store、compiler 或 RunStore |
+| ACW-T12 | target 缺失或属于其他 Agent | 调用 `rollback_version` | 返回稳定 not-found，pointer/audit 不变 |
+| ACW-T13 | target 存在且 current pointer 已读取 | 回滚 | exact CAS、activation 与 audit 同一 UoW；并发冲突不覆盖赢家 |
+| ACW-T14 | 应用只注入 recording Workspace，或 Workspace 抛内部异常 | 调用 rollback route | route 不需要 Local store；返回稳定 404/409/400/500 detail |
+| ACW-T15 | target Published Version 包含 immutable runtime facts | 回滚 | 返回同一 target version 投影；不改任何 Published Version，不调用 Phase F 或部署 rollback |
 
 ## 5. Mock、数据与断言
 
@@ -139,16 +147,38 @@
 | VERIFY-MAIN-5 | 发现项修正后重跑仓库级门禁 | backend、前端、静态与领域检查 | backend 1872 passed、120 skipped、2 deselected；聚焦 141 passed、11 skipped；Dashboard 195、Chat 35；typecheck、两端 build、Ruff、Mypy（348 source files）、domain-context、diff、`uv lock --check` 全部通过 |
 | VERIFY-AGENT-4 | 同一独立子 Agent 复验首轮发现项与完整 Slice 3 | failed outcome、Local writer interleaving/restore、HTTP probes、AST、production isolation、聚焦门禁 | `PASS`；141 passed、11 skipped；Ruff、Mypy（11 files）、domain-context、diff 通过；未发现 P0–P3 未关闭问题 |
 
-## 11. 风险与待确认问题
+## 11. Slice 4 TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 受控实现与行为保护重构 |
+| 公开 interface | `AgentConfigurationWorkspace.rollback_version(...)` |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 不测试的实现细节 | 私有 helper、具体 UUID、SQL 语句形状、Local staging 目录名 |
+| 范围外 | 正式 Phase F publisher、production publication endpoint、Source rollback-Draft、Blue/Green deployment rollback、Contract/Workflow/Skill 编辑、schema、部署 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-8 | Workspace rollback result、activation command 与 route delegation | Workspace/API tests | 因 `AgentActivationRecord` 与 `AgentConfigurationRollback` 不存在而在 collection 阶段失败 |
+| GREEN-8 | Workspace 校验 target，构建 exact pointer expectation，并以同一 UoW 提交 activation 与 `agent.version.rolled_back` audit | Control、contracts、persistence ports | Workspace/API 聚焦 83 passed、4 skipped |
+| REFACTOR-5 | Local/PostgreSQL adapter 实现同一 activation port；删除 `LocalAgentConfigurationStore.rollback_active_version` 和 route direct-store 调用；补稳定错误映射 | adapters、Delivery、store/API/CLI tests | 162 passed、26 skipped；Ruff、聚焦 Mypy、diff 通过 |
+| RED-9 | 独立复验前自审与首轮 finding 锁定兼容、KSS binding、command invariant、非 RuntimeError 500、专属权限和 strict body | Workspace/API/port tests | 各场景在缺少对应保护或测试时失败；`OSError` 旧路径返回 plain 500 |
+| GREEN-9 | 补 exact KSS binding、empty/already-active pointer、record invariant、任意非预期 Exception 稳定 500、rollback 专属 403/Workspace-not-called 与 unknown field 422 | Workspace、Delivery、tests | 新增场景通过；独立子 Agent 首轮 P2 权限证据缺口已关闭 |
+| VERIFY-MAIN-6 | 主代理执行切片聚焦与仓库级门禁 | backend、前端、静态与领域检查 | 聚焦 205 passed、28 skipped；backend 1891 passed、122 skipped、2 deselected；Dashboard 195、Chat 35；两端 `tsc -b` build、Ruff、Mypy（348 source files）、domain-context、diff、`uv lock --check` 全部通过；1 个既有 Authlib warning |
+| ENV-1 | 首轮 backend 与 lock 检查受沙箱限制 | 8 个 loopback tests、uv cache | 允许本机回环和 uv cache 后按原命令重跑通过，不计为产品缺陷 |
+| VERIFY-AGENT-5 | 独立子 Agent 按 Slice 4 清单复验 | scope→diff、权限、target identity、CAS、事务/audit、KSS binding、旧实现删除、错误映射、范围隔离 | `PASS / NO_BLOCKING_FINDINGS`；200 passed、27 skipped；Ruff、Mypy（7 source files）、domain-context、diff 与 deletion grep 通过；首轮 P2 权限证据缺口已关闭 |
+
+## 12. 风险与待确认问题
 
 | 问题 | 等级 | 影响 | 建议动作 | 建议确认人 |
 | --- | --- | --- | --- | --- |
-| rollback、Contract/Workflow/Skill 编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 3 中扩张范围 | 研发负责人未指定 |
+| Contract/Workflow/Skill 编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 4 中扩张范围 | 研发负责人未指定 |
 | 本地 adapter 在 publication CAS 前可能留下 derived compiled package | P2 | 不形成 authoritative Published Version 或 active pointer，但需要后续清理策略 | 在 artifact lifecycle 切片中定义清理与重试；当前以 CAS 失败关闭权威写入 | 研发负责人未指定 |
 | Local UoW 未证明双目录替换中进程崩溃的 durable crash-atomic recovery | P2 | development-only 无锁 reader 可能短暂观察切换；不能作为生产事务证据 | 保持 S0 development-only；生产继续使用 PostgreSQL，若提升本地耐久等级需独立设计 generation/recovery protocol | 研发负责人未指定 |
+| 真实 PostgreSQL rollback 并发集成环境未配置 | P1 | 9 个 PostgreSQL 测试跳过；advisory lock/CAS 只有代码、SQL 与测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行集成与并发场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
 | 本地验证不等于生产批准 | P1 | 不能证明真实 PostgreSQL/部署状态 | 维持 `PARTIAL_VERIFICATION` | 发布负责人未指定 |
 
-## 12. 上下文更新建议
+## 13. 上下文更新建议
 
 | 建议位置 | 类型 | 内容摘要 | 原因 |
 | --- | --- | --- | --- |

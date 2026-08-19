@@ -14,6 +14,7 @@ import proof_agent.bootstrap.composition as bootstrap_composition
 import proof_agent.delivery.agent_configuration_validation as validation_adapter_module
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
+    ActiveAgentVersion,
     AgentDraftRecord,
     AgentValidationRecord,
     AuditActorFacts,
@@ -29,11 +30,13 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationConflict,
     AgentConfigurationNotFound,
     AgentConfigurationPublicationRejected,
+    AgentConfigurationRollback,
     AgentConfigurationValidationExecution,
     AgentConfigurationValidationResult,
 )
 from proof_agent.delivery.configuration_api import (
     publish_config_draft,
+    rollback_config_version,
     router as configuration_router,
 )
 from proof_agent.errors import ProofAgentError
@@ -314,6 +317,25 @@ def test_agent_config_publish_requires_agent_publish_permission(tmp_path: Path) 
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Operator lacks required permission: agent.publish"
+
+
+def test_agent_config_rollback_requires_agent_publish_permission() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        {OperatorPermission.AGENT_EDIT, OperatorPermission.AGENT_VIEW}
+    )
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_1/rollback",
+        json={},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator lacks required permission: agent.publish"
+    assert workspace.rollback_calls == []
 
 
 def test_tool_source_descriptors_include_brave_search(tmp_path: Path) -> None:
@@ -1306,10 +1328,52 @@ def test_publication_route_delegates_to_workspace_without_concrete_store() -> No
     assert ".publish_version(" not in route_source
 
 
+def test_rollback_route_delegates_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version_id"] == "version_route_1"
+    assert response.json()["rollback_from_version_id"] == "version_route_2"
+    assert workspace.rollback_calls[0]["agent_id"] == "agent_alpha"
+    assert workspace.rollback_calls[0]["version_id"] == "version_route_1"
+    assert isinstance(workspace.rollback_calls[0]["actor"], AuditActorFacts)
+    route_source = getsource(rollback_config_version)
+    assert "LocalAgentConfigurationStore" not in route_source
+    assert "_get_configuration_store" not in route_source
+    assert "rollback_active_version" not in route_source
+    assert ".get_version(" not in route_source
+
+
+def test_rollback_route_rejects_unknown_request_fields_before_workspace() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
+        json={"unexpected": True},
+    )
+
+    assert response.status_code == 422
+    assert workspace.rollback_calls == []
+
+
 class _RecordingValidationWorkspace:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.publication_calls: list[dict[str, Any]] = []
+        self.rollback_calls: list[dict[str, Any]] = []
 
     def validate_draft(self, **kwargs: Any) -> AgentConfigurationValidationResult:
         self.calls.append(kwargs)
@@ -1379,6 +1443,34 @@ class _RecordingValidationWorkspace:
             published_by="local-user",
         )
 
+    def rollback_version(self, **kwargs: Any) -> AgentConfigurationRollback:
+        self.rollback_calls.append(kwargs)
+        restored = PublishedAgentVersion(
+            agent_id="agent_alpha",
+            version_id="version_route_1",
+            source_draft_id="draft_alpha",
+            validation_run_id="run_route_1",
+            display_name="Agent Alpha",
+            purpose="Validate governed responses.",
+            contract_bundle=ContractBundle(
+                agent_yaml="schema_version: 3\n",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+            ),
+            published_at="2026-08-19T07:00:00Z",
+            published_by="local-user",
+        )
+        return AgentConfigurationRollback(
+            activation=ActiveAgentVersion(
+                agent_id=restored.agent_id,
+                version_id=restored.version_id,
+                activated_at="2026-08-19T08:00:00Z",
+                activated_by="local-user",
+                rollback_from_version_id="version_route_2",
+            ),
+            restored=restored,
+        )
+
 
 class _RaisingValidationWorkspace:
     def __init__(self, error: Exception) -> None:
@@ -1388,6 +1480,9 @@ class _RaisingValidationWorkspace:
         raise self._error
 
     def publish_draft(self, **_: Any) -> PublishedAgentVersion:
+        raise self._error
+
+    def rollback_version(self, **_: Any) -> AgentConfigurationRollback:
         raise self._error
 
 
@@ -1489,6 +1584,62 @@ def test_publication_route_maps_workspace_errors_to_stable_details(
     response = TestClient(application, raise_server_exceptions=False).post(
         "/api/config/agents/agent_alpha/drafts/draft_alpha/publish",
         json={"validation_run_id": "run_route_1"},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    (
+        (
+            AgentConfigurationNotFound(
+                code="agent_version_not_found",
+                detail="The requested Published Agent Version was not found.",
+            ),
+            404,
+            "agent_version_not_found",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="The Active Agent Version changed.",
+            ),
+            409,
+            "active_agent_version_conflict",
+        ),
+        (
+            ValueError("internal-path:/private/tmp/rollback"),
+            400,
+            "agent_version_rollback_invalid",
+        ),
+        (
+            RuntimeError("internal-path:/private/tmp/rollback"),
+            500,
+            "agent_version_rollback_failed",
+        ),
+        (
+            OSError("internal-path:/private/tmp/rollback"),
+            500,
+            "agent_version_rollback_failed",
+        ),
+    ),
+)
+def test_rollback_route_maps_workspace_errors_to_stable_details(
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
+        json={},
     )
 
     assert response.status_code == expected_status

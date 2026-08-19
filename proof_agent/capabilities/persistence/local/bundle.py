@@ -28,6 +28,7 @@ from proof_agent.contracts.agent_configuration import (
     PublishedAgentVersion,
 )
 from proof_agent.contracts.persistence import (
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     AuditMetadataRecord,
@@ -81,6 +82,12 @@ class _LocalAgentLifecycleRepository:
             publication,
             expected_draft_revision=expected_draft_revision,
         )
+
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        return self._store.activate_version_record(activation)
 
     def get_published(
         self,

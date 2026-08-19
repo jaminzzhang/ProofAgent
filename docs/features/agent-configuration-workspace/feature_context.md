@@ -10,7 +10,7 @@
 | 所属版本 | 待确认；本轮仅处理本地架构切片 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
 | 当前状态 | `PARTIAL_VERIFICATION` |
-| 当前切片 | Slice 3：development Draft publication authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS` |
+| 当前切片 | Slice 4：Agent Version rollback authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS` |
 
 ## 2. 需求目标与范围
 
@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 深化 Workspace module | 把 Draft inventory、读取、元数据更新、版本列表、validation 和 development publication 收进 Control-owned module | Delivery 通过稳定 interface 使用生命周期规则；validation/publish route 不再自行组合 concrete store 与业务规则 |
 | 建立 focused persistence seam | module 依赖 `ConfigurationUnitOfWork` 与 `AgentLifecycleRepository`，不依赖 Local 或 PostgreSQL 实现 | Local 与 PostgreSQL adapter 继续满足同一 port；Control 不 import adapter |
-| 保持生命周期权威 | 元数据更新保持 revision CAS、原子审计和 production sole-Agent 限制 | 现有 API 响应、安全门禁和 publication 权威不变 |
+| 保持生命周期权威 | 元数据更新、publication 与 rollback 分别保持 CAS、原子审计和 production sole-Agent 限制 | 现有 API 响应、安全门禁和正式 Phase F publication 权威不变 |
 
 ### 范围内
 
@@ -30,13 +30,14 @@
 | 行为测试 | 通过 Workspace interface 验证多 Agent 读取、sole-Agent 限制、CAS 与审计 | interface 是测试表面 |
 | Draft validation orchestration | Workspace 约束执行证据身份、revision CAS、Validation Record 与审计；Local adapter 执行编译、Harness、Run 和可选 Full Capture | Delivery 只做权限与 HTTP 映射；validation 不发布、不激活 |
 | Development Draft publication | Workspace 校验当前 Draft revision 的成功 Validation Record，生成 immutable version，并用 Draft CAS、active pointer CAS 和审计原子发布 | publish route 不直接读取 Local store；失败时 Published Version 与 active pointer 不变 |
+| Agent Version rollback | Workspace 校验 target Published Version，以 exact active-pointer expectation 原子切换 activation 与全局 audit | rollback route 不直接读取 Local store；不修改 version history 或重算 KSS binding |
 
 ### 范围外
 
 | 范围项 | 排除原因 | 影响 |
 | --- | --- | --- |
-| rollback 迁移 | 属于后续独立垂直切片 | 现有 rollback 行为保持不变 |
 | 正式生产 Phase F publication | `ProductionAgentPublicationService` 还包含 KSS release evidence、online smoke 与生产 admission | 不与 development Draft publication 合并；不生成生产发布结论 |
+| Blue/Green deployment rollback | 属于应用发布与运行角色 fencing 协议 | 不与 Agent Version pointer rollback 合并 |
 | Contract、Workflow、Skill Pack 编辑迁移 | 需要独立编译与校验 module 设计 | 本轮仍由现有 development route 处理 |
 | 数据库 schema、迁移和生产部署 | 当前 focused ports 已可承载本切片 | 不生成生产发布结论 |
 | 删除整个 `LocalAgentConfigurationStore` | 仍有未迁移的 development-only 编辑用例 | 只删除本切片 Delivery 的具体 store 依赖 |
@@ -52,8 +53,9 @@
 | MAIN-4 | 版本列表 | `agent_id` | 同一 Workspace 读取 Published Versions 与 active pointer | 稳定版本投影 | 空列表与 active pointer | P1 | 已确认 |
 | MAIN-5 | Draft validation | question、capture 策略、actor | adapter 产生执行证据；Workspace 校验身份并以 revision CAS 附加 Validation Record 与审计 | 新 Draft revision 与 validation evidence | scope、身份、capture 互斥、CAS、事务失败 | P1 | 已确认 |
 | MAIN-6 | Draft publication | 当前 Draft、Validation Run、actor | Workspace 校验 validation outcome/freshness/blockers，构建 immutable version，并原子更新 active pointer 与 audit | Published Agent Version + Active Agent Version | failed outcome、Draft CAS、pointer CAS、审计、无 rollback | P1 | 已完成；独立复验 `PASS` |
+| MAIN-7 | Agent Version rollback | target Published Version、actor | Workspace 读取当前 pointer，以 exact expectation 原子切换 activation 与 audit | rollback result + target immutable binding | not-found、pointer CAS、事务失败、KSS binding、历史不变 | P1 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS` |
 | BRANCH-1 | adapter 失败 | Local/PostgreSQL repository 抛错 | 不建立 fallback，由 Delivery 映射稳定错误 | 无部分写入 | fault 与 rollback 行为 | P1 | 已确认 |
-| BOUND-1 | rollback | publication 完成 | 不回滚到历史版本 | rollback 权威不变 | 负向回归 | P1 | 已确认 |
+| BOUND-1 | rollback 范围 | Agent Version rollback 完成 | 不执行 Source rollback-Draft、Phase F 或 Blue/Green deployment rollback | 其他权威不变 | 负向回归 | P1 | 已确认 |
 
 ## 4. 核心业务规则
 
@@ -66,6 +68,7 @@
 | ACW-R05 | 验证证据 | Validation execution、Full Capture 与 Draft 必须具有一致的 Run/Draft 身份；capture 与 capture error 互斥 | adapter evidence | Validation Record 或稳定失败 | 非预期错误不向 HTTP 暴露内部 detail | 已确认 |
 | ACW-R06 | 发布权威 | 只有当前 Draft revision 的成功且无 blocker Validation Record 可以发布；version、activation 与全局 audit 必须在一个 Configuration UoW 内提交 | Draft、validation run、active pointer expectation | immutable Published Agent Version | 失败 outcome 拒绝；不自动 rollback，不调用正式生产 Phase F publisher | 已确认 |
 | ACW-R07 | 本地并发 | Local Configuration UoW 必须在同一外置权威锁下复制事务基线，并在安装前重验 configuration 与 audit 的真实目标摘要 | 两个交错 staging UoW | 单一赢家或稳定 conflict | 失败事务不得覆盖 version、active pointer 或 audit | 已确认 |
+| ACW-R08 | 回滚权威 | Agent Version Rollback 只选择既有 immutable Published Agent Version；activation 与全局 audit 在同一 UoW 提交，并以读取到的 active pointer 做 exact CAS | target version、current pointer、actor | 新 Active Agent Version 与 rollback result | 不改 history；不重算或降级 target KSS binding；不调用部署 rollback | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -74,11 +77,11 @@
 | 领域业务逻辑严谨性 | 是 | Draft 与 Published Version 分离 | 无 | P1 |
 | 金额与关键数值精度 | 否 | 不处理金额 | 无 | NONE |
 | 交易与数据一致性 | 是 | Configuration UoW 原子提交 | 无 | P1 |
-| 状态流转 | 是 | 修改 Draft、附加 Validation Record，或发布 immutable version 并推进 active pointer | rollback 另行处理 | P1 |
+| 状态流转 | 是 | 修改 Draft、附加 Validation Record、发布 immutable version，或把 active pointer 切换到既有 version | 无 | P1 |
 | 幂等与并发 | 是 | revision CAS 保持 | 无 | P1 |
 | 权限与审计 | 是 | Delivery 权限不变；Workspace 追加 audit | 无 | P1 |
 | 隐私与适用监管/合规 | 是 | audit 只记录 trace-safe metadata | 无 | P2 |
-| 生产变更与回滚 | 是 | 本切片只改变 development active pointer；不执行部署或正式生产发布 | 正式生产发布与 rollback 另行确认 | P1 |
+| 生产变更与回滚 | 是 | 本切片只迁移 Agent Version pointer rollback authority；不执行部署或正式生产发布 | 正式生产发布和 Blue/Green rollback 另行确认 | P1 |
 
 ## 6. 影响范围
 
@@ -104,7 +107,7 @@
 
 ## 8. 待确认问题
 
-无未关闭 P0/P1 问题。Slice 3 只迁移 development Draft publication；正式生产 Phase F publication、rollback 和 Contract 编辑需要分别进入 Scope。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
+无未关闭 P0/P1 准入问题。Slice 4 只迁移 Agent Version pointer rollback；正式生产 Phase F publication、Blue/Green deployment rollback 和 Contract 编辑不在范围内。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
 
 ## 9. Slice 2：Draft validation orchestration
 
@@ -125,3 +128,13 @@
 | 范围外 | rollback、production publish endpoint、正式 Phase F release publisher、Contract/Workflow/Skill 编辑、schema、部署 |
 | 验收标准 | publish route 不再组合 compiler 或 Local store；只有当前 Draft revision 的成功 validation 可发布；version、activation 与 audit 原子提交；真实 Local 交错事务与 Draft/pointer 冲突失败关闭；现有 API 响应保持兼容 |
 | 最高风险 | P1：错误复用旧 Validation Run 或遗漏 active pointer expectation 会把未经当前配置验证的版本设为 active |
+
+## 11. Slice 4：Agent Version rollback authority
+
+| 项 | 内容 |
+| --- | --- |
+| 目标 | 让 development rollback route 通过 `AgentConfigurationWorkspace.rollback_version(...)` 完成 target 校验、exact active-pointer CAS、activation/audit 原子提交和 immutable KSS binding 恢复投影 |
+| 范围内 | Workspace rollback interface、adapter-neutral activation command、Local/PostgreSQL lifecycle adapters、development API route、稳定错误映射、旧 direct-store rollback 删除 |
+| 范围外 | 正式 Phase F publisher、production publication endpoint、Source rollback-Draft、Blue/Green deployment rollback、Contract/Workflow/Skill 编辑、schema、部署 |
+| 验收标准 | route 不再调用 concrete store；target 必须属于 Agent；并发 writer 只允许一个赢家；activation 与 audit 原子；历史 versions 不变；响应保留 target immutable KSS binding |
+| 最高风险 | P1：缺少 exact pointer CAS 或把 audit 放在事务外，会让并发回滚覆盖较新的 activation，或留下不可审计的 active state |

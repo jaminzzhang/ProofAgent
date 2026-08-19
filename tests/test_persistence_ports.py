@@ -22,6 +22,8 @@ from proof_agent.contracts import (
     RunPurpose,
 )
 from proof_agent.contracts.persistence import (
+    ActiveAgentPointerExpectation,
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     AuditActorFacts,
@@ -117,6 +119,19 @@ class _InMemoryAgentLifecycleRepository:
         self._published[version_key] = publication
         self._active[version.agent_id] = publication.activation
         return publication
+
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        value = activation.activation
+        if (value.agent_id, value.version_id) not in self._published:
+            raise PersistenceNotFoundError(
+                resource_type="agent_version",
+                resource_id=value.version_id,
+            )
+        self._active[value.agent_id] = value
+        return activation
 
     def get_published(
         self, agent_id: str, version_id: str
@@ -430,6 +445,48 @@ def test_agent_lifecycle_port_atomically_publishes_and_activates_version() -> No
     assert repository.get_published(publication.version.agent_id, "v1") == publication.version
     assert repository.list_published(publication.version.agent_id) == (publication.version,)
     assert repository.get_active(publication.version.agent_id) == publication.activation
+
+
+def test_agent_lifecycle_port_activates_an_existing_immutable_version() -> None:
+    repository = _InMemoryAgentLifecycleRepository()
+    _round_trip_draft(repository)
+    publication = _publication()
+    repository.publish_version(publication, expected_draft_revision=1)
+    activation = AgentActivationRecord(
+        activation=ActiveAgentVersion(
+            agent_id=publication.version.agent_id,
+            version_id=publication.version.version_id,
+            activated_at="2026-07-15T00:02:00Z",
+            activated_by="operator-2",
+            rollback_from_version_id=publication.version.version_id,
+        ),
+        active_pointer_expectation=ActiveAgentPointerExpectation(
+            version_id=publication.version.version_id
+        ),
+    )
+
+    assert repository.activate_version(activation) == activation
+    assert repository.get_active(publication.version.agent_id) == activation.activation
+
+
+def test_agent_activation_record_binds_rollback_origin_to_pointer_expectation() -> None:
+    try:
+        AgentActivationRecord(
+            activation=ActiveAgentVersion(
+                agent_id="agent_alpha",
+                version_id="version_target",
+                activated_at="2026-07-15T00:02:00Z",
+                activated_by="operator-2",
+                rollback_from_version_id="version_current",
+            ),
+            active_pointer_expectation=ActiveAgentPointerExpectation(
+                version_id="version_stale"
+            ),
+        )
+    except ValidationError as exc:
+        assert "rollback origin must match active pointer expectation" in str(exc)
+    else:
+        raise AssertionError("rollback origin and pointer expectation must match")
 
 
 def test_agent_lifecycle_port_publish_conflict_leaves_no_partial_version() -> None:

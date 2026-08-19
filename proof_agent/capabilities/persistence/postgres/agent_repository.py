@@ -25,6 +25,7 @@ from proof_agent.contracts.agent_configuration import (
     PublishedAgentVersion,
 )
 from proof_agent.contracts.persistence import (
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     PersistenceConflictError,
@@ -285,6 +286,77 @@ class PostgresAgentLifecycleRepository:
                 )
             )
         return publication
+
+    def activate_version(
+        self,
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        """Activate one existing immutable version behind exact active-pointer CAS."""
+
+        value = activation.activation
+        version_uuid = uuid_value(value.version_id, field="version_id")
+        expected_version_id = activation.active_pointer_expectation.version_id
+        expected_uuid = (
+            None
+            if expected_version_id is None
+            else uuid_value(
+                expected_version_id,
+                field="expected_active_version_id",
+            )
+        )
+        with write_connection(self._connection_source) as connection:
+            connection.execute(
+                sa.select(
+                    sa.func.pg_advisory_xact_lock(
+                        sa.func.hashtextextended(value.agent_id, 0)
+                    )
+                )
+            ).scalar_one()
+            actual_uuid = connection.execute(
+                sa.select(active_agent_versions.c.version_id)
+                .where(active_agent_versions.c.agent_id == value.agent_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if actual_uuid != expected_uuid:
+                raise PersistencePointerConflictError(
+                    resource_type="active_agent_version",
+                    resource_id=value.agent_id,
+                    expected_pointer=(
+                        None if expected_uuid is None else str(expected_uuid)
+                    ),
+                    actual_pointer=None if actual_uuid is None else str(actual_uuid),
+                )
+            target_exists = connection.execute(
+                sa.select(agent_versions.c.version_id).where(
+                    agent_versions.c.agent_id == value.agent_id,
+                    agent_versions.c.version_id == version_uuid,
+                )
+            ).scalar_one_or_none()
+            if target_exists is None:
+                raise PersistenceNotFoundError(
+                    resource_type="agent_version",
+                    resource_id=value.version_id,
+                )
+            activation_insert = postgres_insert(active_agent_versions).values(
+                agent_id=value.agent_id,
+                version_id=version_uuid,
+                activation_json=model_json(value),
+                activated_at=timestamp_value(
+                    value.activated_at,
+                    field="activated_at",
+                ),
+            )
+            connection.execute(
+                activation_insert.on_conflict_do_update(
+                    index_elements=[active_agent_versions.c.agent_id],
+                    set_={
+                        "version_id": activation_insert.excluded.version_id,
+                        "activation_json": activation_insert.excluded.activation_json,
+                        "activated_at": activation_insert.excluded.activated_at,
+                    },
+                )
+            )
+        return activation
 
     def get_published(
         self,

@@ -18,6 +18,7 @@ import yaml  # type: ignore[import-untyped]
 from proof_agent.bootstrap.validation import validate_secret_safe_params
 from proof_agent.contracts import (
     ActiveAgentVersion,
+    AgentActivationRecord,
     AgentDraftRecord,
     AgentPublicationRecord,
     ConfigurationOperation,
@@ -31,6 +32,7 @@ from proof_agent.contracts import (
     PublishedWorkflowStageConfigurationSnapshot,
     PersistenceConflictError,
     PersistenceInvariantError,
+    PersistenceNotFoundError,
     PersistencePointerConflictError,
     ResolvedKnowledgeBindingSet,
     ResolvedWorkflowStageRuntimeConfiguration,
@@ -674,27 +676,34 @@ class LocalAgentConfigurationStore:
             artifact_path=authority_path,
         )
 
-    def rollback_active_version(
+    def activate_version_record(
         self,
-        *,
-        agent_id: str,
-        version_id: str,
-        actor: str,
-    ) -> ActiveAgentVersion:
+        activation: AgentActivationRecord,
+    ) -> AgentActivationRecord:
+        """Apply an existing-version activation with an exact pointer precondition."""
+
+        value = activation.activation
         with locked(self._store_lock_path(), timeout_seconds=STORE_LOCK_TIMEOUT_SECONDS):
-            self._require_canonical_seed_authority_allows_agent_unlocked(agent_id)
-            if self.get_version(agent_id, version_id) is None:
-                raise KeyError(f"Published Agent Version not found: {agent_id}/{version_id}")
-            current = self.get_active_version(agent_id)
-            active = ActiveAgentVersion(
-                agent_id=agent_id,
-                version_id=version_id,
-                activated_at=_now(),
-                activated_by=actor,
-                rollback_from_version_id=current.version_id if current else None,
+            self._require_canonical_seed_authority_allows_agent_unlocked(
+                value.agent_id
             )
-            self._write_active_version(active)
-            return active
+            if self.get_version(value.agent_id, value.version_id) is None:
+                raise PersistenceNotFoundError(
+                    resource_type="agent_version",
+                    resource_id=value.version_id,
+                )
+            current = self.get_active_version(value.agent_id)
+            actual_pointer = None if current is None else current.version_id
+            expected_pointer = activation.active_pointer_expectation.version_id
+            if actual_pointer != expected_pointer:
+                raise PersistencePointerConflictError(
+                    resource_type="active_agent_version",
+                    resource_id=value.agent_id,
+                    expected_pointer=expected_pointer,
+                    actual_pointer=actual_pointer,
+                )
+            self._write_active_version(value)
+            return activation
 
     def create_model_connection(
         self,
