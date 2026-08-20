@@ -212,6 +212,7 @@ export function AgentDetailPage() {
     await runAction('workflow', async () => {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
+        ...(draft?.revision === undefined ? {} : { expected_revision: draft.revision }),
       })
       setStatus(successMessage)
       refresh()

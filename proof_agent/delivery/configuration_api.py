@@ -157,6 +157,7 @@ class ContractUpdateRequest(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     tools_yaml: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class BusinessFlowSkillPackCreateRequest(BaseModel):
@@ -947,8 +948,21 @@ def get_config_draft_contract(
     """Return the preserved Contract View for a Draft Agent."""
 
     _require_operator(identity, OperatorPermission.AGENT_VIEW)
-    draft = _require_draft(_get_configuration_store(app_request), agent_id, draft_id)
-    return draft.contract_bundle.model_dump(mode="json")
+    try:
+        record = _get_agent_configuration_workspace(app_request).get_draft(
+            agent_id=agent_id,
+            draft_id=draft_id,
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except ProofAgentError as exc:
+        raise _proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_contract_read_failed",
+        ) from exc
+    return record.draft.contract_bundle.model_dump(mode="json")
 
 
 @router.get("/config/agents/{agent_id}/drafts/{draft_id}/skills")
@@ -1088,42 +1102,38 @@ def update_config_draft_contract(
     app_request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
 ) -> dict[str, Any]:
-    """Update the preserved Contract View and validate it as an Agent Package."""
+    """Validate and update the preserved Contract View through the Workspace."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
-    agent_yaml = (
-        request.agent_yaml if request.agent_yaml is not None else draft.contract_bundle.agent_yaml
-    )
-    bundle = ContractBundle(
-        agent_yaml=agent_yaml,
-        policy_yaml=request.policy_yaml
-        if request.policy_yaml is not None
-        else draft.contract_bundle.policy_yaml,
-        tools_yaml=request.tools_yaml
-        if request.tools_yaml is not None
-        else draft.contract_bundle.tools_yaml,
-        extra_files=draft.contract_bundle.extra_files,
-        advanced_fields=draft.contract_bundle.advanced_fields,
-    )
-    candidate = _draft_with_contract_bundle(draft, bundle)
+    _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    workspace = _get_agent_configuration_workspace(app_request)
     try:
-        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        _validate_business_flow_skill_packs(manifest, package_dir / "agent.yaml")
+        expected_revision = request.expected_revision
+        if expected_revision is None:
+            expected_revision = workspace.get_draft(
+                agent_id=agent_id,
+                draft_id=draft_id,
+            ).revision
+        updated = workspace.update_contract(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+            agent_yaml=request.agent_yaml,
+            policy_yaml=request.policy_yaml,
+            tools_yaml=request.tools_yaml,
+            actor=_workspace_audit_actor(identity),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
     except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="agent_contract_invalid") from exc
     except ProofAgentError as exc:
-        raise _proof_agent_http_exception(exc) from exc
-
-    updated = store.update_draft(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        contract_bundle=bundle,
-        actor=actor,
-    )
-    return updated.contract_bundle.model_dump(mode="json")
+        raise HTTPException(status_code=400, detail="agent_contract_invalid") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_contract_update_failed",
+        ) from exc
+    return updated.draft.contract_bundle.model_dump(mode="json")
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages")
@@ -1912,14 +1922,6 @@ def _dump_agent_yaml(raw: dict[str, Any]) -> str:
             allow_unicode=True,
             width=1000,
         ),
-    )
-
-
-def _validate_business_flow_skill_packs(manifest: Any, manifest_path: Path) -> None:
-    load_business_flow_skill_pack_set(
-        manifest,
-        template=resolve_workflow_template(manifest.workflow.template),
-        manifest_path=manifest_path,
     )
 
 

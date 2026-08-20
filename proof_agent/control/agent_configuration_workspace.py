@@ -196,6 +196,16 @@ class AgentConfigurationPublicationValidator(Protocol):
     ) -> None: ...
 
 
+class AgentConfigurationContractValidator(Protocol):
+    """Validate one complete Contract candidate without owning persistence."""
+
+    def validate(
+        self,
+        *,
+        draft: DraftAgent,
+    ) -> None: ...
+
+
 class AgentConfigurationWorkflowStageInspector(Protocol):
     """Compile and inspect one Draft without owning lifecycle writes or rules."""
 
@@ -250,6 +260,7 @@ class AgentConfigurationWorkspace:
         template_bundle: ContractBundle,
         validation_executor: AgentConfigurationValidationExecutor | None = None,
         publication_validator: AgentConfigurationPublicationValidator | None = None,
+        contract_validator: AgentConfigurationContractValidator | None = None,
         workflow_stage_inspector: AgentConfigurationWorkflowStageInspector | None = None,
         scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -259,6 +270,7 @@ class AgentConfigurationWorkspace:
         self._template_bundle = template_bundle
         self._validation_executor = validation_executor
         self._publication_validator = publication_validator
+        self._contract_validator = contract_validator
         self._workflow_stage_inspector = workflow_stage_inspector
         self._scope = scope
         self._clock = clock
@@ -518,6 +530,110 @@ class AgentConfigurationWorkspace:
                         ),
                         category=AuditCategory.CONFIGURATION,
                         event_type="agent.draft.updated",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ) from exc
+        return saved
+
+    def update_contract(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        agent_yaml: str | None,
+        policy_yaml: str | None,
+        tools_yaml: str | None,
+        actor: AuditActorFacts,
+    ) -> AgentDraftRecord:
+        """Validate and atomically save one complete raw Contract candidate."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        if self._contract_validator is None:
+            raise AgentConfigurationConflict(
+                code="agent_contract_update_unavailable",
+                detail="Agent Contract editing is unavailable.",
+            )
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if current.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            )
+        current_bundle = current.draft.contract_bundle
+        bundle = ContractBundle(
+            agent_yaml=(
+                current_bundle.agent_yaml if agent_yaml is None else agent_yaml
+            ),
+            policy_yaml=(
+                current_bundle.policy_yaml if policy_yaml is None else policy_yaml
+            ),
+            tools_yaml=(
+                current_bundle.tools_yaml if tools_yaml is None else tools_yaml
+            ),
+            extra_files=current_bundle.extra_files,
+            advanced_fields=current_bundle.advanced_fields,
+        )
+        now = _timestamp(self._clock())
+        metadata = {
+            "expected_revision": expected_revision,
+            "changed_files": [
+                name
+                for name, value in (
+                    ("agent.yaml", agent_yaml),
+                    ("policy.yaml", policy_yaml),
+                    ("tools.yaml", tools_yaml),
+                )
+                if value is not None
+            ],
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{draft_id}:contract:{expected_revision + 1}:operation",
+                )
+            ),
+            operation=ConfigurationOperation.UPDATED,
+            actor=actor.subject,
+            created_at=now,
+            summary="Updated Agent Contract.",
+            metadata=metadata,
+        )
+        candidate = current.draft.model_copy(
+            update={
+                "contract_bundle": bundle,
+                "updated_at": now,
+                "updated_by": actor.subject,
+                "operation_audit": (*current.draft.operation_audit, operation),
+            }
+        )
+        self._contract_validator.validate(draft=candidate)
+        try:
+            with self._unit_of_work_factory() as uow:
+                saved = uow.agents.save_draft(
+                    candidate,
+                    expected_revision=expected_revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.draft.contract_updated",
                         outcome=AuditOutcome.SUCCEEDED,
                         actor=actor,
                         occurred_at=now,

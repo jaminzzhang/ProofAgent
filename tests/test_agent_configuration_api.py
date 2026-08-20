@@ -35,10 +35,12 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationValidationResult,
 )
 from proof_agent.delivery.configuration_api import (
+    get_config_draft_contract,
     preview_config_draft_workflow_stage,
     publish_config_draft,
     rollback_config_version,
     router as configuration_router,
+    update_config_draft_contract,
     update_config_draft_workflow_stages,
 )
 from proof_agent.errors import ProofAgentError
@@ -329,6 +331,30 @@ def test_workflow_stage_routes_preserve_edit_and_validate_permissions() -> None:
     )
     assert workspace.workflow_stage_update_calls == []
     assert workspace.workflow_stage_preview_calls == []
+
+
+def test_contract_routes_preserve_view_and_edit_permissions() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = _StaticOperatorIdentityProvider(set())
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    read = client.get(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/contract"
+    )
+    update = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/contract",
+        json={"expected_revision": 4, "agent_yaml": "name: agent_alpha\n"},
+    )
+
+    assert read.status_code == 403
+    assert read.json()["detail"] == "Operator lacks required permission: agent.view"
+    assert update.status_code == 403
+    assert update.json()["detail"] == "Operator lacks required permission: agent.edit"
+    assert workspace.contract_read_calls == []
+    assert workspace.contract_update_calls == []
 
 
 def test_agent_config_publish_requires_agent_publish_permission(tmp_path: Path) -> None:
@@ -1074,14 +1100,22 @@ def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
 def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_enterprise_qa(client)
+    loaded_draft = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
+    ).json()
     contract = client.get(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
     ).json()
     updated_yaml = contract["agent_yaml"].replace("  top_k: 2", "  top_k: 1")
+    compiled_validation = _configuration_store(client).root_dir / "compiled_validation"
+    assert not compiled_validation.exists()
 
     updated = client.patch(
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
-        json={"agent_yaml": updated_yaml},
+        json={
+            "expected_revision": loaded_draft["revision"],
+            "agent_yaml": updated_yaml,
+        },
     )
 
     assert updated.status_code == 200
@@ -1090,6 +1124,61 @@ def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path
         f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
     )
     assert "  top_k: 1" in loaded.json()["agent_yaml"]
+    assert not compiled_validation.exists()
+
+
+def test_update_contract_view_rejects_stale_revision_without_overwriting(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    before = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+
+    response = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={
+            "expected_revision": 999,
+            "agent_yaml": before["agent_yaml"].replace("top_k: 2", "top_k: 1"),
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "agent_draft_revision_conflict"}
+    after = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
+    ).json()
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    "invalid_agent_yaml",
+    (
+        "name: [\n",
+        "name: agent_without_workflow\npurpose: invalid candidate\n",
+    ),
+)
+def test_update_contract_view_rejects_invalid_candidate_without_path_leakage(
+    tmp_path: Path,
+    invalid_agent_yaml: str,
+) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    loaded_draft = client.get(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
+    ).json()
+
+    response = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
+        json={
+            "expected_revision": loaded_draft["revision"],
+            "agent_yaml": invalid_agent_yaml,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "proof-agent-contract-" not in response.text
+    assert "/private/" not in response.text
+    assert str(tmp_path) not in response.text
 
 
 @pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
@@ -1459,6 +1548,60 @@ def test_rollback_route_rejects_unknown_request_fields_before_workspace() -> Non
     assert workspace.rollback_calls == []
 
 
+def test_contract_routes_delegate_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    read = client.get(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/contract"
+    )
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/contract",
+        json={
+            "expected_revision": 4,
+            "agent_yaml": "name: updated_agent_alpha\n",
+        },
+    )
+
+    assert read.status_code == 200
+    assert read.json()["agent_yaml"] == "name: agent_alpha\n"
+    assert workspace.contract_read_calls == [
+        {"agent_id": "agent_alpha", "draft_id": "draft_alpha"}
+    ]
+    assert updated.status_code == 200
+    assert updated.json()["agent_yaml"] == "name: updated_agent_alpha\n"
+    assert workspace.contract_update_calls[0]["expected_revision"] == 4
+    assert workspace.contract_update_calls[0]["policy_yaml"] is None
+    assert isinstance(workspace.contract_update_calls[0]["actor"], AuditActorFacts)
+    for route in (get_config_draft_contract, update_config_draft_contract):
+        route_source = getsource(route)
+        assert "LocalAgentConfigurationStore" not in route_source
+        assert "_get_configuration_store" not in route_source
+        assert "compile_draft_agent" not in route_source
+        assert "load_agent_manifest" not in route_source
+        assert "_draft_with_contract_bundle" not in route_source
+
+
+def test_contract_update_rejects_unknown_fields_before_workspace() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/contract",
+        json={"agent_yaml": "name: agent_alpha\n", "unexpected": True},
+    )
+
+    assert response.status_code == 422
+    assert workspace.contract_update_calls == []
+
+
 def test_workflow_stage_routes_delegate_to_workspace_without_concrete_store() -> None:
     workspace = _RecordingValidationWorkspace()
     application = FastAPI()
@@ -1543,8 +1686,48 @@ class _RecordingValidationWorkspace:
         self.calls: list[dict[str, Any]] = []
         self.publication_calls: list[dict[str, Any]] = []
         self.rollback_calls: list[dict[str, Any]] = []
+        self.contract_read_calls: list[dict[str, Any]] = []
+        self.contract_update_calls: list[dict[str, Any]] = []
         self.workflow_stage_update_calls: list[dict[str, Any]] = []
         self.workflow_stage_preview_calls: list[dict[str, Any]] = []
+
+    def get_draft(self, **kwargs: Any) -> AgentDraftRecord:
+        self.contract_read_calls.append(kwargs)
+        draft = DraftAgent(
+            agent_id="agent_alpha",
+            draft_id="draft_alpha",
+            display_name="Agent Alpha",
+            purpose="Validate governed responses.",
+            contract_bundle=ContractBundle(
+                agent_yaml="name: agent_alpha\n",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+            ),
+            created_at="2026-08-19T05:00:00Z",
+            updated_at="2026-08-19T06:00:00Z",
+            created_by="operator-1",
+            updated_by="local-user",
+        )
+        return AgentDraftRecord(draft=draft, revision=4)
+
+    def update_contract(self, **kwargs: Any) -> AgentDraftRecord:
+        self.contract_update_calls.append(kwargs)
+        current = self.get_draft(
+            agent_id=kwargs["agent_id"],
+            draft_id=kwargs["draft_id"],
+        )
+        self.contract_read_calls.pop()
+        bundle = current.draft.contract_bundle.model_copy(
+            update={
+                key: kwargs[key]
+                for key in ("agent_yaml", "policy_yaml", "tools_yaml")
+                if kwargs[key] is not None
+            }
+        )
+        return AgentDraftRecord(
+            draft=current.draft.model_copy(update={"contract_bundle": bundle}),
+            revision=kwargs["expected_revision"] + 1,
+        )
 
     def update_workflow_stages(self, **kwargs: Any) -> AgentDraftRecord:
         self.workflow_stage_update_calls.append(kwargs)
@@ -1690,6 +1873,12 @@ class _RaisingValidationWorkspace:
     def rollback_version(self, **_: Any) -> AgentConfigurationRollback:
         raise self._error
 
+    def get_draft(self, **_: Any) -> AgentDraftRecord:
+        raise self._error
+
+    def update_contract(self, **_: Any) -> AgentDraftRecord:
+        raise self._error
+
     def update_workflow_stages(self, **_: Any) -> AgentDraftRecord:
         raise self._error
 
@@ -1765,6 +1954,68 @@ def test_workflow_stage_routes_map_workspace_errors_to_stable_details(
         response = client.post(
             "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages/plan/preview",
             json={"prompt": {}, "context": {}},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("operation", "error", "expected_status", "expected_detail"),
+    (
+        (
+            "read",
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            "update",
+            AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ),
+            409,
+            "agent_draft_revision_conflict",
+        ),
+        (
+            "update",
+            ValueError("internal-path:/private/tmp/contract-invalid"),
+            400,
+            "agent_contract_invalid",
+        ),
+        (
+            "update",
+            OSError("internal-path:/private/tmp/contract-failed"),
+            500,
+            "agent_contract_update_failed",
+        ),
+    ),
+)
+def test_contract_routes_map_workspace_errors_to_stable_details(
+    operation: str,
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    if operation == "read":
+        response = client.get(
+            "/api/config/agents/agent_alpha/drafts/draft_alpha/contract"
+        )
+    else:
+        response = client.patch(
+            "/api/config/agents/agent_alpha/drafts/draft_alpha/contract",
+            json={"expected_revision": 1, "agent_yaml": "name: agent_alpha\n"},
         )
 
     assert response.status_code == expected_status

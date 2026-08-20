@@ -561,6 +561,7 @@ export function updateConfigDraftContract(
     agent_yaml?: string
     policy_yaml?: string
     tools_yaml?: string
+    expected_revision?: number
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(`${BASE}/config/agents/${agentId}/drafts/${draftId}/contract`, {

@@ -796,6 +796,7 @@ test('updateConfigDraftContract patches Contract View files', async () => {
 
   await updateConfigDraftContract('enterprise_qa', 'draft_1', {
     agent_yaml: 'name: enterprise_qa',
+    expected_revision: 7,
   })
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -804,6 +805,7 @@ test('updateConfigDraftContract patches Contract View files', async () => {
       method: 'PATCH',
       body: JSON.stringify({
         agent_yaml: 'name: enterprise_qa',
+        expected_revision: 7,
       }),
     }),
   )

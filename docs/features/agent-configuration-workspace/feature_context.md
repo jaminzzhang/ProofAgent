@@ -10,13 +10,13 @@
 | 所属版本 | 待确认；本轮仅处理本地架构切片 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
 | 当前状态 | `PARTIAL_VERIFICATION` |
-| 当前切片 | Slice 5：Workflow Stage Configuration editing authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS` |
+| 当前切片 | Slice 6：raw Contract editing authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
 
 ## 2. 需求目标与范围
 
 | 目标 | 说明 | 验收口径 |
 | --- | --- | --- |
-| 深化 Workspace module | 把 Draft inventory、读取、元数据更新、版本列表、validation 和 development publication 收进 Control-owned module | Delivery 通过稳定 interface 使用生命周期规则；validation/publish route 不再自行组合 concrete store 与业务规则 |
+| 深化 Workspace module | 把 Draft inventory、读取、元数据更新、版本列表、validation、development publication、rollback、Workflow Stage 和 raw Contract 编辑收进 Control-owned module | Delivery 通过稳定 interface 使用生命周期与配置规则，不再自行组合本切片的 concrete store、compiler 或 manifest 逻辑 |
 | 建立 focused persistence seam | module 依赖 `ConfigurationUnitOfWork` 与 `AgentLifecycleRepository`，不依赖 Local 或 PostgreSQL 实现 | Local 与 PostgreSQL adapter 继续满足同一 port；Control 不 import adapter |
 | 保持生命周期权威 | 元数据更新、publication 与 rollback 分别保持 CAS、原子审计和 production sole-Agent 限制 | 现有 API 响应、安全门禁和正式 Phase F publication 权威不变 |
 
@@ -31,6 +31,8 @@
 | Draft validation orchestration | Workspace 约束执行证据身份、revision CAS、Validation Record 与审计；Local adapter 执行编译、Harness、Run 和可选 Full Capture | Delivery 只做权限与 HTTP 映射；validation 不发布、不激活 |
 | Development Draft publication | Workspace 校验当前 Draft revision 的成功 Validation Record，生成 immutable version，并用 Draft CAS、active pointer CAS 和审计原子发布 | publish route 不直接读取 Local store；失败时 Published Version 与 active pointer 不变 |
 | Agent Version rollback | Workspace 校验 target Published Version，以 exact active-pointer expectation 原子切换 activation 与全局 audit | rollback route 不直接读取 Local store；不修改 version history 或重算 KSS binding |
+| Workflow Stage Configuration | Workspace 受控替换 template、descriptor version 与 stage overrides，并生成只读 Context Preview | 保存使用 revision CAS 与双层 audit；预览不执行 Run 或写状态 |
+| raw Contract 编辑 | Workspace 合并三个可选 YAML 文件，经本地整包 validator 后以 revision CAS 与双层 audit 保存 | Contract GET/PATCH route 不直接读取 Local store、compiler 或 manifest；失败响应不泄漏临时路径 |
 
 ### 范围外
 
@@ -38,7 +40,7 @@
 | --- | --- | --- |
 | 正式生产 Phase F publication | `ProductionAgentPublicationService` 还包含 KSS release evidence、online smoke 与生产 admission | 不与 development Draft publication 合并；不生成生产发布结论 |
 | Blue/Green deployment rollback | 属于应用发布与运行角色 fencing 协议 | 不与 Agent Version pointer rollback 合并 |
-| Contract 与 Skill Pack 编辑迁移 | 需要各自独立的编译与校验 module 设计 | 本轮仍由现有 development route 处理 |
+| Skill Pack 专用编辑迁移 | 仍在 development route 内组合 YAML、编译与 Local store | 后续按独立切片迁移；raw Contract GET/PATCH 已收口到 Workspace |
 | 数据库 schema、迁移和生产部署 | 当前 focused ports 已可承载本切片 | 不生成生产发布结论 |
 | 删除整个 `LocalAgentConfigurationStore` | 仍有未迁移的 development-only 编辑用例 | 只删除本切片 Delivery 的具体 store 依赖 |
 
@@ -54,6 +56,8 @@
 | MAIN-5 | Draft validation | question、capture 策略、actor | adapter 产生执行证据；Workspace 校验身份并以 revision CAS 附加 Validation Record 与审计 | 新 Draft revision 与 validation evidence | scope、身份、capture 互斥、CAS、事务失败 | P1 | 已确认 |
 | MAIN-6 | Draft publication | 当前 Draft、Validation Run、actor | Workspace 校验 validation outcome/freshness/blockers，构建 immutable version，并原子更新 active pointer 与 audit | Published Agent Version + Active Agent Version | failed outcome、Draft CAS、pointer CAS、审计、无 rollback | P1 | 已完成；独立复验 `PASS` |
 | MAIN-7 | Agent Version rollback | target Published Version、actor | Workspace 读取当前 pointer，以 exact expectation 原子切换 activation 与 audit | rollback result + target immutable binding | not-found、pointer CAS、事务失败、KSS binding、历史不变 | P1 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS` |
+| MAIN-8 | Workflow Stage Configuration | template、descriptor version、stage overrides、expected revision | Workspace 构建受控 Contract candidate，经 inspector 校验并以 CAS 原子保存；preview 只返回受预算投影 | 新 Draft revision 或只读 preview | Prompt/context Gate、CAS、audit、无执行 | P1 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS` |
+| MAIN-9 | raw Contract 编辑 | 三个可选 YAML 文件、expected revision、actor | Workspace 合并完整 Contract candidate，经临时整包 validator 后以 CAS 原子保存与审计 | 新 Draft revision 与完整 Contract Bundle | preservation、whole-package validation、CAS、audit、无残留/路径泄漏 | P1 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS` |
 | BRANCH-1 | adapter 失败 | Local/PostgreSQL repository 抛错 | 不建立 fallback，由 Delivery 映射稳定错误 | 无部分写入 | fault 与 rollback 行为 | P1 | 已确认 |
 | BOUND-1 | rollback 范围 | Agent Version rollback 完成 | 不执行 Source rollback-Draft、Phase F 或 Blue/Green deployment rollback | 其他权威不变 | 负向回归 | P1 | 已确认 |
 
@@ -71,6 +75,7 @@
 | ACW-R08 | 回滚权威 | Agent Version Rollback 只选择既有 immutable Published Agent Version；activation 与全局 audit 在同一 UoW 提交，并以读取到的 active pointer 做 exact CAS | target version、current pointer、actor | 新 Active Agent Version 与 rollback result | 不改 history；不重算或降级 target KSS binding；不调用部署 rollback | 已确认 |
 | ACW-R09 | Stage 编辑权威 | Workflow Stage Configuration 保存必须通过 Workspace，以 Draft revision CAS 提交 Contract Bundle、Draft operation audit 与全局 audit | template、descriptor version、stage overrides、expected revision、actor | 新 Draft revision 与完整 Contract Bundle | 不保存 raw Prompt 到 audit；不验证、不发布、不激活 | 已确认 |
 | ACW-R10 | Stage 预览 | Workflow Stage Context Preview 只读取 revisioned Draft，经受控编译检查后返回脱敏、限长投影 | stage id、Prompt、context options | preview projection | 不执行模型、工具或 Run；不写 trace、Draft 或 audit | 已确认 |
+| ACW-R11 | Contract 编辑权威 | raw Contract 读取与保存必须通过 Workspace；保存先构建完整候选 Bundle 并经 adapter 整包校验，再以 Draft revision CAS 提交 Contract、Draft operation audit 与全局 audit | 三个可选 YAML 文件、expected revision、actor | 新 Draft revision 与完整 Contract Bundle | 保留 extra files/advanced fields；不把 raw YAML 写入 audit；不验证、不发布、不激活 | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -109,7 +114,7 @@
 
 ## 8. 待确认问题
 
-无未关闭 P0/P1 准入问题。Slice 5 只迁移 development Workflow Stage Configuration 保存与预览；Contract、Skill Pack、正式生产 Phase F publication、Blue/Green deployment rollback 不在范围内。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
+无未关闭 P0/P1 准入问题。Slice 6 只迁移 development raw Contract GET/PATCH；Skill Pack 专用编辑、canonical seed bootstrap、正式生产 Phase F publication、Blue/Green deployment rollback 不在范围内。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
 
 ## 9. Slice 2：Draft validation orchestration
 
@@ -150,3 +155,13 @@
 | 范围外 | raw Contract 编辑、Skill Pack 编辑、production Stage endpoint、validation/publication/rollback、schema、部署 |
 | 验收标准 | 保存一次原子更新 template、descriptor version 与 stages；stale revision 返回稳定 conflict；audit 不含 Prompt 文本；预览不执行 Run 或写状态；route 不读取 concrete store/compiler/YAML；Dashboard 不再先保存整份 Contract |
 | 最高风险 | P1：现有 Dashboard 两次顺序写入可能形成部分保存，且旧 route 缺少调用方 revision，存在 stale writer 覆盖风险 |
+
+## 13. Slice 6：raw Contract editing authority
+
+| 项 | 内容 |
+| --- | --- |
+| 目标 | 让 development raw Contract GET/PATCH 只通过 `AgentConfigurationWorkspace`，删除 route 内的 concrete store、Contract 组合、编译与 manifest 校验逻辑 |
+| 范围内 | Workspace Contract interface、本地临时编译 validator、revision CAS、双层原子 audit、稳定错误映射、Dashboard revision 传递、旧实现删除 |
+| 范围外 | Skill Pack 专用编辑、canonical seed bootstrap、production Contract endpoint、validation/publication/activation/rollback、schema、部署 |
+| 验收标准 | GET/PATCH route 不读取 Local store/compiler/manifest；候选整包通过临时目录编译与 Skill Pack 校验；stale revision 返回稳定 conflict；失败不写 Draft/audit；Dashboard 发送当前 revision；无编译残留或内部路径泄漏 |
+| 最高风险 | P1：旧 route 是 last-write-wins，且校验与保存不在同一应用权威；迁移必须同时补齐 revision CAS 和事务审计 |

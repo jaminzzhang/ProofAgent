@@ -1164,6 +1164,7 @@ workflow:
   })
 
   it('keeps Workflow core template_descriptor_version aligned when changing templates', async () => {
+    mockDraft = { ...mockDraft, revision: 8 }
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1186,6 +1187,7 @@ workflow:
     await waitFor(() => {
       expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
         agent_yaml: expect.stringContaining('template: react_enterprise_qa_v3'),
+        expected_revision: mockDraft.revision,
       }))
     })
     expect(latestSavedAgentYaml()).toContain('template_descriptor_version: react_enterprise_qa.v3')

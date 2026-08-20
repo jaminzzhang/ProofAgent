@@ -4,40 +4,40 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 5 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 建议结论 | Slice 6 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
 | 最高风险等级 | P1 |
-| 一句话依据 | 领域上下文已固定 Workflow Stage Prompt/Context 的受限语义；现有 Configuration UoW、受控编译器和稳定 API 行为足以迁移保存与预览权威 |
-| 下一步建议 | Slice 5 已完成；后续以独立 Scope 迁移 raw Contract 或 Skill Pack 编辑权威 |
+| 一句话依据 | Slice 5 已关闭；现有 Configuration UoW、整包编译校验与稳定 Contract API 足以把 raw Contract 读写收口到 Workspace，同时保持公开行为 |
+| 下一步建议 | Slice 6 已关闭；后续以独立 Scope 迁移 Skill Pack 编辑或 canonical seed bootstrap 权威 |
 
 ## 2. 依据与输入缺口
 
 | 材料 | 来源 | 是否读取 | 关键证据 | 缺口 |
 | --- | --- | --- | --- | --- |
-| 用户请求 | 当前对话 | 是 | 用户同意实施 Workflow Stage Configuration 编辑权威；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 5 |
+| 用户请求 | 当前对话 | 是 | 用户要求提交 Slice 5 并继续下一切片；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 6 |
 | 架构评审 | `architecture-review-20260818-220308.html` | 是 | Delivery 与 concrete store 耦合；推荐 deep application module 与 focused ports | Graphify 图较旧，只作导航 |
 | 项目规则 | `AGENTS-COMMON.md`、hicode coding rules | 是 | production PostgreSQL 权威、原子审计、TDD、无兼容 facade | 无 |
 | 领域与 ADR | Agent Configuration context、ADR-0009、ADR-0011 | 是 | Workspace、Draft、Published Version、模块/lifecycle 分离 | context 含已退役知识术语，后续单独清理 |
-| 当前实现 | configuration router、Workspace、Local compiler/store、Dashboard Workflow editor | 是 | Stage 保存与预览仍在 route 内组合 YAML、compiler 与 concrete store；Dashboard Stage 保存先写 Contract、再写 stages | Contract/Skill 编辑与 canonical seed bootstrap 仍待后续切片 |
+| 当前实现 | configuration router、Workspace、Local Contract validator、Dashboard Contract editors | 是 | raw Contract GET/PATCH 已改走 Workspace；PATCH 使用调用方 revision CAS、临时整包校验与原子审计 | Skill Pack 编辑与 canonical seed bootstrap 仍待后续切片 |
 
 ## 3. 需求准入评审
 
 | 项 | 内容 |
 | --- | --- |
-| 准入结论 | `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 准入结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
 | 需求分析输入 | 用户确认、领域规则、现有稳定 API、Configuration UoW、受控编译器、Dashboard 回归 |
-| 证据缺口 | 真实 PostgreSQL Stage endpoint 不存在且不在本切片；本轮只提供 development local adapter 证据，不形成生产批准 |
+| 证据缺口 | raw Contract endpoint 仅在 development 注册；本轮只提供 development adapter 与双 persistence port 的行为证据，不形成生产批准 |
 
 ## 4. 需求分析与范围边界
 
 | 项 | 内容 |
 | --- | --- |
-| 需求目标 | 让 Control-owned Workspace 成为 Workflow Stage Configuration 保存与 Context Preview 的唯一应用权威 |
-| 范围内 | Workspace update/preview interface、typed Stage command、受控本地 Draft inspection adapter、revision CAS、原子审计、development API、稳定错误映射、Dashboard 单次保存、旧 route 逻辑删除、文档 |
-| 范围外 | raw Contract 编辑、Skill Pack 编辑、production Stage endpoint、validation/publication/rollback、schema、部署 |
-| 非目标 | 新增 facade 后保留旧调用；把 Stage Prompt 变成 Harness control prompt；执行模型/工具/Run；把本地验证描述为生产批准 |
-| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；保存以 expected revision CAS 一次提交 template、descriptor version 与 stages；audit 无 Prompt 原文；预览无写入；独立子 Agent 复验 |
+| 需求目标 | 让 Control-owned Workspace 成为 raw Contract 读取、候选整包校验、CAS 保存与审计的唯一应用权威 |
+| 范围内 | Workspace Contract update interface、受控本地整包 validator、revision CAS、Draft operation audit、全局 audit、development GET/PATCH、稳定错误映射、Dashboard revision 传递、旧 route 逻辑删除、文档 |
+| 范围外 | Skill Pack 专用编辑、canonical seed bootstrap、production Contract endpoint、validation/publication/activation/rollback、schema、部署 |
+| 非目标 | 新增 facade 后保留 route 内旧实现；拆分每个 Contract 字段的 typed command；改变 raw Contract 高级入口可更新完整 `agent_yaml` 的兼容语义；把本地验证描述为生产批准 |
+| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；保存以 expected revision CAS 原子提交完整 Contract Bundle 与双层 audit；adapter 临时编译后无残留；audit/HTTP 错误不含 raw YAML 或内部路径；独立子 Agent 复验 |
 | `feature_context.md` 更新 | 已创建 |
-| ADR 处理 | 不需要；ADR-0009、ADR-0210 与 Agent Configuration 领域上下文已固定 immutable-version pointer rollback 和精确 KSS binding 规则 |
+| ADR 处理 | 不需要；执行 ADR-0009、ADR-0011 与既有 Workspace、Draft CAS 和 Contract Bundle 规则，不改变持久化模型或公开协议 |
 
 ## 5. 设计树方案
 
@@ -325,3 +325,48 @@
 - RED：Dashboard 保存 Stage 先调用 Contract endpoint，再调用 Stage endpoint。
 - GREEN：Stage command 携带当前 template 与 Draft revision，一次调用完成；保留显式 Save Core 行为。
 - 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 复验 scope→diff、权限、CAS、审计、Prompt 安全、preview 无执行、旧实现删除、错误映射和范围隔离。
+
+## 26. Slice 6 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
+| 最高风险等级 | P1 |
+| 公开 interface | `AgentConfigurationWorkspace.update_contract(...)`；读取复用 `get_draft(...)` |
+| 可观察行为 | GET 返回既有完整 Contract Bundle；PATCH 合并三个可选 YAML 文件，整包校验后以 expected revision CAS 保存，并原子追加 Draft operation audit 与全局 audit |
+| 兼容边界 | 保持 HTTP method/path、`agent.view`/`agent.edit` 权限和成功响应；`expected_revision` 为可选兼容字段，旧调用在 Route 读取当前 revision 后仍由 Workspace 最终 CAS 防止竞态覆盖 |
+| 范围外 | Skill Pack 专用编辑、canonical seed bootstrap、production Contract endpoint、validation/publication/activation/rollback、schema、部署 |
+| ADR 判断 | 不需要；执行现有 Workspace ownership、Contract Bundle 与 Draft CAS 规则 |
+
+## 27. Slice 6 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-CT-ROOT | Operator 读取或保存 raw Contract | Delivery 只调用 Workspace interface | Contract Bundle projection | HTTP interface 与 AST 删除测试 | P1 |
+| ACW-CT-MAIN-1 | PATCH 含三个可选 YAML 文件与 expected revision | Workspace 从 revisioned Draft 合并候选 Bundle，保留 extra files 与 advanced fields | 完整 candidate Draft | partial update、preservation tests | P1 |
+| ACW-CT-MAIN-2 | candidate 构建完成 | injected adapter 在临时目录编译、加载 manifest 并校验 Business Flow Skill Packs | candidate 可提交 | valid/invalid/no-residue tests | P1 |
+| ACW-CT-MAIN-3 | 整包校验通过 | Configuration UoW 以 expected revision 保存 Draft，并在同一事务追加 operation/global audit | revision +1 | CAS、audit、commit failure tests | P1 |
+| ACW-CT-BRANCH-1 | client revision 已过期或校验期间并发写入 | precheck 或 repository CAS 拒绝 | stable 409；不覆盖赢家 | stale/interleaving tests | P1 |
+| ACW-CT-BRANCH-2 | YAML、compiler、manifest 或 Skill Pack 校验失败 | adapter 收敛临时路径与底层错误；Delivery 返回稳定 400 | Draft/audit 不变 | invalid/fault/error tests | P1 |
+| ACW-CT-BRANCH-3 | adapter/UoW 抛非预期异常 | Delivery 返回稳定 500，不暴露内部路径或异常文本 | 无部分写入 | OSError/RuntimeError tests | P1 |
+| ACW-CT-BOUND-1 | Contract 保存成功 | 不创建 Validation Record、Published Version、activation 或 rollback | 仅 Draft revision 改变 | negative assertions | P1 |
+
+## 28. Slice 6 TDD 任务
+
+### Task ACW-CT1：Workspace Contract 行为
+
+- RED：从 Workspace interface 证明局部文件合并、revision CAS、整包校验、双层 audit 与 lifecycle 负向边界。
+- GREEN：实现 `update_contract(...)`，只依赖 injected validator 与 Configuration UoW。
+- 停止条件：需要拆分 module-specific typed commands、改变 public Contract schema 或数据库 schema。
+
+### Task ACW-CT2：Local validator 与 Delivery 删除
+
+- RED：现有 GET/PATCH route 直接依赖 Local store，PATCH 组合 compiler、manifest loader 与 Skill Pack 校验。
+- GREEN：引入无 concrete store 依赖、自动清理临时目录的 Local validator；GET/PATCH 只保留权限、请求/响应和稳定错误映射；删除 Contract 专用 route helpers。
+- 停止条件：需要迁移 Skill Pack 专用 route 或 canonical seed bootstrap。
+
+### Task ACW-CT3：Dashboard CAS 与独立复核
+
+- RED：Dashboard raw Contract 保存不发送当前 Draft revision，旧 PATCH 允许 last-write-wins。
+- GREEN：client/request 增加可选 `expected_revision`，页面保存显式传递当前 revision；旧调用兼容但仍由服务端 CAS 关闭竞态。
+- 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 按 scope→diff、权限、候选校验、CAS、事务/audit、无残留、旧实现删除、错误映射和范围隔离清单复验。

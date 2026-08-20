@@ -6,15 +6,15 @@
 | --- | --- |
 | 建议结论 | `PARTIAL_VERIFICATION` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1—5 已完成本地验证与独立复验 |
+| 模式 | 行为保护重构；Slice 1—6 已完成本地验证与独立复验 |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback 与 Workflow Stage Configuration 保存/预览 |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration 与 raw Contract 编辑 |
 | 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication adapters |
-| 不覆盖范围 | production validation/publish/Stage endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、raw Contract 与 Skill Pack 编辑、生产部署 |
+| 不覆盖范围 | production validation/publish/Stage/Contract endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、Skill Pack 专用编辑、生产部署 |
 
 ## 3. 测试场景
 
@@ -40,6 +40,10 @@
 | ACW-T18 | Stage audit 与 Draft 同事务提交且不含 Prompt 文本 | security/consistency | P1 | P1 |
 | ACW-T19 | Stage preview 脱敏且不执行模型、工具、Run 或状态写入 | security/negative | P1 | P1 |
 | ACW-T20 | Stage route 只依赖 Workspace；Dashboard 只发送一次保存命令 | architecture | P1 | P1 |
+| ACW-T21 | raw Contract 整包候选先校验，再以 revision CAS 保存并原子追加双层 audit | authority/consistency | P1 | P1 |
+| ACW-T22 | stale revision、adapter、audit 或 commit 失败时不覆盖 Draft 且不产生部分 audit | concurrency/fault | P1 | P1 |
+| ACW-T23 | Contract GET/PATCH route 只依赖 Workspace，并返回稳定 400/404/409/500 | architecture/security | P1 | P1 |
+| ACW-T24 | Dashboard Contract 保存携带当前 Draft revision，未知请求字段被拒绝 | contract | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -65,6 +69,10 @@
 | ACW-T18 | Stage Prompt 含敏感业务文本，或 audit commit 失败 | 保存 Stage command | audit 只含 trace-safe metadata；失败时 Draft 与 audit 均不变 |
 | ACW-T19 | 当前 Draft 可解析，且 Stage/context 合法 | 调用 `preview_workflow_stage` | 返回限长脱敏投影，不新增 Draft、audit、trace 或 Run |
 | ACW-T20 | API 注入 recording Workspace，Dashboard 编辑 Stage | 保存或预览 | route 不组合 store/compiler/YAML；Dashboard 不先保存 raw Contract |
+| ACW-T21 | 当前 revisioned Draft 与三个可选 YAML 文件 | 调用 `update_contract` | 整包候选先校验，再以 revision CAS 保存 Contract 与双层 audit |
+| ACW-T22 | stale revision、校验期间并发写入、audit 或 commit 失败 | 保存 raw Contract | 不覆盖赢家；Draft 与 audit 不产生部分写入 |
+| ACW-T23 | 应用只注入 recording Workspace，或 Workspace/adapter 抛错 | 调用 Contract GET/PATCH | route 不需要 Local store/compiler；返回稳定 400/404/409/500 且不泄漏路径 |
+| ACW-T24 | Dashboard 有当前 Draft revision，或请求含未知字段 | 保存 raw Contract | client 发送 revision；未知字段在 Workspace 前返回 422 |
 
 ## 5. Mock、数据与断言
 
@@ -211,17 +219,39 @@
 | ENV-2 | 首轮 backend 与 lock 检查受沙箱限制 | 8 个 loopback tests、uv cache | 允许本机回环和 uv cache 后按原命令重跑通过，不计为产品缺陷 |
 | VERIFY-AGENT-6 | 独立子 Agent 按 Slice 5 明确清单复验并攻击输出边界 | scope→diff、authority、CAS/audit、权限、删除检查、真实 API preview、前后端与静态门禁 | `PASS / NO_BLOCKING_FINDINGS`；聚焦 188 passed、4 skipped；发现的临时路径泄漏、输出预算与严格 JSON 三组 P2 均经 RED 修正后关闭 |
 
-## 13. 风险与待确认问题
+## 13. Slice 6 TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 受控实现与行为保护重构 |
+| 公开 interface | `AgentConfigurationWorkspace.update_contract(...)`；读取复用 `get_draft(...)` |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
+| 不测试的实现细节 | 临时目录随机名称、YAML 非语义格式、私有 helper |
+| 范围外 | Skill Pack 专用编辑、canonical seed bootstrap、production Contract endpoint、validation/publication/activation/rollback、schema、部署 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-18 | Workspace Contract seam、整包候选校验、revision CAS、双层 audit 与事务失败关闭 | Workspace tests | 旧 Workspace 不接受 `contract_validator` 且无 `update_contract(...)`；6 个场景失败 |
+| GREEN-18 | Workspace 合并三个可选文件，保留 extra/advanced fields，经 injected validator 后以 Configuration UoW 原子提交 | Control module 与 Workspace tests | 成功、stale、校验期间并发、validator/audit/commit failure 场景通过 |
+| RED-19 | Contract GET/PATCH 只依赖 Workspace；Dashboard 发送当前 revision；未知字段先拒绝 | API、AST 与 Dashboard tests | 旧 route 直接读取 Local store/compiler/manifest，请求不接受 revision；8 个场景失败 |
+| GREEN-19 | Delivery 只保留权限、请求/响应与稳定错误映射；Dashboard 显式发送 revision；composition 注入临时编译 validator | Delivery、composition、Dashboard | focused 后端与前端回归通过；旧 Contract 专用 route 组合逻辑删除 |
+| RED-20 | 无效 YAML/manifest 的 400 响应不得泄漏已清理的临时绝对路径 | 真实 TestClient 两组无效候选 | 响应包含 `proof-agent-contract-*` 与 `/private/.../agent.yaml`；2 个场景失败 |
+| GREEN-20 | Local validator 在 adapter 边界把校验细节收敛为稳定 ValueError，保留内部异常链；Route 返回 `agent_contract_invalid` | Local adapter 与真实 API tests | 两组无效候选均返回无路径 400；失败候选不写 Draft/audit，临时目录自动清理 |
+| VERIFY-MAIN-8 | 主代理执行聚焦与仓库级门禁 | backend、前端、静态、构建与领域检查 | focused 189 passed、4 skipped；全量 backend 1936 passed、122 skipped、2 deselected；Dashboard 195、Chat 35；两端 `tsc -b` build、Ruff、Mypy（351 source files）、domain-context、diff、`uv lock --check` 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
+| ENV-3 | `uv lock --check` 首轮受沙箱外部 cache 权限限制 | uv cache | 沙箱外按原命令重跑通过，不计为产品缺陷；两个前端 package 未定义独立 `typecheck` script，build 已执行 `tsc -b` |
+| VERIFY-AGENT-7 | 独立子 Agent 按 Slice 6 明确清单复验 | scope→diff、authority、CAS/audit、权限、整包校验、路径安全、无残留、删除检查、范围隔离与完整门禁 | `PASS / NO_BLOCKING_FINDINGS`；focused 155 passed、6 skipped；全量 backend 1936 passed、122 skipped、2 deselected；Dashboard 195、Chat 35；Ruff、Mypy（351 source files）、两端与共享 UI build、domain-context、diff、lock 全部通过。invalid YAML、缺字段 manifest、缺失 Skill Pack definition 与 OSError 均失败关闭，无 raw/path 泄漏或部分写入；3 个跟踪临时目录全部清理 |
+
+## 14. 风险与待确认问题
 
 | 问题 | 等级 | 影响 | 建议动作 | 建议确认人 |
 | --- | --- | --- | --- | --- |
-| raw Contract、Skill Pack 编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 5 中扩张范围 | 研发负责人未指定 |
+| Skill Pack 专用编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 6 中扩张范围 | 研发负责人未指定 |
 | 本地 adapter 在 publication CAS 前可能留下 derived compiled package | P2 | 不形成 authoritative Published Version 或 active pointer，但需要后续清理策略 | 在 artifact lifecycle 切片中定义清理与重试；当前以 CAS 失败关闭权威写入 | 研发负责人未指定 |
 | Local UoW 未证明双目录替换中进程崩溃的 durable crash-atomic recovery | P2 | development-only 无锁 reader 可能短暂观察切换；不能作为生产事务证据 | 保持 S0 development-only；生产继续使用 PostgreSQL，若提升本地耐久等级需独立设计 generation/recovery protocol | 研发负责人未指定 |
 | 真实 PostgreSQL rollback 并发集成环境未配置 | P1 | 9 个 PostgreSQL 测试跳过；advisory lock/CAS 只有代码、SQL 与测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行集成与并发场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
 | 本地验证不等于生产批准 | P1 | 不能证明真实 PostgreSQL/部署状态 | 维持 `PARTIAL_VERIFICATION` | 发布负责人未指定 |
 
-## 14. 上下文更新建议
+## 15. 上下文更新建议
 
 | 建议位置 | 类型 | 内容摘要 | 原因 |
 | --- | --- | --- | --- |

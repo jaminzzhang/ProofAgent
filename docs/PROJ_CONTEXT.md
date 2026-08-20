@@ -21,17 +21,18 @@
   usable as rollback targets.
 - `[KNOWN | HIGH]` As of 2026-08-20, Agent Configuration Workspace local slices
   cover Draft inventory/read/update, validation, development publication, Agent
-  Version pointer rollback, and development Workflow Stage Configuration
-  save/preview. Stage mutation now owns typed Workflow replacement, caller
-  revision CAS, Prompt/context governance and atomic audit; preview is read-only.
-  Delivery no longer owns Stage YAML/compiler/store composition, and Dashboard
-  uses one Stage save command. Slice 5 passed main-agent verification and
-  independent review with no open P0–P3 findings. Real PostgreSQL concurrency
-  tests remain unexecuted because no test DSN was configured, so this is not
-  production approval.
-- `[COMPUTED | HIGH]` Slice 5 main-agent verification passed 1917 backend tests,
+  Version pointer rollback, Workflow Stage Configuration save/preview, and raw
+  Contract GET/PATCH. Raw Contract candidates now cross one Workspace interface,
+  receive whole-package validation in an automatically cleaned local adapter, and
+  use caller revision CAS plus atomic Draft/global audit. Delivery no longer owns
+  Contract store/compiler/manifest composition, and Dashboard sends the current
+  Draft revision. Slice 6 passed main-agent verification and independent review
+  with no open P0–P3 findings. Real PostgreSQL concurrency tests remain
+  unexecuted because no test DSN was configured, so this is not production
+  approval.
+- `[COMPUTED | HIGH]` Slice 6 main-agent verification passed 1936 backend tests,
   195 Dashboard tests and 35 Chat tests; both production builds passed. Ruff,
-  strict mypy over 350 source files, domain-context, diff and lock checks passed.
+  strict mypy over 351 source files, domain-context, diff and lock checks passed.
   This does not authorize production.
 - `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
   same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS

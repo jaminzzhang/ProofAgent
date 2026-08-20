@@ -20,6 +20,9 @@ from proof_agent.delivery.agent_configuration_validation import (
 from proof_agent.delivery.agent_configuration_workflow_stages import (
     LocalAgentConfigurationWorkflowStageAdapter,
 )
+from proof_agent.delivery.agent_configuration_contracts import (
+    LocalAgentConfigurationContractValidator,
+)
 from proof_agent.delivery.agent_configuration_publication import (
     LocalAgentConfigurationPublicationAdapter,
 )
@@ -289,6 +292,7 @@ def create_app(
                 publication_validator=LocalAgentConfigurationPublicationAdapter(
                     configuration_store=configuration_store,
                 ),
+                contract_validator=LocalAgentConfigurationContractValidator(),
                 workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
                 scope=AgentConfigurationScope.MULTI_AGENT,
             )

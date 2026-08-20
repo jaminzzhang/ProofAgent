@@ -413,6 +413,34 @@ class RecordingWorkflowStageInspector(AgentConfigurationWorkflowStageInspector):
         )
 
 
+class RecordingContractValidator:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.drafts: list[DraftAgent] = []
+        self._error = error
+
+    def validate(self, *, draft: DraftAgent) -> None:
+        self.drafts.append(draft)
+        if self._error is not None:
+            raise self._error
+
+
+class ConcurrentMutationContractValidator(RecordingContractValidator):
+    def __init__(self, factory: UnitOfWorkFactory) -> None:
+        super().__init__()
+        self._factory = factory
+
+    def validate(self, *, draft: DraftAgent) -> None:
+        super().validate(draft=draft)
+        key = (draft.agent_id, draft.draft_id)
+        current = self._factory.agents.records[key]
+        self._factory.agents.records[key] = AgentDraftRecord(
+            draft=current.draft.model_copy(
+                update={"purpose": "Concurrent Contract winner."}
+            ),
+            revision=current.revision + 1,
+        )
+
+
 class ConcurrentMutationWorkflowStageInspector(RecordingWorkflowStageInspector):
     def __init__(self, factory: UnitOfWorkFactory) -> None:
         super().__init__()
@@ -614,6 +642,182 @@ def test_multi_agent_workspace_hides_inventory_and_update_rules_behind_one_inter
     assert factory.units[-1].committed is True
     assert factory.audit.events[-1].event_type == "agent.draft.updated"
     assert factory.audit.events[-1].target_id == second.draft.draft_id
+
+
+def test_workspace_validates_and_atomically_updates_raw_contract_with_revision_cas() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000811",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    preserved_bundle = current.draft.contract_bundle.model_copy(
+        update={
+            "extra_files": {"skills/claims.yaml": "id: claims\n"},
+            "advanced_fields": {"extension": {"enabled": True}},
+        }
+    )
+    current = AgentDraftRecord(
+        draft=current.draft.model_copy(update={"contract_bundle": preserved_bundle}),
+        revision=current.revision,
+    )
+    factory = UnitOfWorkFactory((current,))
+    validator = RecordingContractValidator()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        contract_validator=validator,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 19, 4, tzinfo=UTC),
+    )
+
+    saved = workspace.update_contract(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        expected_revision=1,
+        agent_yaml=current.draft.contract_bundle.agent_yaml.replace(
+            "Governed test Agent.",
+            "Updated governed Agent.",
+        ),
+        policy_yaml=None,
+        tools_yaml="tools:\n  - id: governed_lookup\n",
+        actor=_actor(),
+    )
+
+    assert saved.revision == 2
+    assert len(validator.drafts) == 1
+    assert validator.drafts[0].contract_bundle == saved.draft.contract_bundle
+    assert "Updated governed Agent." in saved.draft.contract_bundle.agent_yaml
+    assert saved.draft.contract_bundle.policy_yaml == preserved_bundle.policy_yaml
+    assert saved.draft.contract_bundle.tools_yaml == (
+        "tools:\n  - id: governed_lookup\n"
+    )
+    assert saved.draft.contract_bundle.extra_files == preserved_bundle.extra_files
+    assert saved.draft.contract_bundle.advanced_fields == preserved_bundle.advanced_fields
+    assert saved.draft.operation_audit[-1].summary == "Updated Agent Contract."
+    assert factory.audit.events[-1].event_type == "agent.draft.contract_updated"
+    audit_text = repr(saved.draft.operation_audit[-1].metadata) + repr(
+        factory.audit.events[-1].metadata
+    )
+    assert "Updated governed Agent." not in audit_text
+    assert "governed_lookup" not in audit_text
+    assert factory.units[-1].committed is True
+    assert factory.agents.list_published(current.draft.agent_id) == ()
+    assert factory.agents.get_active(current.draft.agent_id) is None
+
+
+def test_workspace_contract_update_rejects_stale_revision_before_validation() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000812",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    validator = RecordingContractValidator()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        contract_validator=validator,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as error:
+        workspace.update_contract(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=2,
+            agent_yaml="name: stale\n",
+            policy_yaml=None,
+            tools_yaml=None,
+            actor=_actor(),
+        )
+
+    assert error.value.code == "agent_draft_revision_conflict"
+    assert validator.drafts == []
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
+
+
+def test_workspace_contract_update_does_not_overwrite_concurrent_validation_winner() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000813",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    validator = ConcurrentMutationContractValidator(factory)
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        contract_validator=validator,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as error:
+        workspace.update_contract(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            agent_yaml="name: losing_contract\n",
+            policy_yaml=None,
+            tools_yaml=None,
+            actor=_actor(),
+        )
+
+    assert error.value.code == "agent_draft_revision_conflict"
+    winner = factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    )
+    assert winner is not None
+    assert winner.revision == 2
+    assert winner.draft.purpose == "Concurrent Contract winner."
+    assert winner.draft.contract_bundle == current.draft.contract_bundle
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("failure", ("validator", "audit", "commit"))
+def test_workspace_contract_update_failure_leaves_draft_and_audit_unchanged(
+    failure: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000814",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory(
+        (current,),
+        fail_audit=failure == "audit",
+        fail_commit=failure == "commit",
+    )
+    validator = RecordingContractValidator(
+        error=ValueError("invalid candidate") if failure == "validator" else None
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        contract_validator=validator,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises((ValueError, RuntimeError)):
+        workspace.update_contract(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            agent_yaml="name: invalid_or_uncommitted\n",
+            policy_yaml=None,
+            tools_yaml=None,
+            actor=_actor(),
+        )
+
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
 
 
 def test_workspace_updates_workflow_stages_with_revision_cas_and_trace_safe_audit() -> None:
