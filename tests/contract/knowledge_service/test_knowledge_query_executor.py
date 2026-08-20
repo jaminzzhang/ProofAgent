@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import threading
 from typing import Any
 
+import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
@@ -17,6 +19,7 @@ from knowledge_source_service.application.knowledge_queries import (
 )
 from knowledge_source_service.application.query_executor import KnowledgeQueryExecutor
 from knowledge_source_service.contracts.knowledge_query import CreateKnowledgeQueryRequest
+from knowledge_source_service.domain.knowledge_queries import StaleKnowledgeQueryClaim
 from knowledge_source_service.contracts.results import KnowledgeQueryResult
 from knowledge_source_service.delivery.http import create_application
 from knowledge_source_service.ports.retrieval import (
@@ -280,6 +283,33 @@ def test_executor_renews_the_fenced_lease_during_long_retrieval() -> None:
     assert repository.renewal_count == 1
     assert retrieval_engine.contender_claim is None
     assert client.get(created.headers["location"]).json()["state"] == "succeeded"
+
+
+def test_query_claim_cannot_save_after_its_lease_expires_without_takeover() -> None:
+    base = datetime(2026, 8, 11, 10, 29, 18, tzinfo=UTC)
+    repository = InMemoryKnowledgeQueryRepository()
+    client, _executor = _runtime(StaticRetrievalEngine(), repository=repository)
+    _create_query(client)
+    claim = repository.claim_next_queued(
+        worker_id="worker-expiring",
+        now=base,
+        lease_duration=timedelta(seconds=30),
+    )
+    assert claim is not None
+    running = replace(
+        claim.record,
+        query=claim.record.query.model_copy(
+            update={"state": "running", "started_at": base}
+        ),
+    )
+    repository.save_claim(claim, running, now=base)
+
+    with pytest.raises(StaleKnowledgeQueryClaim):
+        repository.save_claim(
+            claim,
+            running,
+            now=base + timedelta(seconds=30),
+        )
 
 
 def test_result_content_is_not_exposed_after_its_retention_deadline() -> None:

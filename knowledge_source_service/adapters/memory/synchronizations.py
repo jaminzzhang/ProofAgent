@@ -121,6 +121,8 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
         self,
         claim: KnowledgeSourceSynchronizationClaim,
         record: KnowledgeSourceSynchronizationRecord,
+        *,
+        now: datetime,
     ) -> None:
         synchronization_id = (
             claim.record.synchronization.knowledge_source_synchronization_id
@@ -132,6 +134,7 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
             or persisted is None
             or current.worker_id != claim.worker_id
             or current.fencing_token != claim.fencing_token
+            or current.lease_expires_at <= now
         ):
             raise StaleKnowledgeSourceSynchronizationClaim
         if (

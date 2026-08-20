@@ -99,6 +99,8 @@ class InMemoryKnowledgeQueryRepository:
         self,
         claim: KnowledgeQueryClaim,
         record: KnowledgeQueryRecord,
+        *,
+        now: datetime,
     ) -> None:
         query_id = claim.record.query.knowledge_query_id
         current = self._claims.get(query_id)
@@ -106,6 +108,7 @@ class InMemoryKnowledgeQueryRepository:
             current is None
             or current.worker_id != claim.worker_id
             or current.fencing_token != claim.fencing_token
+            or current.lease_expires_at <= now
         ):
             raise StaleKnowledgeQueryClaim(
                 "Knowledge Query execution claim is no longer current"

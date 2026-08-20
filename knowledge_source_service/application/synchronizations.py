@@ -14,6 +14,7 @@ from knowledge_source_service.contracts.synchronizations import (
     KnowledgeSourceSynchronizationLinks,
 )
 from knowledge_source_service.domain.synchronizations import (
+    KnowledgeSourceSynchronizationPersistenceConflict,
     KnowledgeSourceSynchronizationRecord,
 )
 from knowledge_source_service.ports.synchronizations import (
@@ -87,15 +88,28 @@ class KnowledgeSourceSynchronizationApplication:
                 )
             ),
         )
-        self._repository.add(
-            KnowledgeSourceSynchronizationRecord(
-                synchronization=synchronization,
-                request=request,
+        record = KnowledgeSourceSynchronizationRecord(
+            synchronization=synchronization,
+            request=request,
+            operator_id=operator_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+        )
+        try:
+            self._repository.add(record)
+        except KnowledgeSourceSynchronizationPersistenceConflict:
+            concurrent = self._repository.get_by_idempotency(
                 operator_id=operator_id,
                 idempotency_key=idempotency_key,
-                request_fingerprint=fingerprint,
             )
-        )
+            if concurrent is None:
+                raise
+            if concurrent.request_fingerprint != fingerprint:
+                raise KnowledgeSourceSynchronizationIdempotencyConflict
+            return KnowledgeSourceSynchronizationCreation(
+                synchronization=concurrent.synchronization,
+                created=False,
+            )
         return KnowledgeSourceSynchronizationCreation(
             synchronization=synchronization,
             created=True,

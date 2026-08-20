@@ -2,7 +2,14 @@
 
 [KNOWN | HIGH] Knowledge Source Service（KSS）是可独立构建、部署和扩缩容的异构知识服务。它负责知识源摄取、不可变版本、混合检索、受限结构化分析和 `Candidate Evidence` 返回；Evidence Admission、冲突裁决和最终答案仍由 ProofAgent 等调用 Agent 负责。
 
-[KNOWN | HIGH] 当前状态为 `VERIFIED_LOCAL`，不是生产发布批准。生产前剩余门槛见 [`../../docs/features/knowledge-source-service/tdd-report.md`](../../docs/features/knowledge-source-service/tdd-report.md)。
+[KNOWN | HIGH] 当前状态为 `PARTIAL_VERIFICATION`，不是生产发布批准。KSS 本体已完成本地验收，但 KSS-only 切换后的真实生产 scorer、Client Grant、versioned secret、依赖 readiness、shadow、pilot、recovery 和正式发布 Gate 尚未执行。生产前剩余门槛见 [`../../docs/features/knowledge-source-service/tdd-report.md`](../../docs/features/knowledge-source-service/tdd-report.md)。
+
+## 仓库布局
+
+[KNOWN | HIGH] KSS 实现包位于仓库根目录 `knowledge_source_service/`，与
+`proof_agent/` 同级。当前目录只保存 KSS 的独立 `pyproject.toml`、`uv.lock`、
+Dockerfile 和服务说明；因此 KSS 仍可独立构建和部署，但不再形成
+`services/knowledge-source-service/knowledge_source_service/` 的重复嵌套。
 
 ## 运行角色
 
@@ -130,8 +137,11 @@ docker buildx build \
   --build-arg UV_IMAGE="$KSS_UV_IMAGE" \
   --build-arg RUNTIME_IMAGE="$KSS_RUNTIME_IMAGE" \
   --tag proofagent-knowledge-source-service:candidate \
-  --load services/knowledge-source-service
+  --load .
 ```
+
+Docker 构建上下文必须是仓库根目录；Dockerfile-specific ignore 文件只允许 KSS
+独立元数据、锁文件和根目录实现包进入上下文。
 
 `KSS_UV_IMAGE` 和 `KSS_RUNTIME_IMAGE` 必须是 `name@sha256:...`。发布流水线应使用 registry digest 部署构建结果，并把 OCI、wheel、OpenAPI 和 migration contract 的精确摘要写入 Candidate Binding v2。
 

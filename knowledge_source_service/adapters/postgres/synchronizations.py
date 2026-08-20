@@ -227,6 +227,8 @@ class PostgresKnowledgeSourceSynchronizationRepository:
         self,
         claim: KnowledgeSourceSynchronizationClaim,
         record: KnowledgeSourceSynchronizationRecord,
+        *,
+        now: datetime,
     ) -> None:
         _validate_immutable_claim(claim, record)
         synchronization = KnowledgeSourceSynchronization.model_validate(
@@ -250,6 +252,7 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                     WHERE knowledge_source_synchronization_id = %(synchronization_id)s
                       AND lease_owner = %(worker_id)s
                       AND fencing_token = %(fencing_token)s
+                      AND lease_expires_at > %(now)s
                     RETURNING state_version
                     """,
                     {
@@ -266,6 +269,7 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                         ),
                         "worker_id": claim.worker_id,
                         "fencing_token": claim.fencing_token,
+                        "now": now,
                     },
                 ).fetchone()
                 if persisted is None:

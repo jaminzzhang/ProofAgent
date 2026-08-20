@@ -83,6 +83,7 @@
 | KSS-R11 | Dashboard 不得绕过 ProofAgent BFF 直连 KSS 管理 API | operator token 只由服务器端 Vault Secret Handle 解析；KSS 仍是 Space、Source、Base、Version 和 Release 的唯一权威 | 已确认 |
 | KSS-R12 | knowledge-enabled Published Agent Version 必须拥有且只拥有一个 exact KSS binding | package、shared-source、Hybrid binding 均拒绝；缺少 KSS、grant、versioned secret 或 approved scorer 时失败关闭 | 已确认；ADR-0210 |
 | KSS-R13 | KSS 排名只用于候选顺序，ProofAgent Admission Scorer 是唯一准入分数权威 | scorer identity/revision 必须与 binding 精确一致；候选集合漂移或非法分数失败关闭 | 已确认；ADR-0210 |
+| KSS-R14 | KSS 实现包与 ProofAgent 包在仓库根目录同级 | `knowledge_source_service/` 保存实现；`services/knowledge-source-service/` 只保存独立 distribution、锁文件、镜像和说明 | 已确认；2026-08-20 目录整理 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -92,7 +93,7 @@
 | 金额与关键数值精度 | 否 | 本功能不定义金额规则；Structured 必须保留源类型 | 特定业务数据精度由数据集 schema 约束 | P3 |
 | 交易与数据一致性 | 是 | 不可变版本、原子 Release、outbox、fencing | 无阻断项 | P1 |
 | 状态流转 | 是 | Query、ingestion、release 均有显式状态机 | 无阻断项 | P1 |
-| 幂等与并发 | 是 | client-scoped fingerprint、lease 与 fencing | 无阻断项 | P1 |
+| 幂等与并发 | 是 | client-scoped fingerprint、lease 与 fencing | [KNOWN | HIGH] 并发幂等重放和过期租约提交已在本地修正；Result artifact 与同步 intake 仍存在 final fence 前置副作用，见 improvement plan KSS-REV-003/004 | P1 |
 | 权限与审计 | 是 | service grant、Space scope、Plan Gate、稳定审计事件 | 无阻断项 | P1 |
 | 隐私与适用监管或合规 | 是 | 最小化日志、内容隔离、受控删除和保留 | 具体数据集监管标签由部署方提供 | P1 |
 | 生产变更与回滚 | 是 | shadow、pilot、gated cutover；生产无本地回退；旧 Hybrid-bound Published Agent Version 已不再可执行 | 正式阈值和发布批准不属于本地编码结论；回滚只能选择另一 KSS-bound version | P1 |
@@ -133,3 +134,22 @@
 | 正式 SLO、shadow 差异阈值和 cutover 门槛 | P2 | 发布判断 | 产品、SRE、发布负责人（未指定） | 试运行指标与回滚演练 |
 | OCR、embedding、learned Sparse 和 reranker 的具体 provider | P2 | 质量、成本和许可 | 技术负责人（未指定） | provider 评估记录 |
 | 数据集级保留、删除和监管标签 | P2 | 合规策略 | 数据与安全负责人（未指定） | 数据分类和适用政策 |
+
+## 9. 2026-08-20 简化与多源整合查询目标
+
+[KNOWN | HIGH] 当前实现已经支持一个 Knowledge Base Release 冻结多个 Source
+Version，并在一次 Query 中返回文档 relevance group 和 structured group。当前 Query 与
+Client Grant 仍精确绑定一个 Release。
+
+[INFERRED | HIGH] 本次完善规划建议不把 Query 扩展为多个 Release。外部知识库默认作为可同步
+Source，先物化为 immutable Source Version，再与文件、数据集和其他快照一起发布为一个
+aggregate Release。这样既满足多源整合查询，也保留 exact Release、权限隔离、引用和可重放
+边界。
+
+[INFERRED | HIGH] 当前主要完善方向不是继续增加检索能力，而是收敛 Source Connector、
+Base membership、Release Composer、Query Pipeline、Result Composer、Repository 和
+fenced job runtime。详细设计树、分期任务和验收标准见
+`docs/features/knowledge-source-service/improvement-plan.md`。
+
+[INFERRED | MED] 若「多个知识库」包含无法导出或快照、只能实时查询的第三方知识库，需要
+新增 Federation ADR；该语义不在本轮简单核心中推定。

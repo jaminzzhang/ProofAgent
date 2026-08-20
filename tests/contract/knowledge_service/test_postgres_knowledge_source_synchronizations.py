@@ -79,7 +79,11 @@ def test_postgres_synchronization_queue_renews_and_fences_claims(
             "started_at": datetime(2026, 8, 12, 12, 0, 1, tzinfo=UTC),
         }
     )
-    repository.save_claim(claim, replace(claim.record, synchronization=running))
+    repository.save_claim(
+        claim,
+        replace(claim.record, synchronization=running),
+        now=datetime(2026, 8, 12, 12, 0, 1, tzinfo=UTC),
+    )
     repository.renew_claim(
         claim,
         now=datetime(2026, 8, 12, 12, 0, 20, tzinfo=UTC),
@@ -91,18 +95,28 @@ def test_postgres_synchronization_queue_renews_and_fences_claims(
         now=datetime(2026, 8, 12, 12, 0, 32, tzinfo=UTC),
         lease_duration=timedelta(seconds=30),
     )
+    assert created.synchronization.state == "queued"
+    assert repository.get("source-sync-queue-1") is not None
+    assert blocked is None
+    with pytest.raises(StaleKnowledgeSourceSynchronizationClaim):
+        repository.save_claim(
+            claim,
+            replace(claim.record, synchronization=running),
+            now=datetime(2026, 8, 12, 12, 0, 50, tzinfo=UTC),
+        )
+
     takeover = repository.claim_next_queued(
         worker_id="knowledge-worker-b",
         now=datetime(2026, 8, 12, 12, 0, 51, tzinfo=UTC),
         lease_duration=timedelta(seconds=30),
     )
-
-    assert created.synchronization.state == "queued"
-    assert repository.get("source-sync-queue-1") is not None
-    assert blocked is None
     assert takeover is not None
     assert takeover.fencing_token == claim.fencing_token + 1
     with pytest.raises(StaleKnowledgeSourceSynchronizationClaim):
-        repository.save_claim(claim, replace(claim.record, synchronization=running))
+        repository.save_claim(
+            claim,
+            replace(claim.record, synchronization=running),
+            now=datetime(2026, 8, 12, 12, 0, 51, tzinfo=UTC),
+        )
     repository.close()
     catalog.close()

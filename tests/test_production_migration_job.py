@@ -74,8 +74,8 @@ def test_local_production_runs_all_knowledge_source_service_roles() -> None:
     images = {services[name]["image"] for name in role_services}
     assert images == {"proofagent-knowledge-source-service:production-local"}
     assert services["kss-api"]["build"] == {
-        "context": "./services/knowledge-source-service",
-        "dockerfile": "Dockerfile",
+        "context": ".",
+        "dockerfile": "services/knowledge-source-service/Dockerfile",
         "args": {
             "UV_IMAGE": (
                 "ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:"

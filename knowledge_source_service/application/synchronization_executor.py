@@ -82,7 +82,11 @@ class KnowledgeSourceSynchronizationExecutor:
             state="running",
             started_at=started_at,
         )
-        if not self._save(claim, replace(claim.record, synchronization=running)):
+        if not self._save(
+            claim,
+            replace(claim.record, synchronization=running),
+            now=started_at,
+        ):
             return True
         heartbeat = _SynchronizationLeaseHeartbeat(
             repository=self._repository,
@@ -130,25 +134,35 @@ class KnowledgeSourceSynchronizationExecutor:
         if heartbeat.claim_lost:
             return True
         if execution_failed:
+            completed_at = self._clock()
             failed = _transition(
                 running,
                 state="failed",
-                completed_at=self._clock(),
+                completed_at=completed_at,
                 problem=_failure_problem(self._trace_id_factory()),
             )
-            self._save(claim, replace(claim.record, synchronization=failed))
+            self._save(
+                claim,
+                replace(claim.record, synchronization=failed),
+                now=completed_at,
+            )
             return True
         if publication is None:
             raise RuntimeError("synchronization produced no typed publication")
+        completed_at = self._clock()
         succeeded = _transition(
             running,
             state="succeeded",
-            completed_at=self._clock(),
+            completed_at=completed_at,
             materialized_knowledge_source_version_id=(
                 publication.version.knowledge_source_version_id
             ),
         )
-        self._save(claim, replace(claim.record, synchronization=succeeded))
+        self._save(
+            claim,
+            replace(claim.record, synchronization=succeeded),
+            now=completed_at,
+        )
         return True
 
     def _capture(
@@ -172,9 +186,11 @@ class KnowledgeSourceSynchronizationExecutor:
         self,
         claim: KnowledgeSourceSynchronizationClaim,
         record: KnowledgeSourceSynchronizationRecord,
+        *,
+        now: datetime,
     ) -> bool:
         try:
-            self._repository.save_claim(claim, record)
+            self._repository.save_claim(claim, record, now=now)
         except StaleKnowledgeSourceSynchronizationClaim:
             return False
         return True

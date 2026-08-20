@@ -4,8 +4,10 @@
 
 - `[KNOWN | HIGH]` The active Python product package is `proof_agent`; its main
   runtime composition enters through `proof_agent/bootstrap/composition.py`.
-- `[KNOWN | HIGH]` The independent Knowledge Source Service lives under
-  `services/knowledge-source-service/`; its public query resource is
+- `[KNOWN | HIGH]` The independent Knowledge Source Service implementation package
+  is `knowledge_source_service/` at the repository root, alongside `proof_agent/`.
+  Its independent distribution metadata and container build files remain under
+  `services/knowledge-source-service/`. Its public query resource is
   `/v1/knowledge-queries`, and its API, Query Executor, Knowledge Worker,
   Synchronization Scheduler, and migration roles have independent entry points.
 - `[KNOWN | HIGH]` As of 2026-08-19, ADR-0210 makes KSS the only executable

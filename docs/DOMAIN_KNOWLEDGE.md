@@ -5,7 +5,7 @@ not a second glossary.
 
 ## Primary maps
 
-- `docs/domain/CONTEXT-MAP.md` — bounded contexts and ownership boundaries.
+- `CONTEXT-MAP.md` — bounded contexts and ownership boundaries.
 - `docs/domain/knowledge-evidence/CONTEXT.md` — Knowledge & Evidence language,
   invariants, and ownership.
 - `docs/domain/knowledge-evidence/decisions.md` — decision index for this domain.

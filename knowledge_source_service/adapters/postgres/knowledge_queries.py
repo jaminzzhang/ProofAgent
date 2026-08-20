@@ -314,6 +314,8 @@ class PostgresKnowledgeQueryRepository:
         self,
         claim: KnowledgeQueryClaim,
         record: KnowledgeQueryRecord,
+        *,
+        now: datetime,
     ) -> None:
         _validate_claim_record_identity(claim, record)
         query = KnowledgeQuery.model_validate(record.query.model_dump(mode="python"))
@@ -366,6 +368,7 @@ class PostgresKnowledgeQueryRepository:
                     WHERE knowledge_query_id = %(knowledge_query_id)s
                       AND lease_owner = %(worker_id)s
                       AND fencing_token = %(fencing_token)s
+                      AND lease_expires_at > %(now)s
                     RETURNING knowledge_query_id
                     """,
                     {
@@ -382,6 +385,7 @@ class PostgresKnowledgeQueryRepository:
                         "knowledge_query_id": query.knowledge_query_id,
                         "worker_id": claim.worker_id,
                         "fencing_token": claim.fencing_token,
+                        "now": now,
                     },
                 ).fetchone()
                 if persisted is None:

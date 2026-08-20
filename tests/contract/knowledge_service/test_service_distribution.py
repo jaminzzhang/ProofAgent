@@ -32,7 +32,14 @@ from knowledge_source_service.application.projection_encoding import (
 from knowledge_source_service.bootstrap import processes
 
 
-SERVICE_PROJECT = Path(__file__).resolve().parents[3] / "services/knowledge-source-service"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+SERVICE_PROJECT = REPOSITORY_ROOT / "services/knowledge-source-service"
+SERVICE_PACKAGE = REPOSITORY_ROOT / "knowledge_source_service"
+
+
+def test_knowledge_source_service_package_is_at_repository_root() -> None:
+    assert SERVICE_PACKAGE.is_dir()
+    assert not (SERVICE_PROJECT / "knowledge_source_service").exists()
 
 
 def test_knowledge_source_service_is_an_independent_python_distribution() -> None:
@@ -43,9 +50,9 @@ def test_knowledge_source_service_is_an_independent_python_distribution() -> Non
     assert configuration["project"]["requires-python"] == ">=3.12"
     dependencies = set(configuration["project"]["dependencies"])
     assert {"fastapi>=0.111.0", "pydantic>=2.7.0"} <= dependencies
-    assert configuration["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == [
-        "knowledge_source_service"
-    ]
+    assert configuration["tool"]["hatch"]["build"]["targets"]["wheel"][
+        "force-include"
+    ] == {"../../knowledge_source_service": "knowledge_source_service"}
     assert all(
         "proof-agent" not in dependency.lower()
         for dependency in dependencies
@@ -54,19 +61,36 @@ def test_knowledge_source_service_is_an_independent_python_distribution() -> Non
 
 def test_service_image_requires_immutable_build_images_and_a_frozen_lock() -> None:
     dockerfile = (SERVICE_PROJECT / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (SERVICE_PROJECT / "Dockerfile.dockerignore").read_text(
+        encoding="utf-8"
+    )
 
     assert "ARG UV_IMAGE" in dockerfile
     assert "ARG RUNTIME_IMAGE" in dockerfile
     assert "FROM ${UV_IMAGE} AS python-build" in dockerfile
     assert "FROM ${RUNTIME_IMAGE} AS runtime" in dockerfile
     assert "FROM python:3.12-slim" not in dockerfile
-    assert "COPY pyproject.toml uv.lock ./" in dockerfile
+    assert "WORKDIR /src/services/knowledge-source-service" in dockerfile
+    assert (
+        "COPY services/knowledge-source-service/pyproject.toml "
+        "services/knowledge-source-service/uv.lock ./"
+    ) in dockerfile
+    assert "COPY knowledge_source_service /src/knowledge_source_service" in dockerfile
     assert "UV_PROJECT_ENVIRONMENT=/opt/knowledge-source-service/venv" in dockerfile
     assert "uv sync --frozen --no-dev --no-editable" in dockerfile
     assert (
         "/opt/knowledge-source-service/venv /opt/knowledge-source-service/venv"
         in dockerfile
     )
+    assert dockerignore.splitlines() == [
+        "**",
+        "!services/",
+        "!services/knowledge-source-service/",
+        "!services/knowledge-source-service/pyproject.toml",
+        "!services/knowledge-source-service/uv.lock",
+        "!knowledge_source_service/",
+        "!knowledge_source_service/**",
+    ]
 
 
 def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
@@ -102,7 +126,7 @@ def test_openapi_contract_cli_emits_the_exact_canonical_bytes() -> None:
 
     result = subprocess.run(
         [sys.executable, "-m", "knowledge_source_service", "openapi-contract"],
-        cwd=SERVICE_PROJECT,
+        cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
     )
@@ -149,7 +173,7 @@ def test_migration_contract_cli_emits_the_exact_canonical_bytes() -> None:
 
     result = subprocess.run(
         [sys.executable, "-m", "knowledge_source_service", "migration-contract"],
-        cwd=SERVICE_PROJECT,
+        cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
     )
@@ -161,7 +185,7 @@ def test_migration_contract_cli_emits_the_exact_canonical_bytes() -> None:
 def test_service_cli_exposes_the_five_isolated_process_roles() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "knowledge_source_service", "roles"],
-        cwd=SERVICE_PROJECT,
+        cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
         text=True,
@@ -180,7 +204,7 @@ def test_service_cli_exposes_the_five_isolated_process_roles() -> None:
 def test_api_role_configuration_check_fails_closed_without_required_dependencies() -> None:
     missing = subprocess.run(
         [sys.executable, "-m", "knowledge_source_service", "api", "--check-config"],
-        cwd=SERVICE_PROJECT,
+        cwd=REPOSITORY_ROOT,
         env={},
         check=False,
         capture_output=True,
@@ -194,7 +218,7 @@ def test_api_role_configuration_check_fails_closed_without_required_dependencies
     }
     configured = subprocess.run(
         [sys.executable, "-m", "knowledge_source_service", "api", "--check-config"],
-        cwd=SERVICE_PROJECT,
+        cwd=REPOSITORY_ROOT,
         env=configured_environment,
         check=False,
         capture_output=True,

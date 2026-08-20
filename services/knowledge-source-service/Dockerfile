@@ -5,10 +5,10 @@ ARG UV_IMAGE
 ARG RUNTIME_IMAGE
 
 FROM ${UV_IMAGE} AS python-build
-WORKDIR /src
+WORKDIR /src/services/knowledge-source-service
 ENV UV_PROJECT_ENVIRONMENT=/opt/knowledge-source-service/venv
-COPY pyproject.toml uv.lock ./
-COPY knowledge_source_service ./knowledge_source_service
+COPY services/knowledge-source-service/pyproject.toml services/knowledge-source-service/uv.lock ./
+COPY knowledge_source_service /src/knowledge_source_service
 RUN uv sync --frozen --no-dev --no-editable
 
 FROM ${RUNTIME_IMAGE} AS runtime

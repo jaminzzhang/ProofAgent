@@ -77,7 +77,11 @@ class KnowledgeQueryExecutor:
             state="running",
             started_at=started_at,
         )
-        if not self._save_claim(claim, replace(record, query=running)):
+        if not self._save_claim(
+            claim,
+            replace(record, query=running),
+            now=started_at,
+        ):
             return True
 
         heartbeat = _KnowledgeQueryLeaseHeartbeat(
@@ -114,7 +118,11 @@ class KnowledgeQueryExecutor:
                 result_availability="unavailable",
                 problem=_unexpected_execution_problem(self._trace_id_factory()),
             )
-            self._save_claim(claim, replace(record, query=failed))
+            self._save_claim(
+                claim,
+                replace(record, query=failed),
+                now=completed_at,
+            )
             return True
 
         if result is None:
@@ -134,7 +142,11 @@ class KnowledgeQueryExecutor:
             result_expires_at=completed_at + self._result_retention,
             result=result,
         )
-        self._save_claim(claim, replace(record, query=succeeded))
+        self._save_claim(
+            claim,
+            replace(record, query=succeeded),
+            now=completed_at,
+        )
         return True
 
     def _record_expired(
@@ -152,15 +164,21 @@ class KnowledgeQueryExecutor:
             result_availability="unavailable",
             problem=_deadline_elapsed_problem(self._trace_id_factory()),
         )
-        self._save_claim(claim, replace(record, query=expired))
+        self._save_claim(
+            claim,
+            replace(record, query=expired),
+            now=completed_at,
+        )
 
     def _save_claim(
         self,
         claim: KnowledgeQueryClaim,
         record: KnowledgeQueryRecord,
+        *,
+        now: datetime,
     ) -> bool:
         try:
-            self._repository.save_claim(claim, record)
+            self._repository.save_claim(claim, record, now=now)
         except StaleKnowledgeQueryClaim:
             return False
         return True

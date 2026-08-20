@@ -46,4 +46,6 @@ class KnowledgeSourceSynchronizationRepository(Protocol):
         self,
         claim: KnowledgeSourceSynchronizationClaim,
         record: KnowledgeSourceSynchronizationRecord,
+        *,
+        now: datetime,
     ) -> None: ...

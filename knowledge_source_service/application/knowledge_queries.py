@@ -13,7 +13,10 @@ from knowledge_source_service.contracts.knowledge_query import (
     KnowledgeQuery,
     KnowledgeQueryLinks,
 )
-from knowledge_source_service.domain.knowledge_queries import KnowledgeQueryRecord
+from knowledge_source_service.domain.knowledge_queries import (
+    KnowledgeQueryPersistenceConflict,
+    KnowledgeQueryRecord,
+)
 from knowledge_source_service.ports.authorization import KnowledgeQueryAuthorizer
 from knowledge_source_service.ports.knowledge_queries import KnowledgeQueryRepository
 
@@ -112,16 +115,29 @@ class KnowledgeQueryApplication:
                 cancel=f"{self_link}:cancel",
             ),
         )
-        self._repository.add(
-            KnowledgeQueryRecord(
-                query=query,
-                request=request,
+        record = KnowledgeQueryRecord(
+            query=query,
+            request=request,
+            client_id=client.client_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            admission=admission,
+        )
+        try:
+            self._repository.add(record)
+        except KnowledgeQueryPersistenceConflict:
+            concurrent = self._repository.get_by_idempotency(
                 client_id=client.client_id,
                 idempotency_key=idempotency_key,
-                request_fingerprint=request_fingerprint,
-                admission=admission,
             )
-        )
+            if concurrent is None:
+                raise
+            if concurrent.request_fingerprint != request_fingerprint:
+                raise IdempotencyKeyMismatch
+            return KnowledgeQueryCreation(
+                query=_retention_safe_view(concurrent.query, now=self._clock()),
+                replayed=True,
+            )
         return KnowledgeQueryCreation(query=query, replayed=False)
 
     def get(

@@ -415,3 +415,77 @@
 校准/批准、Client Grant、versioned secret provisioning、真实 KSS dependency
 readiness、shadow、pilot、recovery 和 Blue/Green Gate 均未执行。因此本增量不构成
 生产发布批准。
+
+## 14. 2026-08-20 并发与租约审查修正
+
+| 步骤 | 行为 | 结果 |
+| --- | --- | --- |
+| BASELINE-REVIEW-001 | Query、Executor、HTTP 与 Synchronization 定向契约 | `35 passed`；确认原有顺序重放、取消与 heartbeat 用例未失败 |
+| RED-IDEMPOTENCY-001 | 并发相同 fingerprint 的 Query/Sync 请求必须返回唯一约束胜者 | `2 failed`；应用层直接冒泡 persistence conflict |
+| GREEN-IDEMPOTENCY-001 | persistence conflict 后按调用方作用域回读，并重新校验 request fingerprint | 新增 Query/Sync 并发胜者用例转绿；不同 fingerprint 仍走既有 mismatch 语义 |
+| RED-LEASE-002 | claim 在恰好到期且尚未接管时不得保存 | `2 failed`；repository 没有保存时刻，无法拒绝 expired claim |
+| GREEN-LEASE-002 | `save_claim(..., now=...)` 贯通 executor、ports、memory 与 PostgreSQL adapter；SQL 增加 `lease_expires_at > now` | 新增 Query/Sync 过期未接管用例转绿；PostgreSQL integration contract 同步增加边界断言 |
+| REVIEW-SIDE-EFFECT-001 | 检查 final fence 前的不可逆或外部写入 | 发现 Result artifact upload 与 synchronization intake publication 早于最终 fence；登记为 KSS-REV-003/004，未以本轮局部修正冒充关闭 |
+| DOC-EVIDENCE-001 | 复核完善规划的 claim tag 与风险等级 | 未批准的目标架构从 `[FRAME]` 改为 `[INFERRED]`；纯可维护性项从 P1 降为 P2；External KB 语义保持待确认 |
+
+### 增量验证
+
+| 检查 | 结果 |
+| --- | --- |
+| 新增 RED | `4 failed`，失败原因分别为未恢复 persistence conflict 与 `save_claim` 不接受/校验 `now` |
+| 新增 GREEN | `4 passed` |
+| KSS contract suite | `93 passed, 26 skipped` |
+| Root Pytest（all extras） | `1968 passed, 122 skipped, 2 deselected` |
+| 变更文件 Ruff | passed |
+| KSS strict mypy | `Success: no issues found in 77 source files` |
+| ProofAgent strict mypy | `Success: no issues found in 354 source files` |
+| domain context check | passed |
+| diff hygiene | `git diff --check` passed |
+
+[LIMIT | HIGH] `26 skipped` 包含真实 PostgreSQL、S3 和 OpenSearch 集成项；本地没有读取
+`.env` 或借用生产凭证。因此 PostgreSQL 的新租约 SQL 断言已进入测试，但尚未在本轮真实
+数据库中执行。Feature 状态保持 `PARTIAL_VERIFICATION`。
+
+[INFERRED | HIGH] TDD 增量结论为 `PARTIAL_BEHAVIOR_PROTECTION`，审查结论为
+`CONDITIONAL_RECOMMENDATION`。KSS-REV-001/002 已本地关闭；KSS-REV-003/004 是生产前
+必须关闭的 P1，不阻断继续做独立的多 Source characterization slice。
+
+## 15. 2026-08-20 KSS 实现包根目录迁移
+
+[KNOWN | HIGH] KSS 实现包已从
+`services/knowledge-source-service/knowledge_source_service/` 迁移到仓库根目录
+`knowledge_source_service/`，与 `proof_agent/` 同级。独立 distribution 元数据、锁文件、
+Dockerfile 和服务说明仍保留在 `services/knowledge-source-service/`。本报告前述章节中的
+旧路径是迁移前的历史证据，不作追溯改写。
+
+| 步骤 | 行为 | 结果 |
+| --- | --- | --- |
+| RED-LAYOUT-001 | 实现包必须位于仓库根目录，旧嵌套目录必须消失 | 失败符合预期：根目录包不存在 |
+| RED-DISTRIBUTION-001 | 独立 KSS wheel 必须从根目录实现包构建 | 失败符合预期：Hatch 仍引用 distribution 目录内的旧包 |
+| RED-IMAGE-004 | KSS Dockerfile 必须从仓库根构建上下文复制独立元数据和实现包 | 失败符合预期：Dockerfile 仍使用旧相对路径 |
+| RED-COMPOSE-005 | production-local KSS build 必须声明仓库根 context 和独立 Dockerfile | 失败符合预期：Compose 仍使用服务元数据目录作为 context |
+| GREEN-LAYOUT-001 | 使用 Git rename 将 83 个已跟踪文件上移，并保留既有未提交修正 | 根目录存在，旧嵌套目录不存在 |
+| GREEN-DISTRIBUTION-001 | Hatch `force-include` 将根目录实现包映射为独立 wheel package | `uv build --wheel` 成功；wheel 含 87 个条目和全部 6 个 SQL migration |
+| GREEN-IMAGE-004 | Dockerfile 改用仓库根 context；Dockerfile-specific ignore 只允许 KSS 元数据、锁文件和实现包 | distribution 与部署契约测试通过 |
+| GREEN-TEST-PATH-001 | KSS 契约测试和模块 CLI 从仓库根解析实现包 | OpenAPI、migration contract、五角色 CLI 保持稳定 |
+
+### 增量验证
+
+| 检查 | 结果 |
+| --- | --- |
+| 新增 RED | `4 failed`；分别命中目录、wheel、Dockerfile 和 Compose 旧假设 |
+| 新增 GREEN | `4 passed` |
+| distribution 与部署契约 | `38 passed` |
+| 独立锁与安装 | `uv lock --check` 通过；临时环境按 `--frozen --no-dev --no-editable` 安装 32 个 package |
+| 已安装产物 smoke | 五个角色正常列出；OpenAPI 和 migration contract 可由安装后的 console script 生成 |
+| KSS contract suite | `94 passed, 26 skipped` |
+| Root Pytest（all extras） | `1969 passed, 122 skipped, 2 deselected` |
+| Python Ruff | 迁移后的 KSS 包及相关测试通过 |
+| strict mypy | KSS 77 个、ProofAgent 354 个 source files 通过 |
+| domain context check | passed |
+| diff hygiene | `git diff --check` passed |
+
+[LIMIT | HIGH] 本轮没有重新构建或运行 KSS OCI image；Docker root context、COPY
+边界和 deny-by-default ignore 由静态契约保护。`26 skipped` 仍包含真实 PostgreSQL、S3
+和 OpenSearch 集成项，因此本次目录迁移证据不构成生产发布批准，Feature 状态保持
+`PARTIAL_VERIFICATION`。

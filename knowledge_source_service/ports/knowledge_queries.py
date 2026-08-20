@@ -45,4 +45,6 @@ class KnowledgeQueryRepository(Protocol):
         self,
         claim: KnowledgeQueryClaim,
         record: KnowledgeQueryRecord,
+        *,
+        now: datetime,
     ) -> None: ...

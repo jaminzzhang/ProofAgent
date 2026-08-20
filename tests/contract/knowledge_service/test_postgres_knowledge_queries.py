@@ -131,17 +131,9 @@ def test_postgres_claim_uses_a_lease_and_rejects_a_stale_fencing_token(
         now=datetime(2026, 8, 12, 9, 0, 20, tzinfo=UTC),
         lease_duration=timedelta(seconds=30),
     )
-    takeover = repository.claim_next_queued(
-        worker_id="worker-b",
-        now=datetime(2026, 8, 12, 9, 0, 32, tzinfo=UTC),
-        lease_duration=timedelta(seconds=30),
-    )
-
     assert first is not None
     assert blocked is None
-    assert takeover is not None
     assert first.fencing_token == 1
-    assert takeover.fencing_token == 2
 
     first_running = replace(
         first.record,
@@ -153,7 +145,25 @@ def test_postgres_claim_uses_a_lease_and_rejects_a_stale_fencing_token(
         ),
     )
     with pytest.raises(StaleKnowledgeQueryClaim):
-        repository.save_claim(first, first_running)
+        repository.save_claim(
+            first,
+            first_running,
+            now=datetime(2026, 8, 12, 9, 0, 31, tzinfo=UTC),
+        )
+
+    takeover = repository.claim_next_queued(
+        worker_id="worker-b",
+        now=datetime(2026, 8, 12, 9, 0, 32, tzinfo=UTC),
+        lease_duration=timedelta(seconds=30),
+    )
+    assert takeover is not None
+    assert takeover.fencing_token == 2
+    with pytest.raises(StaleKnowledgeQueryClaim):
+        repository.save_claim(
+            first,
+            first_running,
+            now=datetime(2026, 8, 12, 9, 0, 32, tzinfo=UTC),
+        )
 
     takeover_running = replace(
         takeover.record,
@@ -164,7 +174,11 @@ def test_postgres_claim_uses_a_lease_and_rejects_a_stale_fencing_token(
             }
         ),
     )
-    repository.save_claim(takeover, takeover_running)
+    repository.save_claim(
+        takeover,
+        takeover_running,
+        now=datetime(2026, 8, 12, 9, 0, 32, tzinfo=UTC),
+    )
 
     persisted = repository.get("query-leased-1")
     repository.close()
@@ -219,6 +233,7 @@ def test_postgres_running_claim_can_renew_its_lease_without_changing_the_fence(
                 }
             ),
         ),
+        now=datetime(2026, 8, 12, 9, 0, 1, tzinfo=UTC),
     )
 
     repository.renew_claim(
@@ -294,7 +309,11 @@ def test_postgres_state_version_prevents_stale_cancel_from_overwriting_terminal_
             }
         ),
     )
-    repository.save_claim(claim, running)
+    repository.save_claim(
+        claim,
+        running,
+        now=datetime(2026, 8, 12, 9, 0, 1, tzinfo=UTC),
+    )
     stale_cancel_base = repository.get("query-cas-1")
     assert stale_cancel_base is not None
 
@@ -317,7 +336,11 @@ def test_postgres_state_version_prevents_stale_cancel_from_overwriting_terminal_
             }
         ),
     )
-    repository.save_claim(claim, failed)
+    repository.save_claim(
+        claim,
+        failed,
+        now=datetime(2026, 8, 12, 9, 0, 2, tzinfo=UTC),
+    )
 
     stale_cancelled = replace(
         stale_cancel_base,

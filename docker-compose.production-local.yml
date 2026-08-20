@@ -379,8 +379,8 @@ services:
   kss-api:
     <<: *kss-service
     build:
-      context: ./services/knowledge-source-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/knowledge-source-service/Dockerfile
       args:
         UV_IMAGE: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
         RUNTIME_IMAGE: python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36

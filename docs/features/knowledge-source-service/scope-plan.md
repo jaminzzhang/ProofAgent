@@ -22,7 +22,7 @@
 | 实施计划 | `docs/superpowers/plans/2026-08-11-knowledge-source-service.md` | 是 | Task 0 至 Task 14 的依赖顺序和退出条件 | 无阻断项 |
 | 领域与 ADR | `docs/domain/knowledge-evidence/`、ADR-0192 至 ADR-0207 | 是 | 稳定术语和难逆决策 | 无阻断项 |
 | 项目规则 | `AGENTS-COMMON.md`、`docs/rules/hicode-coding-rules.md` | 是 | 生产权威、安全、TDD 和证据要求 | 无阻断项 |
-| 代码图与代码入口 | 现有 Graphify 图及 `proof_agent/` | 是 | bootstrap、resolver、provider、retrieval、local index seam | Graphify 未重建；实现时以代码为准 |
+| 代码图与代码入口 | 2026-08-20 KSS Graphify 图、根目录 `knowledge_source_service/` 及独立 distribution 元数据目录 | 是 | Release、Catalog、Query、Synchronization、Retrieval 和 composition seam | 图谱仅作导航证据，实现仍以代码和测试为准 |
 
 ## 3. 需求准入评审
 
@@ -171,3 +171,27 @@
 | `scope-plan.md` | 新建 | 准入、取舍和 TDD 任务映射 | 已写入 | `TDD_INPUT_READY` |
 
 `TDD_INPUT_READY` 仅表示证据足以进入测试驱动实现，不替代代码 Review、安全评审、发布审批或生产验证。
+
+## 14. 2026-08-20 完善规划增量
+
+| 项 | 内容 |
+| --- | --- |
+| 增量目标 | 在不扩大 KSS 权限的前提下，将服务收敛为多 Source、单 exact Release 的整合查询核心 |
+| 建议结论 | `SPLIT_REQUIRED` |
+| 最高风险等级 | P1 |
+| 推荐方案 | 外部知识库作为 Snapshot Source；一个 aggregate Release 冻结全部 exact Source Version；Query contract 保持单 Release |
+| 非目标 | Query-time live federation、多 Release request、用 KSS rank 替代 Evidence Admission Score |
+| 详细规划 | `docs/features/knowledge-source-service/improvement-plan.md` |
+| 第一切片 | KSS-S1 多源行为保护；先增加文档、结构化数据和外部快照共同查询的 characterization tests |
+| 停止条件 | 业务确认需要只能实时查询的第三方知识库，或实现需要改变 exact Release、Space isolation、Candidate Evidence 边界 |
+
+[KNOWN | HIGH] 2026-08-20 已针对 `services/knowledge-source-service/` 重建本地
+Graphify 导航图。图谱显示 Query、Release Catalog、Dataset Intake、Document Intake、
+Synchronization、Hybrid Retrieval 和 Process Composition 已形成独立 community，但多个
+核心对象跨 community 连接；该证据用于定位重构边界，不替代代码和测试。
+
+[KNOWN | HIGH] 原始 KSS 建设范围保持 `TDD_INPUT_READY` 的历史结论。
+[INFERRED | HIGH] 本次「简化与完善」是新的跨模块增量，因此整体应先按 improvement
+plan 拆分。只有单个切片的公共行为、边界、测试起点和停止条件关闭后，才移交
+`hicode:tdd`。2026-08-20 审查已修正并发幂等与过期租约提交，但 final fence 前的
+Result artifact 和同步 intake 副作用仍为开放 P1，见 KSS-REV-003/004。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -14,7 +15,15 @@ from knowledge_source_service.application.knowledge_queries import (
     KnowledgeQueryApplication,
     KnowledgeServiceClient,
 )
+from knowledge_source_service.contracts.knowledge_query import (
+    CreateKnowledgeQueryRequest,
+    KnowledgeQueryLinks,
+)
 from knowledge_source_service.delivery.http import create_application
+from knowledge_source_service.domain.knowledge_queries import (
+    KnowledgeQueryPersistenceConflict,
+    KnowledgeQueryRecord,
+)
 from knowledge_source_service.ports.authorization import KnowledgeQueryAdmission
 
 
@@ -24,6 +33,40 @@ class AllowingTestAuthorizer:
             knowledge_space_id="space-test",
             client_grant_id=f"grant-{client_id}",
             effective_access_scope_digest=f"sha256:{'a' * 64}",
+        )
+
+
+class ConcurrentWinningKnowledgeQueryRepository(
+    InMemoryKnowledgeQueryRepository
+):
+    """Simulate another request winning the idempotency insert race."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._race_pending = True
+
+    def add(self, record: KnowledgeQueryRecord) -> None:
+        if not self._race_pending:
+            super().add(record)
+            return
+        self._race_pending = False
+        winner_id = "query-concurrent-winner"
+        winner_self = f"/v1/knowledge-queries/{winner_id}"
+        winner = replace(
+            record,
+            query=record.query.model_copy(
+                update={
+                    "knowledge_query_id": winner_id,
+                    "links": KnowledgeQueryLinks(
+                        self=winner_self,
+                        cancel=f"{winner_self}:cancel",
+                    ),
+                }
+            ),
+        )
+        super().add(winner)
+        raise KnowledgeQueryPersistenceConflict(
+            "client-scoped idempotency identity already exists"
         )
 
 
@@ -226,6 +269,26 @@ def test_exact_idempotency_replay_returns_the_same_knowledge_query() -> None:
     assert replay_response.status_code == 200, replay_response.text
     assert replay_response.headers["location"] == first_response.headers["location"]
     assert replay_response.json() == first_response.json()
+
+
+def test_concurrent_exact_idempotency_insert_returns_the_winning_query() -> None:
+    repository = ConcurrentWinningKnowledgeQueryRepository()
+    application = KnowledgeQueryApplication(
+        repository=repository,
+        clock=lambda: datetime(2026, 8, 11, 10, 29, 10, tzinfo=UTC),
+        id_factory=lambda: "query-racing-loser",
+        authorizer=AllowingTestAuthorizer(),
+    )
+    request = CreateKnowledgeQueryRequest.model_validate(_valid_request_payload())
+
+    outcome = application.create(
+        request,
+        client=KnowledgeServiceClient(client_id="agent-client-1"),
+        idempotency_key="query-concurrent-attempt-1",
+    )
+
+    assert outcome.replayed is True
+    assert outcome.query.knowledge_query_id == "query-concurrent-winner"
 
 
 def test_idempotency_key_reuse_with_another_request_returns_safe_conflict() -> None:

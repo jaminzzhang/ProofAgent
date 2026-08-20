@@ -61,7 +61,7 @@ docker buildx build \
   --build-arg UV_IMAGE="$KSS_UV_IMAGE" \
   --build-arg RUNTIME_IMAGE="$KSS_RUNTIME_IMAGE" \
   --tag proofagent-knowledge-source-service:candidate \
-  --load services/knowledge-source-service
+  --load .
 ```
 
 `KSS_UV_IMAGE` and `KSS_RUNTIME_IMAGE` must be `name@sha256:...` references. The resulting KSS image must also be promoted and deployed by registry digest.

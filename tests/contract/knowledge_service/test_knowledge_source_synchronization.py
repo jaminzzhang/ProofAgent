@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import threading
 from typing import Any
@@ -31,11 +32,17 @@ from knowledge_source_service.application.synchronizations import (
 )
 from knowledge_source_service.contracts.synchronizations import (
     CreateKnowledgeSourceSynchronizationRequest,
+    KnowledgeSourceSynchronizationLinks,
 )
 from knowledge_source_service.contracts.knowledge_query import (
     CreateKnowledgeQueryRequest,
 )
 from knowledge_source_service.domain.identities import sha256_text
+from knowledge_source_service.domain.synchronizations import (
+    KnowledgeSourceSynchronizationPersistenceConflict,
+    KnowledgeSourceSynchronizationRecord,
+    StaleKnowledgeSourceSynchronizationClaim,
+)
 from knowledge_source_service.ports.authorization import KnowledgeQueryAdmission
 from knowledge_source_service.ports.retrieval import AdmittedKnowledgeQuery
 from knowledge_source_service.ports.snapshot_connections import (
@@ -102,6 +109,113 @@ def test_synchronization_create_is_operator_scoped_and_exactly_idempotent() -> N
             changed,
             operator_id="operator-1",
             idempotency_key="sync-attempt-1",
+        )
+
+
+class _ConcurrentWinningSynchronizationRepository(
+    InMemoryKnowledgeSourceSynchronizationRepository
+):
+    def __init__(self) -> None:
+        super().__init__()
+        self._race_pending = True
+
+    def add(self, record: KnowledgeSourceSynchronizationRecord) -> None:
+        if not self._race_pending:
+            super().add(record)
+            return
+        self._race_pending = False
+        winner_id = "source-sync-concurrent-winner"
+        winner = replace(
+            record,
+            synchronization=record.synchronization.model_copy(
+                update={
+                    "knowledge_source_synchronization_id": winner_id,
+                    "links": KnowledgeSourceSynchronizationLinks(
+                        self=f"/v1/knowledge-source-synchronizations/{winner_id}"
+                    ),
+                }
+            ),
+        )
+        super().add(winner)
+        raise KnowledgeSourceSynchronizationPersistenceConflict(
+            "operator-scoped idempotency identity already exists"
+        )
+
+
+def test_concurrent_synchronization_insert_returns_the_winning_resource() -> None:
+    repository = _ConcurrentWinningSynchronizationRepository()
+    application = KnowledgeSourceSynchronizationApplication(
+        repository=repository,
+        clock=lambda: datetime(2026, 8, 12, 11, 0, tzinfo=UTC),
+        id_factory=lambda: "source-sync-racing-loser",
+        admit_connection=lambda connection_id: connection_id == "connection-claims",
+    )
+    request = CreateKnowledgeSourceSynchronizationRequest.model_validate(
+        {
+            "knowledge_space_id": "space-claims",
+            "knowledge_source_id": "source-claims",
+            "connection_id": "connection-claims",
+            "display_filename": "claims.snapshot.json",
+            "record_path": ["claims"],
+            "field_types": {"claim_id": "string"},
+        }
+    )
+
+    outcome = application.create(
+        request,
+        operator_id="operator-1",
+        idempotency_key="sync-concurrent-attempt-1",
+    )
+
+    assert outcome.created is False
+    assert (
+        outcome.synchronization.knowledge_source_synchronization_id
+        == "source-sync-concurrent-winner"
+    )
+
+
+def test_synchronization_claim_cannot_save_after_lease_expiry_without_takeover() -> None:
+    base = datetime(2026, 8, 12, 11, 0, tzinfo=UTC)
+    repository = InMemoryKnowledgeSourceSynchronizationRepository()
+    application = KnowledgeSourceSynchronizationApplication(
+        repository=repository,
+        clock=lambda: base - timedelta(seconds=1),
+        id_factory=lambda: "source-sync-expiring-1",
+        admit_connection=lambda connection_id: connection_id == "connection-claims",
+    )
+    application.create(
+        CreateKnowledgeSourceSynchronizationRequest.model_validate(
+            {
+                "knowledge_space_id": "space-claims",
+                "knowledge_source_id": "source-claims",
+                "connection_id": "connection-claims",
+                "display_filename": "claims.snapshot.json",
+                "record_path": ["claims"],
+                "field_types": {"claim_id": "string"},
+            }
+        ),
+        operator_id="operator-1",
+        idempotency_key="sync-expiring-attempt-1",
+    )
+    claim = repository.claim_next_queued(
+        worker_id="worker-expiring",
+        now=base,
+        lease_duration=timedelta(seconds=30),
+    )
+    assert claim is not None
+    running = replace(
+        claim.record,
+        synchronization=claim.record.synchronization.model_copy(
+            update={"state": "running", "started_at": base}
+        ),
+    )
+    repository.save_claim(claim, running, now=base)
+
+    with pytest.raises(StaleKnowledgeSourceSynchronizationClaim):
+        repository.save_claim(
+            claim,
+            running,
+            now=base + timedelta(seconds=30),
         )
 
 

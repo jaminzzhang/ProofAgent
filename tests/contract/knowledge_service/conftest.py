@@ -16,8 +16,8 @@ import pytest
 import httpx
 
 
-SERVICE_PROJECT = Path(__file__).resolve().parents[3] / "services/knowledge-source-service"
-sys.path.insert(0, str(SERVICE_PROJECT))
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
 @pytest.fixture
