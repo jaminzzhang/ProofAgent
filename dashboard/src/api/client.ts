@@ -545,9 +545,13 @@ export function deleteConfigDraftSkillPack(
   agentId: string,
   draftId: string,
   packId: string,
+  expectedRevision?: number,
 ): Promise<BusinessFlowSkillPackConfiguration> {
+  const revisionQuery = expectedRevision === undefined
+    ? ''
+    : `?expected_revision=${encodeURIComponent(String(expectedRevision))}`
   return fetchJson<BusinessFlowSkillPackConfiguration>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows/${packId}`,
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows/${packId}${revisionQuery}`,
     {
       method: 'DELETE',
     },

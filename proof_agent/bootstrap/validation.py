@@ -8,6 +8,9 @@ from uuid import uuid4
 import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import AgentManifest
+from proof_agent.bootstrap.package_security import (
+    require_package_local_skill_pack_definitions,
+)
 from proof_agent.control.workflow.stage_validation import (
     MAX_WORKFLOW_STAGE_TOTAL_PROMPT_CHARS,
     validate_workflow_stage_prompt_config,
@@ -538,6 +541,10 @@ def _validate_skills_capability_config(
             "Add at least one package-local Business Flow Skill Pack binding or disable skills.",
             artifact_path=manifest_path,
         )
+    require_package_local_skill_pack_definitions(
+        manifest,
+        manifest_path=manifest_path,
+    )
     seen_ids: set[str] = set()
     default_ids: list[str] = []
     for binding in skills.business_flows:

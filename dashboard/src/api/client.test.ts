@@ -837,6 +837,7 @@ test('createConfigDraftSkillPack posts draft-local Skill Pack creation request',
   )
 
   const response = await createConfigDraftSkillPack('enterprise_qa', 'draft_1', {
+    expected_revision: 4,
     id: 'claims_qa',
     label: 'Claims QA',
     description: 'Claim handling guidance.',
@@ -848,6 +849,7 @@ test('createConfigDraftSkillPack posts draft-local Skill Pack creation request',
     sameOriginRequest({
       method: 'POST',
       body: JSON.stringify({
+        expected_revision: 4,
         id: 'claims_qa',
         label: 'Claims QA',
         description: 'Claim handling guidance.',
@@ -867,6 +869,7 @@ test('updateConfigDraftSkillPack patches a draft-local Skill Pack', async () => 
   )
 
   await updateConfigDraftSkillPack('enterprise_qa', 'draft_1', 'claims_qa', {
+    expected_revision: 5,
     label: 'Claims QA Updated',
     stage_prompt_addenda: {
       plan: {
@@ -882,6 +885,7 @@ test('updateConfigDraftSkillPack patches a draft-local Skill Pack', async () => 
     sameOriginRequest({
       method: 'PATCH',
       body: JSON.stringify({
+        expected_revision: 5,
         label: 'Claims QA Updated',
         stage_prompt_addenda: {
           plan: {
@@ -903,10 +907,15 @@ test('deleteConfigDraftSkillPack deletes a draft-local Skill Pack', async () => 
     }),
   )
 
-  const response = await deleteConfigDraftSkillPack('enterprise_qa', 'draft_1', 'claims_qa')
+  const response = await deleteConfigDraftSkillPack(
+    'enterprise_qa',
+    'draft_1',
+    'claims_qa',
+    6,
+  )
 
   expect(fetchMock).toHaveBeenCalledWith(
-    '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa',
+    '/api/config/agents/enterprise_qa/drafts/draft_1/skills/business-flows/claims_qa?expected_revision=6',
     sameOriginRequest({
       method: 'DELETE',
     }),

@@ -77,7 +77,10 @@ def test_local_contract_validator_cleans_package_after_success(
         contract_adapter_module,
         "load_agent_manifest",
         lambda _: SimpleNamespace(
-            workflow=SimpleNamespace(template="react_enterprise_qa_v3")
+            workflow=SimpleNamespace(template="react_enterprise_qa_v3"),
+            capabilities=SimpleNamespace(
+                skills=SimpleNamespace(business_flows=())
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -99,6 +102,52 @@ def test_local_contract_validator_cleans_package_after_success(
     assert len(roots) == 1
     assert len(skill_pack_checks) == 1
     assert not roots[0].exists()
+
+
+def test_local_contract_validator_rejects_external_skill_definition_before_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    outside_definition = tmp_path / "outside-skill.yaml"
+    outside_definition.write_text(
+        "schema_version: business_flow_skill_pack.v1\nid: claims_qa\n",
+        encoding="utf-8",
+    )
+    skill_loads: list[Path] = []
+
+    def compile_candidate(draft: DraftAgent, output_root: Path) -> Path:
+        del draft
+        package_dir = output_root / "compiled-package"
+        package_dir.mkdir()
+        (package_dir / "agent.yaml").write_text("name: agent_alpha\n", encoding="utf-8")
+        return package_dir
+
+    monkeypatch.setattr(contract_adapter_module, "compile_draft_agent", compile_candidate)
+    monkeypatch.setattr(
+        contract_adapter_module,
+        "load_agent_manifest",
+        lambda _: SimpleNamespace(
+            workflow=SimpleNamespace(template="react_enterprise_qa_v3"),
+            capabilities=SimpleNamespace(
+                skills=SimpleNamespace(
+                    business_flows=(
+                        SimpleNamespace(id="claims_qa", definition=outside_definition),
+                    )
+                )
+            ),
+        ),
+    )
+    monkeypatch.setattr(contract_adapter_module, "resolve_workflow_template", lambda _: object())
+    monkeypatch.setattr(
+        contract_adapter_module,
+        "load_business_flow_skill_pack_set",
+        lambda _manifest, *, template, manifest_path: skill_loads.append(manifest_path),
+    )
+
+    with pytest.raises(ValueError, match="Agent Contract candidate is invalid"):
+        LocalAgentConfigurationContractValidator().validate(draft=_draft())
+
+    assert skill_loads == []
 
 
 def test_local_contract_validator_has_no_concrete_store_dependency() -> None:

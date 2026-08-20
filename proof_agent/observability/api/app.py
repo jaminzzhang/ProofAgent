@@ -23,6 +23,9 @@ from proof_agent.delivery.agent_configuration_workflow_stages import (
 from proof_agent.delivery.agent_configuration_contracts import (
     LocalAgentConfigurationContractValidator,
 )
+from proof_agent.delivery.agent_configuration_skill_packs import (
+    LocalAgentConfigurationSkillPackAdapter,
+)
 from proof_agent.delivery.agent_configuration_publication import (
     LocalAgentConfigurationPublicationAdapter,
 )
@@ -294,6 +297,7 @@ def create_app(
                 ),
                 contract_validator=LocalAgentConfigurationContractValidator(),
                 workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
+                skill_pack_inspector=LocalAgentConfigurationSkillPackAdapter(),
                 scope=AgentConfigurationScope.MULTI_AGENT,
             )
             application.state.agent_configuration_workspace_persistence = (

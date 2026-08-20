@@ -4,38 +4,38 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 6 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
+| 建议结论 | Slice 7 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
 | 最高风险等级 | P1 |
-| 一句话依据 | Slice 5 已关闭；现有 Configuration UoW、整包编译校验与稳定 Contract API 足以把 raw Contract 读写收口到 Workspace，同时保持公开行为 |
-| 下一步建议 | Slice 6 已关闭；后续以独立 Scope 迁移 Skill Pack 编辑或 canonical seed bootstrap 权威 |
+| 一句话依据 | Slice 6 已关闭；现有 Configuration UoW、Contract Bundle 与 Skill Pack loader 足以把专用读写收口到 Workspace，并删除两次创建和长期派生目录 |
+| 下一步建议 | 启动独立子 Agent，按 scope→diff、权限、CAS、事务、安全与删除清单对抗复验 |
 
 ## 2. 依据与输入缺口
 
 | 材料 | 来源 | 是否读取 | 关键证据 | 缺口 |
 | --- | --- | --- | --- | --- |
-| 用户请求 | 当前对话 | 是 | 用户要求提交 Slice 5 并继续下一切片；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 6 |
+| 用户请求 | 当前对话 | 是 | 用户要求提交 Git，并启动“迁移 Skill Pack 专用编辑权威”；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 7 |
 | 架构评审 | `architecture-review-20260818-220308.html` | 是 | Delivery 与 concrete store 耦合；推荐 deep application module 与 focused ports | Graphify 图较旧，只作导航 |
 | 项目规则 | `AGENTS-COMMON.md`、hicode coding rules | 是 | production PostgreSQL 权威、原子审计、TDD、无兼容 facade | 无 |
 | 领域与 ADR | Agent Configuration context、ADR-0009、ADR-0011 | 是 | Workspace、Draft、Published Version、模块/lifecycle 分离 | context 含已退役知识术语，后续单独清理 |
-| 当前实现 | configuration router、Workspace、Local Contract validator、Dashboard Contract editors | 是 | raw Contract GET/PATCH 已改走 Workspace；PATCH 使用调用方 revision CAS、临时整包校验与原子审计 | Skill Pack 编辑与 canonical seed bootstrap 仍待后续切片 |
+| 当前实现 | configuration router、Workspace、Skill Pack loader、Dashboard Skills editor | 是 | 四个 Skill Pack route 直接组合 Local store、YAML、compiler 与 manifest；创建完整配置需 POST 后 PATCH | canonical seed bootstrap 仍待后续切片 |
 
 ## 3. 需求准入评审
 
 | 项 | 内容 |
 | --- | --- |
-| 准入结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
-| 需求分析输入 | 用户确认、领域规则、现有稳定 API、Configuration UoW、受控编译器、Dashboard 回归 |
-| 证据缺口 | raw Contract endpoint 仅在 development 注册；本轮只提供 development adapter 与双 persistence port 的行为证据，不形成生产批准 |
+| 准入结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 需求分析输入 | 用户明确切片、领域规则、现有稳定 API、Configuration UoW、Skill Pack loader、Dashboard editor 回归 |
+| 证据缺口 | Skill Pack endpoint 仅在 development 注册；真实 PostgreSQL DSN 未配置，本轮不形成生产批准 |
 
 ## 4. 需求分析与范围边界
 
 | 项 | 内容 |
 | --- | --- |
-| 需求目标 | 让 Control-owned Workspace 成为 raw Contract 读取、候选整包校验、CAS 保存与审计的唯一应用权威 |
-| 范围内 | Workspace Contract update interface、受控本地整包 validator、revision CAS、Draft operation audit、全局 audit、development GET/PATCH、稳定错误映射、Dashboard revision 传递、旧 route 逻辑删除、文档 |
-| 范围外 | Skill Pack 专用编辑、canonical seed bootstrap、production Contract endpoint、validation/publication/activation/rollback、schema、部署 |
-| 非目标 | 新增 facade 后保留 route 内旧实现；拆分每个 Contract 字段的 typed command；改变 raw Contract 高级入口可更新完整 `agent_yaml` 的兼容语义；把本地验证描述为生产批准 |
-| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；保存以 expected revision CAS 原子提交完整 Contract Bundle 与双层 audit；adapter 临时编译后无残留；audit/HTTP 错误不含 raw YAML 或内部路径；独立子 Agent 复验 |
+| 需求目标 | 让 Control-owned Workspace 成为 Skill Pack 专用读取、typed mutation、候选校验、CAS 保存与审计的唯一应用权威 |
+| 范围内 | Workspace Skill Pack read/create/update/delete interface、完整 create command、受控本地 inspection adapter、revision CAS、Draft operation audit、全局 audit、development routes、稳定错误映射、Dashboard revision 传递与单次创建、旧逻辑删除、文档 |
+| 范围外 | canonical seed bootstrap、production Skill Pack endpoint、raw Contract 高级入口语义变更、KSS binding 编辑、validation/publication/activation/rollback、schema、部署 |
+| 非目标 | 新增 facade 后保留 route 内旧实现；让 adapter 拥有 CAS 或审计；改变 Skill Pack runtime admission 规则；把本地验证描述为生产批准 |
+| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；完整 create 只发一个命令；manifest binding、definition 与双层 audit 以 expected revision CAS 原子提交；adapter 临时编译后无残留；audit/HTTP 错误不含 Prompt、raw YAML 或内部路径；独立子 Agent 复验 |
 | `feature_context.md` 更新 | 已创建 |
 | ADR 处理 | 不需要；执行 ADR-0009、ADR-0011 与既有 Workspace、Draft CAS 和 Contract Bundle 规则，不改变持久化模型或公开协议 |
 
@@ -370,3 +370,49 @@
 - RED：Dashboard raw Contract 保存不发送当前 Draft revision，旧 PATCH 允许 last-write-wins。
 - GREEN：client/request 增加可选 `expected_revision`，页面保存显式传递当前 revision；旧调用兼容但仍由服务端 CAS 关闭竞态。
 - 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 按 scope→diff、权限、候选校验、CAS、事务/audit、无残留、旧实现删除、错误映射和范围隔离清单复验。
+
+## 29. Slice 7 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 最高风险等级 | P1 |
+| 公开 interface | `get_business_flow_skill_packs(...)`、`create_business_flow_skill_pack(...)`、`update_business_flow_skill_pack(...)`、`delete_business_flow_skill_pack(...)` |
+| 可观察行为 | GET 返回 revisioned projection；mutation 以完整 typed command 更新 manifest binding 与 package-local definition，经 adapter 校验后 CAS 保存并追加双层 audit |
+| 兼容边界 | 保持 HTTP method/path、`agent.view`/`agent.edit` 权限与既有字段；新增 `revision` 响应字段和可选 `expected_revision`，旧调用由 Route 读取当前 revision 后仍受最终 CAS 保护 |
+| 范围外 | canonical seed bootstrap、production Skill Pack endpoint、raw Contract 语义变更、KSS binding 编辑、validation/publication/activation/rollback、schema、部署 |
+| ADR 判断 | 不需要；执行现有 Workspace ownership、Contract Bundle、Draft CAS 与 ADR-0210 KSS 权威边界 |
+
+## 30. Slice 7 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-SP-ROOT | Operator 读取或编辑 Skill Pack | Delivery 只调用 Workspace interface | revisioned Skill Pack projection | interface 与 AST 删除测试 | P1 |
+| ACW-SP-MAIN-1 | GET 当前 Draft Skill Pack | Workspace 读取 revisioned Draft，由 injected adapter 在自动清理目录内编译与投影 | 稳定逻辑引用与配置问题 | 无残留、无临时绝对路径 | P1 |
+| ACW-SP-MAIN-2 | POST/PATCH/DELETE 携带 expected revision | Control typed command 同时构建 manifest binding 与 definition candidate | 完整 Contract Bundle | create/update/delete 行为 | P1 |
+| ACW-SP-MAIN-3 | candidate 构建完成 | adapter 校验完整 Skill Pack set 并生成 candidate projection | 可提交候选 | schema、stage、capability ref Gate | P1 |
+| ACW-SP-MAIN-4 | inspection 通过 | Configuration UoW CAS 保存 Draft，并在同一事务追加 operation/global audit | revision +1 | audit、commit failure、lifecycle negative | P1 |
+| ACW-SP-BRANCH-1 | client revision 过期或 inspection 期间并发写入 | precheck 或 repository CAS 拒绝 | stable 409；不覆盖赢家 | stale/interleaving tests | P1 |
+| ACW-SP-BRANCH-2 | binding、definition、loader 或 adapter 拒绝 | Delivery 返回稳定 400；Draft/audit 不变 | 无部分写入 | invalid/path safety tests | P1 |
+| ACW-SP-BRANCH-3 | adapter/UoW 非预期异常 | Delivery 返回稳定 500，不暴露内部异常 | 无 fallback | fault tests | P1 |
+| ACW-SP-BOUND-1 | Skill Pack 保存成功 | 不创建 Validation Record、Published Version、activation 或 KSS mutation | 仅 Draft revision 改变 | negative assertions | P1 |
+
+## 31. Slice 7 TDD 任务
+
+### Task ACW-SP1：Workspace typed authority
+
+- RED：从 Workspace interface 证明完整 create、update、delete、revision CAS、inspection 期间并发冲突、双层 audit 与 lifecycle 负向边界。
+- GREEN：把 Contract Bundle mutation 收入 Control-owned Skill Pack command module；Workspace 只依赖 injected inspector 与 Configuration UoW。
+- 停止条件：需要改变 runtime Skill Pack admission、KSS binding 或数据库 schema。
+
+### Task ACW-SP2：Local inspector 与 Delivery 删除
+
+- RED：现有四个 route 直接依赖 Local store、YAML、compiler、manifest loader 与 projection helpers，并保留长期 `compiled_projection`/`compiled_validation` 目录。
+- GREEN：引入无 concrete store 依赖且自动清理临时目录的 Local inspector；route 只保留权限、request/response 和稳定错误映射；删除旧 Skill Pack helpers/imports。
+- 停止条件：需要迁移 canonical seed bootstrap 或 raw Contract 高级入口。
+
+### Task ACW-SP3：Dashboard 单命令与独立复核
+
+- RED：Dashboard 创建完整 Skill Pack 先 POST 再 PATCH，mutation 不发送当前 revision。
+- GREEN：create request 一次携带全部字段；create/update/delete 显式发送当前 Skill Pack projection revision，成功响应立即推进 revision。
+- 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 按 scope→diff、权限、typed authority、CAS、事务/audit、临时路径安全、单命令、旧实现删除、错误映射、KSS/生命周期范围隔离清单复验。

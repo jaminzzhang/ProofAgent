@@ -308,6 +308,32 @@ audit:
     )
 
 
+def test_rejects_parent_segments_before_skill_definition_path_normalization(
+    tmp_path: Path,
+) -> None:
+    agent_yaml = _write_react_manifest(tmp_path)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "claims.yaml").write_text("id: claims_qa\n", encoding="utf-8")
+    raw = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    raw["capabilities"]["skills"] = {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "claims_qa",
+                "definition": "./skills/../skills/claims.yaml",
+            }
+        ],
+    }
+    agent_yaml.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ProofAgentError) as exc:
+        load_agent_manifest(agent_yaml)
+
+    assert exc.value.code == "PA_CONFIG_002"
+    assert "definition reference is unsafe: claims_qa" in exc.value.message
+
+
 def test_manifest_rejects_package_knowledge_authority(tmp_path: Path) -> None:
     agent_yaml = _write_react_manifest(tmp_path)
     raw = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))

@@ -13,14 +13,16 @@ import type {
   WorkflowStagePromptConfig,
 } from '../../api/types'
 
+export type SkillPackMutationResult = 'saved' | 'conflict' | 'failed'
+
 interface SkillsModuleEditorProps {
   config: BusinessFlowSkillPackConfiguration | null
   loading: boolean
   error: string | null
   busy: boolean
-  onCreatePack: (payload: BusinessFlowSkillPackCreateRequest) => Promise<void>
-  onUpdatePack: (packId: string, payload: BusinessFlowSkillPackUpdateRequest) => Promise<void>
-  onDeletePack: (packId: string) => Promise<void>
+  onCreatePack: (payload: BusinessFlowSkillPackCreateRequest) => Promise<SkillPackMutationResult>
+  onUpdatePack: (packId: string, payload: BusinessFlowSkillPackUpdateRequest) => Promise<SkillPackMutationResult>
+  onDeletePack: (packId: string) => Promise<SkillPackMutationResult>
 }
 
 interface StageDraft {
@@ -62,6 +64,8 @@ export function SkillsModuleEditor({
   const { t } = useLocale()
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null)
   const [draft, setDraft] = useState<PackDraft | null>(null)
+  const [editingPack, setEditingPack] = useState<BusinessFlowSkillPackProjection | null>(null)
+  const [editConflict, setEditConflict] = useState(false)
   const [newPackId, setNewPackId] = useState('')
   const [newPackLabel, setNewPackLabel] = useState('')
   const [newPackDescription, setNewPackDescription] = useState('')
@@ -80,6 +84,9 @@ export function SkillsModuleEditor({
     () => config?.packs.find((pack) => pack.id === selectedPackId) ?? config?.packs[0] ?? null,
     [config, selectedPackId],
   )
+  const latestEditingPack = editingPack
+    ? config?.packs.find((pack) => pack.id === editingPack.id) ?? null
+    : null
 
   useEffect(() => {
     if (!config || config.packs.length === 0) {
@@ -92,12 +99,13 @@ export function SkillsModuleEditor({
   }, [config, selectedPackId])
 
   useEffect(() => {
+    if (drawerMode === 'edit') return
     if (!selectedPack || !config) {
       setDraft(null)
       return
     }
     setDraft(packToDraft(selectedPack, config))
-  }, [config, selectedPack])
+  }, [config, drawerMode, selectedPack])
 
   if (loading) {
     return (
@@ -128,41 +136,61 @@ export function SkillsModuleEditor({
   async function createPack() {
     const id = newPackId.trim()
     const label = newPackLabel.trim()
-    if (!id || !label) return
-    await onCreatePack({
+    const description = newPackDescription.trim()
+    if (!id || !label || !description) return
+    const completePayload = newPackSupplementalUpdatePayload()
+    const result = await onCreatePack({
       id,
       label,
-      description: newPackDescription.trim(),
+      description,
       intent_patterns: splitLines(newPackIntentPatterns),
       intent_taxonomy_refs: splitLines(newPackIntentTaxonomyRefs),
       default: newPackDefault,
+      ...completePayload,
     })
-    const supplementalPayload = newPackSupplementalUpdatePayload()
-    if (hasSupplementalCreateUpdate(supplementalPayload)) {
-      await onUpdatePack(id, supplementalPayload)
-    }
+    if (result !== 'saved') return
     resetNewPackForm()
     setSelectedPackId(id)
     setDrawerMode(null)
   }
 
   async function savePack() {
-    if (!selectedPack || !draft) return
-    await onUpdatePack(selectedPack.id, draftToUpdatePayload(draft))
-    setDrawerMode(null)
+    if (!editingPack || !draft || editConflict) return
+    const result = await onUpdatePack(editingPack.id, draftToUpdatePayload(draft))
+    if (result === 'conflict') setEditConflict(true)
+    if (result !== 'saved') return
+    closeEditPack()
   }
 
   async function deletePack() {
-    if (!selectedPack) return
-    await onDeletePack(selectedPack.id)
-    setDrawerMode(null)
+    if (!editingPack || editConflict) return
+    const result = await onDeletePack(editingPack.id)
+    if (result === 'conflict') setEditConflict(true)
+    if (result !== 'saved') return
+    closeEditPack()
   }
 
   function openEditPack(pack: BusinessFlowSkillPackProjection) {
     if (!config) return
     setSelectedPackId(pack.id)
+    setEditingPack(pack)
     setDraft(packToDraft(pack, config))
+    setEditConflict(false)
     setDrawerMode('edit')
+  }
+
+  function closeEditPack() {
+    setDrawerMode(null)
+    setEditingPack(null)
+    setEditConflict(false)
+  }
+
+  function reloadLatestEditingPack() {
+    if (!latestEditingPack || !config) return
+    setSelectedPackId(latestEditingPack.id)
+    setEditingPack(latestEditingPack)
+    setDraft(packToDraft(latestEditingPack, config))
+    setEditConflict(false)
   }
 
   function resetNewPackForm() {
@@ -180,7 +208,10 @@ export function SkillsModuleEditor({
     setNewPackStages({})
   }
 
-  function newPackSupplementalUpdatePayload(): BusinessFlowSkillPackUpdateRequest {
+  function newPackSupplementalUpdatePayload(): Omit<
+    BusinessFlowSkillPackCreateRequest,
+    'expected_revision' | 'id' | 'label' | 'description' | 'intent_patterns'
+  > {
     const admission: Record<string, unknown> = {}
     const minConfidence = Number(newPackMinConfidence)
     if (newPackMinConfidence.trim() && Number.isFinite(minConfidence)) {
@@ -306,7 +337,7 @@ export function SkillsModuleEditor({
               <button
                 type="button"
                 onClick={createPack}
-                disabled={busy || !newPackId.trim() || !newPackLabel.trim()}
+                disabled={busy || !newPackId.trim() || !newPackLabel.trim() || !newPackDescription.trim()}
                 className="inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
               >
                 {busy ? 'Saving...' : 'Create Skill Pack'}
@@ -436,16 +467,16 @@ export function SkillsModuleEditor({
           </SkillPackDrawer>
         ) : null}
 
-        {drawerMode === 'edit' && selectedPack && draft ? (
+        {drawerMode === 'edit' && editingPack && draft ? (
           <SkillPackDrawer
             title="Edit Business Flow Skill Pack"
-            onClose={() => setDrawerMode(null)}
+            onClose={closeEditPack}
             footer={
               <>
                 <button
                   type="button"
                   onClick={deletePack}
-                  disabled={busy}
+                  disabled={busy || editConflict}
                   className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm font-medium text-[var(--danger)] hover:bg-[var(--danger)]/15 disabled:opacity-50"
                 >
                   Delete Skill Pack
@@ -453,7 +484,7 @@ export function SkillsModuleEditor({
                 <button
                   type="button"
                   onClick={savePack}
-                  disabled={busy}
+                  disabled={busy || editConflict}
                   className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
                 >
                   {busy ? 'Saving...' : 'Save Skill Pack'}
@@ -461,10 +492,31 @@ export function SkillsModuleEditor({
               </>
             }
           >
+              {editConflict ? (
+                <div
+                  role="alert"
+                  className="border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-4 text-sm text-[var(--danger)]"
+                >
+                  {latestEditingPack ? (
+                    <>
+                      <p>This Skill Pack changed while you were editing. Reload the latest version before applying new edits.</p>
+                      <button
+                        type="button"
+                        onClick={reloadLatestEditingPack}
+                        className="mt-3 rounded-md border border-[var(--danger)]/40 px-3 py-2 font-medium"
+                      >
+                        Reload Latest
+                      </button>
+                    </>
+                  ) : (
+                    <p>This Skill Pack was deleted while you were editing. Close this drawer and review the latest configuration.</p>
+                  )}
+                </div>
+              ) : null}
               <SkillPackDrawerSection title="Basics" defaultOpen>
                 <div className="border-b border-[var(--border)] pb-4">
                   <p className="mt-1 break-all font-mono text-xs text-[var(--text-muted)]">
-                    {selectedPack.definition}
+                    {editingPack.definition}
                   </p>
                 </div>
 
@@ -516,7 +568,7 @@ export function SkillsModuleEditor({
                   <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                     Routing-Safe Summary
                   </h5>
-                  <CodeBlock>{formatJson(selectedPack.routing_admission.routing_safe_summary)}</CodeBlock>
+                  <CodeBlock>{formatJson(editingPack.routing_admission.routing_safe_summary)}</CodeBlock>
                 </div>
               </SkillPackDrawerSection>
 
@@ -533,7 +585,7 @@ export function SkillsModuleEditor({
                 <div className="mt-4 space-y-4">
                   {config.addendum_slots.map((slot) => {
                     const stageDraft = draft.stages[slot.stage_id] ?? EMPTY_STAGE_DRAFT
-                    const projection = selectedPack.stage_addenda.find((stage) => stage.stage_id === slot.stage_id)
+                    const projection = editingPack.stage_addenda.find((stage) => stage.stage_id === slot.stage_id)
                     return (
                       <div key={slot.stage_id} className="border border-[var(--border)] bg-[var(--bg-surface)] p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -577,7 +629,7 @@ export function SkillsModuleEditor({
 
               <SkillPackDrawerSection title="Prompt Preview">
                 <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                  {selectedPack.stage_addenda.map((stage) => (
+                  {editingPack.stage_addenda.map((stage) => (
                     <div key={stage.stage_id} className="min-w-0 border border-[var(--border)] bg-[var(--bg-surface)] p-4">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <h5 className="text-sm font-semibold text-[var(--text-primary)]">{stage.stage_label}</h5>
@@ -1063,17 +1115,6 @@ function draftToUpdatePayload(draft: PackDraft): BusinessFlowSkillPackUpdateRequ
     admission,
     default: draft.default,
   }
-}
-
-function hasSupplementalCreateUpdate(payload: BusinessFlowSkillPackUpdateRequest): boolean {
-  return Boolean(
-    Object.keys(payload.admission ?? {}).length > 0 ||
-      Object.keys(payload.stage_prompt_addenda ?? {}).length > 0 ||
-      (payload.knowledge_binding_refs?.length ?? 0) > 0 ||
-      (payload.tool_contract_refs?.length ?? 0) > 0 ||
-      (payload.policy_rule_refs?.length ?? 0) > 0 ||
-      (payload.validator_refs?.length ?? 0) > 0,
-  )
 }
 
 function stageDraftsToPromptConfig(stages: Record<string, StageDraft>): Record<string, WorkflowStagePromptConfig> {

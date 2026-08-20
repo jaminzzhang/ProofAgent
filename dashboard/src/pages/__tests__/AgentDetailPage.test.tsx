@@ -221,6 +221,7 @@ describe('AgentDetailPage', () => {
     installTestLocalStorage()
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
     vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
+      revision: 4,
       enabled: true,
       template_name: 'react_enterprise_qa_v2',
       template_descriptor_version: 'react_enterprise_qa.v2',
@@ -1360,6 +1361,7 @@ workflow:
     const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
     fireEvent.change(within(drawer).getByLabelText('Pack ID'), { target: { value: 'appeals_qa' } })
     fireEvent.change(within(drawer).getByLabelText('Label'), { target: { value: 'Appeals QA' } })
+    fireEvent.change(within(drawer).getByLabelText('Description'), { target: { value: 'Appeals guidance.' } })
     fireEvent.change(within(drawer).getByLabelText('Intent Patterns'), { target: { value: 'appeal status' } })
     fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), { target: { value: '0.75' } })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Capability References' }))
@@ -1371,25 +1373,28 @@ workflow:
 
     await waitFor(() => {
       expect(createConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        expected_revision: 4,
         id: 'appeals_qa',
         label: 'Appeals QA',
-        description: '',
+        description: 'Appeals guidance.',
         intent_patterns: ['appeal status'],
         intent_taxonomy_refs: [],
+        admission: { min_confidence: 0.75 },
+        knowledge_binding_refs: ['kb_appeals'],
+        policy_rule_refs: [],
+        stage_prompt_addenda: {
+          plan: {
+            business_context: 'Appeals stage context.',
+            task_instructions: [],
+            output_preferences: [],
+          },
+        },
+        tool_contract_refs: [],
+        validator_refs: [],
         default: false,
       })
     })
-    expect(updateConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', 'appeals_qa', expect.objectContaining({
-      admission: { min_confidence: 0.75 },
-      knowledge_binding_refs: ['kb_appeals'],
-      stage_prompt_addenda: {
-        plan: {
-          business_context: 'Appeals stage context.',
-          task_instructions: [],
-          output_preferences: [],
-        },
-      },
-    }))
+    expect(updateConfigDraftSkillPack).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Create Business Flow Skill Pack' })).not.toBeInTheDocument()
     })
@@ -1408,12 +1413,121 @@ workflow:
 
     await waitFor(() => {
       expect(updateConfigDraftSkillPack).toHaveBeenCalledWith('agent-1', 'draft-1', 'claims_qa', expect.objectContaining({
+        expected_revision: 4,
         admission: { min_confidence: 0.8 },
         stage_prompt_addenda: expect.objectContaining({
           plan: expect.objectContaining({ business_context: 'Updated claims context.' }),
         }),
       }))
     })
+  })
+
+  it('keeps Skill Pack edits open and refreshes revision after a stale conflict', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    const currentProjection = await vi.mocked(fetchConfigDraftSkills)
+      .getMockImplementation()?.('agent-1', 'draft-1')
+    if (!currentProjection) throw new Error('Missing Skill Pack test projection.')
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 5,
+      packs: currentProjection.packs.map((pack) =>
+        pack.id === 'claims_qa'
+          ? {
+              ...pack,
+              routing_admission: {
+                ...pack.routing_admission,
+                admission: { min_confidence: 0.7 },
+              },
+            }
+          : pack,
+      ),
+    })
+    vi.mocked(updateConfigDraftSkillPack).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), {
+      target: { value: '0.8' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save Skill Pack' }))
+
+    await waitFor(() => {
+      expect(fetchConfigDraftSkills).toHaveBeenCalledTimes(2)
+    })
+    expect(screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })).toBeInTheDocument()
+    expect(within(drawer).getByLabelText('Minimum Confidence')).toHaveValue(0.8)
+    expect(within(drawer).getByRole('button', { name: 'Save Skill Pack' })).toBeDisabled()
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('changed while you were editing')
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Reload Latest' }))
+
+    expect(within(drawer).getByLabelText('Minimum Confidence')).toHaveValue(0.7)
+    expect(within(drawer).getByRole('button', { name: 'Save Skill Pack' })).toBeEnabled()
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), {
+      target: { value: '0.8' },
+    })
+
+    vi.mocked(updateConfigDraftSkillPack).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 6,
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save Skill Pack' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftSkillPack).toHaveBeenLastCalledWith(
+        'agent-1',
+        'draft-1',
+        'claims_qa',
+        expect.objectContaining({ expected_revision: 5 }),
+      )
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Edit Business Flow Skill Pack' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('never retargets a stale Skill Pack edit after the original pack was deleted', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    const currentProjection = await vi.mocked(fetchConfigDraftSkills)
+      .getMockImplementation()?.('agent-1', 'draft-1')
+    if (!currentProjection) throw new Error('Missing Skill Pack test projection.')
+    const claimsPack = currentProjection.packs[0]
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 5,
+      packs: [{ ...claimsPack, id: 'appeals_qa', label: 'Appeals QA' }],
+    })
+    vi.mocked(updateConfigDraftSkillPack).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Minimum Confidence'), {
+      target: { value: '0.8' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save Skill Pack' }))
+
+    await waitFor(() => {
+      expect(fetchConfigDraftSkills).toHaveBeenCalledTimes(2)
+    })
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('was deleted while you were editing')
+    expect(within(drawer).queryByRole('button', { name: 'Reload Latest' })).not.toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Save Skill Pack' })).toBeDisabled()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save Skill Pack' }))
+    expect(updateConfigDraftSkillPack).toHaveBeenCalledTimes(1)
+    expect(updateConfigDraftSkillPack).not.toHaveBeenCalledWith(
+      'agent-1',
+      'draft-1',
+      'appeals_qa',
+      expect.anything(),
+    )
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {

@@ -45,6 +45,14 @@ from proof_agent.contracts import (
 )
 from proof_agent.contracts.ports import ConfigurationUnitOfWork
 from proof_agent.control.production_agent_publication import SOLE_PRODUCTION_AGENT_ID
+from proof_agent.control.agent_configuration_skill_packs import (
+    BusinessFlowSkillPackConfiguration,
+    BusinessFlowSkillPackCreateCommand,
+    BusinessFlowSkillPackUpdateCommand,
+    create_business_flow_skill_pack_bundle,
+    delete_business_flow_skill_pack_bundle,
+    update_business_flow_skill_pack_bundle,
+)
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
 )
@@ -171,6 +179,14 @@ class AgentConfigurationWorkflowStageDraftFacts:
     memory_scope: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class AgentConfigurationSkillPackResult:
+    """Revisioned Draft state and its Skill Pack configuration projection."""
+
+    record: AgentDraftRecord
+    configuration: BusinessFlowSkillPackConfiguration
+
+
 class AgentConfigurationValidationExecutor(Protocol):
     """Execute one Draft without owning lifecycle persistence rules."""
 
@@ -214,6 +230,17 @@ class AgentConfigurationWorkflowStageInspector(Protocol):
         *,
         draft: DraftAgent,
     ) -> AgentConfigurationWorkflowStageDraftFacts: ...
+
+
+class AgentConfigurationSkillPackInspector(Protocol):
+    """Inspect one Draft's Skill Packs without owning persistence rules."""
+
+    def inspect(
+        self,
+        *,
+        draft: DraftAgent,
+        allow_configuration_issues: bool = False,
+    ) -> BusinessFlowSkillPackConfiguration: ...
 
 
 class AgentConfigurationConflict(RuntimeError):
@@ -262,6 +289,7 @@ class AgentConfigurationWorkspace:
         publication_validator: AgentConfigurationPublicationValidator | None = None,
         contract_validator: AgentConfigurationContractValidator | None = None,
         workflow_stage_inspector: AgentConfigurationWorkflowStageInspector | None = None,
+        skill_pack_inspector: AgentConfigurationSkillPackInspector | None = None,
         scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -272,6 +300,7 @@ class AgentConfigurationWorkspace:
         self._publication_validator = publication_validator
         self._contract_validator = contract_validator
         self._workflow_stage_inspector = workflow_stage_inspector
+        self._skill_pack_inspector = skill_pack_inspector
         self._scope = scope
         self._clock = clock
 
@@ -649,6 +678,195 @@ class AgentConfigurationWorkspace:
                 detail="The Agent Draft changed; reload it before saving.",
             ) from exc
         return saved
+
+    def get_business_flow_skill_packs(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+    ) -> AgentConfigurationSkillPackResult:
+        """Return one revisioned Draft's inspected Business Flow Skill Packs."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        inspector = self._require_skill_pack_inspector()
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        return AgentConfigurationSkillPackResult(
+            record=current,
+            configuration=inspector.inspect(
+                draft=current.draft,
+                allow_configuration_issues=True,
+            ),
+        )
+
+    def create_business_flow_skill_pack(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        command: BusinessFlowSkillPackCreateCommand,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationSkillPackResult:
+        """Create one complete Business Flow Skill Pack atomically."""
+
+        return self._mutate_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            pack_id=command.pack_id,
+            expected_revision=expected_revision,
+            action="created",
+            event_type="agent.draft.skill_pack_created",
+            bundle_factory=lambda draft: create_business_flow_skill_pack_bundle(
+                draft,
+                command,
+            ),
+            actor=actor,
+        )
+
+    def update_business_flow_skill_pack(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        pack_id: str,
+        expected_revision: int,
+        command: BusinessFlowSkillPackUpdateCommand,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationSkillPackResult:
+        """Update one Business Flow Skill Pack atomically."""
+
+        return self._mutate_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            pack_id=pack_id,
+            expected_revision=expected_revision,
+            action="updated",
+            event_type="agent.draft.skill_pack_updated",
+            bundle_factory=lambda draft: update_business_flow_skill_pack_bundle(
+                draft,
+                pack_id=pack_id,
+                command=command,
+            ),
+            actor=actor,
+        )
+
+    def delete_business_flow_skill_pack(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        pack_id: str,
+        expected_revision: int,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationSkillPackResult:
+        """Delete one Business Flow Skill Pack atomically."""
+
+        return self._mutate_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            pack_id=pack_id,
+            expected_revision=expected_revision,
+            action="deleted",
+            event_type="agent.draft.skill_pack_deleted",
+            bundle_factory=lambda draft: delete_business_flow_skill_pack_bundle(
+                draft,
+                pack_id=pack_id,
+            ),
+            actor=actor,
+        )
+
+    def _mutate_business_flow_skill_pack(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        pack_id: str,
+        expected_revision: int,
+        action: str,
+        event_type: str,
+        bundle_factory: Callable[[DraftAgent], tuple[ContractBundle, str]],
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationSkillPackResult:
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        inspector = self._require_skill_pack_inspector()
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if current.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            )
+        bundle, definition_path = bundle_factory(current.draft)
+        now = _timestamp(self._clock())
+        metadata = {
+            "action": action,
+            "pack_id": pack_id,
+            "definition": definition_path,
+            "expected_revision": expected_revision,
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{draft_id}:skill-pack:{pack_id}:{action}:"
+                    f"{expected_revision + 1}:operation",
+                )
+            ),
+            operation=ConfigurationOperation.UPDATED,
+            actor=actor.subject,
+            created_at=now,
+            summary=f"{action.capitalize()} Business Flow Skill Pack.",
+            metadata=metadata,
+        )
+        candidate = current.draft.model_copy(
+            update={
+                "contract_bundle": bundle,
+                "updated_at": now,
+                "updated_by": actor.subject,
+                "operation_audit": (*current.draft.operation_audit, operation),
+            }
+        )
+        configuration = inspector.inspect(draft=candidate)
+        try:
+            with self._unit_of_work_factory() as uow:
+                saved = uow.agents.save_draft(
+                    candidate,
+                    expected_revision=expected_revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type=event_type,
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ) from exc
+        return AgentConfigurationSkillPackResult(
+            record=saved,
+            configuration=configuration,
+        )
+
+    def _require_skill_pack_inspector(self) -> AgentConfigurationSkillPackInspector:
+        if self._skill_pack_inspector is None:
+            raise AgentConfigurationConflict(
+                code="agent_skill_pack_configuration_unavailable",
+                detail="Business Flow Skill Pack configuration is unavailable.",
+            )
+        return self._skill_pack_inspector
 
     def update_workflow_stages(
         self,

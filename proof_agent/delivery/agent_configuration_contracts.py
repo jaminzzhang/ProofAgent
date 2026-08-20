@@ -6,6 +6,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.package_security import (
+    require_package_local_skill_pack_definitions,
+)
 from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.contracts import DraftAgent
@@ -22,6 +25,10 @@ class LocalAgentConfigurationContractValidator:
                 package_dir = compile_draft_agent(draft, Path(temporary_dir))
                 manifest_path = package_dir / "agent.yaml"
                 manifest = load_agent_manifest(manifest_path)
+                require_package_local_skill_pack_definitions(
+                    manifest,
+                    manifest_path=manifest_path,
+                )
                 load_business_flow_skill_pack_set(
                     manifest,
                     template=resolve_workflow_template(manifest.workflow.template),

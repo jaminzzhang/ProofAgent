@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from types import TracebackType
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 from proof_agent.contracts import (
     ActiveAgentVersion,
@@ -42,6 +43,11 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationWorkspace,
     AgentConfigurationWorkflowStageDraftFacts,
     AgentConfigurationWorkflowStageInspector,
+)
+from proof_agent.control.agent_configuration_skill_packs import (
+    BusinessFlowSkillPackConfiguration,
+    BusinessFlowSkillPackCreateCommand,
+    BusinessFlowSkillPackUpdateCommand,
 )
 from proof_agent.errors import ProofAgentError
 
@@ -463,6 +469,55 @@ class ConcurrentMutationWorkflowStageInspector(RecordingWorkflowStageInspector):
         return facts
 
 
+class RecordingSkillPackInspector:
+    def __init__(self) -> None:
+        self.requests: list[DraftAgent] = []
+        self.configuration = BusinessFlowSkillPackConfiguration(
+            enabled=True,
+            template_name="react_enterprise_qa_v3",
+            template_descriptor_version="react_enterprise_qa.v3",
+            addendum_slots=(),
+            configuration_issues=(),
+            packs=(),
+        )
+
+    def inspect(
+        self,
+        *,
+        draft: DraftAgent,
+        allow_configuration_issues: bool = False,
+    ) -> BusinessFlowSkillPackConfiguration:
+        del allow_configuration_issues
+        self.requests.append(draft)
+        return self.configuration
+
+
+class ConcurrentMutationSkillPackInspector(RecordingSkillPackInspector):
+    def __init__(self, factory: UnitOfWorkFactory) -> None:
+        super().__init__()
+        self._factory = factory
+
+    def inspect(
+        self,
+        *,
+        draft: DraftAgent,
+        allow_configuration_issues: bool = False,
+    ) -> BusinessFlowSkillPackConfiguration:
+        configuration = super().inspect(
+            draft=draft,
+            allow_configuration_issues=allow_configuration_issues,
+        )
+        key = (draft.agent_id, draft.draft_id)
+        current = self._factory.agents.records[key]
+        self._factory.agents.records[key] = AgentDraftRecord(
+            draft=current.draft.model_copy(
+                update={"purpose": "Concurrent Skill Pack winner."}
+            ),
+            revision=current.revision + 1,
+        )
+        return configuration
+
+
 class ConcurrentMutationPublicationValidator(RecordingPublicationValidator):
     def __init__(self, factory: UnitOfWorkFactory) -> None:
         super().__init__()
@@ -599,6 +654,61 @@ def _actor() -> AuditActorFacts:
         identity_provider="local-development",
         session_id="session-1",
         permissions=("agent.edit",),
+    )
+
+
+def _skill_pack_draft() -> AgentDraftRecord:
+    return AgentDraftRecord(
+        revision=4,
+        draft=DraftAgent(
+            agent_id="skill_pack_agent",
+            draft_id="draft_skill_pack",
+            display_name="Skill Pack Agent",
+            purpose="Configure governed Business Flow Skill Packs.",
+            contract_bundle=ContractBundle(
+                agent_yaml="""
+name: skill_pack_agent
+purpose: Configure governed Business Flow Skill Packs.
+workflow:
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: false
+  skills:
+    enabled: true
+    business_flows:
+      - id: claims_qa
+        definition: ./skills/claims.yaml
+        default: true
+""",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+                extra_files={
+                    "skills/claims.yaml": """
+schema_version: business_flow_skill_pack.v1
+id: claims_qa
+label: Claims QA
+description: Existing governed claim guidance.
+intent_patterns:
+  - claim status
+intent_taxonomy_refs: []
+stage_prompt_addenda: {}
+knowledge_binding_refs: []
+tool_contract_refs: []
+policy_rule_refs: []
+validator_refs: []
+admission: {}
+""",
+                },
+            ),
+            created_at="2026-08-20T01:00:00Z",
+            updated_at="2026-08-20T02:00:00Z",
+            created_by="operator-1",
+            updated_by="operator-1",
+        ),
     )
 
 
@@ -1924,5 +2034,239 @@ def test_workspace_validation_rolls_back_when_atomic_persistence_fails(
     assert factory.agents.get_draft(
         current.draft.agent_id,
         current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
+
+
+def test_workspace_reads_skill_pack_projection_without_writing_state() -> None:
+    current = _skill_pack_draft()
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingSkillPackInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    result = workspace.get_business_flow_skill_packs(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+    )
+
+    assert result.record == current
+    assert result.configuration is inspector.configuration
+    assert inspector.requests == [current.draft]
+    assert factory.audit.events == []
+
+
+def test_workspace_creates_complete_skill_pack_with_one_cas_and_atomic_audit() -> None:
+    current = _draft(
+        "skill_pack_agent",
+        "draft_skill_pack_create",
+        updated_at="2026-08-20T02:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingSkillPackInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 20, 3, 0, tzinfo=UTC),
+    )
+
+    result = workspace.create_business_flow_skill_pack(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        expected_revision=1,
+        command=BusinessFlowSkillPackCreateCommand(
+            pack_id="claims_qa",
+            label="Claims QA",
+            description="Sensitive operator-only description.",
+            intent_patterns=("sensitive claim intent",),
+            intent_taxonomy_refs=("claims",),
+            stage_prompt_addenda={
+                "plan": WorkflowStagePromptConfig(
+                    business_context="Sensitive claims planning context.",
+                    task_instructions=("Prefer governed retrieval.",),
+                )
+            },
+            knowledge_binding_refs=(),
+            tool_contract_refs=(),
+            policy_rule_refs=(),
+            validator_refs=("evidence",),
+            admission={"min_confidence": 0.7},
+            default=True,
+        ),
+        actor=_actor(),
+    )
+
+    assert result.record.revision == 2
+    candidate = inspector.requests[0]
+    manifest = yaml.safe_load(candidate.contract_bundle.agent_yaml)
+    assert manifest["capabilities"]["skills"] == {
+        "enabled": True,
+        "business_flows": [
+            {
+                "id": "claims_qa",
+                "definition": "./skills/claims_qa.yaml",
+                "default": True,
+            }
+        ],
+    }
+    definition = yaml.safe_load(
+        candidate.contract_bundle.extra_files["skills/claims_qa.yaml"]
+    )
+    assert definition["stage_prompt_addenda"]["plan"]["business_context"] == (
+        "Sensitive claims planning context."
+    )
+    assert definition["validator_refs"] == ["evidence"]
+    assert definition["admission"] == {"min_confidence": 0.7}
+    assert factory.audit.events[0].event_type == "agent.draft.skill_pack_created"
+    audit_text = str(factory.audit.events[0].metadata)
+    assert "claims_qa" in audit_text
+    assert "Sensitive" not in audit_text
+    assert "intent" not in audit_text
+    operation_text = str(result.record.draft.operation_audit[-1].metadata)
+    assert "Sensitive" not in operation_text
+    assert factory.agents.list_published(current.draft.agent_id) == ()
+    assert factory.agents.get_active(current.draft.agent_id) is None
+
+
+def test_workspace_updates_and_deletes_skill_pack_definition_atomically() -> None:
+    current = _skill_pack_draft()
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingSkillPackInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    updated = workspace.update_business_flow_skill_pack(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        pack_id="claims_qa",
+        expected_revision=4,
+        command=BusinessFlowSkillPackUpdateCommand(
+            label="Claims QA Updated",
+            default=False,
+        ),
+        actor=_actor(),
+    )
+    update_definition = yaml.safe_load(
+        updated.record.draft.contract_bundle.extra_files["skills/claims.yaml"]
+    )
+    update_manifest = yaml.safe_load(updated.record.draft.contract_bundle.agent_yaml)
+    assert update_definition["label"] == "Claims QA Updated"
+    assert "default" not in update_manifest["capabilities"]["skills"][
+        "business_flows"
+    ][0]
+    assert factory.audit.events[-1].event_type == "agent.draft.skill_pack_updated"
+
+    deleted = workspace.delete_business_flow_skill_pack(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        pack_id="claims_qa",
+        expected_revision=5,
+        actor=_actor(),
+    )
+    delete_manifest = yaml.safe_load(deleted.record.draft.contract_bundle.agent_yaml)
+    assert delete_manifest["capabilities"]["skills"] == {
+        "enabled": False,
+        "business_flows": [],
+    }
+    assert "skills/claims.yaml" not in deleted.record.draft.contract_bundle.extra_files
+    assert factory.audit.events[-1].event_type == "agent.draft.skill_pack_deleted"
+
+
+def test_workspace_rejects_stale_skill_pack_revision_before_inspection() -> None:
+    current = _skill_pack_draft()
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingSkillPackInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.delete_business_flow_skill_pack(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            pack_id="claims_qa",
+            expected_revision=3,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_draft_revision_conflict"
+    assert inspector.requests == []
+    assert factory.agents.get_draft(
+        current.draft.agent_id, current.draft.draft_id
+    ) == current
+    assert factory.audit.events == []
+
+
+def test_workspace_skill_pack_final_cas_does_not_overwrite_concurrent_winner() -> None:
+    current = _skill_pack_draft()
+    factory = UnitOfWorkFactory((current,))
+    inspector = ConcurrentMutationSkillPackInspector(factory)
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.update_business_flow_skill_pack(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            pack_id="claims_qa",
+            expected_revision=4,
+            command=BusinessFlowSkillPackUpdateCommand(label="Losing update"),
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_draft_revision_conflict"
+    winner = factory.agents.get_draft(current.draft.agent_id, current.draft.draft_id)
+    assert winner is not None
+    assert winner.revision == 5
+    assert winner.draft.purpose == "Concurrent Skill Pack winner."
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("failure", ("audit", "commit"))
+def test_workspace_skill_pack_mutation_rolls_back_atomic_persistence(
+    failure: str,
+) -> None:
+    current = _skill_pack_draft()
+    factory = UnitOfWorkFactory(
+        (current,),
+        fail_audit=failure == "audit",
+        fail_commit=failure == "commit",
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        skill_pack_inspector=RecordingSkillPackInspector(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(RuntimeError, match=f"simulated {failure}"):
+        workspace.update_business_flow_skill_pack(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            pack_id="claims_qa",
+            expected_revision=4,
+            command=BusinessFlowSkillPackUpdateCommand(label="Losing update"),
+            actor=_actor(),
+        )
+
+    assert factory.agents.get_draft(
+        current.draft.agent_id, current.draft.draft_id
     ) == current
     assert factory.audit.events == []

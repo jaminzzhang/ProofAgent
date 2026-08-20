@@ -34,6 +34,7 @@ import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
+import type { SkillPackMutationResult } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
@@ -194,6 +195,38 @@ export function AgentDetailPage() {
     }
   }
 
+  async function runSkillMutation(
+    action: () => Promise<void>,
+  ): Promise<SkillPackMutationResult> {
+    setBusy('skills')
+    setActionError(null)
+    setStatus(null)
+    try {
+      await action()
+      return 'saved'
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+      if (isConflictError(err) && agentId && draftId) {
+        try {
+          const latest = await fetchConfigDraftSkills(agentId, draftId)
+          setSkillsConfig(latest)
+          setSkillsLoaded(true)
+          setSkillsError(null)
+        } catch (reloadError) {
+          setActionError(
+            reloadError instanceof Error
+              ? `${err instanceof Error ? err.message : String(err)}; reload failed: ${reloadError.message}`
+              : `${err instanceof Error ? err.message : String(err)}; reload failed`,
+          )
+        }
+        return 'conflict'
+      }
+      return 'failed'
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function saveBasics() {
     if (!agentId || !draftId || !canEditGeneral) return
     await runAction('basics', async () => {
@@ -243,9 +276,15 @@ export function AgentDetailPage() {
   }
 
   async function createSkillPack(payload: BusinessFlowSkillPackCreateRequest) {
-    if (!agentId || !draftId) return
-    await runAction('skills', async () => {
-      const updated = await createConfigDraftSkillPack(agentId, draftId, payload)
+    if (!agentId || !draftId) return 'failed' as const
+    return runSkillMutation(async () => {
+      const expectedRevision = skillsConfig?.revision ?? draft?.revision
+      const updated = await createConfigDraftSkillPack(agentId, draftId, {
+        ...payload,
+        ...(expectedRevision === undefined
+          ? {}
+          : { expected_revision: expectedRevision }),
+      })
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
@@ -255,9 +294,15 @@ export function AgentDetailPage() {
   }
 
   async function updateSkillPack(packId: string, payload: BusinessFlowSkillPackUpdateRequest) {
-    if (!agentId || !draftId) return
-    await runAction('skills', async () => {
-      const updated = await updateConfigDraftSkillPack(agentId, draftId, packId, payload)
+    if (!agentId || !draftId) return 'failed' as const
+    return runSkillMutation(async () => {
+      const expectedRevision = skillsConfig?.revision ?? draft?.revision
+      const updated = await updateConfigDraftSkillPack(agentId, draftId, packId, {
+        ...payload,
+        ...(expectedRevision === undefined
+          ? {}
+          : { expected_revision: expectedRevision }),
+      })
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
@@ -267,9 +312,15 @@ export function AgentDetailPage() {
   }
 
   async function deleteSkillPack(packId: string) {
-    if (!agentId || !draftId) return
-    await runAction('skills', async () => {
-      const updated = await deleteConfigDraftSkillPack(agentId, draftId, packId)
+    if (!agentId || !draftId) return 'failed' as const
+    return runSkillMutation(async () => {
+      const expectedRevision = skillsConfig?.revision ?? draft?.revision
+      const updated = await deleteConfigDraftSkillPack(
+        agentId,
+        draftId,
+        packId,
+        expectedRevision,
+      )
       setSkillsConfig(updated)
       setSkillsLoaded(true)
       setSkillsError(null)
@@ -678,6 +729,10 @@ export function AgentDetailPage() {
       )}
     </AgentDetailShell>
   )
+}
+
+function isConflictError(error: unknown): error is { status: 409 } {
+  return typeof error === 'object' && error !== null && 'status' in error && error.status === 409
 }
 
 function BlockingReasons({ title, reasons }: { title: string; reasons: string[] }) {

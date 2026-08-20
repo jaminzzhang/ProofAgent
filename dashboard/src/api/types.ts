@@ -747,6 +747,7 @@ export interface BusinessFlowSkillPackProjection {
 }
 
 export interface BusinessFlowSkillPackConfiguration {
+  revision?: number
   enabled: boolean
   template_name: string
   template_descriptor_version: string
@@ -755,15 +756,23 @@ export interface BusinessFlowSkillPackConfiguration {
 }
 
 export interface BusinessFlowSkillPackCreateRequest {
+  expected_revision?: number
   id: string
   label: string
   description: string
   intent_patterns?: string[]
   intent_taxonomy_refs?: string[]
+  stage_prompt_addenda?: Record<string, WorkflowStagePromptConfig>
+  knowledge_binding_refs?: string[]
+  tool_contract_refs?: string[]
+  policy_rule_refs?: string[]
+  validator_refs?: string[]
+  admission?: Record<string, unknown>
   default?: boolean
 }
 
 export interface BusinessFlowSkillPackUpdateRequest {
+  expected_revision?: number
   label?: string | null
   description?: string | null
   intent_patterns?: string[] | null

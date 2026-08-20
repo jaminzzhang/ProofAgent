@@ -7,6 +7,9 @@ import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from proof_agent.bootstrap.manifest import manifest_from_mapping
+from proof_agent.bootstrap.package_security import (
+    require_safe_raw_skill_pack_definition_references,
+)
 from proof_agent.bootstrap.validation import require_manifest_shape, validate_manifest
 from proof_agent.contracts import AgentManifest
 from proof_agent.errors import ProofAgentError
@@ -31,6 +34,10 @@ def load_agent_manifest(
     raw = _load_yaml_mapping(manifest_path)
     # Shape validation gives users targeted config errors before model construction.
     require_manifest_shape(raw, manifest_path=manifest_path)
+    require_safe_raw_skill_pack_definition_references(
+        raw,
+        manifest_path=manifest_path,
+    )
     try:
         manifest = manifest_from_mapping(raw, base_dir=manifest_path.parent)
     except (KeyError, TypeError, ValidationError) as exc:

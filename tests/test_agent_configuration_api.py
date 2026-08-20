@@ -31,16 +31,26 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationNotFound,
     AgentConfigurationPublicationRejected,
     AgentConfigurationRollback,
+    AgentConfigurationSkillPackResult,
     AgentConfigurationValidationExecution,
     AgentConfigurationValidationResult,
 )
+from proof_agent.control.agent_configuration_skill_packs import (
+    BusinessFlowSkillPackConfiguration,
+    BusinessFlowSkillPackCreateCommand,
+    BusinessFlowSkillPackUpdateCommand,
+)
 from proof_agent.delivery.configuration_api import (
+    create_config_draft_business_flow_skill_pack,
+    delete_config_draft_business_flow_skill_pack,
+    fetch_config_draft_skills,
     get_config_draft_contract,
     preview_config_draft_workflow_stage,
     publish_config_draft,
     rollback_config_version,
     router as configuration_router,
     update_config_draft_contract,
+    update_config_draft_business_flow_skill_pack,
     update_config_draft_workflow_stages,
 )
 from proof_agent.errors import ProofAgentError
@@ -702,6 +712,34 @@ admission:
         "missing_stage_ids": ["retrieval_review", "tool_review"],
     }
 
+    unsafe_definition = draft.contract_bundle.extra_files["skills/claims.yaml"].replace(
+        "validator_refs: []",
+        "validator_refs:\n  - /private/operator-secret.yaml",
+    )
+    store.update_draft(
+        agent_id=draft.agent_id,
+        draft_id=draft.draft_id,
+        actor="test-operator",
+        contract_bundle=draft.contract_bundle.model_copy(
+            update={
+                "extra_files": {
+                    "skills/claims.yaml": unsafe_definition,
+                }
+            }
+        ),
+    )
+    issue_response = client.get(
+        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills"
+    )
+    assert issue_response.status_code == 200
+    issue_payload = issue_response.json()["configuration_issues"][0]
+    assert issue_payload["message"] == (
+        "Business Flow Skill Pack capability references require attention."
+    )
+    assert issue_response.json()["packs"][0]["capability_refs"]["validator_refs"] == []
+    assert "/private" not in issue_response.text
+    assert "operator-secret" not in issue_response.text
+
 
 @pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
 def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
@@ -827,16 +865,23 @@ audit:
     response = client.post(
         f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills/business-flows",
         json={
+            "expected_revision": 1,
             "id": "claims_qa",
             "label": "Claims QA",
             "description": "Governed routing addenda for claim questions.",
             "intent_patterns": ["claim status"],
+            "stage_prompt_addenda": {
+                "plan": {"business_context": "Claims planning context."}
+            },
+            "validator_refs": ["evidence"],
+            "admission": {"min_confidence": 0.7},
         },
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["revision"] == 2
     assert [pack["id"] for pack in payload["packs"]] == ["claims_qa"]
     assert payload["packs"][0]["definition"] == "skills/claims_qa.yaml"
     contract = client.get(
@@ -855,8 +900,16 @@ audit:
     assert "skills/claims_qa.yaml" in contract["extra_files"]
     definition = yaml.safe_load(contract["extra_files"]["skills/claims_qa.yaml"])
     assert definition["schema_version"] == "business_flow_skill_pack.v1"
-    assert definition["stage_prompt_addenda"] == {}
     assert definition["intent_patterns"] == ["claim status"]
+    assert definition["stage_prompt_addenda"] == {
+        "plan": {
+            "business_context": "Claims planning context.",
+            "task_instructions": [],
+            "output_preferences": [],
+        }
+    }
+    assert definition["validator_refs"] == ["evidence"]
+    assert definition["admission"] == {"min_confidence": 0.7}
 
 
 def test_update_config_draft_skill_pack_rewrites_definition(
@@ -1179,6 +1232,62 @@ def test_update_contract_view_rejects_invalid_candidate_without_path_leakage(
     assert "proof-agent-contract-" not in response.text
     assert "/private/" not in response.text
     assert str(tmp_path) not in response.text
+
+
+@pytest.mark.parametrize("unsafe_reference", ("absolute", "parent_segment"))
+def test_update_contract_view_rejects_unsafe_skill_definition_without_writes(
+    tmp_path: Path,
+    unsafe_reference: str,
+) -> None:
+    client = _client(tmp_path)
+    imported = _import_enterprise_qa(client)
+    draft_path = (
+        f"/api/config/agents/{imported['agent_id']}/drafts/{imported['draft_id']}"
+    )
+    initial_draft = client.get(draft_path).json()
+    created = client.post(
+        f"{draft_path}/skills/business-flows",
+        json={
+            "expected_revision": initial_draft["revision"],
+            "id": "claims_qa",
+            "label": "Claims QA",
+            "description": "Claim handling guidance.",
+        },
+    )
+    assert created.status_code == 200
+    before_draft = client.get(draft_path).json()
+    before_contract = client.get(f"{draft_path}/contract").json()
+    before_audit = sorted(
+        (tmp_path / "config" / "configuration_audit").glob("*.json")
+    )
+    raw_agent_yaml = yaml.safe_load(before_contract["agent_yaml"])
+    binding = raw_agent_yaml["capabilities"]["skills"]["business_flows"][0]
+    definition_path = str(binding["definition"]).removeprefix("./")
+    if unsafe_reference == "absolute":
+        outside_definition = tmp_path / "outside-skill-pack.yaml"
+        outside_definition.write_text(
+            before_contract["extra_files"][definition_path],
+            encoding="utf-8",
+        )
+        definition_reference = str(outside_definition)
+    else:
+        definition_reference = "./skills/../skills/claims_qa.yaml"
+    binding["definition"] = definition_reference
+
+    response = client.patch(
+        f"{draft_path}/contract",
+        json={
+            "expected_revision": before_draft["revision"],
+            "agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "agent_contract_invalid"}
+    assert definition_reference not in response.text
+    assert client.get(draft_path).json() == before_draft
+    assert client.get(f"{draft_path}/contract").json() == before_contract
+    assert sorted((tmp_path / "config" / "configuration_audit").glob("*.json")) == before_audit
 
 
 @pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
@@ -1602,6 +1711,165 @@ def test_contract_update_rejects_unknown_fields_before_workspace() -> None:
     assert workspace.contract_update_calls == []
 
 
+def test_skill_pack_routes_delegate_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    read = client.get("/api/config/agents/agent_alpha/drafts/draft_alpha/skills")
+    created = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/business-flows",
+        json={
+            "expected_revision": 4,
+            "id": "claims_qa",
+            "label": "Claims QA",
+            "description": "Claim handling guidance.",
+            "intent_patterns": ["claim status"],
+            "stage_prompt_addenda": {
+                "plan": {"business_context": "Claims context."}
+            },
+            "admission": {"min_confidence": 0.7},
+        },
+    )
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa",
+        json={"expected_revision": 5, "label": "Claims QA Updated"},
+    )
+    deleted = client.delete(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa?expected_revision=6"
+    )
+
+    assert read.status_code == 200
+    assert read.json()["revision"] == 4
+    assert created.status_code == 200
+    assert created.json()["revision"] == 5
+    create_call = workspace.skill_pack_create_calls[0]
+    assert create_call["expected_revision"] == 4
+    assert isinstance(create_call["command"], BusinessFlowSkillPackCreateCommand)
+    assert create_call["command"].stage_prompt_addenda["plan"].business_context == (
+        "Claims context."
+    )
+    assert create_call["command"].admission == {"min_confidence": 0.7}
+    assert updated.status_code == 200
+    assert updated.json()["revision"] == 6
+    update_call = workspace.skill_pack_update_calls[0]
+    assert update_call["expected_revision"] == 5
+    assert isinstance(update_call["command"], BusinessFlowSkillPackUpdateCommand)
+    assert deleted.status_code == 200
+    assert deleted.json()["revision"] == 7
+    assert workspace.skill_pack_delete_calls[0]["expected_revision"] == 6
+    for route in (
+        fetch_config_draft_skills,
+        create_config_draft_business_flow_skill_pack,
+        update_config_draft_business_flow_skill_pack,
+        delete_config_draft_business_flow_skill_pack,
+    ):
+        route_source = getsource(route)
+        assert "LocalAgentConfigurationStore" not in route_source
+        assert "_get_configuration_store" not in route_source
+        assert "compile_draft_agent" not in route_source
+        assert "load_agent_manifest" not in route_source
+        assert "yaml." not in route_source
+        assert "_business_flow_skill_pack_configuration_payload" not in route_source
+
+
+def test_skill_pack_routes_reject_unknown_fields_before_workspace() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    created = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/business-flows",
+        json={
+            "id": "claims_qa",
+            "label": "Claims QA",
+            "description": "Claim handling guidance.",
+            "unexpected": True,
+        },
+    )
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa",
+        json={"label": "Claims QA", "unexpected": True},
+    )
+
+    assert created.status_code == 422
+    assert updated.status_code == 422
+    assert workspace.skill_pack_create_calls == []
+    assert workspace.skill_pack_update_calls == []
+
+
+def test_skill_pack_routes_preserve_non_empty_description_contract() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    created = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/business-flows",
+        json={"id": "claims_qa", "label": "Claims QA", "description": ""},
+    )
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa",
+        json={"description": ""},
+    )
+
+    assert created.status_code == 422
+    assert updated.status_code == 422
+    assert workspace.skill_pack_create_calls == []
+    assert workspace.skill_pack_update_calls == []
+
+
+def test_skill_pack_routes_preserve_view_and_edit_permissions() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = _StaticOperatorIdentityProvider(set())
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    read = client.get("/api/config/agents/agent_alpha/drafts/draft_alpha/skills")
+    created = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/business-flows",
+        json={
+            "id": "claims_qa",
+            "label": "Claims QA",
+            "description": "Claim handling guidance.",
+        },
+    )
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa",
+        json={"label": "Claims QA Updated"},
+    )
+    deleted = client.delete(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/skills/"
+        "business-flows/claims_qa"
+    )
+
+    assert read.status_code == 403
+    assert read.json()["detail"] == "Operator lacks required permission: agent.view"
+    assert created.status_code == 403
+    assert created.json()["detail"] == "Operator lacks required permission: agent.edit"
+    assert updated.status_code == 403
+    assert deleted.status_code == 403
+    assert workspace.skill_pack_read_calls == []
+    assert workspace.skill_pack_create_calls == []
+    assert workspace.skill_pack_update_calls == []
+    assert workspace.skill_pack_delete_calls == []
+
+
 def test_workflow_stage_routes_delegate_to_workspace_without_concrete_store() -> None:
     workspace = _RecordingValidationWorkspace()
     application = FastAPI()
@@ -1690,6 +1958,10 @@ class _RecordingValidationWorkspace:
         self.contract_update_calls: list[dict[str, Any]] = []
         self.workflow_stage_update_calls: list[dict[str, Any]] = []
         self.workflow_stage_preview_calls: list[dict[str, Any]] = []
+        self.skill_pack_read_calls: list[dict[str, Any]] = []
+        self.skill_pack_create_calls: list[dict[str, Any]] = []
+        self.skill_pack_update_calls: list[dict[str, Any]] = []
+        self.skill_pack_delete_calls: list[dict[str, Any]] = []
 
     def get_draft(self, **kwargs: Any) -> AgentDraftRecord:
         self.contract_read_calls.append(kwargs)
@@ -1762,6 +2034,45 @@ class _RecordingValidationWorkspace:
             },
             "summary": {"stage_id": kwargs["stage_id"]},
         }
+
+    def _skill_pack_result(self, revision: int) -> AgentConfigurationSkillPackResult:
+        current = self.get_draft(agent_id="agent_alpha", draft_id="draft_alpha")
+        self.contract_read_calls.pop()
+        return AgentConfigurationSkillPackResult(
+            record=AgentDraftRecord(draft=current.draft, revision=revision),
+            configuration=BusinessFlowSkillPackConfiguration(
+                enabled=False,
+                template_name="react_enterprise_qa_v3",
+                template_descriptor_version="react_enterprise_qa.v3",
+                addendum_slots=(),
+                configuration_issues=(),
+                packs=(),
+            ),
+        )
+
+    def get_business_flow_skill_packs(
+        self, **kwargs: Any
+    ) -> AgentConfigurationSkillPackResult:
+        self.skill_pack_read_calls.append(kwargs)
+        return self._skill_pack_result(4)
+
+    def create_business_flow_skill_pack(
+        self, **kwargs: Any
+    ) -> AgentConfigurationSkillPackResult:
+        self.skill_pack_create_calls.append(kwargs)
+        return self._skill_pack_result(kwargs["expected_revision"] + 1)
+
+    def update_business_flow_skill_pack(
+        self, **kwargs: Any
+    ) -> AgentConfigurationSkillPackResult:
+        self.skill_pack_update_calls.append(kwargs)
+        return self._skill_pack_result(kwargs["expected_revision"] + 1)
+
+    def delete_business_flow_skill_pack(
+        self, **kwargs: Any
+    ) -> AgentConfigurationSkillPackResult:
+        self.skill_pack_delete_calls.append(kwargs)
+        return self._skill_pack_result(kwargs["expected_revision"] + 1)
 
     def validate_draft(self, **kwargs: Any) -> AgentConfigurationValidationResult:
         self.calls.append(kwargs)
@@ -1883,6 +2194,26 @@ class _RaisingValidationWorkspace:
         raise self._error
 
     def preview_workflow_stage(self, **_: Any) -> dict[str, Any]:
+        raise self._error
+
+    def get_business_flow_skill_packs(
+        self, **_: Any
+    ) -> AgentConfigurationSkillPackResult:
+        raise self._error
+
+    def create_business_flow_skill_pack(
+        self, **_: Any
+    ) -> AgentConfigurationSkillPackResult:
+        raise self._error
+
+    def update_business_flow_skill_pack(
+        self, **_: Any
+    ) -> AgentConfigurationSkillPackResult:
+        raise self._error
+
+    def delete_business_flow_skill_pack(
+        self, **_: Any
+    ) -> AgentConfigurationSkillPackResult:
         raise self._error
 
 
@@ -2016,6 +2347,81 @@ def test_contract_routes_map_workspace_errors_to_stable_details(
         response = client.patch(
             "/api/config/agents/agent_alpha/drafts/draft_alpha/contract",
             json={"expected_revision": 1, "agent_yaml": "name: agent_alpha\n"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("operation", "error", "expected_status", "expected_detail"),
+    (
+        (
+            "read",
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            "create",
+            AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ),
+            409,
+            "agent_draft_revision_conflict",
+        ),
+        (
+            "update",
+            ValueError("internal-path:/private/tmp/skill-pack-invalid"),
+            400,
+            "agent_skill_pack_configuration_invalid",
+        ),
+        (
+            "delete",
+            OSError("internal-path:/private/tmp/skill-pack-failed"),
+            500,
+            "agent_skill_pack_update_failed",
+        ),
+    ),
+)
+def test_skill_pack_routes_map_workspace_errors_to_stable_details(
+    operation: str,
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+    base = "/api/config/agents/agent_alpha/drafts/draft_alpha/skills"
+
+    if operation == "read":
+        response = client.get(base)
+    elif operation == "create":
+        response = client.post(
+            f"{base}/business-flows",
+            json={
+                "expected_revision": 1,
+                "id": "claims_qa",
+                "label": "Claims QA",
+                "description": "Claim handling guidance.",
+            },
+        )
+    elif operation == "update":
+        response = client.patch(
+            f"{base}/business-flows/claims_qa",
+            json={"expected_revision": 1, "label": "Claims QA"},
+        )
+    else:
+        response = client.delete(
+            f"{base}/business-flows/claims_qa?expected_revision=1"
         )
 
     assert response.status_code == expected_status

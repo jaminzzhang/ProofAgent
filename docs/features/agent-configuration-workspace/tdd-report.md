@@ -6,15 +6,15 @@
 | --- | --- |
 | 建议结论 | `PARTIAL_VERIFICATION` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1—6 已完成本地验证与独立复验 |
+| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；整体因真实 PostgreSQL DSN 缺失维持 `PARTIAL_VERIFICATION` |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration 与 raw Contract 编辑 |
-| 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication adapters |
-| 不覆盖范围 | production validation/publish/Stage/Contract endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、Skill Pack 专用编辑、生产部署 |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration、raw Contract 与 Skill Pack 专用编辑 |
+| 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication/Contract/Skill Pack adapters 与 Dashboard 单命令流程 |
+| 不覆盖范围 | production validation/publish/Stage/Contract/Skill Pack endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、canonical seed bootstrap、生产部署 |
 
 ## 3. 测试场景
 
@@ -44,6 +44,11 @@
 | ACW-T22 | stale revision、adapter、audit 或 commit 失败时不覆盖 Draft 且不产生部分 audit | concurrency/fault | P1 | P1 |
 | ACW-T23 | Contract GET/PATCH route 只依赖 Workspace，并返回稳定 400/404/409/500 | architecture/security | P1 | P1 |
 | ACW-T24 | Dashboard Contract 保存携带当前 Draft revision，未知请求字段被拒绝 | contract | P1 | P1 |
+| ACW-T25 | Skill Pack GET/POST/PATCH/DELETE route 只依赖 Workspace | architecture | P1 | P1 |
+| ACW-T26 | 完整 Skill Pack create 一次原子更新 binding 与 definition | authority/consistency | P1 | P1 |
+| ACW-T27 | Skill Pack mutation 使用调用方 revision CAS，并覆盖 inspection 期间并发写入 | concurrency | P1 | P1 |
+| ACW-T28 | Skill Pack audit 与 Draft 同事务提交且不含 Prompt、intent 或 raw YAML | security/consistency | P1 | P1 |
+| ACW-T29 | Local inspector 自动清理派生包并只返回逻辑路径；Dashboard create 只发一次命令 | architecture/security | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -73,6 +78,11 @@
 | ACW-T22 | stale revision、校验期间并发写入、audit 或 commit 失败 | 保存 raw Contract | 不覆盖赢家；Draft 与 audit 不产生部分写入 |
 | ACW-T23 | 应用只注入 recording Workspace，或 Workspace/adapter 抛错 | 调用 Contract GET/PATCH | route 不需要 Local store/compiler；返回稳定 400/404/409/500 且不泄漏路径 |
 | ACW-T24 | Dashboard 有当前 Draft revision，或请求含未知字段 | 保存 raw Contract | client 发送 revision；未知字段在 Workspace 前返回 422 |
+| ACW-T25 | API 只注入 recording Workspace | 调用四个 Skill Pack route | route 不需要 Local store、compiler、manifest 或 YAML |
+| ACW-T26 | revisioned Draft 与完整 create command | 创建 Skill Pack | 一个新 revision 同时包含 binding、definition 和所有编辑字段 |
+| ACW-T27 | stale revision，或 inspection 后发生并发写入 | 创建、更新或删除 Skill Pack | 返回稳定 conflict，不覆盖并发赢家 |
+| ACW-T28 | Prompt/intent 含敏感业务文本，或 audit/commit 失败 | 保存 Skill Pack | audit 只含 trace-safe identity metadata；Draft 与 audit 原子回滚 |
+| ACW-T29 | 当前 Draft 可解析，Dashboard 完成 create drawer | 读取/保存 Skill Pack | 临时目录返回前清理，只返回包内逻辑引用；浏览器只发送一次 create command |
 
 ## 5. Mock、数据与断言
 
@@ -241,17 +251,48 @@
 | ENV-3 | `uv lock --check` 首轮受沙箱外部 cache 权限限制 | uv cache | 沙箱外按原命令重跑通过，不计为产品缺陷；两个前端 package 未定义独立 `typecheck` script，build 已执行 `tsc -b` |
 | VERIFY-AGENT-7 | 独立子 Agent 按 Slice 6 明确清单复验 | scope→diff、authority、CAS/audit、权限、整包校验、路径安全、无残留、删除检查、范围隔离与完整门禁 | `PASS / NO_BLOCKING_FINDINGS`；focused 155 passed、6 skipped；全量 backend 1936 passed、122 skipped、2 deselected；Dashboard 195、Chat 35；Ruff、Mypy（351 source files）、两端与共享 UI build、domain-context、diff、lock 全部通过。invalid YAML、缺字段 manifest、缺失 Skill Pack definition 与 OSError 均失败关闭，无 raw/path 泄漏或部分写入；3 个跟踪临时目录全部清理 |
 
-## 14. 风险与待确认问题
+## 14. Slice 7 TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 受控实现与行为保护重构 |
+| 公开 interface | `get_business_flow_skill_packs(...)`、`create_business_flow_skill_pack(...)`、`update_business_flow_skill_pack(...)`、`delete_business_flow_skill_pack(...)` |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 不测试的实现细节 | 临时目录随机名称、YAML 非语义格式、私有 helper |
+| 范围外 | canonical seed bootstrap、production Skill Pack endpoint、KSS binding 编辑、validation/publication/activation/rollback、schema、部署 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-21 | Workspace Skill Pack typed seam、完整 create、update/delete、revision CAS、双层 audit 与事务失败关闭 | Workspace tests | Control Skill Pack command module、inspector seam 与四个公开 interface 不存在；collection 失败 |
+| GREEN-21 | Control 同时构建 manifest binding 与 package-local definition；Workspace 经 inspector 后以 CAS 原子保存 Draft 与双层 audit | Control module 与 Workspace tests | read、完整 create、update/delete、stale、inspection 并发、audit/commit failure 场景通过 |
+| RED-22 | Local inspector 自动清理、只返回逻辑路径、拒绝越界 extra file 且不泄漏临时路径 | adapter tests | Local Skill Pack adapter 不存在；collection 失败 |
+| GREEN-22 | adapter 在受控临时目录编译、严格校验 mutation、允许 read-only 可修复问题投影，并在边界收敛错误与路径 | Local inspector tests | success/failure cleanup、unsafe path、configuration issue 路径安全场景通过 |
+| RED-23 | 四个 route 只依赖 Workspace；权限、unknown field、稳定 400/404/409/500；Dashboard 完整 create 单命令与 revision | API、AST 与 Dashboard tests | 旧 route 返回 500 或缺少新字段；Dashboard 仍 POST 后 PATCH；3 个前端场景失败 |
+| GREEN-23 | Delivery 只保留权限、request/response 与稳定错误；Dashboard create/update/delete 发送 projection revision，create 一次携带全部字段 | Delivery、composition、Dashboard | 旧 YAML/compiler/store/projection helpers 删除；API 与前端回归通过 |
+| RED-24 | absolute/`..` Skill definition 必须在任何 definition loader 前失败关闭，raw Contract 与 Skill Pack command 使用同一包边界 | adapter、loader 与真实 Contract API tests | 外部 definition 会被 raw Contract validator/Skill inspector 读取；Contract PATCH 可持久化后续专用 GET 无法读取的 Draft |
+| GREEN-24 | 把 package-local definition 约束提升为共享 package security rule；raw mapping Gate 在路径归一化前拒绝 absolute、Windows/反斜杠与任意 `..`，resolved Gate 再防 symlink/越界 | bootstrap security helper、manifest loader、两个 adapter、真实 TestClient | unsafe definition 返回稳定 400；loader 未调用；Draft、Contract 与全局 audit 不变；既有包内 `skill_packs/` 引用兼容 |
+| RED-25 | 409 后不得关闭 Drawer、盲目抬升 revision 或把已删除 target 回退到其他 Pack | Dashboard concurrent-change/concurrent-delete tests | 旧 handler 吞错并关闭 Drawer；首轮修正会以最新 revision 重放旧完整 payload，可能覆盖并发赢家或误改其他 Pack |
+| GREEN-25 | mutation 返回显式 outcome；冲突刷新 projection 但冻结 Save/Delete，编辑 target ID 固定；只有显式 Reload Latest 才建立新编辑基线 | Dashboard page/editor tests | 输入保留；并发删除不 retarget；并发改动不会被 silent rebase；重载后才使用新 revision |
+| RED-26 | create/update `description` 保持既有非空公共契约 | API 与 Dashboard tests | 首轮 request model 放宽为空，形成未记录的 HTTP 语义漂移 |
+| GREEN-26 | 恢复 `min_length=1`；Create Drawer 把 description 设为必填 | Delivery request model 与 Dashboard | 空值继续 422 且 Workspace 不被调用；完整 create 仍只发送一次命令 |
+| RED-27 | recoverable capability-ref issue 不得把 path-like raw ref 复制到 message 或 Pack projection | adapter 与真实 GET tests | `/private/operator-secret.yaml` 同时出现在 issue message 与 `validator_refs` response |
+| GREEN-27 | issue 使用固定 trace-safe 文案；仅在 recoverable issue projection 中过滤不符合受限逻辑 ID 的 refs | Local Skill inspector 与 API | direct adapter/完整 HTTP response 均不含 raw ref、临时目录或 artifact path；正常合法 projection 保持原值 |
+| REFACTOR-8 | 删除旧 Skill route 编译残留与执行路径 | ignored runtime directories、deletion grep、API regression | 精确删除 `runs/config/compiled_projection` 与 `runs/config/compiled_validation`；新流程执行 28 passed、1 skipped 后目录仍不存在 |
+| VERIFY-MAIN-9 | 主代理执行聚焦与仓库级门禁 | backend、前端、静态、构建与领域检查 | focused 196 passed、4 skipped；全量 backend 1964 passed、122 skipped、2 deselected；Dashboard 197、Chat 35；两端 `tsc -b` build、Ruff、Mypy（354 source files）、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
+| ENV-4 | 真实 PostgreSQL Configuration UoW 环境未配置 | `PROOF_AGENT_TEST_POSTGRES_DSN` | 定向 2 skipped；不计为通过证据，整体维持 `PARTIAL_VERIFICATION` |
+| VERIFY-AGENT-8 | 独立子 Agent 按 Slice 7 明确清单复验 | scope→diff、权限、typed authority、CAS/audit、路径安全、单命令、删除与范围隔离 | `PASS / NO_BLOCKING_FINDINGS`；focused 216 passed、4 skipped；全量 backend 1964 passed、122 skipped、2 deselected；Dashboard 197、Chat 35；两端与共享 UI build、Ruff、Mypy（354 source files）、TypeScript、domain-context、diff、lock、AST/deletion、production isolation 全部通过。首轮 definition 预读取/词法路径、Contract 包边界、stale blind-rebase、issue 泄漏、description 漂移与旧派生目录均经 RED 修正后关闭 |
+
+## 15. 风险与待确认问题
 
 | 问题 | 等级 | 影响 | 建议动作 | 建议确认人 |
 | --- | --- | --- | --- | --- |
-| Skill Pack 专用编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 6 中扩张范围 | 研发负责人未指定 |
+| canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 7 中扩张范围 | 研发负责人未指定 |
 | 本地 adapter 在 publication CAS 前可能留下 derived compiled package | P2 | 不形成 authoritative Published Version 或 active pointer，但需要后续清理策略 | 在 artifact lifecycle 切片中定义清理与重试；当前以 CAS 失败关闭权威写入 | 研发负责人未指定 |
 | Local UoW 未证明双目录替换中进程崩溃的 durable crash-atomic recovery | P2 | development-only 无锁 reader 可能短暂观察切换；不能作为生产事务证据 | 保持 S0 development-only；生产继续使用 PostgreSQL，若提升本地耐久等级需独立设计 generation/recovery protocol | 研发负责人未指定 |
-| 真实 PostgreSQL rollback 并发集成环境未配置 | P1 | 9 个 PostgreSQL 测试跳过；advisory lock/CAS 只有代码、SQL 与测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行集成与并发场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
+| 真实 PostgreSQL Configuration UoW/Skill Pack CAS 环境未配置 | P1 | 定向 2 个 PostgreSQL Configuration UoW 测试跳过；事务、advisory lock 与 CAS 只有实现、SQL 和测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行 Skill Pack mutation、并发 conflict 与 audit 原子性场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
 | 本地验证不等于生产批准 | P1 | 不能证明真实 PostgreSQL/部署状态 | 维持 `PARTIAL_VERIFICATION` | 发布负责人未指定 |
 
-## 15. 上下文更新建议
+## 16. 上下文更新建议
 
 | 建议位置 | 类型 | 内容摘要 | 原因 |
 | --- | --- | --- | --- |
