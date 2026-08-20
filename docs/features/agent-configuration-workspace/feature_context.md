@@ -9,8 +9,8 @@
 | 需求来源 | 用户请求；架构评审报告 Phase 3；ADR-0009、ADR-0011 |
 | 所属版本 | 待确认；本轮仅处理本地架构切片 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
-| 当前状态 | `PARTIAL_VERIFICATION` |
-| 当前切片 | Slice 7：Skill Pack 专用编辑权威；主代理 `LOCAL_VERIFIED`，独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 当前状态 | `VERIFIED_LOCAL` |
+| 当前切片 | Slice 7：Skill Pack 专用编辑权威；主代理 `LOCAL_VERIFIED`，切片与真实 PostgreSQL 补充验证的独立复验均为 `PASS / NO_BLOCKING_FINDINGS` |
 
 ## 2. 需求目标与范围
 
@@ -178,4 +178,4 @@
 | 范围外 | canonical seed bootstrap、production Skill Pack endpoint、raw Contract 语义变更、KSS binding 编辑、validation/publication/activation/rollback、schema、部署 |
 | 验收标准 | 四个 route 不读取 Local store/compiler/manifest/YAML；一次 create 同时保存全部 Skill Pack 字段；stale revision 和 inspection 期间并发写入失败关闭；manifest binding、definition 与双层 audit 同一事务；无派生包残留或临时路径泄漏 |
 | 最高风险 | P1：旧创建流程 POST 后再 PATCH，且 mutation 先校验后 last-write-wins 保存，可能形成部分 Skill Pack 或覆盖并发赢家 |
-| 当前证据 | 主代理聚焦 196 passed、4 skipped；独立复验聚焦 216 passed、4 skipped；全量 backend 1964 passed、122 skipped、2 deselected；Dashboard 197、Chat 35；两端与共享 UI build、Ruff、Mypy（354 source files）、TypeScript、domain-context、diff、lock、AST/deletion 与 production isolation 全部通过；独立结论 `PASS / NO_BLOCKING_FINDINGS` |
+| 当前证据 | Slice 7 主代理聚焦 196 passed、4 skipped，独立复验聚焦 216 passed、4 skipped；补充真实 PostgreSQL 验证为 84 passed、11 个 S3 endpoint skip，全量 backend 为 2050 passed、36 skipped、2 deselected；PG 补充独立复验最小集 3 passed，并确认无 P0–P3；Dashboard 197、Chat 35；两端与共享 UI build、Ruff、Mypy（354 source files）、TypeScript、domain-context、diff、lock、AST/deletion 与 production isolation 全部通过 |

@@ -7,7 +7,7 @@
 | 建议结论 | Slice 7 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
 | 最高风险等级 | P1 |
 | 一句话依据 | Slice 6 已关闭；现有 Configuration UoW、Contract Bundle 与 Skill Pack loader 足以把专用读写收口到 Workspace，并删除两次创建和长期派生目录 |
-| 下一步建议 | 启动独立子 Agent，按 scope→diff、权限、CAS、事务、安全与删除清单对抗复验 |
+| 下一步建议 | 真实 PostgreSQL 补充验证与 stale role-test 清理已独立复验通过；按独立 Scope 迁移 canonical seed bootstrap |
 
 ## 2. 依据与输入缺口
 
@@ -25,7 +25,7 @@
 | --- | --- |
 | 准入结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
 | 需求分析输入 | 用户明确切片、领域规则、现有稳定 API、Configuration UoW、Skill Pack loader、Dashboard editor 回归 |
-| 证据缺口 | Skill Pack endpoint 仅在 development 注册；真实 PostgreSQL DSN 未配置，本轮不形成生产批准 |
+| 证据缺口 | Skill Pack endpoint 仅在 development 注册；真实 PostgreSQL 只在 disposable 本地测试服务验证，本轮不形成生产批准 |
 
 ## 4. 需求分析与范围边界
 

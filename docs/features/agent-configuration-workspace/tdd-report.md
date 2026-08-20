@@ -4,9 +4,9 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | `PARTIAL_VERIFICATION` |
+| 建议结论 | `VERIFIED_LOCAL` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；整体因真实 PostgreSQL DSN 缺失维持 `PARTIAL_VERIFICATION` |
+| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；真实 PostgreSQL 补充验证已关闭 DSN 缺失项 |
 
 ## 2. 测试目标与范围
 
@@ -279,8 +279,12 @@
 | GREEN-27 | issue 使用固定 trace-safe 文案；仅在 recoverable issue projection 中过滤不符合受限逻辑 ID 的 refs | Local Skill inspector 与 API | direct adapter/完整 HTTP response 均不含 raw ref、临时目录或 artifact path；正常合法 projection 保持原值 |
 | REFACTOR-8 | 删除旧 Skill route 编译残留与执行路径 | ignored runtime directories、deletion grep、API regression | 精确删除 `runs/config/compiled_projection` 与 `runs/config/compiled_validation`；新流程执行 28 passed、1 skipped 后目录仍不存在 |
 | VERIFY-MAIN-9 | 主代理执行聚焦与仓库级门禁 | backend、前端、静态、构建与领域检查 | focused 196 passed、4 skipped；全量 backend 1964 passed、122 skipped、2 deselected；Dashboard 197、Chat 35；两端 `tsc -b` build、Ruff、Mypy（354 source files）、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
-| ENV-4 | 真实 PostgreSQL Configuration UoW 环境未配置 | `PROOF_AGENT_TEST_POSTGRES_DSN` | 定向 2 skipped；不计为通过证据，整体维持 `PARTIAL_VERIFICATION` |
+| ENV-4 | 首轮真实 PostgreSQL Configuration UoW 环境未配置 | `PROOF_AGENT_TEST_POSTGRES_DSN` | 当时定向 2 skipped；后续由 `VERIFY-PG-1` 关闭 |
 | VERIFY-AGENT-8 | 独立子 Agent 按 Slice 7 明确清单复验 | scope→diff、权限、typed authority、CAS/audit、路径安全、单命令、删除与范围隔离 | `PASS / NO_BLOCKING_FINDINGS`；focused 216 passed、4 skipped；全量 backend 1964 passed、122 skipped、2 deselected；Dashboard 197、Chat 35；两端与共享 UI build、Ruff、Mypy（354 source files）、TypeScript、domain-context、diff、lock、AST/deletion、production isolation 全部通过。首轮 definition 预读取/词法路径、Contract 包边界、stale blind-rebase、issue 泄漏、description 漂移与旧派生目录均经 RED 修正后关闭 |
+| RED-28 | 强制启用真实 PostgreSQL 测试后，worker-role expired-owner fencing 场景仍引用已删除的 ProofAgent `KNOWLEDGE_WORKER` | `tests/test_worker_role_leases.py` | 最小用例稳定失败：`AttributeError: ProductionWorkerRole has no attribute KNOWLEDGE_WORKER` |
+| GREEN-28 | 保持 ADR-0210 的 KSS 独立权威与历史迁移不变，把 fencing 场景改为当前唯一可执行角色 `RUN_EXECUTOR` | PostgreSQL worker-role integration test | 最小用例 1 passed；未恢复旧枚举、advisory lock 或 ProofAgent Knowledge Worker 入口 |
+| VERIFY-PG-1 | disposable PostgreSQL 17.5、显式 DSN 与 fail-on-missing Gate | Configuration UoW、worker-role leases、全部 PostgreSQL 标记与 backend 全量 | Configuration UoW 2 passed；PostgreSQL 标记集 84 passed、11 skipped、1993 deselected，其中 11 个 skip 均因 S3 endpoint 未配置；backend 2050 passed、36 skipped、2 deselected；1 个既有 Authlib warning。DSN 凭据未写入文档或 Git |
+| VERIFY-AGENT-9 | 独立子 Agent 复验 PostgreSQL 补充验证与 stale role-test 清理 | ADR-0210、角色枚举、advisory lock、历史迁移、fencing/CAS、状态文档与真实 PostgreSQL | `PASS / NO_BLOCKING_FINDINGS`，无未关闭 P0–P3；最小 fencing 与 Configuration UoW 3 passed；PostgreSQL 标记集 84 passed、11 个 S3 endpoint skip；Ruff、domain-context、diff-check 通过；未读取 `.env` 或记录凭据 |
 
 ## 15. 风险与待确认问题
 
@@ -289,8 +293,8 @@
 | canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 7 中扩张范围 | 研发负责人未指定 |
 | 本地 adapter 在 publication CAS 前可能留下 derived compiled package | P2 | 不形成 authoritative Published Version 或 active pointer，但需要后续清理策略 | 在 artifact lifecycle 切片中定义清理与重试；当前以 CAS 失败关闭权威写入 | 研发负责人未指定 |
 | Local UoW 未证明双目录替换中进程崩溃的 durable crash-atomic recovery | P2 | development-only 无锁 reader 可能短暂观察切换；不能作为生产事务证据 | 保持 S0 development-only；生产继续使用 PostgreSQL，若提升本地耐久等级需独立设计 generation/recovery protocol | 研发负责人未指定 |
-| 真实 PostgreSQL Configuration UoW/Skill Pack CAS 环境未配置 | P1 | 定向 2 个 PostgreSQL Configuration UoW 测试跳过；事务、advisory lock 与 CAS 只有实现、SQL 和测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行 Skill Pack mutation、并发 conflict 与 audit 原子性场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
-| 本地验证不等于生产批准 | P1 | 不能证明真实 PostgreSQL/部署状态 | 维持 `PARTIAL_VERIFICATION` | 发布负责人未指定 |
+| 真实 PostgreSQL 证据仅来自 disposable 本地服务 | P1 | 已证明本地 PostgreSQL 17.5 上的事务、advisory lock 与 CAS 测试合同，但不能证明生产数据库、权限、网络或部署状态 | 生产候选仍需在受控发布环境执行 PostgreSQL 与部署 Gate | 测试或发布负责人未指定 |
+| 本地验证不等于生产批准 | P1 | `VERIFIED_LOCAL` 不证明生产部署状态 | 保持正常 Product Release Authority 与发布审批 | 发布负责人未指定 |
 
 ## 16. 上下文更新建议
 

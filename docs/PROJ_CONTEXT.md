@@ -30,10 +30,11 @@
   complete Skill Pack with one command. Package-local definition safety is shared
   by manifest, raw Contract and Skill Pack adapters; Dashboard freezes stale edits
   until an explicit latest-version reload. Slice 7 passed main-agent verification
-  and independent review with no blocking findings. Real PostgreSQL concurrency tests remain
-  unexecuted because no test DSN was configured, so this is not production
-  approval.
-- `[COMPUTED | HIGH]` Slice 7 main-agent verification passed 1964 backend tests,
+  and independent review with no blocking findings. A disposable PostgreSQL 17.5
+  service subsequently passed the Configuration UoW tests and the complete
+  PostgreSQL-marked suite. An independent follow-up review found no P0–P3; this
+  remains local evidence, not production approval.
+- `[COMPUTED | HIGH]` Slice 7 plus the real-PostgreSQL follow-up passed 2050 backend tests,
   197 Dashboard tests and 35 Chat tests; both production builds passed. Ruff,
   strict mypy over 354 source files, domain-context, diff and lock checks passed.
   This does not authorize production.
@@ -86,7 +87,7 @@ release approval.
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
-| `agent-configuration-workspace` | `PARTIAL_VERIFICATION` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |
+| `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |
 
 ## Status vocabulary
 

@@ -108,9 +108,9 @@ def test_worker_role_activation_is_epoch_cas_and_fences_expired_owner(
 ) -> None:
     repository = PostgresWorkerRoleRepository(postgres_engine)
     first = repository.activate(
-        role=ProductionWorkerRole.KNOWLEDGE_WORKER,
+        role=ProductionWorkerRole.RUN_EXECUTOR,
         slot=1,
-        owner_id="knowledge-blue",
+        owner_id="executor-blue",
         expected_epoch=0,
         now=NOW,
         lease_seconds=15,
@@ -118,9 +118,9 @@ def test_worker_role_activation_is_epoch_cas_and_fences_expired_owner(
 
     with pytest.raises(WorkerRoleLeaseConflictError):
         repository.activate(
-            role=ProductionWorkerRole.KNOWLEDGE_WORKER,
+            role=ProductionWorkerRole.RUN_EXECUTOR,
             slot=2,
-            owner_id="knowledge-green",
+            owner_id="executor-green",
             expected_epoch=0,
             now=NOW + timedelta(seconds=1),
             lease_seconds=15,
@@ -133,9 +133,9 @@ def test_worker_role_activation_is_epoch_cas_and_fences_expired_owner(
         )
 
     replacement = repository.activate(
-        role=ProductionWorkerRole.KNOWLEDGE_WORKER,
+        role=ProductionWorkerRole.RUN_EXECUTOR,
         slot=2,
-        owner_id="knowledge-green",
+        owner_id="executor-green",
         expected_epoch=first.activation_epoch,
         now=NOW + timedelta(seconds=16),
         lease_seconds=15,
