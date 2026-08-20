@@ -19,17 +19,20 @@
   physically removed. KSS's own Knowledge Worker remains. Former Hybrid-bound
   Published Agent Versions are historical records and no longer replayable or
   usable as rollback targets.
-- `[KNOWN | HIGH]` As of 2026-08-19, Agent Configuration Workspace local slices
-  cover Draft inventory/read/update, validation, development publication, and
-  Agent Version pointer rollback. Rollback now owns target identity, exact
-  active-pointer CAS, immutable KSS binding restoration, and atomic audit behind
-  the shared Local/PostgreSQL lifecycle port; the old direct Local-store rollback
-  path is removed. Slice 4 passed independent local review with no open P0-P3
-  findings. Real PostgreSQL concurrency tests remain unexecuted because no test
-  DSN was configured, so this is not production approval.
-- `[COMPUTED | HIGH]` Final local cutover verification passed 1837 backend tests,
-  all 195 Dashboard tests and the Dashboard production build. Ruff, strict mypy,
-  domain-context and diff checks passed. This does not authorize production.
+- `[KNOWN | HIGH]` As of 2026-08-20, Agent Configuration Workspace local slices
+  cover Draft inventory/read/update, validation, development publication, Agent
+  Version pointer rollback, and development Workflow Stage Configuration
+  save/preview. Stage mutation now owns typed Workflow replacement, caller
+  revision CAS, Prompt/context governance and atomic audit; preview is read-only.
+  Delivery no longer owns Stage YAML/compiler/store composition, and Dashboard
+  uses one Stage save command. Slice 5 passed main-agent verification and
+  independent review with no open P0–P3 findings. Real PostgreSQL concurrency
+  tests remain unexecuted because no test DSN was configured, so this is not
+  production approval.
+- `[COMPUTED | HIGH]` Slice 5 main-agent verification passed 1917 backend tests,
+  195 Dashboard tests and 35 Chat tests; both production builds passed. Ruff,
+  strict mypy over 350 source files, domain-context, diff and lock checks passed.
+  This does not authorize production.
 - `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
   same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS
   operator credential from Vault and calls the independent service through the

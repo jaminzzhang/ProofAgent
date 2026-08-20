@@ -17,6 +17,9 @@ from proof_agent.delivery.configuration_api import router as configuration_route
 from proof_agent.delivery.agent_configuration_validation import (
     LocalAgentConfigurationValidationAdapter,
 )
+from proof_agent.delivery.agent_configuration_workflow_stages import (
+    LocalAgentConfigurationWorkflowStageAdapter,
+)
 from proof_agent.delivery.agent_configuration_publication import (
     LocalAgentConfigurationPublicationAdapter,
 )
@@ -286,6 +289,7 @@ def create_app(
                 publication_validator=LocalAgentConfigurationPublicationAdapter(
                     configuration_store=configuration_store,
                 ),
+                workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
                 scope=AgentConfigurationScope.MULTI_AGENT,
             )
             application.state.agent_configuration_workspace_persistence = (

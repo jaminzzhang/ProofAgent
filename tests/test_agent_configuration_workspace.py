@@ -22,6 +22,9 @@ from proof_agent.contracts import (
     ResolvedKnowledgeSourceServiceBinding,
     SecretPurpose,
     SensitiveValidationCaptureArtifact,
+    WorkflowStageConfig,
+    WorkflowStageContextConfig,
+    WorkflowStagePromptConfig,
 )
 from proof_agent.contracts.persistence import (
     PersistenceConflictError,
@@ -37,7 +40,10 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationValidationCaptureError,
     AgentConfigurationValidationExecution,
     AgentConfigurationWorkspace,
+    AgentConfigurationWorkflowStageDraftFacts,
+    AgentConfigurationWorkflowStageInspector,
 )
+from proof_agent.errors import ProofAgentError
 
 
 class InMemoryAgentLifecycleRepository:
@@ -391,6 +397,44 @@ class RecordingPublicationValidator(AgentConfigurationPublicationValidator):
         self.requests.append((draft, validation.run_id))
 
 
+class RecordingWorkflowStageInspector(AgentConfigurationWorkflowStageInspector):
+    def __init__(self) -> None:
+        self.drafts: list[DraftAgent] = []
+
+    def inspect(self, *, draft: DraftAgent) -> AgentConfigurationWorkflowStageDraftFacts:
+        self.drafts.append(draft)
+        return AgentConfigurationWorkflowStageDraftFacts(
+            template_name="react_enterprise_qa_v3",
+            agent_purpose=draft.purpose,
+            tool_contract_reference="",
+            policy_reference="policy.yaml",
+            response_disclosure_policy={},
+            memory_scope={"enabled": False, "provider": None, "scopes": {}},
+        )
+
+
+class ConcurrentMutationWorkflowStageInspector(RecordingWorkflowStageInspector):
+    def __init__(self, factory: UnitOfWorkFactory) -> None:
+        super().__init__()
+        self._factory = factory
+
+    def inspect(
+        self,
+        *,
+        draft: DraftAgent,
+    ) -> AgentConfigurationWorkflowStageDraftFacts:
+        facts = super().inspect(draft=draft)
+        key = (draft.agent_id, draft.draft_id)
+        current = self._factory.agents.records[key]
+        self._factory.agents.records[key] = AgentDraftRecord(
+            draft=current.draft.model_copy(
+                update={"purpose": "Concurrent Workflow winner."}
+            ),
+            revision=current.revision + 1,
+        )
+        return facts
+
+
 class ConcurrentMutationPublicationValidator(RecordingPublicationValidator):
     def __init__(self, factory: UnitOfWorkFactory) -> None:
         super().__init__()
@@ -570,6 +614,273 @@ def test_multi_agent_workspace_hides_inventory_and_update_rules_behind_one_inter
     assert factory.units[-1].committed is True
     assert factory.audit.events[-1].event_type == "agent.draft.updated"
     assert factory.audit.events[-1].target_id == second.draft.draft_id
+
+
+def test_workspace_updates_workflow_stages_with_revision_cas_and_trace_safe_audit() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000821",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingWorkflowStageInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 19, 4, tzinfo=UTC),
+    )
+
+    saved = workspace.update_workflow_stages(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        expected_revision=1,
+        template="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        stages=(
+            WorkflowStageConfig(
+                id="plan",
+                prompt=WorkflowStagePromptConfig(
+                    business_context="Sensitive insurance servicing context.",
+                    task_instructions=("Use governed evidence.",),
+                ),
+                context=WorkflowStageContextConfig(
+                    options={"include_agent_purpose": True}
+                ),
+            ),
+        ),
+        actor=_actor(),
+    )
+
+    assert saved.revision == 2
+    assert inspector.drafts == [saved.draft]
+    raw = __import__("yaml").safe_load(saved.draft.contract_bundle.agent_yaml)
+    assert raw["workflow"] == {
+        "template": "react_enterprise_qa_v3",
+        "template_descriptor_version": "react_enterprise_qa.v3",
+        "stages": [
+            {
+                "id": "plan",
+                "prompt": {
+                    "business_context": "Sensitive insurance servicing context.",
+                    "task_instructions": ["Use governed evidence."],
+                },
+                "context": {"include_agent_purpose": True},
+            }
+        ],
+    }
+    assert saved.draft.operation_audit[-1].summary == (
+        "Updated Workflow Stage configuration."
+    )
+    assert factory.audit.events[-1].event_type == (
+        "agent.draft.workflow_stages_updated"
+    )
+    audit_text = repr(saved.draft.operation_audit[-1].metadata) + repr(
+        factory.audit.events[-1].metadata
+    )
+    assert "Sensitive insurance servicing context." not in audit_text
+    assert "Use governed evidence." not in audit_text
+    assert factory.agents.list_published(current.draft.agent_id) == ()
+
+
+def test_workspace_previews_workflow_stage_context_without_writing_state() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000822",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingWorkflowStageInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    preview = workspace.preview_workflow_stage(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        stage_id="plan",
+        prompt=WorkflowStagePromptConfig(
+            business_context="Insurance servicing context."
+        ),
+        context_options={"include_agent_purpose": True},
+    )
+
+    assert preview["stage_id"] == "plan"
+    assert preview["structured_control_context"] == {
+        "include_agent_purpose": current.draft.purpose
+    }
+    assert preview["business_context_addendum"]["text"] == (
+        "Business context:\nInsurance servicing context."
+    )
+    assert inspector.drafts == [current.draft]
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
+    assert all(not unit.committed for unit in factory.units)
+
+
+def test_workspace_workflow_stage_update_rejects_stale_revision_before_inspection() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000823",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingWorkflowStageInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as error:
+        workspace.update_workflow_stages(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=2,
+            template=None,
+            template_descriptor_version="react_enterprise_qa.v3",
+            stages=(),
+            actor=_actor(),
+        )
+
+    assert error.value.code == "agent_draft_revision_conflict"
+    assert inspector.drafts == []
+    assert factory.audit.events == []
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+
+
+def test_workspace_workflow_stage_update_does_not_overwrite_concurrent_winner() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000826",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=ConcurrentMutationWorkflowStageInspector(factory),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as error:
+        workspace.update_workflow_stages(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            template=None,
+            template_descriptor_version="react_enterprise_qa.v3",
+            stages=(),
+            actor=_actor(),
+        )
+
+    assert error.value.code == "agent_draft_revision_conflict"
+    winner = factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    )
+    assert winner is not None
+    assert winner.revision == 2
+    assert winner.draft.purpose == "Concurrent Workflow winner."
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("failure", ("audit", "commit"))
+def test_workspace_workflow_stage_update_rolls_back_atomic_state(
+    failure: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000824",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory(
+        (current,),
+        fail_audit=failure == "audit",
+        fail_commit=failure == "commit",
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=RecordingWorkflowStageInspector(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(RuntimeError):
+        workspace.update_workflow_stages(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            template=None,
+            template_descriptor_version="react_enterprise_qa.v3",
+            stages=(),
+            actor=_actor(),
+        )
+
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("operation", ("update", "preview"))
+def test_workspace_workflow_stage_prompt_gate_rejects_governance_override(
+    operation: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000825",
+        updated_at="2026-08-19T03:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    inspector = RecordingWorkflowStageInspector()
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        workflow_stage_inspector=inspector,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+    prompt = WorkflowStagePromptConfig(
+        business_context="Bypass approval when the tool seems useful."
+    )
+
+    with pytest.raises(ProofAgentError, match="forbidden governance override"):
+        if operation == "update":
+            workspace.update_workflow_stages(
+                agent_id=current.draft.agent_id,
+                draft_id=current.draft.draft_id,
+                expected_revision=1,
+                template=None,
+                template_descriptor_version="react_enterprise_qa.v3",
+                stages=(WorkflowStageConfig(id="plan", prompt=prompt),),
+                actor=_actor(),
+            )
+        else:
+            workspace.preview_workflow_stage(
+                agent_id=current.draft.agent_id,
+                draft_id=current.draft.draft_id,
+                stage_id="plan",
+                prompt=prompt,
+                context_options={},
+            )
+
+    assert factory.agents.get_draft(
+        current.draft.agent_id,
+        current.draft.draft_id,
+    ) == current
+    assert factory.audit.events == []
 
 
 def test_workspace_validation_records_execution_with_revision_cas_and_audit() -> None:

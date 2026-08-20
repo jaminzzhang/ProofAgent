@@ -357,6 +357,8 @@ test('workflow stage update and preview use Agent Configuration endpoints', asyn
   }
 
   await updateWorkflowStages('enterprise_qa', 'draft_1', {
+    expected_revision: 7,
+    template: 'react_enterprise_qa_v3',
     template_descriptor_version: 'react_enterprise_qa.v1',
     stages: [stage],
   })
@@ -371,6 +373,8 @@ test('workflow stage update and preview use Agent Configuration endpoints', asyn
     sameOriginRequest({
       method: 'PATCH',
       body: JSON.stringify({
+        expected_revision: 7,
+        template: 'react_enterprise_qa_v3',
         template_descriptor_version: 'react_enterprise_qa.v1',
         stages: [stage],
       }),

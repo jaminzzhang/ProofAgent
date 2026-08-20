@@ -6,15 +6,15 @@
 | --- | --- |
 | 建议结论 | `PARTIAL_VERIFICATION` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1、2、3、4 已完成本地验证与独立复验 |
+| 模式 | 行为保护重构；Slice 1—5 已完成本地验证与独立复验 |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation、development publication 与 Agent Version pointer rollback |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback 与 Workflow Stage Configuration 保存/预览 |
 | 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication adapters |
-| 不覆盖范围 | production validation/publish endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、Contract/Workflow/Skill 编辑、生产部署 |
+| 不覆盖范围 | production validation/publish/Stage endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、raw Contract 与 Skill Pack 编辑、生产部署 |
 
 ## 3. 测试场景
 
@@ -35,6 +35,11 @@
 | ACW-T13 | rollback activation 与 audit 原子提交并受 exact pointer CAS 保护 | consistency/concurrency | P1 | P1 |
 | ACW-T14 | rollback route 只依赖 Workspace，错误 detail 稳定 | architecture/security | P1 | P1 |
 | ACW-T15 | rollback 不修改 version history，不重算 target KSS binding | authority/negative | P1 | P1 |
+| ACW-T16 | Stage 保存一次原子替换 template、descriptor version 与 stages | authority/contract | P1 | P1 |
+| ACW-T17 | Stage 保存以调用方 revision CAS，并覆盖编译期间并发写入 | consistency/concurrency | P1 | P1 |
+| ACW-T18 | Stage audit 与 Draft 同事务提交且不含 Prompt 文本 | security/consistency | P1 | P1 |
+| ACW-T19 | Stage preview 脱敏且不执行模型、工具、Run 或状态写入 | security/negative | P1 | P1 |
+| ACW-T20 | Stage route 只依赖 Workspace；Dashboard 只发送一次保存命令 | architecture | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -55,6 +60,11 @@
 | ACW-T13 | target 存在且 current pointer 已读取 | 回滚 | exact CAS、activation 与 audit 同一 UoW；并发冲突不覆盖赢家 |
 | ACW-T14 | 应用只注入 recording Workspace，或 Workspace 抛内部异常 | 调用 rollback route | route 不需要 Local store；返回稳定 404/409/400/500 detail |
 | ACW-T15 | target Published Version 包含 immutable runtime facts | 回滚 | 返回同一 target version 投影；不改任何 Published Version，不调用 Phase F 或部署 rollback |
+| ACW-T16 | 当前 Draft 与合法 Stage command | 调用 `update_workflow_stages` | 一个新 revision 同时包含 template、descriptor version 与 stages |
+| ACW-T17 | stale client revision，或 inspection 后发生并发写入 | 保存 Stage command | 返回稳定 conflict，不覆盖并发赢家 |
+| ACW-T18 | Stage Prompt 含敏感业务文本，或 audit commit 失败 | 保存 Stage command | audit 只含 trace-safe metadata；失败时 Draft 与 audit 均不变 |
+| ACW-T19 | 当前 Draft 可解析，且 Stage/context 合法 | 调用 `preview_workflow_stage` | 返回限长脱敏投影，不新增 Draft、audit、trace 或 Run |
+| ACW-T20 | API 注入 recording Workspace，Dashboard 编辑 Stage | 保存或预览 | route 不组合 store/compiler/YAML；Dashboard 不先保存 raw Contract |
 
 ## 5. Mock、数据与断言
 
@@ -168,17 +178,50 @@
 | ENV-1 | 首轮 backend 与 lock 检查受沙箱限制 | 8 个 loopback tests、uv cache | 允许本机回环和 uv cache 后按原命令重跑通过，不计为产品缺陷 |
 | VERIFY-AGENT-5 | 独立子 Agent 按 Slice 4 清单复验 | scope→diff、权限、target identity、CAS、事务/audit、KSS binding、旧实现删除、错误映射、范围隔离 | `PASS / NO_BLOCKING_FINDINGS`；200 passed、27 skipped；Ruff、Mypy（7 source files）、domain-context、diff 与 deletion grep 通过；首轮 P2 权限证据缺口已关闭 |
 
-## 12. 风险与待确认问题
+## 12. Slice 5 TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 受控实现与行为保护重构 |
+| 公开 interface | `AgentConfigurationWorkspace.update_workflow_stages(...)`、`AgentConfigurationWorkspace.preview_workflow_stage(...)` |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
+| 不测试的实现细节 | 私有 helper、临时编译目录、YAML 序列化的非语义格式 |
+| 范围外 | raw Contract、Skill Pack、production Stage endpoint、validation/publication/rollback、schema、部署 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-10 | Workspace Stage typed command 与保存行为 | `tests/test_agent_configuration_workspace.py` | 因 Stage facts/inspector interface 不存在而在 collection 阶段失败 |
+| GREEN-10 | Workspace 受控替换 Workflow 字段，执行 Prompt/context/template Gate，并以 revision CAS 原子保存 Draft 与双层 audit | Control module 与 Stage validation rules | Workspace 测试通过 |
+| RED-11 | Workspace preview interface | Workspace tests | 因 `preview_workflow_stage(...)` 不存在而失败 |
+| GREEN-11 | Workspace 从 revisioned Draft 组合受控、脱敏 preview，不执行或写入状态 | Workspace 与 local inspector | preview 行为测试通过 |
+| RED-12 | Stage route 只依赖 Workspace；Dashboard 保存只发一个 Stage command | API 与 Dashboard tests | 旧 route 缺少新字段并继续先保存 raw Contract |
+| GREEN-12 | Delivery 只保留权限、请求/响应与稳定错误映射；Dashboard 发送 `expected_revision` 和 template 的单命令 | Delivery、composition、Dashboard | API 与 Dashboard 回归通过 |
+| REFACTOR-6 | 把 Prompt Gate 从 bootstrap 移入 Control；删除 route 内 YAML mutation、compiler/manifest/store 与 preview helpers | Control、bootstrap、Delivery | 聚焦 177 passed、4 skipped；Ruff、Mypy 通过 |
+| RED-13 | inspector 不得在配置根残留 preview/update 编译包 | API integration test | 旧 adapter 创建并保留 `compiled_workflow_stages` 目录，测试失败 |
+| GREEN-13 | inspector 去除 concrete store 依赖，在受控临时目录编译并于返回前清理 | Local Stage inspector | update/preview 定向 3 passed；配置根无 derived package |
+| RED-14 | 临时编译 facts 不得把已清理目录的绝对路径暴露到 preview | 独立子 Agent HTTP 探针与 API regression | `include_policy_outline` 返回含临时目录前缀的绝对路径 |
+| GREEN-14 | adapter 只返回包内、相对的逻辑 Contract 引用，并拒绝越界路径 | Local Stage inspector 与 API tests | preview 返回 `policy.yaml`，不含临时前缀或失效绝对路径；定向 3 passed |
+| RED-15 | preview 必须限制超长 purpose 与嵌套 response/memory 投影 | 独立子 Agent HTTP 探针与 Control tests | 50,000 字符 purpose 原样返回；3 个新增输出预算场景失败 |
+| GREEN-15 | Control preview 对 Prompt、结构化上下文、单值、键、集合项数和递归深度设置预算，并标记 `truncation_applied` | Stage context Control tests | 113 passed、4 skipped；超长与嵌套场景均受限 |
+| RED-16 | 非字符串 JSON scalar 也必须计入 preview 总文本预算 | 独立子 Agent probe 与 Control test | 64 个 4,000 位整数产生约 257 KB 响应，新增场景失败 |
+| GREEN-16 | scalar 按真实 JSON 序列化长度扣减预算；超限或不可安全序列化时返回截断标记 | Stage context Control tests | 114 passed、4 skipped；整数绕过场景受限 |
+| RED-17 | `NaN` 与 `±Infinity` 不得绕过严格 JSON preview 语义 | 独立子 Agent API probe 与 Control tests | 宽松序列化保留非有限数，API 静默转为 `null` 且无截断标记；3 个场景失败 |
+| GREEN-17 | scalar 使用 `allow_nan=False` 严格序列化，非有限数进入安全截断分支 | Stage context Control tests | 117 passed、4 skipped；严格 JSON 可重新序列化且标记截断 |
+| VERIFY-MAIN-7 | 主代理执行仓库级门禁 | backend、前端、静态与领域检查 | backend 1917 passed、122 skipped、2 deselected；Dashboard 195、Chat 35；两端 build、Ruff、Mypy（350 source files）、domain-context、diff、`uv lock --check` 全部通过；1 个既有 Authlib warning |
+| ENV-2 | 首轮 backend 与 lock 检查受沙箱限制 | 8 个 loopback tests、uv cache | 允许本机回环和 uv cache 后按原命令重跑通过，不计为产品缺陷 |
+| VERIFY-AGENT-6 | 独立子 Agent 按 Slice 5 明确清单复验并攻击输出边界 | scope→diff、authority、CAS/audit、权限、删除检查、真实 API preview、前后端与静态门禁 | `PASS / NO_BLOCKING_FINDINGS`；聚焦 188 passed、4 skipped；发现的临时路径泄漏、输出预算与严格 JSON 三组 P2 均经 RED 修正后关闭 |
+
+## 13. 风险与待确认问题
 
 | 问题 | 等级 | 影响 | 建议动作 | 建议确认人 |
 | --- | --- | --- | --- | --- |
-| Contract/Workflow/Skill 编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 4 中扩张范围 | 研发负责人未指定 |
+| raw Contract、Skill Pack 编辑和 canonical seed bootstrap 仍直接依赖 Local store | P1 | Workspace 尚未完全深化 | 按独立 Scope 继续迁移；不在 Slice 5 中扩张范围 | 研发负责人未指定 |
 | 本地 adapter 在 publication CAS 前可能留下 derived compiled package | P2 | 不形成 authoritative Published Version 或 active pointer，但需要后续清理策略 | 在 artifact lifecycle 切片中定义清理与重试；当前以 CAS 失败关闭权威写入 | 研发负责人未指定 |
 | Local UoW 未证明双目录替换中进程崩溃的 durable crash-atomic recovery | P2 | development-only 无锁 reader 可能短暂观察切换；不能作为生产事务证据 | 保持 S0 development-only；生产继续使用 PostgreSQL，若提升本地耐久等级需独立设计 generation/recovery protocol | 研发负责人未指定 |
 | 真实 PostgreSQL rollback 并发集成环境未配置 | P1 | 9 个 PostgreSQL 测试跳过；advisory lock/CAS 只有代码、SQL 与测试契约静态证据 | 在具备真实 PostgreSQL DSN 的受控环境运行集成与并发场景后，才能形成生产适用证据 | 测试或发布负责人未指定 |
 | 本地验证不等于生产批准 | P1 | 不能证明真实 PostgreSQL/部署状态 | 维持 `PARTIAL_VERIFICATION` | 发布负责人未指定 |
 
-## 13. 上下文更新建议
+## 14. 上下文更新建议
 
 | 建议位置 | 类型 | 内容摘要 | 原因 |
 | --- | --- | --- | --- |

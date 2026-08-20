@@ -4,38 +4,38 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 4 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 建议结论 | Slice 5 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
 | 最高风险等级 | P1 |
-| 一句话依据 | ADR-0009 与领域上下文已固定指针回滚语义；现有 Local/PostgreSQL lifecycle adapters、Configuration UoW、active-pointer CAS 和 API 行为提供了完整输入 |
-| 下一步建议 | Slice 4 收口；下一切片重新 Scope Contract/Workflow/Skill 编辑权威，不复用本切片生产结论 |
+| 一句话依据 | 领域上下文已固定 Workflow Stage Prompt/Context 的受限语义；现有 Configuration UoW、受控编译器和稳定 API 行为足以迁移保存与预览权威 |
+| 下一步建议 | Slice 5 已完成；后续以独立 Scope 迁移 raw Contract 或 Skill Pack 编辑权威 |
 
 ## 2. 依据与输入缺口
 
 | 材料 | 来源 | 是否读取 | 关键证据 | 缺口 |
 | --- | --- | --- | --- | --- |
-| 用户请求 | 当前对话 | 是 | 提交检查点并实施下一独立切片；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 4 |
+| 用户请求 | 当前对话 | 是 | 用户同意实施 Workflow Stage Configuration 编辑权威；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 5 |
 | 架构评审 | `architecture-review-20260818-220308.html` | 是 | Delivery 与 concrete store 耦合；推荐 deep application module 与 focused ports | Graphify 图较旧，只作导航 |
 | 项目规则 | `AGENTS-COMMON.md`、hicode coding rules | 是 | production PostgreSQL 权威、原子审计、TDD、无兼容 facade | 无 |
 | 领域与 ADR | Agent Configuration context、ADR-0009、ADR-0011 | 是 | Workspace、Draft、Published Version、模块/lifecycle 分离 | context 含已退役知识术语，后续单独清理 |
-| 当前实现 | configuration routers、Workspace、production application、Local/PostgreSQL adapters | 是 | development rollback route 已改走 Workspace；Local/PostgreSQL port 实现 exact pointer activation，旧 direct-store rollback 已删除 | Contract/Workflow/Skill 编辑与 canonical seed bootstrap 仍待后续切片 |
+| 当前实现 | configuration router、Workspace、Local compiler/store、Dashboard Workflow editor | 是 | Stage 保存与预览仍在 route 内组合 YAML、compiler 与 concrete store；Dashboard Stage 保存先写 Contract、再写 stages | Contract/Skill 编辑与 canonical seed bootstrap 仍待后续切片 |
 
 ## 3. 需求准入评审
 
 | 项 | 内容 |
 | --- | --- |
-| 准入结论 | `NO_BLOCKING_GAPS` |
-| 需求分析输入 | 用户请求、架构报告、现有稳定 API、两个真实 persistence adapters、生命周期规则 |
-| 证据缺口 | 正式生产发布、部署 Blue/Green rollback 与 Agent Version pointer rollback 是不同权威；本切片只迁移最后一项 |
+| 准入结论 | `LOCAL_VERIFIED`；独立子 Agent `PASS` |
+| 需求分析输入 | 用户确认、领域规则、现有稳定 API、Configuration UoW、受控编译器、Dashboard 回归 |
+| 证据缺口 | 真实 PostgreSQL Stage endpoint 不存在且不在本切片；本轮只提供 development local adapter 证据，不形成生产批准 |
 
 ## 4. 需求分析与范围边界
 
 | 项 | 内容 |
 | --- | --- |
-| 需求目标 | 让 Control-owned Workspace 成为普通 Agent Version pointer rollback 的唯一应用权威 |
-| 范围内 | Workspace rollback interface、existing Published Version 校验、active-pointer expectation、activation/audit 原子提交、Local/PostgreSQL lifecycle adapters、development API 路由、稳定错误映射、旧 direct-store rollback 删除、文档 |
-| 范围外 | production validation/publish endpoint、正式 Phase F publisher、Blue/Green 应用部署 rollback、Source rollback-Draft、Contract/Workflow/Skill 编辑、schema、部署 |
-| 非目标 | 新增 facade 后保留旧调用；统一 development 与 production 能力；把本地验证描述为生产批准 |
-| 验收标准 | Workspace 行为与负向契约测试、API 回归、Local/PostgreSQL persistence 回归、Ruff/Mypy/Dashboard 与全量后端通过；rollback route 不直接调用具体 store；并发只允许一个 active-pointer winner；独立子 Agent 复验 |
+| 需求目标 | 让 Control-owned Workspace 成为 Workflow Stage Configuration 保存与 Context Preview 的唯一应用权威 |
+| 范围内 | Workspace update/preview interface、typed Stage command、受控本地 Draft inspection adapter、revision CAS、原子审计、development API、稳定错误映射、Dashboard 单次保存、旧 route 逻辑删除、文档 |
+| 范围外 | raw Contract 编辑、Skill Pack 编辑、production Stage endpoint、validation/publication/rollback、schema、部署 |
+| 非目标 | 新增 facade 后保留旧调用；把 Stage Prompt 变成 Harness control prompt；执行模型/工具/Run；把本地验证描述为生产批准 |
+| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；保存以 expected revision CAS 一次提交 template、descriptor version 与 stages；audit 无 Prompt 原文；预览无写入；独立子 Agent 复验 |
 | `feature_context.md` 更新 | 已创建 |
 | ADR 处理 | 不需要；ADR-0009、ADR-0210 与 Agent Configuration 领域上下文已固定 immutable-version pointer rollback 和精确 KSS binding 规则 |
 
@@ -195,7 +195,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | `TDD_INPUT_READY` |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
 | 最高风险等级 | P1 |
 | 公开 interface | `AgentConfigurationWorkspace.publish_draft(...)` |
 | 可观察行为 | 当前 Draft revision 的无 blocker Validation Record 被提升为 immutable Published Agent Version；Active Agent Version 与 audit 在同一 UoW 提交 |
@@ -239,7 +239,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | `TDD_INPUT_READY` |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS` |
 | 最高风险等级 | P1 |
 | 公开 interface | `AgentConfigurationWorkspace.rollback_version(...)` |
 | 可观察行为 | 选择一个既有 immutable Published Agent Version，精确比较并切换 Active Agent Version pointer，同时提交全局 configuration audit；返回恢复后的不可变 KSS binding 投影 |
@@ -279,3 +279,49 @@
 - 主代理执行聚焦测试、真实 Local 交错事务、可用 PostgreSQL 集成测试、全量后端、Ruff、Mypy、Dashboard/Chat 与领域检查。
 - 切片完成后启动独立子 Agent，按 scope→diff、权限、target identity、CAS、事务/audit、KSS binding、旧实现删除、错误映射和范围隔离清单复验。
 - 子 Agent 发现问题时，主代理先补 RED 再修正并重跑相关门禁。
+
+## 23. Slice 5 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS` |
+| 最高风险等级 | P1 |
+| 公开 interface | `AgentConfigurationWorkspace.update_workflow_stages(...)`、`AgentConfigurationWorkspace.preview_workflow_stage(...)` |
+| 可观察行为 | 保存以一个 Draft revision CAS 更新 Workflow Template、Descriptor Version 与 Stage overrides，并原子追加 Draft operation audit 和全局 audit；预览返回脱敏投影且不写任何状态 |
+| 兼容边界 | 保持 HTTP method/path、`agent.edit`/`agent.validate` 权限和现有成功响应；请求新增可选 `expected_revision` 与 `template`，旧调用可继续使用服务端当前 revision 与既有 template |
+| 范围外 | raw Contract 编辑、Skill Pack 编辑、production Stage endpoint、validation/publication/rollback、schema、部署 |
+| ADR 判断 | 不需要；执行既有 Workflow Stage Configuration、Harness Prompt Authority Boundary、Workspace ownership 与 Draft CAS 规则 |
+
+## 24. Slice 5 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-WS-ROOT | Operator 保存或预览 Workflow Stage Configuration | Delivery 只调用 Workspace interface | Contract Bundle 或 preview projection | HTTP interface 与 AST 删除测试 | P1 |
+| ACW-WS-MAIN-1 | 保存请求含 template、descriptor version、stages 与 expected revision | Workspace 解析当前 Agent YAML，只替换受控 Workflow 字段，构建 typed candidate | candidate Draft | YAML/Unicode/未知字段/legacy nodes tests | P1 |
+| ACW-WS-MAIN-2 | candidate 构建完成 | injected local adapter 编译并加载 manifest；Control 复用既有 Stage validation | 可保存 candidate | invalid template/stage/prompt/context tests | P1 |
+| ACW-WS-MAIN-3 | candidate 校验通过 | Configuration UoW 以 expected revision 保存 Draft，并原子追加 operation/global audit | revision +1 | CAS、audit、commit failure tests | P1 |
+| ACW-WS-MAIN-4 | 请求 Context Preview | Workspace 检查 Draft、stage、Prompt 与 context，调用受控 inspector 并构建 redacted preview | 无执行 preview | no Run/no mutation、redaction tests | P1 |
+| ACW-WS-BRANCH-1 | client revision 已过期或保存期间并发写入 | revision CAS 拒绝 | stable 409；不覆盖赢家 | stale/interleaving tests | P1 |
+| ACW-WS-BRANCH-2 | compiler、manifest 或 adapter 失败 | 保存失败关闭；Delivery 返回稳定错误且不泄漏路径 | Draft/audit 不变 | fault/error mapping tests | P1 |
+| ACW-WS-BRANCH-3 | Prompt 或 context 试图越过 descriptor/Harness 约束 | 既有 `PA_CONFIG_002` Gate 拒绝 | 不保存、不预览 | governance-bypass tests | P1 |
+| ACW-WS-BOUND-1 | Stage 保存/预览完成 | 不验证、不发布、不激活，不迁移 Contract/Skill 路由 | 其他 lifecycle 权威不变 | negative assertions 与 scope diff | P1 |
+
+## 25. Slice 5 TDD 任务
+
+### Task ACW-WS1：Workspace Stage 保存与预览行为
+
+- RED：从 Workspace interface 证明 typed mutation、revision CAS、双层 audit、Prompt 不进入 audit、preview 无状态写入。
+- GREEN：实现 `update_workflow_stages(...)` 与 `preview_workflow_stage(...)`，复用现有 Configuration UoW 和 Control Stage rules。
+- 停止条件：需要改变 Published Version、数据库 schema 或 production endpoint。
+
+### Task ACW-WS2：Local inspector 与 Delivery 删除
+
+- RED：现有 route 仍直接组合 YAML、compiler、manifest loader、Local store 与 preview helper。
+- GREEN：引入只负责本地编译/manifest facts 的 adapter；route 只做权限、请求/响应和稳定错误映射；删除 Stage 专用 route helpers。
+- 停止条件：需要迁移 raw Contract 或 Skill Pack 编辑。
+
+### Task ACW-WS3：Dashboard 单次保存与独立复核
+
+- RED：Dashboard 保存 Stage 先调用 Contract endpoint，再调用 Stage endpoint。
+- GREEN：Stage command 携带当前 template 与 Draft revision，一次调用完成；保留显式 Save Core 行为。
+- 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 复验 scope→diff、权限、CAS、审计、Prompt 安全、preview 无执行、旧实现删除、错误映射和范围隔离。

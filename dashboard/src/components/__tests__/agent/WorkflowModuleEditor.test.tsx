@@ -239,6 +239,7 @@ describe('WorkflowModuleEditor', () => {
 
     await waitFor(() => {
       expect(saveStages).toHaveBeenCalledWith({
+        template: 'react_enterprise_qa_v3',
         template_descriptor_version: 'react_enterprise_qa.v3',
         stages: expect.arrayContaining([
           {
@@ -295,6 +296,7 @@ workflow:
 
     await waitFor(() => {
       expect(saveStages).toHaveBeenCalledWith({
+        template: 'react_enterprise_qa_v3',
         template_descriptor_version: 'react_enterprise_qa.v3',
         stages: expect.arrayContaining([
           {

@@ -35,9 +35,11 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationValidationResult,
 )
 from proof_agent.delivery.configuration_api import (
+    preview_config_draft_workflow_stage,
     publish_config_draft,
     rollback_config_version,
     router as configuration_router,
+    update_config_draft_workflow_stages,
 )
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.app import create_app
@@ -296,6 +298,37 @@ def test_agent_config_validation_requires_agent_validate_permission(tmp_path: Pa
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Operator lacks required permission: agent.validate"
+
+
+def test_workflow_stage_routes_preserve_edit_and_validate_permissions() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = _StaticOperatorIdentityProvider(
+        {OperatorPermission.AGENT_VIEW}
+    )
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    update = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages",
+        json={"expected_revision": 1, "stages": []},
+    )
+    preview = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages/plan/preview",
+        json={"prompt": {}, "context": {}},
+    )
+
+    assert update.status_code == 403
+    assert update.json()["detail"] == (
+        "Operator lacks required permission: agent.edit"
+    )
+    assert preview.status_code == 403
+    assert preview.json()["detail"] == (
+        "Operator lacks required permission: agent.validate"
+    )
+    assert workspace.workflow_stage_update_calls == []
+    assert workspace.workflow_stage_preview_calls == []
 
 
 def test_agent_config_publish_requires_agent_publish_permission(tmp_path: Path) -> None:
@@ -1203,6 +1236,33 @@ def test_update_workflow_stages_preserves_unicode_prompt_text(tmp_path: Path) ->
     assert "\\u4E2D" not in agent_yaml
 
 
+def test_update_workflow_stages_rejects_stale_client_revision(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    imported = _import_react_enterprise_qa(client)
+    loaded = client.get(
+        f"/api/config/agents/{imported['agent_id']}/drafts/{imported['draft_id']}"
+    )
+    assert loaded.status_code == 200
+    revision = loaded.json()["revision"]
+
+    response = client.patch(
+        f"/api/config/agents/{imported['agent_id']}/drafts/{imported['draft_id']}/workflow-stages",
+        json={
+            "expected_revision": revision + 1,
+            "template": "react_enterprise_qa_v3",
+            "template_descriptor_version": "react_enterprise_qa.v3",
+            "stages": [],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "agent_draft_revision_conflict"}
+    after = client.get(
+        f"/api/config/agents/{imported['agent_id']}/drafts/{imported['draft_id']}"
+    )
+    assert after.json()["revision"] == revision
+
+
 def test_preview_workflow_stage_context(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_react_enterprise_qa(client)
@@ -1224,6 +1284,36 @@ def test_preview_workflow_stage_context(tmp_path: Path) -> None:
         )
     }
     assert client.get("/api/runs").json()["meta"]["total"] == 0
+
+
+def test_workflow_stage_inspection_leaves_no_compiled_package(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa(client)
+
+    update = client.patch(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages",
+        json={
+            "template_descriptor_version": "react_enterprise_qa.v3",
+            "stages": [{"id": "plan"}],
+        },
+    )
+    preview = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/workflow-stages/plan/preview",
+        json={
+            "context": {
+                "include_bound_tools": True,
+                "include_policy_outline": True,
+            }
+        },
+    )
+
+    assert update.status_code == 200
+    assert preview.status_code == 200
+    structured_context = preview.json()["structured_control_context"]
+    assert structured_context["include_bound_tools"] == ""
+    assert structured_context["include_policy_outline"] == "policy.yaml"
+    assert "proof-agent-workflow-stage-" not in json.dumps(structured_context)
+    assert not (tmp_path / "config" / "compiled_workflow_stages").exists()
 
 
 def test_workflow_stage_preview_rejects_governance_bypass_prompt(tmp_path: Path) -> None:
@@ -1369,11 +1459,126 @@ def test_rollback_route_rejects_unknown_request_fields_before_workspace() -> Non
     assert workspace.rollback_calls == []
 
 
+def test_workflow_stage_routes_delegate_to_workspace_without_concrete_store() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    updated = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages",
+        json={
+            "expected_revision": 4,
+            "template": "react_enterprise_qa_v3",
+            "template_descriptor_version": "react_enterprise_qa.v3",
+            "stages": [
+                {
+                    "id": "plan",
+                    "prompt": {"business_context": "Claims context."},
+                    "context": {"include_agent_purpose": True},
+                }
+            ],
+        },
+    )
+    preview = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages/plan/preview",
+        json={
+            "prompt": {"business_context": "Claims context."},
+            "context": {"include_agent_purpose": True},
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["agent_yaml"] == "name: agent_alpha\n"
+    assert workspace.workflow_stage_update_calls[0]["expected_revision"] == 4
+    assert workspace.workflow_stage_update_calls[0]["template"] == (
+        "react_enterprise_qa_v3"
+    )
+    assert workspace.workflow_stage_update_calls[0]["stages"][0].id == "plan"
+    assert preview.status_code == 200
+    assert preview.json()["stage_id"] == "plan"
+    assert workspace.workflow_stage_preview_calls[0]["stage_id"] == "plan"
+    assert workspace.workflow_stage_preview_calls[0]["prompt"].business_context == (
+        "Claims context."
+    )
+    for route in (
+        update_config_draft_workflow_stages,
+        preview_config_draft_workflow_stage,
+    ):
+        route_source = getsource(route)
+        assert "LocalAgentConfigurationStore" not in route_source
+        assert "_get_configuration_store" not in route_source
+        assert "compile_draft_agent" not in route_source
+        assert "load_agent_manifest" not in route_source
+        assert "yaml." not in route_source
+
+
+def test_workflow_stage_routes_reject_unknown_fields_before_workspace() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    update = client.patch(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages",
+        json={"stages": [], "unexpected": True},
+    )
+    preview = client.post(
+        "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages/plan/preview",
+        json={"prompt": {}, "context": {}, "unexpected": True},
+    )
+
+    assert update.status_code == 422
+    assert preview.status_code == 422
+    assert workspace.workflow_stage_update_calls == []
+    assert workspace.workflow_stage_preview_calls == []
+
+
 class _RecordingValidationWorkspace:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.publication_calls: list[dict[str, Any]] = []
         self.rollback_calls: list[dict[str, Any]] = []
+        self.workflow_stage_update_calls: list[dict[str, Any]] = []
+        self.workflow_stage_preview_calls: list[dict[str, Any]] = []
+
+    def update_workflow_stages(self, **kwargs: Any) -> AgentDraftRecord:
+        self.workflow_stage_update_calls.append(kwargs)
+        draft = DraftAgent(
+            agent_id="agent_alpha",
+            draft_id="draft_alpha",
+            display_name="Agent Alpha",
+            purpose="Validate governed responses.",
+            contract_bundle=ContractBundle(
+                agent_yaml="name: agent_alpha\n",
+                policy_yaml="rules: []\n",
+                tools_yaml="tools: []\n",
+            ),
+            created_at="2026-08-19T05:00:00Z",
+            updated_at="2026-08-19T06:00:00Z",
+            created_by="operator-1",
+            updated_by="local-user",
+        )
+        return AgentDraftRecord(draft=draft, revision=5)
+
+    def preview_workflow_stage(self, **kwargs: Any) -> dict[str, Any]:
+        self.workflow_stage_preview_calls.append(kwargs)
+        return {
+            "stage_id": kwargs["stage_id"],
+            "stage_label": "Plan",
+            "harness_control_prompt_summary": "Harness prompt is locked.",
+            "structured_control_context": {},
+            "business_context_addendum": {
+                "present": True,
+                "text": "Claims context.",
+                "fields": ["business_context"],
+            },
+            "summary": {"stage_id": kwargs["stage_id"]},
+        }
 
     def validate_draft(self, **kwargs: Any) -> AgentConfigurationValidationResult:
         self.calls.append(kwargs)
@@ -1484,6 +1689,87 @@ class _RaisingValidationWorkspace:
 
     def rollback_version(self, **_: Any) -> AgentConfigurationRollback:
         raise self._error
+
+    def update_workflow_stages(self, **_: Any) -> AgentDraftRecord:
+        raise self._error
+
+    def preview_workflow_stage(self, **_: Any) -> dict[str, Any]:
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    ("operation", "error", "expected_status", "expected_detail"),
+    (
+        (
+            "update",
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="The requested Agent Draft was not found.",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            "update",
+            AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ),
+            409,
+            "agent_draft_revision_conflict",
+        ),
+        (
+            "update",
+            ValueError("internal-path:/private/tmp/workflow-update"),
+            400,
+            "agent_workflow_stage_configuration_invalid",
+        ),
+        (
+            "update",
+            OSError("internal-path:/private/tmp/workflow-update"),
+            500,
+            "agent_workflow_stage_configuration_failed",
+        ),
+        (
+            "preview",
+            ValueError("internal-path:/private/tmp/workflow-preview"),
+            400,
+            "agent_workflow_stage_preview_invalid",
+        ),
+        (
+            "preview",
+            OSError("internal-path:/private/tmp/workflow-preview"),
+            500,
+            "agent_workflow_stage_preview_failed",
+        ),
+    ),
+)
+def test_workflow_stage_routes_map_workspace_errors_to_stable_details(
+    operation: str,
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = _RaisingValidationWorkspace(error)
+    application.include_router(configuration_router, prefix="/api")
+    client = TestClient(application, raise_server_exceptions=False)
+
+    if operation == "update":
+        response = client.patch(
+            "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages",
+            json={"expected_revision": 1, "stages": []},
+        )
+    else:
+        response = client.post(
+            "/api/config/agents/agent_alpha/drafts/draft_alpha/workflow-stages/plan/preview",
+            json={"prompt": {}, "context": {}},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "internal-path" not in response.text
 
 
 @pytest.mark.parametrize(

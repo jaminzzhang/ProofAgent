@@ -38,14 +38,23 @@ from proof_agent.contracts import (
     PublishedWorkflowStageConfigurationSnapshot,
     ResolvedKnowledgeBindingSet,
     SensitiveValidationCaptureArtifact,
+    WorkflowStageConfig,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
+    WorkflowStagePromptConfig,
 )
 from proof_agent.contracts.ports import ConfigurationUnitOfWork
 from proof_agent.control.production_agent_publication import SOLE_PRODUCTION_AGENT_ID
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
 )
+from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
+from proof_agent.control.workflow.stage_validation import (
+    MAX_WORKFLOW_STAGE_TOTAL_PROMPT_CHARS,
+    validate_workflow_stage_prompt_config,
+)
+from proof_agent.control.workflow.templates import resolve_workflow_template
+from proof_agent.errors import ProofAgentError
 
 
 _EXPECTED_WORKFLOW_TEMPLATE = "react_enterprise_qa_v3"
@@ -150,6 +159,18 @@ class AgentConfigurationValidationResult:
     execution: AgentConfigurationValidationExecution
 
 
+@dataclass(frozen=True)
+class AgentConfigurationWorkflowStageDraftFacts:
+    """Adapter-neutral manifest facts used by Workflow Stage configuration."""
+
+    template_name: str
+    agent_purpose: str
+    tool_contract_reference: str
+    policy_reference: str
+    response_disclosure_policy: Mapping[str, Any]
+    memory_scope: Mapping[str, Any]
+
+
 class AgentConfigurationValidationExecutor(Protocol):
     """Execute one Draft without owning lifecycle persistence rules."""
 
@@ -173,6 +194,16 @@ class AgentConfigurationPublicationValidator(Protocol):
         draft: DraftAgent,
         validation: AgentValidationRecord,
     ) -> None: ...
+
+
+class AgentConfigurationWorkflowStageInspector(Protocol):
+    """Compile and inspect one Draft without owning lifecycle writes or rules."""
+
+    def inspect(
+        self,
+        *,
+        draft: DraftAgent,
+    ) -> AgentConfigurationWorkflowStageDraftFacts: ...
 
 
 class AgentConfigurationConflict(RuntimeError):
@@ -219,6 +250,7 @@ class AgentConfigurationWorkspace:
         template_bundle: ContractBundle,
         validation_executor: AgentConfigurationValidationExecutor | None = None,
         publication_validator: AgentConfigurationPublicationValidator | None = None,
+        workflow_stage_inspector: AgentConfigurationWorkflowStageInspector | None = None,
         scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -227,6 +259,7 @@ class AgentConfigurationWorkspace:
         self._template_bundle = template_bundle
         self._validation_executor = validation_executor
         self._publication_validator = publication_validator
+        self._workflow_stage_inspector = workflow_stage_inspector
         self._scope = scope
         self._clock = clock
 
@@ -500,6 +533,149 @@ class AgentConfigurationWorkspace:
                 detail="The Agent Draft changed; reload it before saving.",
             ) from exc
         return saved
+
+    def update_workflow_stages(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        template: str | None,
+        template_descriptor_version: str | None,
+        stages: tuple[WorkflowStageConfig, ...],
+        actor: AuditActorFacts,
+    ) -> AgentDraftRecord:
+        """Validate and atomically replace one Draft's Workflow Stage settings."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        if self._workflow_stage_inspector is None:
+            raise AgentConfigurationConflict(
+                code="agent_workflow_stage_configuration_unavailable",
+                detail="Workflow Stage configuration is unavailable.",
+            )
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if current.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            )
+        now = _timestamp(self._clock())
+        bundle, workflow_template = _workflow_stage_contract_bundle(
+            current.draft.contract_bundle,
+            template=template,
+            template_descriptor_version=template_descriptor_version,
+            stages=stages,
+        )
+        _validate_workflow_stage_command(
+            workflow_template=workflow_template,
+            template_descriptor_version=template_descriptor_version,
+            stages=stages,
+        )
+        metadata = {
+            "expected_revision": expected_revision,
+            "workflow_template": workflow_template,
+            "template_descriptor_version": template_descriptor_version,
+            "stage_ids": [stage.id for stage in stages],
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{draft_id}:workflow-stages:{expected_revision + 1}:operation",
+                )
+            ),
+            operation=ConfigurationOperation.UPDATED,
+            actor=actor.subject,
+            created_at=now,
+            summary="Updated Workflow Stage configuration.",
+            metadata=metadata,
+        )
+        candidate = current.draft.model_copy(
+            update={
+                "contract_bundle": bundle,
+                "updated_at": now,
+                "updated_by": actor.subject,
+                "operation_audit": (*current.draft.operation_audit, operation),
+            }
+        )
+        facts = self._workflow_stage_inspector.inspect(draft=candidate)
+        if facts.template_name != workflow_template:
+            raise RuntimeError(
+                "Workflow Stage inspection returned inconsistent template identity"
+            )
+        try:
+            with self._unit_of_work_factory() as uow:
+                saved = uow.agents.save_draft(
+                    candidate,
+                    expected_revision=expected_revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type="agent.draft.workflow_stages_updated",
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ) from exc
+        return saved
+
+    def preview_workflow_stage(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        stage_id: str,
+        prompt: WorkflowStagePromptConfig,
+        context_options: Mapping[str, bool],
+    ) -> dict[str, Any]:
+        """Render a redacted Workflow Stage Context Preview without execution."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if self._workflow_stage_inspector is None:
+            raise AgentConfigurationConflict(
+                code="agent_workflow_stage_configuration_unavailable",
+                detail="Workflow Stage configuration is unavailable.",
+            )
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        facts = self._workflow_stage_inspector.inspect(draft=current.draft)
+        descriptor = resolve_workflow_template(facts.template_name)
+        stage_descriptor = descriptor.stage(stage_id)
+        validate_workflow_stage_prompt_config(
+            stage_id=stage_id,
+            prompt=prompt,
+            stage_descriptor=stage_descriptor,
+        )
+        return build_workflow_stage_context_preview(
+            descriptor=descriptor,
+            stage_id=stage_id,
+            prompt=prompt,
+            context_options=context_options,
+            sample_context={
+                "agent_purpose": facts.agent_purpose,
+                "bound_knowledge_sources": [],
+                "bound_tools": facts.tool_contract_reference,
+                "policy_outline": facts.policy_reference,
+                "response_disclosure_policy": dict(
+                    facts.response_disclosure_policy
+                ),
+                "memory_scope": dict(facts.memory_scope),
+            },
+        )
 
     def validate_draft(
         self,
@@ -905,6 +1081,122 @@ def _validate_template_bundle(bundle: ContractBundle) -> None:
     workflow = agent.get("workflow")
     if not isinstance(workflow, dict) or workflow.get("template") != _EXPECTED_WORKFLOW_TEMPLATE:
         raise ValueError("production Agent template must use react_enterprise_qa_v3")
+
+
+def _workflow_stage_contract_bundle(
+    bundle: ContractBundle,
+    *,
+    template: str | None,
+    template_descriptor_version: str | None,
+    stages: tuple[WorkflowStageConfig, ...],
+) -> tuple[ContractBundle, str]:
+    try:
+        raw = yaml.safe_load(bundle.agent_yaml)
+    except yaml.YAMLError as exc:
+        raise ValueError("agent_yaml is invalid YAML") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("agent_yaml must be a mapping")
+    workflow = raw.get("workflow")
+    if not isinstance(workflow, dict):
+        raise ValueError("agent_yaml workflow must be a mapping")
+    if template is not None:
+        workflow["template"] = _nonblank(template, "template", maximum=255)
+    workflow_template = workflow.get("template")
+    if not isinstance(workflow_template, str) or not workflow_template.strip():
+        raise ValueError("agent_yaml workflow.template must be a non-empty string")
+    if template_descriptor_version is not None:
+        workflow["template_descriptor_version"] = _nonblank(
+            template_descriptor_version,
+            "template_descriptor_version",
+            maximum=255,
+        )
+    workflow["stages"] = [_workflow_stage_payload(stage) for stage in stages]
+    workflow.pop("nodes", None)
+    raw["workflow"] = workflow
+    agent_yaml = yaml.safe_dump(
+        raw,
+        sort_keys=False,
+        allow_unicode=True,
+        width=1000,
+    )
+    return (
+        ContractBundle(
+            agent_yaml=agent_yaml,
+            policy_yaml=bundle.policy_yaml,
+            tools_yaml=bundle.tools_yaml,
+            extra_files=bundle.extra_files,
+            advanced_fields=bundle.advanced_fields,
+        ),
+        workflow_template,
+    )
+
+
+def _workflow_stage_payload(stage: WorkflowStageConfig) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": stage.id}
+    prompt: dict[str, Any] = {}
+    if stage.prompt.business_context:
+        prompt["business_context"] = stage.prompt.business_context
+    if stage.prompt.task_instructions:
+        prompt["task_instructions"] = list(stage.prompt.task_instructions)
+    if stage.prompt.output_preferences:
+        prompt["output_preferences"] = list(stage.prompt.output_preferences)
+    if prompt:
+        payload["prompt"] = prompt
+    context = dict(stage.context.options)
+    if context:
+        payload["context"] = context
+    return payload
+
+
+def _validate_workflow_stage_command(
+    *,
+    workflow_template: str,
+    template_descriptor_version: str | None,
+    stages: tuple[WorkflowStageConfig, ...],
+) -> None:
+    descriptor = resolve_workflow_template(workflow_template)
+    if (
+        template_descriptor_version is not None
+        and template_descriptor_version != descriptor.descriptor_version
+    ):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow.template_descriptor_version does not match registered template descriptor",
+            f"Set workflow.template_descriptor_version to {descriptor.descriptor_version}.",
+        )
+    seen: set[str] = set()
+    total_prompt_chars = 0
+    for stage in stages:
+        if stage.id in seen:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"duplicate workflow stage id: {stage.id}",
+                "Use each workflow.stages[].id at most once.",
+            )
+        seen.add(stage.id)
+        stage_descriptor = descriptor.stage(stage.id)
+        unsupported_context_options = sorted(
+            option
+            for option in stage.context.options
+            if option not in stage_descriptor.context_options
+        )
+        if unsupported_context_options:
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                f"unsupported context option for workflow stage {stage.id}: {', '.join(unsupported_context_options)}",
+                f"Use context options: {', '.join(stage_descriptor.context_options)}.",
+            )
+        total_prompt_chars += validate_workflow_stage_prompt_config(
+            stage_id=stage.id,
+            prompt=stage.prompt,
+            stage_descriptor=stage_descriptor,
+        )
+    if total_prompt_chars > MAX_WORKFLOW_STAGE_TOTAL_PROMPT_CHARS:
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "workflow stage prompt text exceeds total size limit",
+            f"Use at most {MAX_WORKFLOW_STAGE_TOTAL_PROMPT_CHARS} total prompt characters.",
+        )
 
 
 def _require_draft_id(draft_id: str) -> None:

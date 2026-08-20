@@ -20,9 +20,6 @@ from proof_agent.bootstrap.skills import (
     SUPPORTED_BUSINESS_FLOW_ADDENDUM_STAGE_IDS,
     load_business_flow_skill_pack_set,
 )
-from proof_agent.bootstrap.validation import (
-    validate_workflow_stage_prompt_config,
-)
 from proof_agent.capabilities.tools.source_descriptors import (
     get_tool_source_descriptor,
     list_tool_source_descriptors,
@@ -41,6 +38,8 @@ from proof_agent.contracts import (
     ModelConnectionValidationRecord,
     SharedModelConnection,
     ToolSource,
+    WorkflowStageConfig,
+    WorkflowStageContextConfig,
     WorkflowStageConfigurationRuntimeSource,
     WorkflowStageConfigurationRuntimeSourceType,
     WorkflowStagePromptConfig,
@@ -53,7 +52,6 @@ from proof_agent.control.agent_configuration_workspace import (
     SOLE_PRODUCTION_AGENT_ID,
     load_server_owned_agent_template,
 )
-from proof_agent.control.workflow.stage_context import build_workflow_stage_context_preview
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
 )
@@ -217,7 +215,13 @@ class WorkflowStagesUpdateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    template_descriptor_version: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
+    template: str | None = Field(default=None, min_length=1, max_length=255)
+    template_descriptor_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+    )
     stages: list[WorkflowStageUpdateItemRequest]
 
 
@@ -872,7 +876,7 @@ def get_config_draft(
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_workspace_exception(exc) from exc
-    return _draft_payload(record.draft)
+    return _draft_payload(record.draft, revision=record.revision)
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}")
@@ -901,7 +905,7 @@ def update_config_draft(
         raise _configuration_workspace_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _draft_payload(updated.draft)
+    return _draft_payload(updated.draft, revision=updated.revision)
 
 
 @router.get("/config/workflow-templates")
@@ -1132,44 +1136,41 @@ def update_config_draft_workflow_stages(
 ) -> dict[str, Any]:
     """Replace Draft Agent workflow.stages[] and validate the Agent Contract."""
 
-    actor = _require_operator(identity, OperatorPermission.AGENT_EDIT)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
+    _require_operator(identity, OperatorPermission.AGENT_EDIT)
+    workspace = _get_agent_configuration_workspace(app_request)
     try:
-        raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
-        if not isinstance(raw, dict):
-            raise ValueError("agent_yaml must be a mapping.")
-        workflow = raw.get("workflow")
-        if not isinstance(workflow, dict):
-            raise ValueError("agent_yaml workflow must be a mapping.")
-        if request.template_descriptor_version is not None:
-            workflow["template_descriptor_version"] = request.template_descriptor_version
-        workflow["stages"] = [_workflow_stage_request_payload(item) for item in request.stages]
-        workflow.pop("nodes", None)
-        raw["workflow"] = workflow
-        agent_yaml = _dump_agent_yaml(raw)
-        bundle = ContractBundle(
-            agent_yaml=agent_yaml,
-            policy_yaml=draft.contract_bundle.policy_yaml,
-            tools_yaml=draft.contract_bundle.tools_yaml,
-            extra_files=draft.contract_bundle.extra_files,
-            advanced_fields=draft.contract_bundle.advanced_fields,
+        expected_revision = request.expected_revision
+        if expected_revision is None:
+            expected_revision = workspace.get_draft(
+                agent_id=agent_id,
+                draft_id=draft_id,
+            ).revision
+        updated = workspace.update_workflow_stages(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+            template=request.template,
+            template_descriptor_version=request.template_descriptor_version,
+            stages=tuple(
+                _workflow_stage_config_request(item) for item in request.stages
+            ),
+            actor=_workspace_audit_actor(identity),
         )
-        candidate = _draft_with_contract_bundle(draft, bundle)
-        package_dir = compile_draft_agent(candidate, store.root_dir / "compiled_validation")
-        load_agent_manifest(package_dir / "agent.yaml")
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_workflow_stage_configuration_invalid",
+        ) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
-
-    updated = store.update_draft(
-        agent_id=agent_id,
-        draft_id=draft_id,
-        contract_bundle=bundle,
-        actor=actor,
-    )
-    return updated.contract_bundle.model_dump(mode="json")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_workflow_stage_configuration_failed",
+        ) from exc
+    return updated.draft.contract_bundle.model_dump(mode="json")
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview")
@@ -1184,31 +1185,28 @@ def preview_config_draft_workflow_stage(
     """Render a redacted Workflow Stage Context Preview without executing a run."""
 
     _require_operator(identity, OperatorPermission.AGENT_VALIDATE)
-    store = _get_configuration_store(app_request)
-    draft = _require_draft(store, agent_id, draft_id)
     try:
-        package_dir = compile_draft_agent(draft, store.root_dir / "compiled_preview")
-        manifest = load_agent_manifest(package_dir / "agent.yaml")
-        descriptor = resolve_workflow_template(manifest.workflow.template)
-        stage_descriptor = descriptor.stage(stage_id)
-        prompt = WorkflowStagePromptConfig(**_workflow_stage_prompt_request_payload(request.prompt))
-        validate_workflow_stage_prompt_config(
+        return _get_agent_configuration_workspace(app_request).preview_workflow_stage(
+            agent_id=agent_id,
+            draft_id=draft_id,
             stage_id=stage_id,
-            prompt=prompt,
-            stage_descriptor=stage_descriptor,
-            manifest_path=package_dir / "agent.yaml",
-        )
-        return build_workflow_stage_context_preview(
-            descriptor=descriptor,
-            stage_id=stage_id,
-            prompt=prompt,
+            prompt=_workflow_stage_prompt_config(request.prompt),
             context_options=request.context,
-            sample_context=_workflow_stage_sample_context(manifest),
         )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_workspace_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_workflow_stage_preview_invalid",
+        ) from exc
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_workflow_stage_preview_failed",
+        ) from exc
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/validate")
@@ -1385,53 +1383,32 @@ def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:
     return payload
 
 
-def _workflow_stage_request_payload(item: WorkflowStageUpdateItemRequest) -> dict[str, Any]:
-    payload: dict[str, Any] = {"id": item.id}
-    prompt = _workflow_stage_prompt_request_payload(item.prompt)
-    if prompt:
-        payload["prompt"] = prompt
-    if item.context:
-        payload["context"] = dict(item.context)
-    return payload
-
-
-def _workflow_stage_prompt_request_payload(
+def _workflow_stage_prompt_config(
     prompt: WorkflowStagePromptRequest,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    if prompt.business_context:
-        payload["business_context"] = prompt.business_context
-    if prompt.task_instructions:
-        payload["task_instructions"] = list(prompt.task_instructions)
-    if prompt.output_preferences:
-        payload["output_preferences"] = list(prompt.output_preferences)
-    return payload
-
-
-def _workflow_stage_sample_context(manifest: Any) -> dict[str, Any]:
-    tool_contract_path = (
-        str(manifest.capabilities.tools.file)
-        if manifest.capabilities.tools.enabled and manifest.capabilities.tools.file is not None
-        else ""
+) -> WorkflowStagePromptConfig:
+    return WorkflowStagePromptConfig(
+        business_context=prompt.business_context or "",
+        task_instructions=tuple(prompt.task_instructions),
+        output_preferences=tuple(prompt.output_preferences),
     )
-    return {
-        "agent_purpose": manifest.purpose,
-        "bound_knowledge_sources": [],
-        "bound_tools": tool_contract_path,
-        "policy_outline": str(manifest.policy.file),
-        "response_disclosure_policy": (
-            manifest.response.model_dump(mode="json") if manifest.response else {}
-        ),
-        "memory_scope": {
-            "enabled": manifest.capabilities.memory.enabled,
-            "provider": manifest.capabilities.memory.provider,
-            "scopes": dict(manifest.capabilities.memory.scopes),
-        },
-    }
 
 
-def _draft_payload(draft: DraftAgent) -> dict[str, Any]:
-    return {
+def _workflow_stage_config_request(
+    item: WorkflowStageUpdateItemRequest,
+) -> WorkflowStageConfig:
+    return WorkflowStageConfig(
+        id=item.id,
+        prompt=_workflow_stage_prompt_config(item.prompt),
+        context=WorkflowStageContextConfig(options=item.context),
+    )
+
+
+def _draft_payload(
+    draft: DraftAgent,
+    *,
+    revision: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "agent_id": draft.agent_id,
         "draft_id": draft.draft_id,
         "display_name": draft.display_name,
@@ -1449,6 +1426,9 @@ def _draft_payload(draft: DraftAgent) -> dict[str, Any]:
         ],
         "capabilities": _DEVELOPMENT_DRAFT_CAPABILITIES,
     }
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
 
 
 def _draft_with_contract_bundle(draft: DraftAgent, bundle: ContractBundle) -> DraftAgent:

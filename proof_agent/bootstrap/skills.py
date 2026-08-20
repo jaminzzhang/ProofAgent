@@ -7,9 +7,11 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
-from proof_agent.bootstrap.validation import validate_workflow_stage_prompt_config
 from proof_agent.contracts import AgentManifest, BusinessFlowSkillPackDefinition
 from proof_agent.control.policy.rules import load_policy_rules
+from proof_agent.control.workflow.stage_validation import (
+    validate_workflow_stage_prompt_config,
+)
 from proof_agent.control.workflow.templates import WorkflowTemplate
 from proof_agent.errors import ProofAgentError
 

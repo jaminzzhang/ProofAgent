@@ -291,6 +291,8 @@ export function updateWorkflowStages(
   agentId: string,
   draftId: string,
   payload: {
+    expected_revision?: number
+    template?: string | null
     template_descriptor_version?: string | null
     stages: WorkflowStageConfig[]
   },

@@ -1037,6 +1037,7 @@ describe('AgentDetailPage', () => {
   })
 
   it('loads workflow descriptor and saves stage prompt configuration', async () => {
+    mockDraft = { ...mockDraft, revision: 7 }
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1077,6 +1078,8 @@ workflow:
 
     await waitFor(() => {
       expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', {
+        expected_revision: 7,
+        template: 'react_enterprise_qa',
         template_descriptor_version: 'react_enterprise_qa.v1',
         stages: [
           {
@@ -1102,11 +1105,8 @@ workflow:
     })
   })
 
-  it('persists the Workflow core before saving stages when the template changed', async () => {
-    // Regression: switching the Template dropdown to react_enterprise_qa_v3 and
-    // clicking Save Stages previously sent template_descriptor_version=v3 while
-    // the server-side template was still v1 (core not persisted), causing a
-    // 400 "template_descriptor_version does not match registered template".
+  it('saves the selected Workflow template and stages in one revisioned command', async () => {
+    mockDraft = { ...mockDraft, revision: 7 }
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1151,15 +1151,13 @@ workflow:
     fireEvent.change(templateSelect, { target: { value: 'react_enterprise_qa_v3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
 
-    // The core contract must be persisted first so the server-side template
-    // matches the descriptor_version sent with the stages.
     await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
-        agent_yaml: expect.stringContaining('template: react_enterprise_qa_v3'),
-      }))
+      expect(updateConfigDraftContract).not.toHaveBeenCalled()
     })
     await waitFor(() => {
       expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+        expected_revision: 7,
+        template: 'react_enterprise_qa_v3',
         template_descriptor_version: 'react_enterprise_qa.v3',
       }))
     })

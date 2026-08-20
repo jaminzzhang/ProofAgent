@@ -42,6 +42,7 @@ interface WorkflowModuleEditorProps {
   onFieldChange: (path: string[], value: string) => void
   onSaveCore: () => void
   onSaveStages: (payload: {
+    template: string
     template_descriptor_version: string
     stages: WorkflowStageConfig[]
   }) => Promise<void>
@@ -176,6 +177,7 @@ export function WorkflowModuleEditor({
       ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[selectedTemplateName]
       ?? descriptor.descriptor_version
     await onSaveStages({
+      template: selectedTemplateName,
       template_descriptor_version: descriptorVersion,
       stages: stages.map((stage) => sanitizeStageConfigForDescriptor(stage, descriptor)),
     })

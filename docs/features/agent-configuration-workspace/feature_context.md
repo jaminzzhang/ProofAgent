@@ -10,7 +10,7 @@
 | 所属版本 | 待确认；本轮仅处理本地架构切片 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
 | 当前状态 | `PARTIAL_VERIFICATION` |
-| 当前切片 | Slice 4：Agent Version rollback authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS` |
+| 当前切片 | Slice 5：Workflow Stage Configuration editing authority；主代理 `LOCAL_VERIFIED`，独立子 Agent `PASS` |
 
 ## 2. 需求目标与范围
 
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | 正式生产 Phase F publication | `ProductionAgentPublicationService` 还包含 KSS release evidence、online smoke 与生产 admission | 不与 development Draft publication 合并；不生成生产发布结论 |
 | Blue/Green deployment rollback | 属于应用发布与运行角色 fencing 协议 | 不与 Agent Version pointer rollback 合并 |
-| Contract、Workflow、Skill Pack 编辑迁移 | 需要独立编译与校验 module 设计 | 本轮仍由现有 development route 处理 |
+| Contract 与 Skill Pack 编辑迁移 | 需要各自独立的编译与校验 module 设计 | 本轮仍由现有 development route 处理 |
 | 数据库 schema、迁移和生产部署 | 当前 focused ports 已可承载本切片 | 不生成生产发布结论 |
 | 删除整个 `LocalAgentConfigurationStore` | 仍有未迁移的 development-only 编辑用例 | 只删除本切片 Delivery 的具体 store 依赖 |
 
@@ -69,6 +69,8 @@
 | ACW-R06 | 发布权威 | 只有当前 Draft revision 的成功且无 blocker Validation Record 可以发布；version、activation 与全局 audit 必须在一个 Configuration UoW 内提交 | Draft、validation run、active pointer expectation | immutable Published Agent Version | 失败 outcome 拒绝；不自动 rollback，不调用正式生产 Phase F publisher | 已确认 |
 | ACW-R07 | 本地并发 | Local Configuration UoW 必须在同一外置权威锁下复制事务基线，并在安装前重验 configuration 与 audit 的真实目标摘要 | 两个交错 staging UoW | 单一赢家或稳定 conflict | 失败事务不得覆盖 version、active pointer 或 audit | 已确认 |
 | ACW-R08 | 回滚权威 | Agent Version Rollback 只选择既有 immutable Published Agent Version；activation 与全局 audit 在同一 UoW 提交，并以读取到的 active pointer 做 exact CAS | target version、current pointer、actor | 新 Active Agent Version 与 rollback result | 不改 history；不重算或降级 target KSS binding；不调用部署 rollback | 已确认 |
+| ACW-R09 | Stage 编辑权威 | Workflow Stage Configuration 保存必须通过 Workspace，以 Draft revision CAS 提交 Contract Bundle、Draft operation audit 与全局 audit | template、descriptor version、stage overrides、expected revision、actor | 新 Draft revision 与完整 Contract Bundle | 不保存 raw Prompt 到 audit；不验证、不发布、不激活 | 已确认 |
+| ACW-R10 | Stage 预览 | Workflow Stage Context Preview 只读取 revisioned Draft，经受控编译检查后返回脱敏、限长投影 | stage id、Prompt、context options | preview projection | 不执行模型、工具或 Run；不写 trace、Draft 或 audit | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -107,7 +109,7 @@
 
 ## 8. 待确认问题
 
-无未关闭 P0/P1 准入问题。Slice 4 只迁移 Agent Version pointer rollback；正式生产 Phase F publication、Blue/Green deployment rollback 和 Contract 编辑不在范围内。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
+无未关闭 P0/P1 准入问题。Slice 5 只迁移 development Workflow Stage Configuration 保存与预览；Contract、Skill Pack、正式生产 Phase F publication、Blue/Green deployment rollback 不在范围内。本轮结果不代表 Agent Configuration Workspace 已全部迁移。
 
 ## 9. Slice 2：Draft validation orchestration
 
@@ -138,3 +140,13 @@
 | 范围外 | 正式 Phase F publisher、production publication endpoint、Source rollback-Draft、Blue/Green deployment rollback、Contract/Workflow/Skill 编辑、schema、部署 |
 | 验收标准 | route 不再调用 concrete store；target 必须属于 Agent；并发 writer 只允许一个赢家；activation 与 audit 原子；历史 versions 不变；响应保留 target immutable KSS binding |
 | 最高风险 | P1：缺少 exact pointer CAS 或把 audit 放在事务外，会让并发回滚覆盖较新的 activation，或留下不可审计的 active state |
+
+## 12. Slice 5：Workflow Stage Configuration editing authority
+
+| 项 | 内容 |
+| --- | --- |
+| 目标 | 让 development Workflow Stage 保存与 Context Preview 只通过 `AgentConfigurationWorkspace`，删除 route 内的 YAML mutation、编译、Local store 与 preview 组合逻辑 |
+| 范围内 | Workspace Stage update/preview interface、受控本地 Draft inspection adapter、revision CAS、Draft operation audit、全局 audit、稳定错误映射、Dashboard 单次保存 |
+| 范围外 | raw Contract 编辑、Skill Pack 编辑、production Stage endpoint、validation/publication/rollback、schema、部署 |
+| 验收标准 | 保存一次原子更新 template、descriptor version 与 stages；stale revision 返回稳定 conflict；audit 不含 Prompt 文本；预览不执行 Run 或写状态；route 不读取 concrete store/compiler/YAML；Dashboard 不再先保存整份 Contract |
+| 最高风险 | P1：现有 Dashboard 两次顺序写入可能形成部分保存，且旧 route 缺少调用方 revision，存在 stale writer 覆盖风险 |
