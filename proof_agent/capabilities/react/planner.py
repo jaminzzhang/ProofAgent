@@ -540,7 +540,10 @@ def _canonicalize_planner_proposal(
 def _planner_parameters_schema(
     effective_tool_proposal_scope: EffectiveToolProposalScope | None,
 ) -> Mapping[str, Any]:
-    if effective_tool_proposal_scope is None:
+    if (
+        effective_tool_proposal_scope is None
+        or not effective_tool_proposal_scope.tool_interfaces
+    ):
         return {
             "anyOf": [
                 {
@@ -607,7 +610,10 @@ def _planner_parameters_schema(
 def _target_tool_name_schema(
     effective_tool_proposal_scope: EffectiveToolProposalScope | None,
 ) -> Mapping[str, Any]:
-    if effective_tool_proposal_scope is None:
+    if (
+        effective_tool_proposal_scope is None
+        or not effective_tool_proposal_scope.tool_interfaces
+    ):
         return {"type": ["string", "null"]}
     return {
         "type": "string",

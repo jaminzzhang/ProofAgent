@@ -96,6 +96,18 @@ _Avoid_: Validator-owned activation, Delivery-owned publication transaction, for
 An editable Agent configuration version inside the Agent Configuration Workspace that may be saved, validated, and test-run before publication.
 _Avoid_: Published Agent, arbitrary runtime manifest, unvalidated production Agent
 
+**Draft KSS Release Binding Candidate**:
+The secret-free authoring intent stored on one Draft Agent that identifies one exact KSS Knowledge Space, Knowledge Base, Knowledge Base Version, and queryable Knowledge Base Release. It is validated against the live KSS catalog when saved but is not executable and does not change the Active Agent Version.
+_Avoid_: Resolved Knowledge Source Service Binding, manifest knowledge binding, mutable latest release pointer, runtime activation
+
+**Production KSS Binding Profile**:
+Deployment-owned configuration that supplies the binding identity, versioned KSS client credential reference, ProofAgent Admission Scorer identity and revision, and required failure mode. Phase F combines it with an exact Draft KSS Release Binding Candidate only after live revalidation.
+_Avoid_: Draft secret, Dashboard-editable credential, Agent Contract field, KSS catalog authority
+
+**Agent Knowledge Release Catalog Projection**:
+A trace-safe, read-only Agent Configuration Workspace projection of KSS readiness and exact Release identities used to author or review a Draft KSS Release Binding Candidate.
+_Avoid_: Copied KSS authority, cached executable binding, source-management API, local Knowledge catalog
+
 **Agent Configuration Store**:
 The configuration-system store for Draft Agents, version history, validation results, publication metadata, and reviewable contract snapshots.
 _Avoid_: RunStore, Conversation Store, arbitrary local filesystem path
@@ -153,7 +165,7 @@ The governed transition that promotes a validated Draft Agent into a Published A
 _Avoid_: Save draft, direct run, frontend-only enablement
 
 **Knowledge Release Record**:
-[FRAME | HIGH] The immutable candidate-bound authority required for every Published Agent Version containing a Resolved Hybrid Knowledge Binding; it binds the exact Draft Contract Bundle and Resolved Knowledge Binding Set to distinct Shadow, Capacity, Sealed Acceptance, and Recovery artifact references and is frozen into the published version.
+[FRAME | HIGH] The immutable candidate-bound authority required for every knowledge-enabled Published Agent Version containing a Resolved Knowledge Source Service Binding; it binds the exact Draft Contract Bundle and Resolved Knowledge Binding Set to distinct Shadow, Capacity, Sealed Acceptance, and Recovery artifact references and is frozen into the published version.
 _Avoid_: Release checklist, mutable latest report, CI status, request-supplied approval, artifact directory
 
 **Knowledge Release Evidence Authority**:

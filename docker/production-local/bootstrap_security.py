@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import ipaddress
 import os
+from uuid import NAMESPACE_URL, uuid5
 
 from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
 from proof_agent.contracts import (
@@ -24,7 +26,9 @@ from proof_agent.contracts import (
 LEGACY_PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000001"
 PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000004"
 LEGACY_EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000003"
-EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000005"
+PREVIOUS_EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000005"
+EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000006"
+_DOCKER_DESKTOP_DNS_PROXY_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 def main() -> None:
@@ -88,32 +92,16 @@ def _bootstrap_permissions(bundle: PostgresPersistenceBundle) -> None:
 
 
 def _bootstrap_egress(bundle: PostgresPersistenceBundle) -> None:
-    existing = bundle.security.get_egress_policy(EGRESS_VERSION_ID)
+    model_cidrs = os.environ.get("PROOF_AGENT_MODEL_EGRESS_CIDRS", "")
+    version_id = _model_egress_version_id(model_cidrs)
+    existing = bundle.security.get_egress_policy(version_id)
     if existing is None:
         policies = bundle.security.list_egress_policies()
         expected_revision = max((policy.revision for policy in policies), default=0)
-        networks = ("172.16.0.0/12",)
         version = EgressPolicyVersion(
-            version_id=EGRESS_VERSION_ID,
+            version_id=version_id,
             revision=expected_revision + 1,
-            rules=tuple(
-                EgressOriginRule(
-                    origin=ExactHttpsOrigin.parse(origin),
-                    allowed_ip_networks=networks,
-                )
-                for origin in (
-                    "https://proof-agent.localhost:8443",
-                    "https://proof-agent.localhost:8444",
-                    "https://vault.internal:8200",
-                    "https://opensearch.internal:9200",
-                    "https://models.internal:9443",
-                    "https://models.internal:9444",
-                    "https://models.internal:9445",
-                    "https://models.internal:9446",
-                    "https://models.internal:9447",
-                    "https://models.internal:9448",
-                )
-            ),
+            rules=_local_egress_rules(model_cidrs),
             created_at=_now(),
             created_by="local-production-bootstrap",
         )
@@ -123,18 +111,127 @@ def _bootstrap_egress(bundle: PostgresPersistenceBundle) -> None:
         )
         existing = version
     active = bundle.security.get_active_egress_policy()
-    if active is None or active.version_id == LEGACY_EGRESS_VERSION_ID:
+    if active is None or active.version_id != existing.version_id:
+        if active is not None and not _is_replaceable_local_egress_policy(active):
+            raise RuntimeError("a different egress policy is already active")
         bundle.security.activate_egress_policy(
             existing.version_id,
             audit_event=_audit(
-                audit_id="019ba100-0000-7000-8000-000000000015",
+                audit_id=str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"proof-agent-production-local-egress-audit:{version_id}",
+                    )
+                ),
                 event_type="egress_policy.activated",
                 target_type="egress_policy_version",
                 target_id=existing.version_id,
             ),
         )
-    elif active.version_id != existing.version_id:
-        raise RuntimeError("a different egress policy is already active")
+
+
+def _local_egress_rules(model_cidrs: str) -> tuple[EgressOriginRule, ...]:
+    internal_networks = ("172.16.0.0/12",)
+    rules = [
+        EgressOriginRule(
+            origin=ExactHttpsOrigin.parse(origin),
+            allowed_ip_networks=internal_networks,
+        )
+        for origin in (
+            "https://proof-agent.localhost:8443",
+            "https://proof-agent.localhost:8444",
+            "https://vault.internal:8200",
+            "https://opensearch.internal:9200",
+            "https://models.internal:9443",
+            "https://models.internal:9444",
+            "https://models.internal:9445",
+            "https://models.internal:9446",
+            "https://models.internal:9447",
+            "https://models.internal:9448",
+        )
+    ]
+    pinned_networks = _normalized_model_egress_networks(model_cidrs)
+    if not pinned_networks:
+        return tuple(rules)
+    rules.append(
+        EgressOriginRule(
+            origin=ExactHttpsOrigin.parse("https://api.deepseek.com"),
+            allowed_ip_networks=pinned_networks,
+        )
+    )
+    return tuple(rules)
+
+
+def _normalized_model_egress_networks(model_cidrs: str) -> tuple[str, ...]:
+    raw_values = tuple(value.strip() for value in model_cidrs.split(",") if value.strip())
+    if len(raw_values) > 16:
+        raise ValueError("model egress requires exact public host CIDRs")
+    networks: list[str] = []
+    for value in raw_values:
+        try:
+            network = ipaddress.ip_network(value, strict=True)
+        except ValueError as exc:
+            raise ValueError("model egress requires exact public host CIDRs") from exc
+        address = network.network_address
+        docker_desktop_proxy = (
+            isinstance(address, ipaddress.IPv4Address)
+            and address in _DOCKER_DESKTOP_DNS_PROXY_NETWORK
+        )
+        if network.prefixlen != network.max_prefixlen or not (
+            address.is_global or docker_desktop_proxy
+        ):
+            raise ValueError("model egress requires exact public host CIDRs")
+        networks.append(str(network))
+    return tuple(sorted(set(networks)))
+
+
+def _model_egress_version_id(model_cidrs: str) -> str:
+    networks = _normalized_model_egress_networks(model_cidrs)
+    if not networks:
+        return EGRESS_VERSION_ID
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            "proof-agent-production-local-egress:" + ",".join(networks),
+        )
+    )
+
+
+def _is_replaceable_local_egress_policy(policy: EgressPolicyVersion) -> bool:
+    if policy.version_id in {
+        LEGACY_EGRESS_VERSION_ID,
+        PREVIOUS_EGRESS_VERSION_ID,
+        EGRESS_VERSION_ID,
+    }:
+        return True
+    if policy.created_by != "local-production-bootstrap":
+        return False
+    internal_origins = {
+        "https://proof-agent.localhost:8443",
+        "https://proof-agent.localhost:8444",
+        "https://vault.internal:8200",
+        "https://opensearch.internal:9200",
+        "https://models.internal:9443",
+        "https://models.internal:9444",
+        "https://models.internal:9445",
+        "https://models.internal:9446",
+        "https://models.internal:9447",
+        "https://models.internal:9448",
+    }
+    actual = frozenset(rule.origin.value for rule in policy.rules)
+    expected = frozenset(ExactHttpsOrigin.parse(value).value for value in internal_origins)
+    deepseek_origin = ExactHttpsOrigin.parse("https://api.deepseek.com").value
+    if actual not in {expected, frozenset((*expected, deepseek_origin))}:
+        return False
+    for rule in policy.rules:
+        if rule.origin.value == deepseek_origin:
+            try:
+                _normalized_model_egress_networks(",".join(rule.allowed_ip_networks))
+            except ValueError:
+                return False
+        elif rule.allowed_ip_networks != ("172.16.0.0/12",):
+            return False
+    return True
 
 
 def _audit(

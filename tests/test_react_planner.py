@@ -682,6 +682,44 @@ def test_llm_react_planner_generates_tool_schema_from_effective_scope() -> None:
     assert proposal.target_tool_name == "claim_status_lookup"
 
 
+def test_llm_react_planner_uses_no_tool_schema_for_empty_effective_scope() -> None:
+    provider = FakePlannerProvider(
+        _planner_output(
+            action_type="plan_retrieval",
+            candidate_actions=["plan_retrieval", "refuse"],
+            selected_action="plan_retrieval",
+            parameters={"query": "What is the delay threshold?"},
+        )
+    )
+    planner = LLMReActPlanner(
+        config=ReActPlannerConfig(provider="deepseek", name="deepseek-v4-flash"),
+        model_provider=provider,
+    )
+    empty_scope = EffectiveToolProposalScope(
+        run_id="run_empty_scope",
+        plan_round=0,
+        schema_digest="sha256:empty",
+    )
+
+    planner.plan(
+        question="What is the delay threshold?",
+        system_prompt="Use governed ReAct planning.",
+        context_summary="No prior context.",
+        eligible_actions=frozenset(
+            {ReActActionType.PLAN_RETRIEVAL, ReActActionType.REFUSE}
+        ),
+        effective_tool_proposal_scope=empty_scope,
+    )
+
+    function_schema = provider.requests[0].function_schema
+    assert function_schema is not None
+    properties = function_schema.parameters_schema["properties"]
+    assert properties["parameters"]["anyOf"]
+    assert "oneOf" not in properties["parameters"]
+    assert properties["target_tool_name"]["type"] == ("string", "null")
+    assert "enum" not in properties["target_tool_name"]
+
+
 def test_resolve_react_planner_uses_llm_adapter_for_registered_model_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

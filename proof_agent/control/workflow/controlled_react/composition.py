@@ -1040,7 +1040,7 @@ def _emit_admitted_evidence_trace(
                 "evidence": [
                     {
                         "source": chunk.source,
-                        "status": chunk.status.value,
+                        "status": EvidenceStatus.ACCEPTED.value,
                         "evidence_id": chunk.evidence_id,
                         "provider_native_score": chunk.provider_native_score,
                         "admission_score": chunk.admission_score,

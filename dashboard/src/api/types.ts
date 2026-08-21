@@ -786,6 +786,20 @@ export interface BusinessFlowSkillPackUpdateRequest {
   default?: boolean | null
 }
 
+export interface DraftKnowledgeReleaseBindingCandidate {
+  knowledge_space_id: string
+  knowledge_base_id: string
+  knowledge_base_version_id: string
+  knowledge_base_release_id: string
+}
+
+export interface AgentKnowledgeReleaseBindingConfiguration {
+  revision: number
+  candidate: DraftKnowledgeReleaseBindingCandidate | null
+  readiness: KnowledgeServiceReadinessProjection
+  releases: KnowledgeServiceReleaseProjection[]
+}
+
 export type ConfigurationOperation =
   | 'created'
   | 'imported'
@@ -844,6 +858,7 @@ export interface AgentConfigurationCapabilities {
 
 export interface AgentDraftCapabilities {
   mode: 'development' | 'production'
+  visible_modules: string[]
   editable_modules: string[]
   lifecycle_tabs: string[]
   actions: {

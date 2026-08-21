@@ -75,6 +75,15 @@ from proof_agent.deployment.compatibility import (
 from proof_agent.delivery.production_agent_validation import (
     ProductionOnlineAgentCandidateValidator,
 )
+from proof_agent.delivery.agent_configuration_contracts import (
+    LocalAgentConfigurationContractValidator,
+)
+from proof_agent.delivery.agent_configuration_workflow_stages import (
+    LocalAgentConfigurationWorkflowStageAdapter,
+)
+from proof_agent.delivery.agent_configuration_skill_packs import (
+    LocalAgentConfigurationSkillPackAdapter,
+)
 from proof_agent.delivery.published_agent_materializer import (
     PublishedAgentAuthority,
     PublishedAgentMaterializer,
@@ -310,6 +319,10 @@ def create_production_api_application(
         agent_configuration_workspace = AgentConfigurationWorkspace(
             unit_of_work_factory=publication_uow,
             template_bundle=load_server_owned_agent_template(),
+            contract_validator=LocalAgentConfigurationContractValidator(),
+            workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
+            skill_pack_inspector=LocalAgentConfigurationSkillPackAdapter(),
+            knowledge_release_catalog=knowledge_service_management,
         )
         application = create_app(
             mode="production",

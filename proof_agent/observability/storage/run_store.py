@@ -554,9 +554,6 @@ class RunStore:
             (e for e in reversed(events) if e.get("event_type") == "retrieval_result"), None
         )
         evaluation = self._evidence_admission_event(events)
-        if retrieval is None:
-            return []
-
         eval_meta: Mapping[str, Any] = {}
         if evaluation:
             evaluation_payload = evaluation.get("payload", {})
@@ -569,6 +566,9 @@ class RunStore:
             return _project_evidence_chunks(
                 [chunk for chunk in evidence_summary if isinstance(chunk, Mapping)]
             )
+
+        if retrieval is None:
+            return []
 
         payload = retrieval.get("payload", {})
         if not isinstance(payload, Mapping):

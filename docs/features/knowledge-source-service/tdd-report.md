@@ -489,3 +489,39 @@ Dockerfile 和服务说明仍保留在 `services/knowledge-source-service/`。�
 边界和 deny-by-default ignore 由静态契约保护。`26 skipped` 仍包含真实 PostgreSQL、S3
 和 OpenSearch 集成项，因此本次目录迁移证据不构成生产发布批准，Feature 状态保持
 `PARTIAL_VERIFICATION`。
+
+## 16. 2026-08-20 production-local KSS、ProofAgent 与 DeepSeek 问答验证
+
+[KNOWN | HIGH] 本增量在用户明确授权向已配置 DeepSeek 连接发送验证问题和 KSS
+候选证据后，重建并运行完整 production-local 拓扑。过程中没有直接读取 `.env` 文件，
+没有输出模型凭据、KSS client token、Vault material、原始 prompt 或原始 provider 错误体。
+
+| 步骤 | 行为 | 结果 |
+| --- | --- | --- |
+| RED-EGRESS-001 | DeepSeek DNS 的全部解析地址必须被不可变 Egress Policy 精确固定 | 首次真实问答在传输前以 `dns_address_not_allowed` 失败；Docker Desktop 返回单地址 synthetic DNS proxy |
+| GREEN-EGRESS-001 | preparation 只接纳当前解析到的 `/32` 或 `/128`；允许 `198.18.0.0/15` 内的单个 Docker Desktop proxy 地址但拒绝网段放宽 | 出站默认拒绝不变；DeepSeek 最小请求到达 provider |
+| RED-KSS-RUNTIME-001 | KSS client、Admission Scorer Secret Handle 和 runtime budget 必须匹配 exact Client Grant | 初始 scorer route/secret locator 缺失；随后超出 Grant 的预算返回 `403` |
+| GREEN-KSS-RUNTIME-001 | 增加 authenticated scorer compatibility endpoint、versioned Vault locators，并把 query budget 收敛到 exact Grant | KSS 返回 2 个 evidence group、1 个 scored candidate，scorer identity/revision 匹配 |
+| RED-DEEPSEEK-001 | 无工具 Agent 的 Planner schema 必须被 DeepSeek 接受 | 真实请求返回 HTTP `400`；最小差分探针确认 `oneOf: []` 与 `enum: []` 是唯一失败变量 |
+| GREEN-DEEPSEEK-001 | 空 Effective Tool Scope 使用合法 no-tool Planner schema；非空工具作用域保持既有 schema | Planner/OpenAI-compatible 回归通过；真实 DeepSeek Planner 调用继续执行 |
+| RED-CITATION-001 | KSS admitted evidence 必须进入 RunDetail 和 publication validation 的 accepted citation 计数 | 真实运行 Outcome 为 `ANSWERED_WITH_CITATIONS`，但投影计数为 0；确认 admitted trace 仍写 `candidate`，且 RunStore 错误依赖旧 `retrieval_result` |
+| GREEN-CITATION-001 | admitted trace 明确投影 `accepted`；RunStore 优先消费自包含 `evidence_evaluation`，仅在缺失时回退旧 retrieval event | 最终真实问答返回 `ANSWERED_WITH_CITATIONS` 与 `accepted_citation_count=1` |
+
+### 增量验证
+
+| 检查 | 结果 |
+| --- | --- |
+| production-local build 与 rollout | ProofAgent image `sha256:84c8699f…`；API、Run Executor、KSS API/Executor/Worker/Scheduler、Gateway、OIDC、PostgreSQL、Vault、MinIO、OpenSearch 健康 |
+| `production-local-verify.sh` | API/KSS/model-plane/OpenSearch、ProofAgent migration `0021`、KSS migration `0001`–`0006`、KSS PostgreSQL authority isolation 和两个 versioned bucket 全部通过 |
+| 最终聚焦 Pytest | `152 passed`；一个既有 Authlib deprecation warning |
+| Ruff、Mypy、Shell 与 diff hygiene | 全部通过；Mypy 覆盖 6 个变更 source files |
+| 真实 KSS → DeepSeek → ProofAgent 问答 | Release `release-a4b70851cb914862000e15c3`；connection `model_deepseek`；`ANSWERED_WITH_CITATIONS`；1 条 accepted citation |
+
+[LIMIT | HIGH] 验证回答为“航班延误满四小时，定额赔付人民币300元。本保障等待期为
+30天。”。它证明受控问答链路和引用闭环已贯通，但当前 Release 没有回答问题中的“申请
+期限”，且模型把 30 天表述为等待期。因此本证据不证明三项业务事实均被 KSS 覆盖；需
+单独补充并发布申请期限的权威 Knowledge，再执行语义验收。
+
+[LIMIT | HIGH] `/readyz` 仍按设计因 sole production Agent 尚未正式发布而返回 HTTP
+`503`。本验证脚本只使用 `RunPurpose.VALIDATION`，没有发布、激活或绕过 Phase F，故不
+构成正式生产发布批准。

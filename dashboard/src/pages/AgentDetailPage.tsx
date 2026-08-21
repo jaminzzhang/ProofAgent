@@ -5,6 +5,7 @@ import {
   createModelConnection,
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
+  fetchConfigDraftKnowledgeBinding,
   fetchConfigDraftSkills,
   fetchWorkflowTemplate,
   fetchModelConnections,
@@ -12,15 +13,18 @@ import {
   publishConfigDraft,
   rollbackConfigVersion,
   updateConfigDraft,
+  updateConfigDraftKnowledgeBinding,
   updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
   validateConfigDraft,
 } from '../api/client'
 import type {
+  AgentKnowledgeReleaseBindingConfiguration,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
+  DraftKnowledgeReleaseBindingCandidate,
   SharedModelConnection,
   WorkflowTemplateDescriptor,
 } from '../api/types'
@@ -33,6 +37,10 @@ import { AgentMonitor, AgentMonitorSummary } from '../components/agent/AgentMoni
 import { ModuleEditor } from '../components/agent/ModuleEditor'
 import { ModelModuleEditor } from '../components/agent/ModelModuleEditor'
 import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
+import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
+import type { KnowledgeBindingMutationResult } from '../components/agent/KnowledgeModuleEditor'
+import { ReadOnlyConfigurationModule } from '../components/agent/ReadOnlyConfigurationModule'
+import type { ConfigurationSection } from '../components/agent/ReadOnlyConfigurationModule'
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import type { SkillPackMutationResult } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
@@ -52,7 +60,7 @@ import {
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
-type Tab = 'general' | 'workflow' | 'skills' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
+type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
 
 const SAFE_EDITABLE_MODULES: readonly Tab[] = ['general']
 const SAFE_LIFECYCLE_TABS: readonly Tab[] = []
@@ -70,8 +78,13 @@ export function AgentDetailPage() {
   } = useConfigVersions(agentId)
   const requestedTab = agentDetailTab(searchParams.get('tab'))
   const editableModuleIds = draft?.capabilities?.editable_modules ?? SAFE_EDITABLE_MODULES
+  const visibleModuleIds = draft?.capabilities?.visible_modules ?? editableModuleIds
   const advertisedLifecycleTabs = draft?.capabilities?.lifecycle_tabs ?? SAFE_LIFECYCLE_TABS
   const canEditGeneral = draft?.capabilities?.editable_modules.includes('general') ?? false
+  const canEditKnowledge = (
+    draft?.capabilities?.mode === 'production'
+    && editableModuleIds.includes('knowledge')
+  )
   const canValidate = draft?.capabilities?.actions.can_validate ?? false
   const canPublish = draft?.capabilities?.actions.can_publish ?? false
   const canRollback = draft?.capabilities?.actions.can_rollback ?? false
@@ -79,7 +92,7 @@ export function AgentDetailPage() {
     (tab) => tab !== 'validate' || canValidate,
   )
   const activeTab = (
-    editableModuleIds.includes(requestedTab) || lifecycleTabIds.includes(requestedTab)
+    visibleModuleIds.includes(requestedTab) || lifecycleTabIds.includes(requestedTab)
   ) ? requestedTab : 'general'
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
@@ -94,6 +107,9 @@ export function AgentDetailPage() {
   const [skillsConfig, setSkillsConfig] = useState<BusinessFlowSkillPackConfiguration | null>(null)
   const [skillsLoaded, setSkillsLoaded] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
+  const [knowledgeConfig, setKnowledgeConfig] = useState<AgentKnowledgeReleaseBindingConfiguration | null>(null)
+  const [knowledgeLoaded, setKnowledgeLoaded] = useState(false)
+  const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
   const [selectedRunDetailId, setSelectedRunDetailId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -108,7 +124,11 @@ export function AgentDetailPage() {
   }, [contract])
 
   useEffect(() => {
-    if (activeTab !== 'model' || modelConnectionsLoaded) return
+    if (
+      activeTab !== 'model'
+      || !editableModuleIds.includes('model')
+      || modelConnectionsLoaded
+    ) return
     let mounted = true
     fetchModelConnections()
       .then((response) => {
@@ -124,7 +144,7 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, modelConnectionsLoaded])
+  }, [activeTab, editableModuleIds, modelConnectionsLoaded])
 
   const workflowTemplateName = useMemo(
     () => readAgentYamlField(agentYaml, ['workflow', 'template']),
@@ -132,7 +152,7 @@ export function AgentDetailPage() {
   )
 
   useEffect(() => {
-    if (activeTab !== 'workflow') return
+    if (activeTab !== 'workflow' || !editableModuleIds.includes('workflow')) return
     if (!workflowTemplateName) {
       setWorkflowDescriptor(null)
       setWorkflowDescriptorError(t('agentDetail.workflowTemplateMissing'))
@@ -155,10 +175,16 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, workflowTemplateName, t])
+  }, [activeTab, editableModuleIds, workflowTemplateName, t])
 
   useEffect(() => {
-    if (activeTab !== 'skills' || skillsLoaded || !agentId || !draftId) return
+    if (
+      activeTab !== 'skills'
+      || !editableModuleIds.includes('skills')
+      || skillsLoaded
+      || !agentId
+      || !draftId
+    ) return
     let mounted = true
     fetchConfigDraftSkills(agentId, draftId)
       .then((response) => {
@@ -174,7 +200,32 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, agentId, draftId, skillsLoaded])
+  }, [activeTab, agentId, draftId, editableModuleIds, skillsLoaded])
+
+  useEffect(() => {
+    if (
+      activeTab !== 'knowledge'
+      || !canEditKnowledge
+      || knowledgeLoaded
+      || !agentId
+      || !draftId
+    ) return
+    let mounted = true
+    fetchConfigDraftKnowledgeBinding(agentId, draftId)
+      .then((response) => {
+        if (!mounted) return
+        setKnowledgeConfig(response)
+        setKnowledgeLoaded(true)
+        setKnowledgeError(null)
+      })
+      .catch((err) => {
+        if (!mounted) return
+        setKnowledgeError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      mounted = false
+    }
+  }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded])
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const memoryReadinessBlockers = useMemo(
@@ -212,6 +263,38 @@ export function AgentDetailPage() {
           setSkillsConfig(latest)
           setSkillsLoaded(true)
           setSkillsError(null)
+        } catch (reloadError) {
+          setActionError(
+            reloadError instanceof Error
+              ? `${err instanceof Error ? err.message : String(err)}; reload failed: ${reloadError.message}`
+              : `${err instanceof Error ? err.message : String(err)}; reload failed`,
+          )
+        }
+        return 'conflict'
+      }
+      return 'failed'
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runKnowledgeMutation(
+    action: () => Promise<void>,
+  ): Promise<KnowledgeBindingMutationResult> {
+    setBusy('knowledge')
+    setActionError(null)
+    setStatus(null)
+    try {
+      await action()
+      return 'saved'
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+      if (isConflictError(err) && agentId && draftId) {
+        try {
+          const latest = await fetchConfigDraftKnowledgeBinding(agentId, draftId)
+          setKnowledgeConfig(latest)
+          setKnowledgeLoaded(true)
+          setKnowledgeError(null)
         } catch (reloadError) {
           setActionError(
             reloadError instanceof Error
@@ -329,6 +412,23 @@ export function AgentDetailPage() {
     })
   }
 
+  async function saveKnowledgeReleaseBinding(
+    candidate: DraftKnowledgeReleaseBindingCandidate,
+  ): Promise<KnowledgeBindingMutationResult> {
+    if (!agentId || !draftId || !knowledgeConfig) return 'failed'
+    return runKnowledgeMutation(async () => {
+      const updated = await updateConfigDraftKnowledgeBinding(agentId, draftId, {
+        expected_revision: knowledgeConfig.revision,
+        ...candidate,
+      })
+      setKnowledgeConfig(updated)
+      setKnowledgeLoaded(true)
+      setKnowledgeError(null)
+      setStatus(t('agentDetail.knowledgeBindingSaved'))
+      refresh()
+    })
+  }
+
   async function publishDraft() {
     if (!agentId || !draftId || !latestValidation || memoryReadinessBlockers.length > 0) return
     await runAction('publish', async () => {
@@ -363,12 +463,13 @@ export function AgentDetailPage() {
     { id: 'general', label: t('agentDetail.tabOverview') },
     { id: 'workflow', label: t('agentDetail.tabWorkflow') },
     { id: 'skills', label: t('agentDetail.tabSkills') },
+    { id: 'knowledge', label: t('agentDetail.tabKnowledge') },
     { id: 'tools', label: t('agentDetail.tabTools') },
     { id: 'policy', label: t('agentDetail.tabPolicy') },
     { id: 'model', label: t('agentDetail.tabModel') },
     { id: 'memory', label: t('agentDetail.tabMemory') },
     { id: 'response', label: t('agentDetail.tabResponse') },
-  ].filter((module) => editableModuleIds.includes(module.id as Tab))
+  ].filter((module) => visibleModuleIds.includes(module.id as Tab))
 
   const LIFECYCLE_TABS = [
     { id: 'validate', label: t('agentDetail.tabValidate') },
@@ -392,6 +493,30 @@ export function AgentDetailPage() {
       }
       return next
     })
+  }
+
+  function readOnlyConfiguration(
+    title: string,
+    sections: ConfigurationSection[],
+  ) {
+    return (
+      <ReadOnlyConfigurationModule
+        title={title}
+        description={t(
+          draft?.capabilities?.mode === 'production'
+            ? 'agentDetail.readOnlyConfigurationDescription'
+            : 'agentDetail.contractProjectionDescription',
+        )}
+        status={t(
+          draft?.capabilities?.mode === 'production'
+            ? 'agentDetail.readOnlyConfiguration'
+            : 'agentDetail.contractProjection',
+        )}
+        agentYaml={agentYaml}
+        sections={sections}
+        emptyMessage={t('agentDetail.configurationNotSet')}
+      />
+    )
   }
 
   return (
@@ -491,93 +616,149 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'workflow' && (
-        <WorkflowModuleEditor
-          agentYaml={agentYaml}
-          descriptor={workflowDescriptor}
-          descriptorError={workflowDescriptorError}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSaveCore={() => saveAgentYaml(t('agentDetail.workflowSaved'))}
-          onSaveStages={saveWorkflowStages}
-          onPreviewStage={previewWorkflowStage}
-          busy={busy === 'workflow'}
-          stageBusy={busy === 'workflow-stages'}
-        />
+        editableModuleIds.includes('workflow') ? (
+          <WorkflowModuleEditor
+            agentYaml={agentYaml}
+            descriptor={workflowDescriptor}
+            descriptorError={workflowDescriptorError}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+            onSaveCore={() => saveAgentYaml(t('agentDetail.workflowSaved'))}
+            onSaveStages={saveWorkflowStages}
+            onPreviewStage={previewWorkflowStage}
+            busy={busy === 'workflow'}
+            stageBusy={busy === 'workflow-stages'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabWorkflow'), [
+          { label: 'workflow', path: ['workflow'] },
+        ])
       )}
 
       {activeTab === 'skills' && (
-        <SkillsModuleEditor
-          config={skillsConfig}
-          loading={!skillsLoaded && !skillsError}
-          error={skillsError}
-          busy={busy === 'skills'}
-          onCreatePack={createSkillPack}
-          onUpdatePack={updateSkillPack}
-          onDeletePack={deleteSkillPack}
-        />
+        editableModuleIds.includes('skills') ? (
+          <SkillsModuleEditor
+            config={skillsConfig}
+            loading={!skillsLoaded && !skillsError}
+            error={skillsError}
+            busy={busy === 'skills'}
+            onCreatePack={createSkillPack}
+            onUpdatePack={updateSkillPack}
+            onDeletePack={deleteSkillPack}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabSkills'), [
+          { label: 'capabilities.skills', path: ['capabilities', 'skills'] },
+        ])
+      )}
+
+      {activeTab === 'knowledge' && (
+        canEditKnowledge ? (
+          <KnowledgeModuleEditor
+            config={knowledgeConfig}
+            loading={!knowledgeLoaded && !knowledgeError}
+            error={knowledgeError}
+            busy={busy === 'knowledge'}
+            onSave={saveKnowledgeReleaseBinding}
+          />
+        ) : readOnlyConfiguration(
+          t('agentDetail.tabKnowledge'),
+          [
+            { label: 'package_knowledge_sources', path: ['package_knowledge_sources'] },
+            { label: 'knowledge_bindings', path: ['knowledge_bindings'] },
+            { label: 'retrieval', path: ['retrieval'] },
+          ],
+        )
       )}
 
       {activeTab === 'tools' && (
-        <ModuleEditor
-          title={t('agentDetail.toolsTitle')}
-          description={t('agentDetail.toolsDescription')}
-          fields={TOOLS_FIELDS}
-          yamlSection="tools"
-          agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml(t('agentDetail.toolsSaved'))}
-          busy={busy === 'workflow'}
-        />
+        editableModuleIds.includes('tools') ? (
+          <ModuleEditor
+            title={t('agentDetail.toolsTitle')}
+            description={t('agentDetail.toolsDescription')}
+            fields={TOOLS_FIELDS}
+            yamlSection="tools"
+            agentYaml={agentYaml}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+            onSave={() => saveAgentYaml(t('agentDetail.toolsSaved'))}
+            busy={busy === 'workflow'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabTools'), [
+          { label: 'capabilities.tools', path: ['capabilities', 'tools'] },
+          { label: 'tools', path: ['tools'] },
+          { label: 'tools.yaml', content: contract.tools_yaml },
+        ])
       )}
 
       {activeTab === 'policy' && (
-        <ModuleEditor
-          title={t('agentDetail.policyTitle')}
-          description={t('agentDetail.policyDescription')}
-          fields={POLICY_FIELDS}
-          yamlSection="policy"
-          agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml(t('agentDetail.policySaved'))}
-          busy={busy === 'workflow'}
-        />
+        editableModuleIds.includes('policy') ? (
+          <ModuleEditor
+            title={t('agentDetail.policyTitle')}
+            description={t('agentDetail.policyDescription')}
+            fields={POLICY_FIELDS}
+            yamlSection="policy"
+            agentYaml={agentYaml}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+            onSave={() => saveAgentYaml(t('agentDetail.policySaved'))}
+            busy={busy === 'workflow'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabPolicy'), [
+          { label: 'policy', path: ['policy'] },
+          { label: 'policy.yaml', content: contract.policy_yaml },
+        ])
       )}
 
       {activeTab === 'model' && (
-        <ModelModuleEditor
-          agentYaml={agentYaml}
-          modelConnections={modelConnections}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
-          onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
-          onCreateSharedModelConnection={async (payload) => {
-            const connection = await createModelConnection(payload)
-            setModelConnections((current) => [...current, connection])
-            return connection
-          }}
-          onSave={() => saveAgentYaml(t('agentDetail.modelSaved'))}
-          busy={busy === 'workflow'}
-        />
+        editableModuleIds.includes('model') ? (
+          <ModelModuleEditor
+            agentYaml={agentYaml}
+            modelConnections={modelConnections}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
+            onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
+            onCreateSharedModelConnection={async (payload) => {
+              const connection = await createModelConnection(payload)
+              setModelConnections((current) => [...current, connection])
+              return connection
+            }}
+            onSave={() => saveAgentYaml(t('agentDetail.modelSaved'))}
+            busy={busy === 'workflow'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabModel'), [
+          { label: 'model', path: ['model'] },
+          { label: 'react.planner', path: ['react', 'planner'] },
+          { label: 'review.subagent', path: ['review', 'subagent'] },
+        ])
       )}
 
       {activeTab === 'memory' && (
-        <MemoryModuleEditor
-          agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
-          onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
-          busy={busy === 'workflow'}
-        />
+        editableModuleIds.includes('memory') ? (
+          <MemoryModuleEditor
+            agentYaml={agentYaml}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
+            onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
+            busy={busy === 'workflow'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabMemory'), [
+          { label: 'capabilities.memory', path: ['capabilities', 'memory'] },
+          {
+            label: 'context.source_policies.memory_recall',
+            path: ['context', 'source_policies', 'memory_recall'],
+          },
+        ])
       )}
 
       {activeTab === 'response' && (
-        <ModuleEditor
-          title={t('agentDetail.responseTitle')}
-          description={t('agentDetail.responseDescription')}
-          fields={RESPONSE_FIELDS}
-          yamlSection="response"
-          agentYaml={agentYaml}
-          onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-          onSave={() => saveAgentYaml(t('agentDetail.responseSaved'))}
-          busy={busy === 'workflow'}
-        />
+        editableModuleIds.includes('response') ? (
+          <ModuleEditor
+            title={t('agentDetail.responseTitle')}
+            description={t('agentDetail.responseDescription')}
+            fields={RESPONSE_FIELDS}
+            yamlSection="response"
+            agentYaml={agentYaml}
+            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
+            onSave={() => saveAgentYaml(t('agentDetail.responseSaved'))}
+            busy={busy === 'workflow'}
+          />
+        ) : readOnlyConfiguration(t('agentDetail.tabResponse'), [
+          { label: 'response', path: ['response'] },
+        ])
       )}
 
       {activeTab === 'validate' && agentId && draftId && (
@@ -811,6 +992,7 @@ function agentDetailTab(value: string | null): Tab {
     'general',
     'workflow',
     'skills',
+    'knowledge',
     'tools',
     'policy',
     'model',

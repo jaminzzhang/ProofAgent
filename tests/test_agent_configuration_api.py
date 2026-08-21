@@ -222,6 +222,18 @@ def test_create_config_agent_uses_server_owned_template(tmp_path: Path) -> None:
     assert draft["agent_id"] == "agent_management_insurance_specialist"
     assert draft["display_name"] == "Insurance Specialist"
     assert draft["capabilities"]["mode"] == "development"
+    assert draft["capabilities"]["visible_modules"] == [
+        "general",
+        "workflow",
+        "skills",
+        "knowledge",
+        "tools",
+        "policy",
+        "model",
+        "memory",
+        "response",
+    ]
+    assert "knowledge" not in draft["capabilities"]["editable_modules"]
     assert draft["capabilities"]["actions"] == {
         "can_validate": True,
         "can_publish": True,

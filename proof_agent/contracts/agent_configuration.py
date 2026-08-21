@@ -6,10 +6,16 @@ from typing import Any, Literal, cast
 
 from pydantic import Field, field_serializer, field_validator, model_validator
 
-from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts._base import (
+    FrozenDict,
+    FrozenModel,
+    StrictFrozenModel,
+    freeze_value,
+)
 from proof_agent.contracts.secrets import ProductionSecretHandle
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
 from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
+from proof_agent.contracts.knowledge_service_management import KnowledgeServiceIdentifier
 from proof_agent.contracts.shared_assets import ResolvedSharedAssetVersions
 from proof_agent.contracts.workflow_stage_configuration import (
     EffectiveWorkflowStageConfiguration,
@@ -166,6 +172,15 @@ class ConfigurationOperationAudit(FrozenModel):
         return cast(dict[str, Any], _jsonable(value))
 
 
+class DraftKnowledgeReleaseBindingCandidate(StrictFrozenModel):
+    """Secret-free exact KSS Release selection retained on one Draft Agent."""
+
+    knowledge_space_id: KnowledgeServiceIdentifier
+    knowledge_base_id: KnowledgeServiceIdentifier
+    knowledge_base_version_id: KnowledgeServiceIdentifier
+    knowledge_base_release_id: KnowledgeServiceIdentifier
+
+
 class DraftAgent(FrozenModel):
     """Editable Agent configuration state before publication."""
 
@@ -179,6 +194,7 @@ class DraftAgent(FrozenModel):
     created_by: str
     updated_by: str
     version_id: str | None = None
+    knowledge_release_binding_candidate: DraftKnowledgeReleaseBindingCandidate | None = None
     validation_records: tuple[AgentValidationRecord, ...] = Field(default_factory=tuple)
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
 

@@ -4,40 +4,40 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 7 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 建议结论 | Slice 8D KSS Knowledge binding 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
 | 最高风险等级 | P1 |
-| 一句话依据 | Slice 6 已关闭；现有 Configuration UoW、Contract Bundle 与 Skill Pack loader 足以把专用读写收口到 Workspace，并删除两次创建和长期派生目录 |
-| 下一步建议 | 真实 PostgreSQL 补充验证与 stale role-test 清理已独立复验通过；按独立 Scope 迁移 canonical seed bootstrap |
+| 一句话依据 | Knowledge 专用交互只保存无密钥 exact KSS Release Draft candidate；live catalog 校验、revision CAS、双层审计与稳定错误映射保持在 Workspace 权威链路 |
+| 下一步建议 | 进入部署与端到端交互验证；真实 PostgreSQL DSN 证据仍保持 `PARTIAL_VERIFICATION` |
 
 ## 2. 依据与输入缺口
 
 | 材料 | 来源 | 是否读取 | 关键证据 | 缺口 |
 | --- | --- | --- | --- | --- |
-| 用户请求 | 当前对话 | 是 | 用户要求提交 Git，并启动“迁移 Skill Pack 专用编辑权威”；每个切片完成后由子 Agent 按明确流程验证 | 当前为 Slice 7 |
+| 用户请求 | 当前对话 | 是 | 用户要求恢复 Agent Detail 的 Workflow、Knowledge、Model 等专用交互，并在每个切片完成后由子 Agent 按明确流程验证 | Slice 8D 已完成并独立复验通过 |
 | 架构评审 | `architecture-review-20260818-220308.html` | 是 | Delivery 与 concrete store 耦合；推荐 deep application module 与 focused ports | Graphify 图较旧，只作导航 |
 | 项目规则 | `AGENTS-COMMON.md`、hicode coding rules | 是 | production PostgreSQL 权威、原子审计、TDD、无兼容 facade | 无 |
 | 领域与 ADR | Agent Configuration context、ADR-0009、ADR-0011 | 是 | Workspace、Draft、Published Version、模块/lifecycle 分离 | context 含已退役知识术语，后续单独清理 |
-| 当前实现 | configuration router、Workspace、Skill Pack loader、Dashboard Skills editor | 是 | 四个 Skill Pack route 直接组合 Local store、YAML、compiler 与 manifest；创建完整配置需 POST 后 PATCH | canonical seed bootstrap 仍待后续切片 |
+| 当前实现 | Production configuration router、Workspace、KSS management client 与 Dashboard module editors | 是 | Slice 8A 已恢复 Tools/Policy/Model/Memory/Response；Slice 8B Workflow、8C Skill Pack、8D KSS exact Release selector/save 已独立通过 | 真实 PostgreSQL DSN 证据待环境提供 |
 
 ## 3. 需求准入评审
 
 | 项 | 内容 |
 | --- | --- |
-| 准入结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
-| 需求分析输入 | 用户明确切片、领域规则、现有稳定 API、Configuration UoW、Skill Pack loader、Dashboard editor 回归 |
-| 证据缺口 | Skill Pack endpoint 仅在 development 注册；真实 PostgreSQL 只在 disposable 本地测试服务验证，本轮不形成生产批准 |
+| 准入结论 | Slice 8A/8B/8C/8D 均已完成主代理验证与独立复验；部署和端到端验证可继续 |
+| 需求分析输入 | 用户明确的交互恢复目标、领域规则、现有稳定 API、Configuration UoW、Contract/Workflow/Skill Pack Workspace command 与 Dashboard editor 回归 |
+| 证据缺口 | 当前环境未配置 `PROOF_AGENT_TEST_POSTGRES_DSN`，真实 PostgreSQL UoW 证据为 2 项 skip；本轮不形成生产发布批准 |
 
 ## 4. 需求分析与范围边界
 
 | 项 | 内容 |
 | --- | --- |
-| 需求目标 | 让 Control-owned Workspace 成为 Skill Pack 专用读取、typed mutation、候选校验、CAS 保存与审计的唯一应用权威 |
-| 范围内 | Workspace Skill Pack read/create/update/delete interface、完整 create command、受控本地 inspection adapter、revision CAS、Draft operation audit、全局 audit、development routes、稳定错误映射、Dashboard revision 传递与单次创建、旧逻辑删除、文档 |
-| 范围外 | canonical seed bootstrap、production Skill Pack endpoint、raw Contract 高级入口语义变更、KSS binding 编辑、validation/publication/activation/rollback、schema、部署 |
-| 非目标 | 新增 facade 后保留 route 内旧实现；让 adapter 拥有 CAS 或审计；改变 Skill Pack runtime admission 规则；把本地验证描述为生产批准 |
-| 验收标准 | Workspace/API/Dashboard 行为测试、Ruff/Mypy/前端与全量后端通过；完整 create 只发一个命令；manifest binding、definition 与双层 audit 以 expected revision CAS 原子提交；adapter 临时编译后无残留；audit/HTTP 错误不含 Prompt、raw YAML 或内部路径；独立子 Agent 复验 |
+| 需求目标 | 让 Production Agent Detail 通过 Control-owned Workspace 恢复 Contract、Workflow、Skill Pack 与 KSS Knowledge Draft candidate 专用交互，同时保持 Development/Production 共用一套业务权威 |
+| 范围内 | Slice 8A 的 Tools/Policy/Model/Memory/Response Contract 保存；Slice 8B 的 Workflow catalog、Core、Stage 与 Preview；Slice 8C 的 Skill Pack 列表与 create/update/delete；Slice 8D 的 exact KSS Release Draft candidate 读取/保存；权限、revision CAS、双层 audit、稳定错误映射与 Dashboard stale-state 保护 |
+| 范围外 | KSS 管理写操作、credential/scorer、executable binding/profile、production validation/publication/activation/rollback；不修改 schema，不执行正式生产发布 |
+| 非目标 | 复制 Workspace 业务规则到 Production route；用通用 YAML 表单代替专用交互；恢复旧 Knowledge Source/Hybrid 权威；把本地验证描述为生产批准 |
+| 验收标准 | Production API、Workspace/adapter、Dashboard 行为测试、Ruff/Mypy、前端构建与全量后端通过；每次 mutation 携带当前 revision；KSS candidate 只接受 exact、queryable、完整父级四元组；400/409/500/503 保留用户输入且不 blind rebase；独立子 Agent 复验 |
 | `feature_context.md` 更新 | 已创建 |
-| ADR 处理 | 不需要；执行 ADR-0009、ADR-0011 与既有 Workspace、Draft CAS 和 Contract Bundle 规则，不改变持久化模型或公开协议 |
+| ADR 处理 | 执行 ADR-0009、ADR-0011 与 ADR-0211；Draft candidate 与 executable KSS binding/profile 保持分离，新增 Production route 不改变 SQL schema |
 
 ## 5. 设计树方案
 
@@ -416,3 +416,193 @@
 - RED：Dashboard 创建完整 Skill Pack 先 POST 再 PATCH，mutation 不发送当前 revision。
 - GREEN：create request 一次携带全部字段；create/update/delete 显式发送当前 Skill Pack projection revision，成功响应立即推进 revision。
 - 验证：主代理执行聚焦、全量、静态与前端门禁；独立子 Agent 按 scope→diff、权限、typed authority、CAS、事务/audit、临时路径安全、单命令、旧实现删除、错误映射、KSS/生命周期范围隔离清单复验。
+
+## 32. Slice 8 总体方案：恢复 Production Agent Detail 配置交互
+
+| 项 | 内容 |
+| --- | --- |
+| 用户目标 | 找回 Agent Detail 的 Workflow、Knowledge、Tools、Policy、Model、Memory、Response 与 Skill Pack 交互，并适配新的 Workspace 与 KSS 权威 |
+| 根因 | Production capability 只声明 `general` 可编辑，且 Production composition 未注入 Contract、Workflow Stage 与 Skill Pack inspector；Knowledge 旧编辑器随 KSS 切换被删除 |
+| 推荐方案 | 按四个垂直切片恢复：8A Contract 模块、8B Workflow、8C Skill Pack、8D KSS Knowledge binding |
+| 不采用方案 | 只在前端显示 Save；恢复旧 Knowledge Source/Hybrid API；一次开放全部 Production route |
+| 共同不变量 | `agent.edit` 权限、调用方 revision CAS、Draft operation audit 与全局 audit 同事务、稳定错误映射、失败不落盘、保存不等于验证或发布 |
+| 验证方式 | 每个切片先完成 RED/GREEN/REFACTOR 与聚焦门禁，再启动独立子 Agent 按明确清单复验 |
+
+## 33. Slice 8A 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
+| 最高风险等级 | P1 |
+| 公开 interface | Production `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract`；Control 复用 `AgentConfigurationWorkspace.update_contract(...)` |
+| 可观察行为 | Tools、Policy、Model、Memory、Response 显示结构化编辑器；保存完整 Agent YAML candidate，成功后 revision 增加并刷新页面 |
+| 兼容边界 | GET Contract 与 Development PATCH 路径/响应不变；Production 新增同路径 PATCH；不改变数据库 schema |
+| 范围外 | Workflow Stage、Skill Pack、Knowledge/KSS binding、validation、publication、activation、rollback |
+| ADR 判断 | 不需要新增 ADR；执行 ADR-0009、ADR-0011 与既有 Workspace、Draft CAS、Contract Bundle 决策。Production public route 的批准设计记录即本节与用户明确请求 |
+
+## 34. Slice 8A 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-PCT-ROOT | Production Operator 保存五个 Contract 模块之一 | Production Delivery 只调用 Workspace `update_contract(...)` | Contract Bundle | route delegation 与 AST/import 边界 | P1 |
+| ACW-PCT-MAIN-1 | 请求携带 Agent YAML 与 expected revision | Pydantic 严格校验；Workspace 构建完整 candidate | 待校验 Draft | 未知字段、缺 revision、空请求 | P1 |
+| ACW-PCT-MAIN-2 | candidate 构建完成 | Production composition 注入无持久化权威的临时 Contract validator | 有效 candidate | 合法/无效 YAML、自动清理、无路径泄漏 | P1 |
+| ACW-PCT-MAIN-3 | candidate 校验通过 | PostgreSQL Configuration UoW 以 expected revision 提交 Draft 与 audit | revision +1 | CAS、双层 audit、事务回滚 | P1 |
+| ACW-PCT-BRANCH-1 | stale revision | Workspace 或 repository CAS 拒绝 | 稳定 409 | 不覆盖并发赢家；前端提示并要求刷新 | P1 |
+| ACW-PCT-BRANCH-2 | candidate 无效 | 返回稳定 400 `agent_contract_invalid` | Draft/audit 不变 | 不泄漏临时路径或底层异常 | P1 |
+| ACW-PCT-BRANCH-3 | validator/UoW 非预期失败 | 返回稳定 500 `agent_contract_update_failed` | 无部分写入 | OSError/RuntimeError fault test | P1 |
+| ACW-PCT-BOUND-1 | 保存成功 | capability 只增加五个模块；Workflow、Skills、Knowledge 仍只读 | 生命周期权威不变 | negative route/capability assertions | P1 |
+
+## 35. Slice 8A TDD 任务
+
+### Task ACW-PCT1：Production HTTP 契约 RED/GREEN
+
+- RED：Production Contract PATCH 当前为 405，Production Draft 只声明 `general` 可编辑。
+- GREEN：新增严格请求模型、`agent.edit` 权限、Workspace delegation 与稳定 400/404/409/500 映射；capability 仅加入 Tools、Policy、Model、Memory、Response。
+- 停止条件：需要改变 Workflow、Skill Pack、Knowledge 或 lifecycle route。
+
+### Task ACW-PCT2：Production composition 与 PostgreSQL 权威
+
+- RED：Production Workspace 缺少 Contract validator，调用 `update_contract(...)` 返回 `agent_contract_update_unavailable`。
+- GREEN：composition 注入既有临时整包 validator；持久化仍只使用 PostgreSQL Configuration UoW。
+- 停止条件：validator 需要持久化本地文件或新增数据库 schema。
+
+### Task ACW-PCT3：Dashboard 保存与独立复核
+
+- RED：Production capability 下五个模块只显示配置文件投影，没有保存控件。
+- GREEN：服务端 capability 驱动既有结构化编辑器；保存显式发送当前 revision，成功刷新 Draft/Contract；失败保留当前编辑与错误提示。
+- 验证：后端 route/Workspace/PostgreSQL 聚焦测试、Dashboard 每模块保存测试、Ruff、Mypy、TypeScript、build、domain-context、diff；完成后启动独立子 Agent 复验权限、CAS、audit、错误映射、模块边界和生命周期隔离。
+
+## 36. Slice 8B 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS / NO_BLOCKING_FINDINGS` |
+| 最高风险等级 | P1 |
+| 公开 interface | Production Workflow Template catalog/detail；Production Workflow Stage update/preview；Core 保存继续复用 Contract PATCH |
+| 可观察行为 | Workflow 模块显示 Template、Core 参数、Stage Inspector 与 Context Preview；Core/Stage 保存分别为单命令，均携带当前 Draft revision |
+| 兼容边界 | 保持 Development HTTP method/path、请求/响应与权限语义；Production 新增相同路径；不改变数据库 schema |
+| 范围外 | Skill Pack、Knowledge/KSS binding、validation、publication、activation、rollback |
+| ADR 判断 | 不需要新增 ADR；执行既有 Workflow Stage Configuration、Prompt Authority Boundary、Workspace 与 Draft CAS 决策 |
+
+## 37. Slice 8B 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-PWS-ROOT | Production Operator 打开 Workflow | 读取 backend-owned Template catalog/detail 和当前 Contract | 完整 Workflow Editor | production route 与 descriptor contract | P1 |
+| ACW-PWS-MAIN-1 | 保存 Core 参数 | 复用 Slice 8A Contract PATCH | revision +1 | revision、candidate validation、stale handling | P1 |
+| ACW-PWS-MAIN-2 | 保存 template、descriptor version 与 stages | Production Delivery 调用 `update_workflow_stages(...)` | revision +1 | 单命令、Prompt Gate、CAS、双层 audit | P1 |
+| ACW-PWS-MAIN-3 | 预览未保存的 Prompt/context | Delivery 调用 `preview_workflow_stage(...)` | 脱敏、限长 preview | 无模型、工具、Run、Draft 或 audit 写入 | P1 |
+| ACW-PWS-BRANCH-1 | descriptor、stage、Prompt 或 context 无效 | 返回稳定 400；不保存 | Draft/audit 不变 | 不泄漏路径或 Prompt | P1 |
+| ACW-PWS-BRANCH-2 | stale revision 或提交期间并发写入 | Workspace/PostgreSQL CAS 拒绝 | 稳定 409 | 不覆盖赢家；前端保留编辑并提示刷新 | P1 |
+| ACW-PWS-BRANCH-3 | inspector/UoW 非预期失败 | 返回稳定 500 | 无部分写入 | fault tests | P1 |
+| ACW-PWS-BOUND-1 | Workflow 闭环完成 | capability 只新增 `workflow`；Skills、Knowledge 仍只读 | 生命周期权威不变 | negative capability/route assertions | P1 |
+
+## 38. Slice 8B TDD 任务
+
+### Task ACW-PWS1：共享 HTTP contract 与 Production route
+
+- RED：Production Template 请求为 404，Stage update/preview 为 404/405，Workflow capability 不可编辑。
+- GREEN：提取 Development/Production 共用的严格 Workflow request/serialization；新增 Production catalog/detail、update/preview route 与稳定错误映射。
+- 停止条件：需要改变 Skill Pack、Knowledge 或 lifecycle route。
+
+### Task ACW-PWS2：Production composition 与安全边界
+
+- RED：Production Workspace 未注入 Workflow Stage inspector。
+- GREEN：注入既有自动清理 inspector；保持 PostgreSQL 为唯一 Draft/audit 持久化权威；preview 不写状态。
+- 停止条件：inspector 需要持久化本地编译目录或执行模型、工具、Run。
+
+### Task ACW-PWS3：Dashboard stale-state 与独立复核
+
+- RED：Production Workflow 只显示只读投影；保存冲突未证明保留编辑内容。
+- GREEN：capability 驱动既有 Workflow Editor；Core/Stage 保存都发送 revision；409 后不自动升级 revision 或覆盖并发赢家，用户刷新后重新编辑。
+- 验证：聚焦后端、Dashboard Workflow、静态、构建、domain-context、diff；切片完成后独立子 Agent 复验 catalog、权限、CAS/audit、Prompt 安全、preview 无执行、错误映射、stale UX 和生命周期隔离。
+
+## 39. Slice 8C 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS` |
+| 最高风险等级 | P1 |
+| 公开 interface | Production Skill Pack GET、Business Flow create/update/delete；复用现有 Workspace typed commands |
+| 可观察行为 | Skills 模块显示 revisioned Pack 列表；Drawer 可创建、更新、删除；成功响应立即推进 projection revision |
+| 兼容边界 | 保持 Development HTTP method/path、字段、响应和权限语义；Production 新增相同路径并强制调用方 revision；不改变数据库 schema |
+| 范围外 | Knowledge/KSS binding、validation、publication、activation、rollback |
+| ADR 判断 | 不需要新增 ADR；执行既有 Workspace、Contract Bundle、Skill Pack 与 KSS 权威边界 |
+
+## 40. Slice 8C 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-PSP-ROOT | Production Operator 打开 Skills | Workspace inspector 返回 revisioned projection | Pack list 与配置问题 | GET permission、稳定 projection、无路径泄漏 | P1 |
+| ACW-PSP-MAIN-1 | 创建完整 Pack | typed create command 一次构建 binding 与 definition | revision +1 | 单命令、schema/ref Gate、双层 audit | P1 |
+| ACW-PSP-MAIN-2 | 更新或删除 Pack | target ID 与调用方 revision 固定；Workspace 构建完整 candidate | revision +1 | identity、CAS、audit、definition cleanup | P1 |
+| ACW-PSP-MAIN-3 | candidate 构建完成 | 自动清理 inspector 编译、校验和投影 | 可提交 candidate | package-local path、临时目录、trace-safe issue | P1 |
+| ACW-PSP-BRANCH-1 | stale revision | Workspace/PostgreSQL CAS 拒绝 | 稳定 409 | 不 retarget、不 blind rebase；显式 Reload Latest | P1 |
+| ACW-PSP-BRANCH-2 | binding/definition/ref 无效 | 稳定 400 | Draft/audit 不变 | loader 前置边界、无 raw ref/path 泄漏 | P1 |
+| ACW-PSP-BRANCH-3 | inspector/UoW 非预期失败 | 稳定 500 | 无部分写入 | fault tests | P1 |
+| ACW-PSP-BOUND-1 | Skill Pack 闭环完成 | capability 只新增 `skills`；Knowledge 仍只读 | 生命周期权威不变 | KSS/lifecycle negative assertions | P1 |
+
+## 41. Slice 8C TDD 任务
+
+### Task ACW-PSP1：共享 HTTP contract 与 Production route
+
+- RED：Production Skill Pack GET/POST/PATCH/DELETE 为 404，Skills capability 不可编辑。
+- GREEN：提取 Development/Production 共用的严格请求、Control command translation 和 projection serialization；Production mutation 强制 expected revision。
+- 停止条件：需要改变 KSS binding、runtime admission 或 lifecycle route。
+
+### Task ACW-PSP2：Production composition 与安全边界
+
+- RED：Production Workspace 未注入 Skill Pack inspector。
+- GREEN：注入既有自动清理 inspector；持久化仍只使用 PostgreSQL UoW；所有 definition ref 在 loader 前失败关闭。
+- 停止条件：inspector 需要持久化本地编译目录或访问 package 外文件。
+
+### Task ACW-PSP3：Dashboard stale-state 与独立复核
+
+- RED：Production Skills 只显示只读投影。
+- GREEN：capability 驱动既有 Skills editor；mutation 使用 projection revision；409 保留输入、冻结原 target，只有显式 Reload Latest 后才能重新保存。
+- 验证：聚焦后端、Dashboard Skills、静态、构建、domain-context、diff；切片完成后独立子 Agent 复验权限、typed authority、CAS/audit、路径安全、trace-safe projection、stale UX、错误映射和 KSS/lifecycle 隔离。
+
+## 42. Slice 8D 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | 主代理 `LOCAL_VERIFIED`；按 ADR-0211 实现的 Draft KSS Release Binding Candidate 独立复验 `PASS_WITH_ENV_LIMITATION` |
+| 最高风险等级 | P1 |
+| 公开 interface | Production Agent Knowledge binding GET/PATCH；Workspace typed read/update；Dashboard exact Release selector |
+| 可观察行为 | Knowledge 模块显示 KSS readiness、queryable Release catalog 与当前 Draft candidate；保存携带当前 revision，成功只更新 Draft authoring state |
+| 权威边界 | KSS 拥有 Catalog/Release；Draft 只保存 secret-free exact identity tuple；deployment profile 与 Phase F publisher 仍拥有 executable binding construction |
+| 兼容边界 | 不恢复 manifest `knowledge_bindings`、旧 Source/Hybrid API 或本地 fallback；Development Knowledge 保持可见只读且不调用 Production 专用 route；不改变 Production lifecycle capability；Draft 使用现有 JSONB，无 SQL schema migration |
+| 范围外 | KSS Space/Source/Base/Release 管理、credential/scorer 编辑、正式 Phase F publication integration、activation、rollback、当前问答运行时切换 |
+| ADR 判断 | ADR-0211：Draft candidate 与 executable binding/profile 分离是不可逆且易被误解的权威决策 |
+
+## 43. Slice 8D 设计树
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-PKB-ROOT | Production Operator 打开 Knowledge | Workspace 读取 Draft 与 live KSS catalog | revisioned catalog + current candidate | `agent.view` 与 `knowledge_source.view`、trace-safe projection | P1 |
+| ACW-PKB-MAIN-1 | Operator 选择 exact Release 并保存 | strict typed command 固定 Space/Base/Base Version/Release tuple | Draft candidate | 不接受 `latest`、retired、missing 或 parent mismatch | P1 |
+| ACW-PKB-MAIN-2 | KSS catalog 验证通过 | Workspace 在 PostgreSQL Configuration UoW 中以 Draft revision CAS 保存 candidate 与双层 audit | revision +1 | CAS、audit 原子性、metadata 无 secret | P1 |
+| ACW-PKB-BRANCH-1 | KSS unavailable 或 Release 不可查询 | fail closed，返回稳定 400/503 | Draft/audit 不变 | 无 local fallback、无底层 URL/credential 泄漏 | P1 |
+| ACW-PKB-BRANCH-2 | stale revision | 返回稳定 409，保留用户选择并冻结重试 | 显式 Reload Latest | 不 blind rebase、不改变 Active Version | P1 |
+| ACW-PKB-BOUND-1 | Draft candidate 保存成功 | capability 只新增 `knowledge`；lifecycle actions 继续关闭 | authoring state only | publisher/runtime/env binding 负向隔离 | P1 |
+
+## 44. Slice 8D TDD 任务
+
+### Task ACW-PKB1：领域 contract 与 Workspace 权威
+
+- RED：Draft 无 first-class KSS candidate；Workspace 无 exact Release catalog/read/update interface。
+- GREEN：新增 secret-free candidate contract、catalog inspector port 与 revisioned Workspace result；save-time 校验 ready/queryable/exact parent tuple，并以 CAS 和双层 audit 原子提交。
+- 停止条件：需要把 credential、scorer、Source 配置或 KSS content 写入 Draft。
+
+### Task ACW-PKB2：Production HTTP/composition 与失败关闭
+
+- RED：Production Knowledge 仅显示旧 manifest 字段的只读空投影，Agent-specific KSS binding route 不存在。
+- GREEN：Production GET/PATCH 只委托 Workspace；组合既有 KSS management client 作为 catalog inspector；要求 Agent 与 Knowledge view/edit 权限，提供稳定 400/404/409/500/503。
+- 停止条件：需要恢复 Hybrid/local fallback 或开放 production lifecycle route。
+
+### Task ACW-PKB3：Dashboard 交互与独立复核
+
+- RED：Production Knowledge 无 selector 或保存控件。
+- GREEN：Production 显示 authoring-only 状态、readiness 与 queryable Releases；保存发送 projection revision；409 保留选择并要求显式 Reload Latest；Development 保留 Knowledge Contract 只读投影且不请求 Production 专用 route。
+- 验证：Workspace/API/PostgreSQL 聚焦、Dashboard Knowledge、权限/错误/审计/隔离负向、静态与全门禁；完成后启动独立子 Agent 复验。

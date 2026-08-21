@@ -117,7 +117,19 @@ class UnitOfWorkFactory:
         return unit
 
 
-def _service(factory: UnitOfWorkFactory) -> AgentConfigurationWorkspace:
+class RecordingContractValidator:
+    def __init__(self) -> None:
+        self.candidates: list[DraftAgent] = []
+
+    def validate(self, *, draft: DraftAgent) -> None:
+        self.candidates.append(draft)
+
+
+def _service(
+    factory: UnitOfWorkFactory,
+    *,
+    contract_validator: RecordingContractValidator | None = None,
+) -> AgentConfigurationWorkspace:
     return AgentConfigurationWorkspace(
         unit_of_work_factory=factory,
         template_bundle=ContractBundle(
@@ -131,6 +143,7 @@ def _service(factory: UnitOfWorkFactory) -> AgentConfigurationWorkspace:
             tools_yaml="tools: []\n",
         ),
         clock=lambda: datetime(2026, 8, 12, tzinfo=UTC),
+        contract_validator=contract_validator or RecordingContractValidator(),
     )
 
 
@@ -271,6 +284,46 @@ def test_update_draft_uses_revision_cas_and_appends_audit_in_the_same_unit() -> 
     assert [event.event_type for event in factory.audit.events] == [
         "agent.draft.created",
         "agent.draft.updated",
+    ]
+
+
+def test_update_contract_validates_and_atomically_saves_with_audit() -> None:
+    factory = UnitOfWorkFactory()
+    validator = RecordingContractValidator()
+    service = _service(factory, contract_validator=validator)
+    created = service.create_draft(
+        display_name="Insurance Specialist",
+        purpose="Answer governed insurance questions.",
+        idempotency_key="create-agent-attempt-1",
+        actor=_actor(),
+    )
+    candidate_yaml = created.record.draft.contract_bundle.agent_yaml.replace(
+        "purpose: Canonical governed insurance assistance.",
+        "purpose: Updated governed insurance assistance.",
+    )
+
+    updated = service.update_contract(
+        agent_id=SOLE_PRODUCTION_AGENT_ID,
+        draft_id=created.record.draft.draft_id,
+        expected_revision=1,
+        agent_yaml=candidate_yaml,
+        policy_yaml=None,
+        tools_yaml=None,
+        actor=_actor(),
+    )
+
+    assert updated.revision == 2
+    assert updated.draft.contract_bundle.agent_yaml == candidate_yaml
+    assert validator.candidates == [updated.draft]
+    assert updated.draft.operation_audit[-1].operation is ConfigurationOperation.UPDATED
+    assert updated.draft.operation_audit[-1].metadata == {
+        "expected_revision": 1,
+        "changed_files": ["agent.yaml"],
+    }
+    assert factory.units[-1].commits == 1
+    assert [event.event_type for event in factory.audit.events] == [
+        "agent.draft.created",
+        "agent.draft.contract_updated",
     ]
 
 

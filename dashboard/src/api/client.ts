@@ -1,5 +1,6 @@
 import type {
   ActiveAgentVersion,
+  AgentKnowledgeReleaseBindingConfiguration,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
@@ -7,6 +8,7 @@ import type {
   ConfigVersionsResponse,
   ContractBundle,
   DraftAgent,
+  DraftKnowledgeReleaseBindingCandidate,
   DraftValidationResponse,
   EvaluationCampaignCasesResponse,
   EvaluationCampaignsResponse,
@@ -554,6 +556,30 @@ export function deleteConfigDraftSkillPack(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/skills/business-flows/${packId}${revisionQuery}`,
     {
       method: 'DELETE',
+    },
+  )
+}
+
+export function fetchConfigDraftKnowledgeBinding(
+  agentId: string,
+  draftId: string,
+): Promise<AgentKnowledgeReleaseBindingConfiguration> {
+  return fetchJson<AgentKnowledgeReleaseBindingConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-binding`,
+  )
+}
+
+export function updateConfigDraftKnowledgeBinding(
+  agentId: string,
+  draftId: string,
+  payload: DraftKnowledgeReleaseBindingCandidate & { expected_revision: number },
+): Promise<AgentKnowledgeReleaseBindingConfiguration> {
+  return fetchJson<AgentKnowledgeReleaseBindingConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-binding`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     },
   )
 }

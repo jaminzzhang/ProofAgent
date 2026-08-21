@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import os
 import re
 from datetime import UTC, datetime
@@ -28,28 +27,34 @@ from proof_agent.contracts import (
     ModelConnectionValidationRecord,
     SharedModelConnection,
     ToolSource,
-    WorkflowStageConfig,
-    WorkflowStageContextConfig,
-    WorkflowStagePromptConfig,
 )
 from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationConflict,
     AgentConfigurationNotFound,
     AgentConfigurationPublicationRejected,
-    AgentConfigurationSkillPackResult,
     AgentConfigurationWorkspace,
     SOLE_PRODUCTION_AGENT_ID,
     load_server_owned_agent_template,
-)
-from proof_agent.control.agent_configuration_skill_packs import (
-    BusinessFlowSkillPackCreateCommand,
-    BusinessFlowSkillPackUpdateCommand,
 )
 from proof_agent.control.workflow.templates import (
     list_workflow_templates,
     resolve_workflow_template,
 )
 from proof_agent.delivery.http_errors import proof_agent_http_exception
+from proof_agent.delivery.agent_configuration_workflow_http import (
+    WorkflowStagePreviewRequest,
+    WorkflowStageUpdateItemRequest,
+    workflow_stage_config_request,
+    workflow_stage_prompt_config,
+    workflow_template_payload,
+)
+from proof_agent.delivery.agent_configuration_skill_pack_http import (
+    BusinessFlowSkillPackCreateFields,
+    BusinessFlowSkillPackUpdateFields,
+    business_flow_skill_pack_create_command,
+    business_flow_skill_pack_result_payload,
+    business_flow_skill_pack_update_command,
+)
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
@@ -83,11 +88,21 @@ _CANONICAL_AGENT_TEMPLATE = {
 }
 _DEVELOPMENT_DRAFT_CAPABILITIES = {
     "mode": "development",
-    "editable_modules": [
+    "visible_modules": [
         "general",
         "workflow",
         "skills",
         "knowledge",
+        "tools",
+        "policy",
+        "model",
+        "memory",
+        "response",
+    ],
+    "editable_modules": [
+        "general",
+        "workflow",
+        "skills",
         "tools",
         "policy",
         "model",
@@ -150,65 +165,16 @@ class ContractUpdateRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
-class BusinessFlowSkillPackCreateRequest(BaseModel):
+class BusinessFlowSkillPackCreateRequest(BusinessFlowSkillPackCreateFields):
     """Request body for creating one draft-local Business Flow Skill Pack."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
     expected_revision: int | None = Field(default=None, ge=1)
-    label: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    intent_patterns: list[str] = Field(default_factory=list)
-    intent_taxonomy_refs: list[str] = Field(default_factory=list)
-    stage_prompt_addenda: dict[str, WorkflowStagePromptRequest] = Field(
-        default_factory=dict
-    )
-    knowledge_binding_refs: list[str] = Field(default_factory=list)
-    tool_contract_refs: list[str] = Field(default_factory=list)
-    policy_rule_refs: list[str] = Field(default_factory=list)
-    validator_refs: list[str] = Field(default_factory=list)
-    admission: dict[str, Any] = Field(default_factory=dict)
-    default: bool = False
 
 
-class WorkflowStagePromptRequest(BaseModel):
-    """Request body fragment for stage-level business Prompt settings."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    business_context: str | None = None
-    task_instructions: list[str] = Field(default_factory=list)
-    output_preferences: list[str] = Field(default_factory=list)
-
-
-class BusinessFlowSkillPackUpdateRequest(BaseModel):
+class BusinessFlowSkillPackUpdateRequest(BusinessFlowSkillPackUpdateFields):
     """Request body for updating one draft-local Business Flow Skill Pack."""
 
-    model_config = ConfigDict(extra="forbid")
-
     expected_revision: int | None = Field(default=None, ge=1)
-    label: str | None = Field(default=None, min_length=1)
-    description: str | None = Field(default=None, min_length=1)
-    intent_patterns: list[str] | None = None
-    intent_taxonomy_refs: list[str] | None = None
-    stage_prompt_addenda: dict[str, WorkflowStagePromptRequest] | None = None
-    knowledge_binding_refs: list[str] | None = None
-    tool_contract_refs: list[str] | None = None
-    policy_rule_refs: list[str] | None = None
-    validator_refs: list[str] | None = None
-    admission: dict[str, Any] | None = None
-    default: bool | None = None
-
-
-class WorkflowStageUpdateItemRequest(BaseModel):
-    """Request body item for one workflow stage configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(min_length=1)
-    prompt: WorkflowStagePromptRequest = Field(default_factory=WorkflowStagePromptRequest)
-    context: dict[str, bool] = Field(default_factory=dict)
 
 
 class WorkflowStagesUpdateRequest(BaseModel):
@@ -224,15 +190,6 @@ class WorkflowStagesUpdateRequest(BaseModel):
         max_length=255,
     )
     stages: list[WorkflowStageUpdateItemRequest]
-
-
-class WorkflowStagePreviewRequest(BaseModel):
-    """Request body for rendering one redacted Workflow Stage Context Preview."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: WorkflowStagePromptRequest = Field(default_factory=WorkflowStagePromptRequest)
-    context: dict[str, bool] = Field(default_factory=dict)
 
 
 class DraftValidationRequest(BaseModel):
@@ -918,7 +875,7 @@ def list_config_workflow_templates(
     _require_operator(identity, OperatorPermission.AGENT_VIEW)
     descriptors = list_workflow_templates()
     return {
-        "data": [_workflow_template_payload(descriptor) for descriptor in descriptors],
+        "data": [workflow_template_payload(descriptor) for descriptor in descriptors],
         "meta": {"total": len(descriptors)},
     }
 
@@ -935,7 +892,7 @@ def get_config_workflow_template(
         descriptor = resolve_workflow_template(template_id)
     except ProofAgentError as exc:
         raise _proof_agent_http_exception(exc) from exc
-    return _workflow_template_payload(descriptor)
+    return workflow_template_payload(descriptor)
 
 
 @router.get("/config/agents/{agent_id}/drafts/{draft_id}/contract")
@@ -998,7 +955,7 @@ def fetch_config_draft_skills(
             status_code=500,
             detail="agent_skill_pack_read_failed",
         ) from exc
-    return _business_flow_skill_pack_result_payload(result)
+    return business_flow_skill_pack_result_payload(result)
 
 
 @router.post("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows")
@@ -1024,23 +981,7 @@ def create_config_draft_business_flow_skill_pack(
             agent_id=agent_id,
             draft_id=draft_id,
             expected_revision=expected_revision,
-            command=BusinessFlowSkillPackCreateCommand(
-                pack_id=request.id,
-                label=request.label,
-                description=request.description,
-                intent_patterns=tuple(request.intent_patterns),
-                intent_taxonomy_refs=tuple(request.intent_taxonomy_refs),
-                stage_prompt_addenda={
-                    stage_id: _workflow_stage_prompt_config(prompt)
-                    for stage_id, prompt in request.stage_prompt_addenda.items()
-                },
-                knowledge_binding_refs=tuple(request.knowledge_binding_refs),
-                tool_contract_refs=tuple(request.tool_contract_refs),
-                policy_rule_refs=tuple(request.policy_rule_refs),
-                validator_refs=tuple(request.validator_refs),
-                admission=request.admission,
-                default=request.default,
-            ),
+            command=business_flow_skill_pack_create_command(request),
             actor=_workspace_audit_actor(identity),
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
@@ -1060,7 +1001,7 @@ def create_config_draft_business_flow_skill_pack(
             status_code=500,
             detail="agent_skill_pack_update_failed",
         ) from exc
-    return _business_flow_skill_pack_result_payload(result)
+    return business_flow_skill_pack_result_payload(result)
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
@@ -1088,50 +1029,7 @@ def update_config_draft_business_flow_skill_pack(
             draft_id=draft_id,
             pack_id=pack_id,
             expected_revision=expected_revision,
-            command=BusinessFlowSkillPackUpdateCommand(
-                label=request.label,
-                description=request.description,
-                intent_patterns=(
-                    None
-                    if request.intent_patterns is None
-                    else tuple(request.intent_patterns)
-                ),
-                intent_taxonomy_refs=(
-                    None
-                    if request.intent_taxonomy_refs is None
-                    else tuple(request.intent_taxonomy_refs)
-                ),
-                stage_prompt_addenda=(
-                    None
-                    if request.stage_prompt_addenda is None
-                    else {
-                        stage_id: _workflow_stage_prompt_config(prompt)
-                        for stage_id, prompt in request.stage_prompt_addenda.items()
-                    }
-                ),
-                knowledge_binding_refs=(
-                    None
-                    if request.knowledge_binding_refs is None
-                    else tuple(request.knowledge_binding_refs)
-                ),
-                tool_contract_refs=(
-                    None
-                    if request.tool_contract_refs is None
-                    else tuple(request.tool_contract_refs)
-                ),
-                policy_rule_refs=(
-                    None
-                    if request.policy_rule_refs is None
-                    else tuple(request.policy_rule_refs)
-                ),
-                validator_refs=(
-                    None
-                    if request.validator_refs is None
-                    else tuple(request.validator_refs)
-                ),
-                admission=request.admission,
-                default=request.default,
-            ),
+            command=business_flow_skill_pack_update_command(request),
             actor=_workspace_audit_actor(identity),
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
@@ -1151,7 +1049,7 @@ def update_config_draft_business_flow_skill_pack(
             status_code=500,
             detail="agent_skill_pack_update_failed",
         ) from exc
-    return _business_flow_skill_pack_result_payload(result)
+    return business_flow_skill_pack_result_payload(result)
 
 
 @router.delete("/config/agents/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
@@ -1197,7 +1095,7 @@ def delete_config_draft_business_flow_skill_pack(
             status_code=500,
             detail="agent_skill_pack_update_failed",
         ) from exc
-    return _business_flow_skill_pack_result_payload(result)
+    return business_flow_skill_pack_result_payload(result)
 
 
 @router.patch("/config/agents/{agent_id}/drafts/{draft_id}/contract")
@@ -1268,7 +1166,7 @@ def update_config_draft_workflow_stages(
             template=request.template,
             template_descriptor_version=request.template_descriptor_version,
             stages=tuple(
-                _workflow_stage_config_request(item) for item in request.stages
+                workflow_stage_config_request(item) for item in request.stages
             ),
             actor=_workspace_audit_actor(identity),
         )
@@ -1306,7 +1204,7 @@ def preview_config_draft_workflow_stage(
             agent_id=agent_id,
             draft_id=draft_id,
             stage_id=stage_id,
-            prompt=_workflow_stage_prompt_config(request.prompt),
+            prompt=workflow_stage_prompt_config(request.prompt),
             context_options=request.context,
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
@@ -1491,40 +1389,6 @@ def rollback_config_version(
             detail="agent_version_rollback_failed",
         ) from exc
     return serialize_agent_version_rollback(result.activation, result.restored)
-
-
-def _workflow_template_payload(descriptor: Any) -> dict[str, Any]:
-    payload = asdict(descriptor)
-    payload["stages"] = [asdict(stage) for stage in descriptor.stages]
-    return payload
-
-
-def _business_flow_skill_pack_result_payload(
-    result: AgentConfigurationSkillPackResult,
-) -> dict[str, Any]:
-    payload = asdict(result.configuration)
-    payload["revision"] = result.record.revision
-    return payload
-
-
-def _workflow_stage_prompt_config(
-    prompt: WorkflowStagePromptRequest,
-) -> WorkflowStagePromptConfig:
-    return WorkflowStagePromptConfig(
-        business_context=prompt.business_context or "",
-        task_instructions=tuple(prompt.task_instructions),
-        output_preferences=tuple(prompt.output_preferences),
-    )
-
-
-def _workflow_stage_config_request(
-    item: WorkflowStageUpdateItemRequest,
-) -> WorkflowStageConfig:
-    return WorkflowStageConfig(
-        id=item.id,
-        prompt=_workflow_stage_prompt_config(item.prompt),
-        context=WorkflowStageContextConfig(options=item.context),
-    )
 
 
 def _draft_payload(

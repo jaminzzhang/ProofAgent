@@ -12,6 +12,7 @@ from proof_agent.contracts import (
     ConfigurationOperation,
     ConfigurationOperationAudit,
     ContractBundle,
+    DraftKnowledgeReleaseBindingCandidate,
     DraftAgent,
     EffectiveWorkflowStageConfigurationStage,
     FoundationKnowledgeSourceValidation,
@@ -74,6 +75,25 @@ def test_draft_agent_is_editable_state_not_a_published_version() -> None:
     assert draft.draft_id == "draft_001"
     assert draft.version_id is None
     assert draft.validation_records == ()
+
+
+@pytest.mark.parametrize(
+    "undeclared_field",
+    ("credential", "scorer", "content", "latest", "unknown"),
+)
+def test_draft_kss_release_candidate_rejects_undeclared_fields(
+    undeclared_field: str,
+) -> None:
+    payload = {
+        "knowledge_space_id": "space_insurance",
+        "knowledge_base_id": "base_claims",
+        "knowledge_base_version_id": "base_claims_v3",
+        "knowledge_base_release_id": "release_7",
+        undeclared_field: "must-not-be-accepted",
+    }
+
+    with pytest.raises(ValidationError):
+        DraftKnowledgeReleaseBindingCandidate.model_validate(payload)
 
 
 def test_published_agent_version_requires_validation_run_id() -> None:

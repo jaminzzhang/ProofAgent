@@ -6,6 +6,7 @@ import { ThemeProvider } from '@proofagent/ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createModelConnection,
+  fetchConfigDraftKnowledgeBinding,
   fetchConfigDraftSkills,
   fetchRunDetail,
   fetchValidationCapture,
@@ -16,6 +17,7 @@ import {
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
   updateConfigDraft,
+  updateConfigDraftKnowledgeBinding,
   updateConfigDraftSkillPack,
   updateConfigDraftContract,
   updateWorkflowStages,
@@ -30,6 +32,7 @@ vi.mock('../../api/client', () => ({
   createModelConnection: vi.fn(),
   createConfigDraftSkillPack: vi.fn(),
   deleteConfigDraftSkillPack: vi.fn(),
+  fetchConfigDraftKnowledgeBinding: vi.fn(),
   fetchConfigDraftSkills: vi.fn(),
   fetchRunDetail: vi.fn(),
   fetchRuns: vi.fn(),
@@ -52,6 +55,7 @@ vi.mock('../../api/client', () => ({
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
+  updateConfigDraftKnowledgeBinding: vi.fn(),
   updateConfigDraftSkillPack: vi.fn(),
   updateConfigDraftContract: vi.fn(),
   updateWorkflowStages: vi.fn(),
@@ -74,7 +78,8 @@ let mockDraft: DraftAgent = {
   operation_audit: [],
   capabilities: {
     mode: 'development',
-    editable_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+    visible_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+    editable_modules: ['general', 'workflow', 'skills', 'tools', 'policy', 'model', 'memory', 'response'],
     lifecycle_tabs: ['validate', 'versions', 'contract', 'monitor'],
     actions: {
       can_validate: true,
@@ -164,6 +169,83 @@ function latestSavedAgentYaml(): string {
   return payload.agent_yaml
 }
 
+function enableProductionContractEditing(revision = 11) {
+  mockDraft = {
+    ...mockDraft,
+    revision,
+    capabilities: {
+      mode: 'production',
+      visible_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+      editable_modules: ['general', 'tools', 'policy', 'model', 'memory', 'response'],
+      lifecycle_tabs: ['versions', 'contract', 'monitor'],
+      actions: {
+        can_validate: false,
+        can_publish: false,
+        can_rollback: false,
+      },
+    },
+  }
+}
+
+function enableProductionWorkflowEditing(revision = 11) {
+  enableProductionContractEditing(revision)
+  mockDraft = {
+    ...mockDraft,
+    capabilities: {
+      ...mockDraft.capabilities!,
+      editable_modules: [
+        'general',
+        'workflow',
+        'tools',
+        'policy',
+        'model',
+        'memory',
+        'response',
+      ],
+    },
+  }
+}
+
+function enableProductionSkillPackEditing(revision = 11) {
+  enableProductionWorkflowEditing(revision)
+  mockDraft = {
+    ...mockDraft,
+    capabilities: {
+      ...mockDraft.capabilities!,
+      editable_modules: [
+        'general',
+        'workflow',
+        'skills',
+        'tools',
+        'policy',
+        'model',
+        'memory',
+        'response',
+      ],
+    },
+  }
+}
+
+function enableProductionKnowledgeEditing(revision = 11) {
+  enableProductionWorkflowEditing(revision)
+  mockDraft = {
+    ...mockDraft,
+    capabilities: {
+      ...mockDraft.capabilities!,
+      editable_modules: [
+        'general',
+        'workflow',
+        'knowledge',
+        'tools',
+        'policy',
+        'model',
+        'memory',
+        'response',
+      ],
+    },
+  }
+}
+
 function runDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   return {
     run_id: 'run-1',
@@ -220,6 +302,48 @@ describe('AgentDetailPage', () => {
     vi.clearAllMocks()
     installTestLocalStorage()
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValue({
+      revision: 4,
+      candidate: {
+        knowledge_space_id: 'space_insurance',
+        knowledge_base_id: 'base_claims',
+        knowledge_base_version_id: 'base_version_3',
+        knowledge_base_release_id: 'release_7',
+      },
+      readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
+      releases: [
+        {
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_3',
+          knowledge_base_release_id: 'release_7',
+          source_version_count: 3,
+          state: 'queryable',
+        },
+        {
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_4',
+          knowledge_base_release_id: 'release_9',
+          source_version_count: 5,
+          state: 'queryable',
+        },
+      ],
+    })
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockImplementation(
+      async (_agentId, _draftId, payload) => ({
+        revision: payload.expected_revision + 1,
+        candidate: {
+          knowledge_space_id: payload.knowledge_space_id,
+          knowledge_base_id: payload.knowledge_base_id,
+          knowledge_base_version_id: payload.knowledge_base_version_id,
+          knowledge_base_release_id: payload.knowledge_base_release_id,
+        },
+        readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
+        releases: await vi.mocked(fetchConfigDraftKnowledgeBinding)
+          .getMockImplementation()?.('agent-1', 'draft-1').then((value) => value.releases) ?? [],
+      }),
+    )
     vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
       revision: 4,
       enabled: true,
@@ -452,7 +576,8 @@ describe('AgentDetailPage', () => {
       operation_audit: [],
       capabilities: {
         mode: 'development',
-        editable_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+        visible_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
+        editable_modules: ['general', 'workflow', 'skills', 'tools', 'policy', 'model', 'memory', 'response'],
         lifecycle_tabs: ['validate', 'versions', 'contract', 'monitor'],
         actions: {
           can_validate: true,
@@ -569,6 +694,7 @@ describe('AgentDetailPage', () => {
       revision: 3,
       capabilities: {
         mode: 'production',
+        visible_modules: ['general', 'workflow', 'skills', 'knowledge', 'tools', 'policy', 'model', 'memory', 'response'],
         editable_modules: ['general'],
         lifecycle_tabs: ['versions', 'contract', 'monitor'],
         actions: {
@@ -592,10 +718,10 @@ describe('AgentDetailPage', () => {
       },
     ]
 
-    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+    renderPage()
 
     expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.queryByRole('button', { name: 'Workflow' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Workflow' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Validate & Test' })).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByDisplayValue('Insurance Agent'), {
@@ -614,6 +740,88 @@ describe('AgentDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Versions' }))
     expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rollback' })).not.toBeInTheDocument()
+  })
+
+  it('keeps production configuration modules visible as read-only Contract projections', async () => {
+    mockDraft = {
+      ...mockDraft,
+      capabilities: {
+        mode: 'production',
+        editable_modules: ['general'],
+        visible_modules: [
+          'general',
+          'workflow',
+          'skills',
+          'knowledge',
+          'tools',
+          'policy',
+          'model',
+          'memory',
+          'response',
+        ],
+        lifecycle_tabs: ['versions', 'contract', 'monitor'],
+        actions: {
+          can_validate: false,
+          can_publish: false,
+          can_rollback: false,
+        },
+      },
+    }
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'workflow:',
+        '  template: react_enterprise_qa_v3',
+        'knowledge_bindings: []',
+        'retrieval:',
+        '  strategy: single_step',
+        'model:',
+        '  connection_id: model_production_primary',
+        'response:',
+        '  include_review_results: false',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    for (const moduleName of [
+      'Workflow',
+      'Skills',
+      'Knowledge',
+      'Tools',
+      'Policy',
+      'Model',
+      'Memory',
+      'Response',
+    ]) {
+      expect(screen.getByRole('button', { name: moduleName })).toBeInTheDocument()
+    }
+    expect(screen.getByRole('button', { name: 'Workflow' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByText('Read-only production configuration')).toBeInTheDocument()
+    expect(screen.getByText(/template: react_enterprise_qa_v3/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Workflow' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'knowledge_bindings' }).parentElement)
+        .toHaveTextContent('knowledge_bindings: []')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'model' }).parentElement)
+        .toHaveTextContent('connection_id: model_production_primary')
+    })
+  })
+
+  it('keeps Development Knowledge read-only without calling the Production KSS binding route', async () => {
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    expect(await screen.findByRole('heading', { name: 'Knowledge' })).toBeInTheDocument()
+    expect(screen.getByText('Contract configuration projection')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'KSS Release Binding' })).not.toBeInTheDocument()
+    expect(fetchConfigDraftKnowledgeBinding).not.toHaveBeenCalled()
   })
 
   it('fails closed when Draft capabilities are absent', async () => {
@@ -1038,7 +1246,7 @@ describe('AgentDetailPage', () => {
   })
 
   it('loads workflow descriptor and saves stage prompt configuration', async () => {
-    mockDraft = { ...mockDraft, revision: 7 }
+    enableProductionWorkflowEditing(7)
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1107,7 +1315,7 @@ workflow:
   })
 
   it('saves the selected Workflow template and stages in one revisioned command', async () => {
-    mockDraft = { ...mockDraft, revision: 7 }
+    enableProductionWorkflowEditing(7)
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1165,7 +1373,7 @@ workflow:
   })
 
   it('keeps Workflow core template_descriptor_version aligned when changing templates', async () => {
-    mockDraft = { ...mockDraft, revision: 8 }
+    enableProductionWorkflowEditing(8)
     mockContract = {
       ...mockContract,
       agent_yaml: `name: insurance
@@ -1195,7 +1403,43 @@ workflow:
     expect(latestSavedAgentYaml()).not.toContain('template_descriptor_version: react_enterprise_qa.v2')
   })
 
+  it('preserves unsaved Workflow Stage edits after a revision conflict', async () => {
+    enableProductionWorkflowEditing(7)
+    mockContract = {
+      ...mockContract,
+      agent_yaml: `name: insurance
+workflow:
+  runtime: langgraph
+  template: react_enterprise_qa
+  checkpointer:
+    type: memory
+`,
+    }
+    vi.mocked(updateWorkflowStages).mockRejectedValueOnce(
+      new Error('agent_draft_revision_conflict'),
+    )
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+
+    const businessContext = await screen.findByLabelText('Business Context')
+    fireEvent.change(businessContext, { target: { value: 'Local unsaved claims edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'agent_draft_revision_conflict',
+    )
+    expect(businessContext).toHaveValue('Local unsaved claims edit')
+    expect(updateWorkflowStages).toHaveBeenCalledTimes(1)
+    expect(updateWorkflowStages).toHaveBeenCalledWith(
+      'agent-1',
+      'draft-1',
+      expect.objectContaining({ expected_revision: 7 }),
+    )
+    expect(refreshDraft).not.toHaveBeenCalled()
+  })
+
   it('renders Business Flow Skill Packs as the default Skills list view', async () => {
+    enableProductionSkillPackEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
     expect(await screen.findByText('Skills Configuration')).toBeInTheDocument()
@@ -1355,6 +1599,7 @@ workflow:
   })
 
   it('creates a Skill Pack with complete drawer configuration', async () => {
+    enableProductionSkillPackEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
     fireEvent.click(await screen.findByRole('button', { name: 'New Skill Pack' }))
@@ -1400,7 +1645,61 @@ workflow:
     })
   })
 
+  it('freezes Skill Pack creation after a stale conflict until the user reloads latest', async () => {
+    enableProductionSkillPackEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    const currentProjection = await vi.mocked(fetchConfigDraftSkills)
+      .getMockImplementation()?.('agent-1', 'draft-1')
+    if (!currentProjection) throw new Error('Missing Skill Pack test projection.')
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 5,
+    })
+    vi.mocked(createConfigDraftSkillPack).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill Pack' }))
+    const drawer = screen.getByRole('dialog', { name: 'Create Business Flow Skill Pack' })
+    fireEvent.change(within(drawer).getByLabelText('Pack ID'), { target: { value: 'appeals_qa' } })
+    fireEvent.change(within(drawer).getByLabelText('Label'), { target: { value: 'Appeals QA' } })
+    fireEvent.change(within(drawer).getByLabelText('Description'), { target: { value: 'Appeals guidance.' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Create Skill Pack' }))
+
+    await waitFor(() => {
+      expect(within(drawer).getByRole('alert')).toHaveTextContent('changed while you were creating')
+    })
+    expect(fetchConfigDraftSkills).toHaveBeenCalledTimes(2)
+    expect(within(drawer).getByLabelText('Pack ID')).toHaveValue('appeals_qa')
+    expect(within(drawer).getByRole('button', { name: 'Create Skill Pack' })).toBeDisabled()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Create Skill Pack' }))
+    expect(createConfigDraftSkillPack).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Reload Latest' }))
+    expect(within(drawer).getByRole('button', { name: 'Create Skill Pack' })).toBeEnabled()
+
+    vi.mocked(createConfigDraftSkillPack).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 6,
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Create Skill Pack' }))
+
+    await waitFor(() => {
+      expect(createConfigDraftSkillPack).toHaveBeenLastCalledWith(
+        'agent-1',
+        'draft-1',
+        expect.objectContaining({ expected_revision: 5, id: 'appeals_qa' }),
+      )
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Create Business Flow Skill Pack' })).not.toBeInTheDocument()
+    })
+  })
+
   it('saves existing Skill Pack edits from the drawer', async () => {
+    enableProductionSkillPackEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
     await screen.findByText('Business Flow Skill Packs')
@@ -1422,7 +1721,135 @@ workflow:
     })
   })
 
+  it('deletes an existing Skill Pack with the current production projection revision', async () => {
+    enableProductionSkillPackEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Edit' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Business Flow Skill Pack' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Delete Skill Pack' }))
+
+    await waitFor(() => {
+      expect(deleteConfigDraftSkillPack).toHaveBeenCalledWith(
+        'agent-1',
+        'draft-1',
+        'claims_qa',
+        4,
+      )
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Edit Business Flow Skill Pack' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('freezes list deletion after a stale conflict until the user reloads latest', async () => {
+    enableProductionSkillPackEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    const currentProjection = await vi.mocked(fetchConfigDraftSkills)
+      .getMockImplementation()?.('agent-1', 'draft-1')
+    if (!currentProjection) throw new Error('Missing Skill Pack test projection.')
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 5,
+      packs: [
+        ...currentProjection.packs,
+        { ...currentProjection.packs[0], id: 'appeals_qa', label: 'Appeals QA' },
+      ],
+    })
+    vi.mocked(deleteConfigDraftSkillPack).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    let claimsRow = skillPackArticle('Claims QA')
+    fireEvent.click(within(claimsRow).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(fetchConfigDraftSkills).toHaveBeenCalledTimes(2)
+    })
+    claimsRow = skillPackArticle('Claims QA')
+    const appealsRow = skillPackArticle('Appeals QA')
+    expect(within(claimsRow).getByRole('alert')).toHaveTextContent('changed before deletion')
+    expect(within(claimsRow).getByRole('button', { name: 'Delete' })).toBeDisabled()
+    expect(within(appealsRow).getByRole('button', { name: 'Delete' })).toBeDisabled()
+    fireEvent.click(within(claimsRow).getByRole('button', { name: 'Delete' }))
+    expect(deleteConfigDraftSkillPack).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(claimsRow).getByRole('button', { name: 'Reload Latest' }))
+    expect(within(claimsRow).getByRole('button', { name: 'Delete' })).toBeEnabled()
+    expect(within(appealsRow).getByRole('button', { name: 'Delete' })).toBeEnabled()
+
+    vi.mocked(deleteConfigDraftSkillPack).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 6,
+    })
+    fireEvent.click(within(claimsRow).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(deleteConfigDraftSkillPack).toHaveBeenLastCalledWith(
+        'agent-1',
+        'draft-1',
+        'claims_qa',
+        5,
+      )
+    })
+  })
+
+  it('clears a stale list-delete lock when the original Skill Pack was concurrently deleted', async () => {
+    enableProductionSkillPackEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
+
+    await screen.findByText('Business Flow Skill Packs')
+    const currentProjection = await vi.mocked(fetchConfigDraftSkills)
+      .getMockImplementation()?.('agent-1', 'draft-1')
+    if (!currentProjection) throw new Error('Missing Skill Pack test projection.')
+    const claimsPack = currentProjection.packs[0]
+    vi.mocked(fetchConfigDraftSkills).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 5,
+      packs: [{ ...claimsPack, id: 'appeals_qa', label: 'Appeals QA' }],
+    })
+    vi.mocked(deleteConfigDraftSkillPack).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    fireEvent.click(within(skillPackArticle('Claims QA')).getByRole('button', { name: 'Delete' }))
+
+    await screen.findByRole('heading', { name: 'Appeals QA' })
+    expect(screen.queryByRole('heading', { name: 'Claims QA' })).not.toBeInTheDocument()
+    const appealsRow = skillPackArticle('Appeals QA')
+    await waitFor(() => {
+      expect(within(appealsRow).getByRole('button', { name: 'Delete' })).toBeEnabled()
+    })
+
+    vi.mocked(deleteConfigDraftSkillPack).mockResolvedValueOnce({
+      ...currentProjection,
+      revision: 6,
+      packs: [],
+    })
+    fireEvent.click(within(appealsRow).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(deleteConfigDraftSkillPack).toHaveBeenLastCalledWith(
+        'agent-1',
+        'draft-1',
+        'appeals_qa',
+        5,
+      )
+    })
+    expect(deleteConfigDraftSkillPack).toHaveBeenCalledTimes(2)
+    expect(deleteConfigDraftSkillPack).not.toHaveBeenLastCalledWith(
+      'agent-1',
+      'draft-1',
+      'claims_qa',
+      expect.anything(),
+    )
+  })
+
   it('keeps Skill Pack edits open and refreshes revision after a stale conflict', async () => {
+    enableProductionSkillPackEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
     await screen.findByText('Business Flow Skill Packs')
@@ -1491,6 +1918,7 @@ workflow:
   })
 
   it('never retargets a stale Skill Pack edit after the original pack was deleted', async () => {
+    enableProductionSkillPackEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=skills')
 
     await screen.findByText('Business Flow Skill Packs')
@@ -1528,6 +1956,138 @@ workflow:
       'appeals_qa',
       expect.anything(),
     )
+  })
+
+  it('loads the live KSS Release catalog for Production Knowledge authoring', async () => {
+    enableProductionKnowledgeEditing()
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    expect(await screen.findByRole('heading', { name: 'KSS Release Binding' })).toBeInTheDocument()
+    expect(fetchConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-1', 'draft-1')
+    expect(screen.getByText('Draft authoring only. Saving does not change the active runtime.')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /release_9.*5 source versions/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/credential/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/scorer/i)).not.toBeInTheDocument()
+  })
+
+  it('saves one exact KSS Release tuple with the current Draft revision', async () => {
+    enableProductionKnowledgeEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    const release = await screen.findByLabelText('Exact KSS Release')
+    fireEvent.change(release, {
+      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
+
+    await waitFor(() => {
+      expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith(
+        'agent-1',
+        'draft-1',
+        {
+          expected_revision: 4,
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_4',
+          knowledge_base_release_id: 'release_9',
+        },
+      )
+    })
+    expect(await screen.findByText('Knowledge source binding saved.')).toBeInTheDocument()
+    expect(refreshDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('freezes a stale KSS Release selection until the user explicitly reloads latest', async () => {
+    enableProductionKnowledgeEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    const release = await screen.findByLabelText('Exact KSS Release')
+    fireEvent.change(release, {
+      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
+    })
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValueOnce({
+      revision: 5,
+      candidate: {
+        knowledge_space_id: 'space_insurance',
+        knowledge_base_id: 'base_claims',
+        knowledge_base_version_id: 'base_version_3',
+        knowledge_base_release_id: 'release_7',
+      },
+      readiness: { state: 'ready', revision: 'catalog-4', blockers: [] },
+      releases: [
+        {
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_3',
+          knowledge_base_release_id: 'release_7',
+          source_version_count: 3,
+          state: 'queryable',
+        },
+        {
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_4',
+          knowledge_base_release_id: 'release_9',
+          source_version_count: 5,
+          state: 'queryable',
+        },
+      ],
+    })
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(
+      Object.assign(new Error('stale draft revision'), { status: 409 }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
+
+    expect(await screen.findByText(/Your selection is preserved/)).toBeInTheDocument()
+    expect(release).toHaveValue('space_insurance|base_claims|base_version_4|release_9')
+    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
+    expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Latest' }))
+    expect(release).toHaveValue('space_insurance|base_claims|base_version_3|release_7')
+    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeEnabled()
+  })
+
+  it('preserves the selected KSS Release when a non-conflict save fails', async () => {
+    enableProductionKnowledgeEditing()
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(
+      new Error('agent_knowledge_binding_update_failed'),
+    )
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    const release = await screen.findByLabelText('Exact KSS Release')
+    fireEvent.change(release, {
+      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('agent_knowledge_binding_update_failed')
+    expect(release).toHaveValue('space_insurance|base_claims|base_version_4|release_9')
+    expect(refreshDraft).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the live KSS Release catalog is unavailable', async () => {
+    enableProductionKnowledgeEditing()
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValueOnce({
+      revision: 4,
+      candidate: null,
+      readiness: {
+        state: 'unavailable',
+        revision: null,
+        blockers: ['Knowledge Source Service is unavailable.'],
+      },
+      releases: [],
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+
+    expect(await screen.findByRole('heading', { name: 'KSS Release Binding' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeDisabled()
+    expect(screen.getByText('Knowledge Source Service is unavailable.')).toBeInTheDocument()
+    expect(updateConfigDraftKnowledgeBinding).not.toHaveBeenCalled()
   })
 
   it('shows chat entry actions for the active Published Agent version', () => {
@@ -1588,6 +2148,7 @@ workflow:
       expected: 'include_reasoning_summary: false',
     },
   ])('saves $tab configuration through the draft contract API', async ({ tab, label, initialYaml, value, control, expected }) => {
+    enableProductionContractEditing()
     mockContract = {
       ...mockContract,
       agent_yaml: initialYaml,
@@ -1606,12 +2167,46 @@ workflow:
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
+      expect(updateConfigDraftContract).toHaveBeenCalledWith(
+        'agent-1',
+        'draft-1',
+        expect.objectContaining({ expected_revision: 11 }),
+      )
     })
     expect(latestSavedAgentYaml()).toContain(expected)
   })
 
+  it.each([
+    'agent_contract_invalid',
+    'agent_draft_revision_conflict',
+    'agent_contract_update_failed',
+  ])('preserves Contract edits without refresh or blind rebase after %s', async (detail) => {
+    enableProductionContractEditing()
+    mockContract = {
+      ...mockContract,
+      agent_yaml: ['name: insurance', 'tools:', '  file: config/tools.yaml', ''].join('\n'),
+    }
+    vi.mocked(updateConfigDraftContract).mockRejectedValueOnce(new Error(detail))
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=tools')
+
+    const toolsFile = screen.getByLabelText('Tools Config File')
+    fireEvent.change(toolsFile, { target: { value: 'config/tools-local-edit.yaml' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(detail)
+    expect(toolsFile).toHaveValue('config/tools-local-edit.yaml')
+    expect(updateConfigDraftContract).toHaveBeenCalledTimes(1)
+    expect(updateConfigDraftContract).toHaveBeenCalledWith(
+      'agent-1',
+      'draft-1',
+      expect.objectContaining({ expected_revision: 11 }),
+    )
+    expect(refreshDraft).not.toHaveBeenCalled()
+  })
+
   it('saves Memory provider and scope settings through the draft contract API', async () => {
+    enableProductionContractEditing()
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -1652,7 +2247,11 @@ workflow:
     fireEvent.click(screen.getByRole('button', { name: 'Save Memory' }))
 
     await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
+      expect(updateConfigDraftContract).toHaveBeenCalledWith(
+        'agent-1',
+        'draft-1',
+        expect.objectContaining({ expected_revision: 11 }),
+      )
     })
     const savedYaml = latestSavedAgentYaml()
     expect(savedYaml).toContain(`capabilities:
@@ -1795,6 +2394,7 @@ workflow:
   })
 
   it('saves unified Model settings across answer, planner, and reviewer roles', async () => {
+    enableProductionContractEditing()
     mockContract = {
       ...mockContract,
       agent_yaml: [
@@ -1858,7 +2458,11 @@ workflow:
     fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
 
     await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalled()
+      expect(updateConfigDraftContract).toHaveBeenCalledWith(
+        'agent-1',
+        'draft-1',
+        expect.objectContaining({ expected_revision: 11 }),
+      )
     })
     const savedYaml = latestSavedAgentYaml()
     expect(savedYaml).toContain('model:\n  provider: openai\n  name: gpt-4.1-mini')

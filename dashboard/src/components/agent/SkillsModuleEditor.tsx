@@ -66,6 +66,8 @@ export function SkillsModuleEditor({
   const [draft, setDraft] = useState<PackDraft | null>(null)
   const [editingPack, setEditingPack] = useState<BusinessFlowSkillPackProjection | null>(null)
   const [editConflict, setEditConflict] = useState(false)
+  const [createConflict, setCreateConflict] = useState(false)
+  const [deleteConflictPackId, setDeleteConflictPackId] = useState<string | null>(null)
   const [newPackId, setNewPackId] = useState('')
   const [newPackLabel, setNewPackLabel] = useState('')
   const [newPackDescription, setNewPackDescription] = useState('')
@@ -107,6 +109,16 @@ export function SkillsModuleEditor({
     setDraft(packToDraft(selectedPack, config))
   }, [config, drawerMode, selectedPack])
 
+  useEffect(() => {
+    if (
+      deleteConflictPackId
+      && config
+      && !config.packs.some((pack) => pack.id === deleteConflictPackId)
+    ) {
+      setDeleteConflictPackId(null)
+    }
+  }, [config, deleteConflictPackId])
+
   if (loading) {
     return (
       <div className="border border-[var(--border)] bg-[var(--bg-surface)] p-8">
@@ -134,6 +146,7 @@ export function SkillsModuleEditor({
   }
 
   async function createPack() {
+    if (createConflict) return
     const id = newPackId.trim()
     const label = newPackLabel.trim()
     const description = newPackDescription.trim()
@@ -148,10 +161,22 @@ export function SkillsModuleEditor({
       default: newPackDefault,
       ...completePayload,
     })
+    if (result === 'conflict') setCreateConflict(true)
     if (result !== 'saved') return
     resetNewPackForm()
+    setCreateConflict(false)
     setSelectedPackId(id)
     setDrawerMode(null)
+  }
+
+  async function deletePackFromList(packId: string) {
+    if (deleteConflictPackId) return
+    const result = await onDeletePack(packId)
+    if (result === 'conflict') {
+      setDeleteConflictPackId(packId)
+      return
+    }
+    if (result === 'saved') setDeleteConflictPackId(null)
   }
 
   async function savePack() {
@@ -277,6 +302,7 @@ export function SkillsModuleEditor({
               size="sm"
               onClick={() => {
                 resetNewPackForm()
+                setCreateConflict(false)
                 setDrawerMode('create')
               }}
             >
@@ -296,8 +322,11 @@ export function SkillsModuleEditor({
                   pack={pack}
                   slotCount={config.addendum_slots.length}
                   busy={busy}
+                  blockedByConflict={deleteConflictPackId !== null}
+                  conflict={deleteConflictPackId === pack.id}
                   onEdit={() => openEditPack(pack)}
-                  onDelete={() => onDeletePack(pack.id)}
+                  onDelete={() => deletePackFromList(pack.id)}
+                  onReloadLatest={() => setDeleteConflictPackId(null)}
                 />
               ))}
             </div>
@@ -332,18 +361,36 @@ export function SkillsModuleEditor({
         {drawerMode === 'create' ? (
           <SkillPackDrawer
             title="Create Business Flow Skill Pack"
-            onClose={() => setDrawerMode(null)}
+            onClose={() => {
+              setDrawerMode(null)
+              setCreateConflict(false)
+            }}
             footer={
               <button
                 type="button"
                 onClick={createPack}
-                disabled={busy || !newPackId.trim() || !newPackLabel.trim() || !newPackDescription.trim()}
+                disabled={busy || createConflict || !newPackId.trim() || !newPackLabel.trim() || !newPackDescription.trim()}
                 className="inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
               >
                 {busy ? 'Saving...' : 'Create Skill Pack'}
               </button>
             }
           >
+            {createConflict ? (
+              <div
+                role="alert"
+                className="border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-4 text-sm text-[var(--danger)]"
+              >
+                <p>The Skill Pack configuration changed while you were creating. Reload the latest version before submitting this draft again.</p>
+                <button
+                  type="button"
+                  onClick={() => setCreateConflict(false)}
+                  className="mt-3 rounded-md border border-[var(--danger)]/40 px-3 py-2 font-medium"
+                >
+                  Reload Latest
+                </button>
+              </div>
+            ) : null}
             <SkillPackDrawerSection title="Basics" defaultOpen>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <TextInput
@@ -757,14 +804,20 @@ function SkillPackListRow({
   pack,
   slotCount,
   busy,
+  blockedByConflict,
+  conflict,
   onEdit,
   onDelete,
+  onReloadLatest,
 }: {
   pack: BusinessFlowSkillPackProjection
   slotCount: number
   busy: boolean
+  blockedByConflict: boolean
+  conflict: boolean
   onEdit: () => void
   onDelete: () => void
+  onReloadLatest: () => void
 }) {
   return (
     <article className="border border-[var(--border)] bg-[var(--bg-surface)] p-4">
@@ -794,6 +847,7 @@ function SkillPackListRow({
             variant="outline"
             size="sm"
             onClick={onEdit}
+            disabled={busy || blockedByConflict}
           >
             Edit
           </Button>
@@ -802,12 +856,28 @@ function SkillPackListRow({
             variant="destructive-outline"
             size="sm"
             onClick={onDelete}
-            disabled={busy}
+            disabled={busy || blockedByConflict}
           >
             Delete
           </Button>
         </div>
       </div>
+
+      {conflict ? (
+        <div
+          role="alert"
+          className="mt-4 border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-3 text-sm text-[var(--danger)]"
+        >
+          <p>This Skill Pack changed before deletion. Review and reload the latest configuration before deleting it.</p>
+          <button
+            type="button"
+            onClick={onReloadLatest}
+            className="mt-3 rounded-md border border-[var(--danger)]/40 px-3 py-2 font-medium"
+          >
+            Reload Latest
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-4">
         <KeyValueList

@@ -4,17 +4,17 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | `VERIFIED_LOCAL` |
+| 建议结论 | Slice 8D KSS Knowledge binding 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；真实 PostgreSQL 补充验证已关闭 DSN 缺失项 |
+| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；Slice 8A/8B/8C 依次恢复 Production Contract、Workflow 与 Skill Pack 交互；Slice 8D 恢复 KSS exact Release Draft candidate 交互 |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration、raw Contract 与 Skill Pack 专用编辑 |
-| 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Delivery routes、本地 validation/publication/Contract/Skill Pack adapters 与 Dashboard 单命令流程 |
-| 不覆盖范围 | production validation/publish/Stage/Contract/Skill Pack endpoint、正式 Phase F publisher、Source rollback-Draft、Blue/Green deployment rollback、canonical seed bootstrap、生产部署 |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration、raw Contract、Skill Pack 专用编辑，以及 Production Contract、Workflow、Skill Pack 与 KSS Knowledge Draft candidate 保存/预览 |
+| 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Development/Production Delivery routes、本地 inspectors、KSS management catalog seam 与 Dashboard capability 驱动流程 |
+| 不覆盖范围 | production validation/publish、正式 Phase F publisher、executable KSS binding/profile、Source rollback-Draft、Blue/Green deployment rollback、canonical seed bootstrap |
 
 ## 3. 测试场景
 
@@ -49,6 +49,11 @@
 | ACW-T27 | Skill Pack mutation 使用调用方 revision CAS，并覆盖 inspection 期间并发写入 | concurrency | P1 | P1 |
 | ACW-T28 | Skill Pack audit 与 Draft 同事务提交且不含 Prompt、intent 或 raw YAML | security/consistency | P1 | P1 |
 | ACW-T29 | Local inspector 自动清理派生包并只返回逻辑路径；Dashboard create 只发一次命令 | architecture/security | P1 | P1 |
+| ACW-T30 | Draft KSS candidate 只包含 exact Space/Base/Base Version/Release identity | authority/contract | P1 | P1 |
+| ACW-T31 | KSS catalog unavailable、retired、missing 或 parent mismatch 失败关闭且无 fallback | authority/security | P1 | P1 |
+| ACW-T32 | KSS candidate 使用 Draft revision CAS，并与 Draft/global audit 原子提交 | consistency/concurrency | P1 | P1 |
+| ACW-T33 | Production Knowledge route 强制 Agent 与 KSS 权限，返回稳定 400/404/409/500/503 | API/security | P1 | P1 |
+| ACW-T34 | Dashboard 409 保留 exact Release 选择、冻结重放并要求显式 Reload Latest | concurrency/UX | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -83,6 +88,11 @@
 | ACW-T27 | stale revision，或 inspection 后发生并发写入 | 创建、更新或删除 Skill Pack | 返回稳定 conflict，不覆盖并发赢家 |
 | ACW-T28 | Prompt/intent 含敏感业务文本，或 audit/commit 失败 | 保存 Skill Pack | audit 只含 trace-safe identity metadata；Draft 与 audit 原子回滚 |
 | ACW-T29 | 当前 Draft 可解析，Dashboard 完成 create drawer | 读取/保存 Skill Pack | 临时目录返回前清理，只返回包内逻辑引用；浏览器只发送一次 create command |
+| ACW-T30 | live KSS catalog 含一个 queryable Release | 保存 Draft candidate | 只持久化四个 exact identity，不包含 credential、scorer 或内容 |
+| ACW-T31 | KSS unavailable、Release retired/missing 或父级 identity 不匹配 | 保存 Draft candidate | 返回稳定错误；Draft、audit 与当前 Active Version 不变；不查询本地 fallback |
+| ACW-T32 | 当前 Draft revision 与 actor | 保存合法 candidate | revision +1，Draft operation audit 与 global audit 同一 UoW 提交；stale 或 fault 不产生部分写入 |
+| ACW-T33 | Production route 收到合法、未知字段或依赖异常 | GET/PATCH Knowledge binding | 双权限与 strict body 生效；错误 detail 稳定且不泄漏内部路径 |
+| ACW-T34 | Operator 选择 Release 后发生 409 | 再次保存 | 保留本地选择但禁用保存；只有显式 Reload Latest 后才采用新 revision |
 
 ## 5. Mock、数据与断言
 
@@ -302,3 +312,88 @@
 | --- | --- | --- | --- |
 | Agent Configuration context | 术语 | Workspace interface 与 focused persistence seam | 保持架构语言一致 |
 | `docs/PROJ_CONTEXT.md` | Feature 状态 | 记录本切片状态和证据路径 | 供后续切片定位 |
+
+## 17. Slice 8A TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 公开 HTTP 契约扩展与行为保护重构 |
+| 公开 interface | Production `PATCH /api/config/agents/{agent_id}/drafts/{draft_id}/contract`；复用 `AgentConfigurationWorkspace.update_contract(...)` |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION`；当前真实 PostgreSQL 证据为 `PARTIAL_VERIFICATION` |
+| 不测试的实现细节 | 临时目录名称、YAML 非语义格式、私有 helper |
+| 范围外 | Production Workflow Stage、Skill Pack、Knowledge/KSS binding、validation、publication、activation、rollback |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-29 | Production Contract PATCH、strict revision、权限与稳定错误映射 | `tests/test_production_agent_configuration_api.py` | 旧实现统一返回 405；6 个场景失败 |
+| GREEN-29 | 新 route 只委托 Workspace；要求 `expected_revision` 与至少一个 Contract 文件；稳定映射 400/404/409/500 | Production Delivery 与 API tests | 12 个 Production API 场景通过 |
+| GREEN-30 | Production composition 注入自动清理的整包 Contract validator；持久化继续使用 PostgreSQL Configuration UoW | `production_roles.py`、composition/service tests | Contract candidate 先校验，再以 revision CAS 保存并追加双层 audit |
+| RED/GREEN-31 | Production capability 只开放 General 与五个 Contract 模块；Dashboard 每个模块保存发送当前 revision | Agent Detail tests | Tools、Policy、Response 参数化场景与 Model、Memory 专用场景通过；Workflow、Skills、Knowledge 保持只读 |
+| VERIFY-MAIN-10 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard、静态、构建与领域检查 | focused backend 79 passed；backend 1986 passed、122 skipped、2 deselected；Dashboard 201 passed；TypeScript、两端与共享 UI build、Ruff、聚焦 Mypy、domain-context、diff、lock 全部通过；1 个既有 Authlib warning |
+| ENV-5 | 首轮 backend 与 lock 受沙箱限制；分发测试发现忽略的 `.pyc` 空目录骨架 | loopback、uv cache、KSS build cache | 精确清理纯 `.pyc` 与空目录；允许本机回环和 uv cache 后按原命令重跑通过，不计为产品缺陷 |
+| VERIFY-AGENT-10 | 独立子 Agent 对抗复验 Slice 8A | scope→diff、权限、strict body、CAS/audit、错误映射、stale UX、composition、route isolation 与全门禁 | `PASS_WITH_ENV_LIMITATION / CONDITIONAL_RECOMMENDATION`；无未关闭 P0–P3；focused backend 79 passed、2 skipped，backend 1986 passed、122 skipped、2 deselected，Dashboard 201、Agent Detail 45；Ruff、Mypy（354 source files）、TypeScript、build、domain-context、diff、lock 全部通过 |
+| ENV-6 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | 真实 PostgreSQL Configuration UoW | 2 skipped，标记 `PARTIAL_VERIFICATION`；既往 disposable PostgreSQL 证据不冒充本次数据库连接证明，不影响 Slice 8A 代码 verdict |
+
+## 18. Slice 8B TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 公开 HTTP 契约扩展与行为保护重构 |
+| 公开 interface | Production Workflow Template catalog/detail；Production Workflow Stage update/preview；共享 Workflow HTTP DTO/serialization |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent 复验 `PASS / NO_BLOCKING_FINDINGS`；真实 PostgreSQL 证据为 `PARTIAL_VERIFICATION` |
+| 不测试的实现细节 | 临时目录名称、YAML 非语义格式、私有 helper |
+| 范围外 | Production Skill Pack、Knowledge/KSS binding、validation、publication、activation、rollback |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-32 | Production Template catalog/detail、Stage update/preview 与权限/strict revision | `tests/test_production_agent_configuration_api.py` | 旧实现统一返回 404；3 个场景失败 |
+| GREEN-32 | Development/Production 共享严格 Prompt、Stage item、Preview DTO 与 Descriptor serialization；Production 新增 catalog/detail、update/preview route | shared Delivery HTTP contracts、Production API tests | 路由成功、权限、strict body、typed delegation 场景通过 |
+| GREEN-33 | Production composition 注入自动清理的 Workflow Stage inspector；持久化继续使用 PostgreSQL UoW | `production_roles.py`、composition tests | inspector 不保留编译目录，不形成第二持久化权威 |
+| RED/GREEN-34 | Production Workflow capability 显示完整编辑器；Core/Stage 保存携带 revision；409 保留未保存 Prompt 且不刷新或 blind rebase | Agent Detail tests | Production Workflow Core、Stage、Preview 与 stale-state 行为通过 |
+| REFACTOR-9 | 抽取 Development/Production 共用的 Workflow HTTP contract/serialization | `agent_configuration_workflow_http.py`、Development API regression | 两个 router 不复制 DTO 与 Control translation；Development 成功响应保持兼容 |
+| VERIFY-MAIN-11 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard、静态、构建与领域检查 | focused backend 166 passed、4 skipped；backend 1995 passed、122 skipped、2 deselected；Dashboard 202 passed；Ruff、Mypy、TypeScript、两端与共享 UI build、domain-context、diff 全部通过；1 个既有 Authlib warning |
+| VERIFY-AGENT-11 | 独立子 Agent 对抗复验 Slice 8B | scope→diff、共享 DTO、权限矩阵、CAS/audit、Prompt 与 preview 安全、stale UX、composition、route isolation 与全门禁 | `PASS / NO_BLOCKING_FINDINGS`；focused backend 188 passed、6 skipped，Agent Detail 46，Dashboard 202；Ruff、Mypy（355 source files）、TypeScript、build、domain-context、diff、lock、权限矩阵与 AST 禁止依赖检查全部通过 |
+| ENV-7 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | 真实 PostgreSQL Configuration UoW | 延续 `PARTIAL_VERIFICATION`；不把 fake UoW 或既往 PostgreSQL 证据冒充本次数据库证明 |
+
+## 19. Slice 8C TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 公开 HTTP 契约扩展与行为保护重构 |
+| 公开 interface | Production Skill Pack GET 与 Business Flow create/update/delete；共享 Skill Pack HTTP fields、command translation 与 projection serialization |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS / NO_BLOCKING_FINDINGS`；真实 PostgreSQL 证据为 `PARTIAL_VERIFICATION` |
+| 不测试的实现细节 | 临时目录随机名称、YAML 非语义格式、私有 helper |
+| 范围外 | Knowledge/KSS binding、production validation、publication、activation、rollback |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-35 | Production Skill Pack GET/POST/PATCH/DELETE、strict revision、权限、稳定错误与 capability | Production API/composition tests | 旧实现四条 route 均为 404，capability 无 `skills`，composition 无 inspector；10 个预期失败 |
+| GREEN-35 | Production route 只委托 Workspace typed command；GET 使用 `agent.view`，mutation 使用 `agent.edit`；create/update/delete 强制调用方 revision | Production API tests | 成功路径、完整 typed command、权限矩阵、未知字段、400/409/500 与路径不泄漏通过 |
+| REFACTOR-10 | 抽取 Development/Production 共用 Skill Pack HTTP fields、Control command translation 与 projection serialization | `agent_configuration_skill_pack_http.py`、Development API regression | Development 可选 revision 兼容语义保持；Production 使用独立 required-revision request；Delivery 不复制命令翻译 |
+| GREEN-36 | Production composition 注入既有自动清理 Skill Pack inspector；PostgreSQL UoW 继续是唯一 Draft/audit 持久化权威 | composition、adapter/Workspace tests、canonical template probe | canonical Production 模板投影 6 packs、0 issues；无持久化临时目录或第二权威 |
+| RED/GREEN-37 | Production capability 开放 `skills`；Dashboard 列表、完整 create、update、delete 使用 projection revision，409 冻结原 target 并要求显式 Reload Latest | Agent Detail tests | 50 passed；create/update/delete 发送 revision 4；create、edit 与列表 delete 在 409 后禁止 blind replay；并发删除不 retarget，目标消失后不残留无响应锁 |
+| VERIFY-MAIN-12 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard/Chat、静态、构建与领域检查 | focused backend 185 passed、4 skipped；backend 2006 passed、122 skipped、2 deselected；Dashboard 203、Chat 35；Ruff、Mypy（356 source files）、TypeScript、共享 UI/两端 build、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
+| VERIFY-AGENT-12 | 独立子 Agent 对抗复验 Slice 8C，并复验三项并发 UX 修正 | scope→diff、typed authority、权限、CAS/audit、路径与临时目录安全、错误映射、stale UX、composition、KSS/生命周期隔离与全门禁 | `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS`；focused backend 144 passed、6 skipped，backend 2006 passed、122 skipped、2 deselected，Agent Detail 50，Dashboard 206，Chat 35；Ruff、Mypy（356 source files）、TypeScript、build、domain-context、diff、lock 全部通过；canonical 模板 6 packs、0 issues、0 残留目录 |
+| ENV-8 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | 真实 PostgreSQL Configuration UoW | 2 项真实 PostgreSQL UoW 用例继续 skip，标记 `PARTIAL_VERIFICATION`；不把 fake UoW 或既往 disposable PostgreSQL 证据冒充本次数据库证明 |
+
+## 20. Slice 8D TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 领域 contract 扩展、公开 HTTP 契约扩展与行为保护重构 |
+| 公开 interface | Workspace KSS candidate read/update；Production Knowledge binding GET/PATCH；Dashboard exact Release selector/save |
+| 当前状态 | 主代理 `LOCAL_VERIFIED`；独立子 Agent `PASS_WITH_ENV_LIMITATION`；真实 PostgreSQL 证据为 `PARTIAL_VERIFICATION` |
+| 不测试的实现细节 | Catalog client 内部传输、React 私有 state、JSONB 序列化 helper |
+| 范围外 | KSS 管理写操作、credential/scorer、executable binding/profile、Phase F publication、activation、rollback、当前问答运行时切换 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-38 | Draft first-class KSS candidate、Workspace read/update、exact catalog 校验与原子审计 | Workspace tests | constructor/interface 缺失，6 个场景失败 |
+| GREEN-38 | 新增无密钥四元组 strict contract 与 catalog port；保存前验证 ready/queryable/完整父级身份，再以 revision CAS 提交 Draft 与双层 audit | Workspace/contract tests | 7 个 KSS 聚焦场景通过；credential、scorer、content、latest 与未知字段 fail closed；unavailable、retired、parent mismatch、stale、missing、audit/commit fault 均不写状态或提前调用 KSS |
+| RED-39 | Production Knowledge GET/PATCH、双权限、strict body 与稳定错误映射 | Production API tests | 旧路由返回 404；8 个场景失败 |
+| GREEN-39 | Delivery 只委托 Workspace，组合既有 KSS management client；返回 revision、candidate、readiness 与 Release catalog | Production API/composition tests | exact tuple delegation、权限、400/404/409/500/503、路径不泄漏与 production isolation 通过 |
+| RED-40 | Production Knowledge 仍是旧 Contract 只读投影；无 selector/save/stale recovery | Agent Detail tests | 新增 5 个场景失败，其余 50 个回归通过 |
+| GREEN-40 | Production capability 开放 `knowledge`；Dashboard 显示 authoring-only、live readiness/queryable catalog，保存 projection revision；409 保留选择并冻结重放；Development 保留 Knowledge Contract 投影但不声明 editable，也不调用 Production 专用 route | Dashboard client/page 与 Development API tests | client 20、Agent Detail 56；成功 exact save、409 explicit reload、500 输入保留、unavailable fail-closed、Development read-only/no-fetch 通过 |
+| VERIFY-MAIN-13 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard/Chat、静态、构建与领域检查 | focused backend 112 passed、4 skipped；backend 2026 passed、122 skipped、2 deselected；Dashboard 214、Agent Detail 56、Chat 35；Ruff、Mypy（356 source files）、TypeScript、共享 UI/两端 build、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
+| VERIFY-AGENT-13 | 独立子 Agent 对抗复验 Slice 8D，并复验 strict candidate 与 Development 只读兼容修正 | scope→diff、KSS 权威、权限、strict contract、CAS/audit、错误映射、stale UX、composition、lifecycle/runtime 隔离与全门禁 | `PASS_WITH_ENV_LIMITATION`；无未关闭 P0–P3；focused backend 37 passed、1 skipped，相关后端 222 passed、15 skipped，backend 2026 passed、122 skipped、2 deselected，Dashboard focused 76、全量 214，Chat 35；Ruff、Mypy（356 source files）、TypeScript、build、domain-context、diff、lock 全部通过 |
+| ENV-9 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | 真实 PostgreSQL Configuration UoW | 2 项真实 PostgreSQL UoW 用例 skip，标记 `PARTIAL_VERIFICATION`；既往 disposable PostgreSQL 证据不冒充本次连接证明 |

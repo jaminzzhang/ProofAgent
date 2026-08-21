@@ -230,6 +230,70 @@ def test_local_production_connects_dashboard_bff_to_kss_without_browser_secret()
     assert services["api"]["depends_on"]["kss-api"]["condition"] == ("service_healthy")
 
 
+def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
+    compose = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))
+    services = compose["services"]
+    api_environment = services["api"]["environment"]
+    vault_environment = services["vault-init"]["environment"]
+    vault_command = services["vault-init"]["command"][0]
+    model_plane_environment = services["model-plane"]["environment"]
+
+    locators = json.loads(api_environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"])
+    assert locators["knowledge/source-service/client"] == {
+        "mount": "secret",
+        "path": "proof-agent/knowledge-source-service-client",
+        "field": "value",
+    }
+    assert locators["knowledge/admission-scorer"] == {
+        "mount": "secret",
+        "path": "proof-agent/knowledge-admission-scorer",
+        "field": "value",
+    }
+    assert api_environment["PROOF_AGENT_KSS_CLIENT_SECRET_VERSION_ID"] == "1"
+    assert api_environment["PROOF_AGENT_KSS_ADMISSION_SCORER_REVISION"] == (
+        "insurance-evidence-admission.local-compatibility.v1"
+    )
+    assert {
+        key: api_environment[key]
+        for key in (
+            "PROOF_AGENT_KSS_QUERY_MAX_ROUNDS",
+            "PROOF_AGENT_KSS_QUERY_MAX_MODEL_CALLS",
+            "PROOF_AGENT_KSS_QUERY_MAX_CANDIDATES",
+            "PROOF_AGENT_KSS_QUERY_MAX_MODEL_TOKENS",
+            "PROOF_AGENT_KSS_QUERY_MAX_DURATION_MS",
+        )
+    } == {
+        "PROOF_AGENT_KSS_QUERY_MAX_ROUNDS": "2",
+        "PROOF_AGENT_KSS_QUERY_MAX_MODEL_CALLS": "2",
+        "PROOF_AGENT_KSS_QUERY_MAX_CANDIDATES": "20",
+        "PROOF_AGENT_KSS_QUERY_MAX_MODEL_TOKENS": "1000",
+        "PROOF_AGENT_KSS_QUERY_MAX_DURATION_MS": "10000",
+    }
+    assert vault_environment["KSS_AGENT_CLIENT_BEARER_TOKEN"] == (
+        "${KSS_AGENT_CLIENT_BEARER_TOKEN}"
+    )
+    assert vault_environment["KSS_ADMISSION_SCORER_BEARER_TOKEN"] == (
+        "${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
+    )
+    assert "proof-agent/knowledge-source-service-client" in vault_command
+    assert "proof-agent/knowledge-admission-scorer" in vault_command
+    assert model_plane_environment["KSS_ADMISSION_SCORER_BEARER_TOKEN"] == (
+        "${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
+    )
+    assert services["security-bootstrap"]["environment"][
+        "PROOF_AGENT_MODEL_EGRESS_CIDRS"
+    ] == "${PROOF_AGENT_MODEL_EGRESS_CIDRS:-}"
+
+    prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
+    assert "api.deepseek.com" in prepare
+    assert (
+        "refresh_public_setting PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
+    )
+
+
 def test_local_production_compatibility_fixture_is_fresh_and_explicitly_local(
     tmp_path: Path,
 ) -> None:

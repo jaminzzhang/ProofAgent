@@ -16,6 +16,7 @@ from proof_agent.contracts import (
     AuditActorFacts,
     AuditMetadataRecord,
     ContractBundle,
+    DraftKnowledgeReleaseBindingCandidate,
     DraftAgent,
     ProductionSecretHandle,
     PublishedAgentVersion,
@@ -26,6 +27,11 @@ from proof_agent.contracts import (
     WorkflowStageConfig,
     WorkflowStageContextConfig,
     WorkflowStagePromptConfig,
+)
+from proof_agent.contracts.knowledge_service_management import (
+    KnowledgeServiceManagementWorkspace,
+    KnowledgeServiceReadinessProjection,
+    KnowledgeServiceReleaseProjection,
 )
 from proof_agent.contracts.persistence import (
     PersistenceConflictError,
@@ -2263,6 +2269,256 @@ def test_workspace_skill_pack_mutation_rolls_back_atomic_persistence(
             pack_id="claims_qa",
             expected_revision=4,
             command=BusinessFlowSkillPackUpdateCommand(label="Losing update"),
+            actor=_actor(),
+        )
+
+    assert factory.agents.get_draft(
+        current.draft.agent_id, current.draft.draft_id
+    ) == current
+    assert factory.audit.events == []
+
+
+class StaticKnowledgeReleaseCatalog:
+    def __init__(self, projection: KnowledgeServiceManagementWorkspace) -> None:
+        self.projection = projection
+        self.calls = 0
+
+    def workspace(self) -> KnowledgeServiceManagementWorkspace:
+        self.calls += 1
+        return self.projection
+
+
+def _knowledge_release_candidate() -> DraftKnowledgeReleaseBindingCandidate:
+    return DraftKnowledgeReleaseBindingCandidate(
+        knowledge_space_id="insurance",
+        knowledge_base_id="insurance-guidance",
+        knowledge_base_version_id="insurance-guidance-v3",
+        knowledge_base_release_id="insurance-guidance-release-7",
+    )
+
+
+def _knowledge_release_catalog(
+    *,
+    readiness: str = "ready",
+    release_state: str = "queryable",
+) -> KnowledgeServiceManagementWorkspace:
+    candidate = _knowledge_release_candidate()
+    return KnowledgeServiceManagementWorkspace(
+        readiness=KnowledgeServiceReadinessProjection(
+            state=readiness,
+            revision="kss-release-2026-08-21",
+            blockers=() if readiness == "ready" else ("search",),
+        ),
+        spaces=(),
+        sources=(),
+        bases=(),
+        source_versions=(),
+        releases=(
+            KnowledgeServiceReleaseProjection(
+                **candidate.model_dump(mode="python"),
+                source_version_count=3,
+                state=release_state,
+            ),
+        ),
+    )
+
+
+def test_workspace_reads_and_atomically_saves_exact_kss_release_candidate() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000899",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    catalog = StaticKnowledgeReleaseCatalog(_knowledge_release_catalog())
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 8, 21, 2, tzinfo=UTC),
+    )
+
+    projection = workspace.get_knowledge_release_binding_candidate(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+    )
+    saved = workspace.update_knowledge_release_binding_candidate(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        expected_revision=1,
+        candidate=_knowledge_release_candidate(),
+        actor=_actor(),
+    )
+
+    assert projection.record == current
+    assert projection.catalog.readiness.state == "ready"
+    assert projection.catalog.releases[0].state == "queryable"
+    assert saved.record.revision == 2
+    assert saved.record.draft.knowledge_release_binding_candidate == (
+        _knowledge_release_candidate()
+    )
+    assert DraftAgent.model_validate(
+        saved.record.draft.model_dump(mode="json")
+    ).knowledge_release_binding_candidate == _knowledge_release_candidate()
+    assert saved.record.draft.contract_bundle == current.draft.contract_bundle
+    assert saved.catalog == projection.catalog
+    assert factory.audit.events[-1].event_type == (
+        "agent.draft.knowledge_release_binding_candidate_updated"
+    )
+    assert factory.audit.events[-1].metadata["knowledge_base_release_id"] == (
+        "insurance-guidance-release-7"
+    )
+    assert "credential" not in str(factory.audit.events[-1].metadata).lower()
+    assert catalog.calls == 2
+    assert factory.agents.active == {}
+    assert factory.agents.published == {}
+
+
+@pytest.mark.parametrize(
+    ("readiness", "release_state", "expected_code"),
+    (
+        ("unavailable", "queryable", "agent_knowledge_catalog_unavailable"),
+        ("ready", "retired", "agent_knowledge_release_not_queryable"),
+    ),
+)
+def test_workspace_rejects_unavailable_or_retired_kss_release_without_writes(
+    readiness: str,
+    release_state: str,
+    expected_code: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000898",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=StaticKnowledgeReleaseCatalog(
+            _knowledge_release_catalog(
+                readiness=readiness,
+                release_state=release_state,
+            )
+        ),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.update_knowledge_release_binding_candidate(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            candidate=_knowledge_release_candidate(),
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == expected_code
+    assert factory.agents.get_draft(
+        current.draft.agent_id, current.draft.draft_id
+    ) == current
+    assert factory.audit.events == []
+
+
+def test_workspace_rejects_kss_candidate_parent_mismatch_without_writes() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000897",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=StaticKnowledgeReleaseCatalog(
+            _knowledge_release_catalog()
+        ),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+    mismatched = _knowledge_release_candidate().model_copy(
+        update={"knowledge_base_id": "another-base"}
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.update_knowledge_release_binding_candidate(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            candidate=mismatched,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_knowledge_release_not_queryable"
+    assert factory.agents.get_draft(
+        current.draft.agent_id, current.draft.draft_id
+    ) == current
+    assert factory.audit.events == []
+
+
+def test_workspace_rejects_missing_or_stale_draft_before_calling_kss() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000895",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    catalog = StaticKnowledgeReleaseCatalog(_knowledge_release_catalog())
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as stale:
+        workspace.update_knowledge_release_binding_candidate(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=2,
+            candidate=_knowledge_release_candidate(),
+            actor=_actor(),
+        )
+    with pytest.raises(AgentConfigurationNotFound):
+        workspace.get_knowledge_release_binding_candidate(
+            agent_id=current.draft.agent_id,
+            draft_id="019ba001-1111-7000-8000-000000000894",
+        )
+
+    assert stale.value.code == "agent_draft_revision_conflict"
+    assert catalog.calls == 0
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("failure", ("audit", "commit"))
+def test_workspace_kss_candidate_update_rolls_back_atomic_persistence(
+    failure: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000896",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory(
+        (current,),
+        fail_audit=failure == "audit",
+        fail_commit=failure == "commit",
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=StaticKnowledgeReleaseCatalog(
+            _knowledge_release_catalog()
+        ),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(RuntimeError, match=f"simulated {failure}"):
+        workspace.update_knowledge_release_binding_candidate(
+            agent_id=current.draft.agent_id,
+            draft_id=current.draft.draft_id,
+            expected_revision=1,
+            candidate=_knowledge_release_candidate(),
             actor=_actor(),
         )
 

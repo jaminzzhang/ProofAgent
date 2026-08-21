@@ -30,6 +30,7 @@ from proof_agent.contracts import (
     ConfigurationOperation,
     ConfigurationOperationAudit,
     ContractBundle,
+    DraftKnowledgeReleaseBindingCandidate,
     DraftAgent,
     PersistenceConflictError,
     PersistenceNotFoundError,
@@ -44,6 +45,9 @@ from proof_agent.contracts import (
     WorkflowStagePromptConfig,
 )
 from proof_agent.contracts.ports import ConfigurationUnitOfWork
+from proof_agent.contracts.knowledge_service_management import (
+    KnowledgeServiceManagementWorkspace,
+)
 from proof_agent.control.production_agent_publication import SOLE_PRODUCTION_AGENT_ID
 from proof_agent.control.agent_configuration_skill_packs import (
     BusinessFlowSkillPackConfiguration,
@@ -187,6 +191,14 @@ class AgentConfigurationSkillPackResult:
     configuration: BusinessFlowSkillPackConfiguration
 
 
+@dataclass(frozen=True)
+class AgentConfigurationKnowledgeBindingResult:
+    """Revisioned Draft state and live KSS authoring catalog projection."""
+
+    record: AgentDraftRecord
+    catalog: KnowledgeServiceManagementWorkspace
+
+
 class AgentConfigurationValidationExecutor(Protocol):
     """Execute one Draft without owning lifecycle persistence rules."""
 
@@ -243,6 +255,12 @@ class AgentConfigurationSkillPackInspector(Protocol):
     ) -> BusinessFlowSkillPackConfiguration: ...
 
 
+class AgentConfigurationKnowledgeReleaseCatalog(Protocol):
+    """Read the live KSS catalog without owning Draft persistence rules."""
+
+    def workspace(self) -> KnowledgeServiceManagementWorkspace: ...
+
+
 class AgentConfigurationConflict(RuntimeError):
     """Stable Agent configuration conflict."""
 
@@ -290,6 +308,7 @@ class AgentConfigurationWorkspace:
         contract_validator: AgentConfigurationContractValidator | None = None,
         workflow_stage_inspector: AgentConfigurationWorkflowStageInspector | None = None,
         skill_pack_inspector: AgentConfigurationSkillPackInspector | None = None,
+        knowledge_release_catalog: AgentConfigurationKnowledgeReleaseCatalog | None = None,
         scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -301,6 +320,7 @@ class AgentConfigurationWorkspace:
         self._contract_validator = contract_validator
         self._workflow_stage_inspector = workflow_stage_inspector
         self._skill_pack_inspector = skill_pack_inspector
+        self._knowledge_release_catalog = knowledge_release_catalog
         self._scope = scope
         self._clock = clock
 
@@ -699,6 +719,126 @@ class AgentConfigurationWorkspace:
             ),
         )
 
+    def get_knowledge_release_binding_candidate(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+    ) -> AgentConfigurationKnowledgeBindingResult:
+        """Return one Draft candidate with the current live KSS catalog."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        catalog = self._require_knowledge_release_catalog().workspace()
+        return AgentConfigurationKnowledgeBindingResult(
+            record=current,
+            catalog=catalog,
+        )
+
+    def update_knowledge_release_binding_candidate(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        candidate: DraftKnowledgeReleaseBindingCandidate,
+        actor: AuditActorFacts,
+    ) -> AgentConfigurationKnowledgeBindingResult:
+        """Validate and atomically save one exact secret-free KSS Release candidate."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if current.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            )
+        catalog = self._require_knowledge_release_catalog().workspace()
+        if catalog.readiness.state != "ready":
+            raise AgentConfigurationConflict(
+                code="agent_knowledge_catalog_unavailable",
+                detail="The Knowledge Source Service catalog is unavailable.",
+            )
+        if not any(
+            release.state == "queryable"
+            and release.knowledge_space_id == candidate.knowledge_space_id
+            and release.knowledge_base_id == candidate.knowledge_base_id
+            and release.knowledge_base_version_id
+            == candidate.knowledge_base_version_id
+            and release.knowledge_base_release_id
+            == candidate.knowledge_base_release_id
+            for release in catalog.releases
+        ):
+            raise AgentConfigurationConflict(
+                code="agent_knowledge_release_not_queryable",
+                detail="The selected KSS Release is not queryable for the exact parent identities.",
+            )
+        now = _timestamp(self._clock())
+        metadata = {
+            "expected_revision": expected_revision,
+            "knowledge_space_id": candidate.knowledge_space_id,
+            "knowledge_base_id": candidate.knowledge_base_id,
+            "knowledge_base_version_id": candidate.knowledge_base_version_id,
+            "knowledge_base_release_id": candidate.knowledge_base_release_id,
+            "kss_catalog_revision": catalog.readiness.revision,
+        }
+        operation = ConfigurationOperationAudit(
+            operation_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{draft_id}:kss-release:{expected_revision + 1}:operation",
+                )
+            ),
+            operation=ConfigurationOperation.UPDATED,
+            actor=actor.subject,
+            created_at=now,
+            summary="Updated Draft KSS Release Binding Candidate.",
+            metadata=metadata,
+        )
+        updated = current.draft.model_copy(
+            update={
+                "knowledge_release_binding_candidate": candidate,
+                "updated_at": now,
+                "updated_by": actor.subject,
+                "operation_audit": (*current.draft.operation_audit, operation),
+            }
+        )
+        try:
+            with self._unit_of_work_factory() as uow:
+                saved = uow.agents.save_draft(
+                    updated,
+                    expected_revision=expected_revision,
+                )
+                uow.audit.append(
+                    AuditMetadataRecord(
+                        audit_id=str(uuid4()),
+                        category=AuditCategory.CONFIGURATION,
+                        event_type=(
+                            "agent.draft.knowledge_release_binding_candidate_updated"
+                        ),
+                        outcome=AuditOutcome.SUCCEEDED,
+                        actor=actor,
+                        occurred_at=now,
+                        target_type="agent_draft",
+                        target_id=draft_id,
+                        metadata=metadata,
+                    )
+                )
+                uow.commit()
+        except PersistenceConflictError as exc:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before saving.",
+            ) from exc
+        return AgentConfigurationKnowledgeBindingResult(
+            record=saved,
+            catalog=catalog,
+        )
+
     def create_business_flow_skill_pack(
         self,
         *,
@@ -867,6 +1007,16 @@ class AgentConfigurationWorkspace:
                 detail="Business Flow Skill Pack configuration is unavailable.",
             )
         return self._skill_pack_inspector
+
+    def _require_knowledge_release_catalog(
+        self,
+    ) -> AgentConfigurationKnowledgeReleaseCatalog:
+        if self._knowledge_release_catalog is None:
+            raise AgentConfigurationConflict(
+                code="agent_knowledge_catalog_unavailable",
+                detail="KSS Knowledge configuration is unavailable.",
+            )
+        return self._knowledge_release_catalog
 
     def update_workflow_stages(
         self,

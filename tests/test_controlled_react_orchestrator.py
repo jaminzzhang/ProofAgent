@@ -47,6 +47,7 @@ from proof_agent.control.workflow.controlled_react import (
 )
 from proof_agent.control.workflow.controlled_react.composition import (
     _EvidenceAnswerSynthesisAdapter,
+    _emit_admitted_evidence_trace,
     _tool_summary_projection,
 )
 from proof_agent.control.workflow.controlled_react.artifact_binding import (
@@ -58,6 +59,22 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
     FileObservationTruthStore,
 )
 from proof_agent.errors import ProofAgentError
+
+
+def test_admitted_evidence_trace_projects_candidate_as_accepted() -> None:
+    trace = _TraceCapture()
+    evidence = EvidenceChunk(
+        source="knowledge://policy",
+        content="A governed policy fact.",
+        status=EvidenceStatus.CANDIDATE,
+        admission_score=0.9,
+        citation="knowledge://policy#text-lines=1-2",
+    )
+
+    _emit_admitted_evidence_trace(trace, accepted_evidence=(evidence,))
+
+    projected = trace.events[0]["payload"]["metadata"]["evidence"][0]  # type: ignore[index]
+    assert projected["status"] == "accepted"
 
 
 def test_start_returns_workflow_template_execution_result_for_terminal_answer() -> None:

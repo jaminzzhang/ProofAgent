@@ -187,6 +187,22 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         captured["agent_configuration_workspace"],
         production_roles.AgentConfigurationWorkspace,
     )
+    assert isinstance(
+        captured["agent_configuration_workspace"]._contract_validator,
+        production_roles.LocalAgentConfigurationContractValidator,
+    )
+    assert isinstance(
+        captured["agent_configuration_workspace"]._workflow_stage_inspector,
+        production_roles.LocalAgentConfigurationWorkflowStageAdapter,
+    )
+    assert isinstance(
+        captured["agent_configuration_workspace"]._skill_pack_inspector,
+        production_roles.LocalAgentConfigurationSkillPackAdapter,
+    )
+    assert (
+        captured["agent_configuration_workspace"]._knowledge_release_catalog
+        is captured["knowledge_service_management_client"]
+    )
 
 
 def test_embedded_reference_profile_source_selection_is_removed() -> None:

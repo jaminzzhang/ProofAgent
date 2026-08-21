@@ -4,14 +4,40 @@ from __future__ import annotations
 
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from proof_agent.contracts import AgentDraftRecord, AuditActorFacts, Permission
+from proof_agent.contracts import (
+    AgentDraftRecord,
+    AuditActorFacts,
+    DraftKnowledgeReleaseBindingCandidate,
+    Permission,
+)
+from proof_agent.contracts.knowledge_service_management import KnowledgeServiceIdentifier
 from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationConflict,
     AgentConfigurationNotFound,
 )
+from proof_agent.control.workflow.templates import (
+    list_workflow_templates,
+    resolve_workflow_template,
+)
+from proof_agent.delivery.agent_configuration_workflow_http import (
+    WorkflowStagePreviewRequest,
+    WorkflowStageUpdateItemRequest,
+    workflow_stage_config_request,
+    workflow_stage_prompt_config,
+    workflow_template_payload,
+)
+from proof_agent.delivery.agent_configuration_skill_pack_http import (
+    BusinessFlowSkillPackCreateFields,
+    BusinessFlowSkillPackUpdateFields,
+    business_flow_skill_pack_create_command,
+    business_flow_skill_pack_result_payload,
+    business_flow_skill_pack_update_command,
+)
+from proof_agent.delivery.http_errors import proof_agent_http_exception
+from proof_agent.errors import ProofAgentError
 from proof_agent.observability.api.dependencies import get_operator_identity
 from proof_agent.observability.api.operator_identity import (
     OperatorIdentityContext,
@@ -19,7 +45,15 @@ from proof_agent.observability.api.operator_identity import (
 )
 
 
-router = APIRouter(prefix="/config/agents", tags=["production-agent-configuration"])
+router = APIRouter()
+agent_router = APIRouter(
+    prefix="/config/agents",
+    tags=["production-agent-configuration"],
+)
+workflow_template_router = APIRouter(
+    prefix="/config/workflow-templates",
+    tags=["production-agent-configuration"],
+)
 
 _CANONICAL_TEMPLATE = {
     "id": "agent_management_insurance_specialist",
@@ -60,7 +94,99 @@ class ProductionAgentUpdateRequest(BaseModel):
         return self
 
 
-@router.get("")
+class ProductionAgentContractUpdateRequest(BaseModel):
+    """Revisioned whole-package candidate for production Draft configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    agent_yaml: str | None = None
+    policy_yaml: str | None = None
+    tools_yaml: str | None = None
+
+    @model_validator(mode="after")
+    def require_candidate_file(self) -> "ProductionAgentContractUpdateRequest":
+        if all(
+            value is None
+            for value in (self.agent_yaml, self.policy_yaml, self.tools_yaml)
+        ):
+            raise ValueError("at least one Contract file is required")
+        return self
+
+
+class ProductionWorkflowStagesUpdateRequest(BaseModel):
+    """Revisioned replacement for production Draft Workflow Stage settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    template: str | None = Field(default=None, min_length=1, max_length=255)
+    template_descriptor_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+    )
+    stages: list[WorkflowStageUpdateItemRequest]
+
+
+class ProductionBusinessFlowSkillPackCreateRequest(
+    BusinessFlowSkillPackCreateFields
+):
+    """Revisioned create command for a production Draft Skill Pack."""
+
+    expected_revision: int = Field(ge=1)
+
+
+class ProductionBusinessFlowSkillPackUpdateRequest(
+    BusinessFlowSkillPackUpdateFields
+):
+    """Revisioned update command for a production Draft Skill Pack."""
+
+    expected_revision: int = Field(ge=1)
+
+
+class ProductionKnowledgeReleaseBindingUpdateRequest(BaseModel):
+    """Secret-free exact KSS Release candidate for one production Draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    knowledge_space_id: KnowledgeServiceIdentifier
+    knowledge_base_id: KnowledgeServiceIdentifier
+    knowledge_base_version_id: KnowledgeServiceIdentifier
+    knowledge_base_release_id: KnowledgeServiceIdentifier
+
+
+@workflow_template_router.get("")
+def list_production_workflow_templates(
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return the backend-owned Workflow Template catalog."""
+
+    require_operator_permission(identity, Permission.AGENT_VIEW)
+    descriptors = list_workflow_templates()
+    return {
+        "data": [workflow_template_payload(item) for item in descriptors],
+        "meta": {"total": len(descriptors)},
+    }
+
+
+@workflow_template_router.get("/{template_id}")
+def get_production_workflow_template(
+    template_id: str,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return one backend-owned Workflow Template Descriptor."""
+
+    require_operator_permission(identity, Permission.AGENT_VIEW)
+    try:
+        descriptor = resolve_workflow_template(template_id)
+    except ProofAgentError as exc:
+        raise proof_agent_http_exception(exc) from exc
+    return workflow_template_payload(descriptor)
+
+
+@agent_router.get("")
 def list_production_agents(
     request: Request,
     identity: OperatorIdentityContext = Depends(get_operator_identity),
@@ -97,7 +223,7 @@ def list_production_agents(
     }
 
 
-@router.post("")
+@agent_router.post("")
 def create_production_agent(
     body: ProductionAgentCreateRequest,
     request: Request,
@@ -124,7 +250,7 @@ def create_production_agent(
     return _draft_payload(result.record)
 
 
-@router.get("/{agent_id}/drafts/{draft_id}")
+@agent_router.get("/{agent_id}/drafts/{draft_id}")
 def get_production_agent_draft(
     agent_id: str,
     draft_id: str,
@@ -145,7 +271,7 @@ def get_production_agent_draft(
     return _draft_payload(record)
 
 
-@router.patch("/{agent_id}/drafts/{draft_id}")
+@agent_router.patch("/{agent_id}/drafts/{draft_id}")
 def update_production_agent_draft(
     agent_id: str,
     draft_id: str,
@@ -170,7 +296,7 @@ def update_production_agent_draft(
     return _draft_payload(record)
 
 
-@router.get("/{agent_id}/drafts/{draft_id}/contract")
+@agent_router.get("/{agent_id}/drafts/{draft_id}/contract")
 def get_production_agent_contract(
     agent_id: str,
     draft_id: str,
@@ -191,7 +317,344 @@ def get_production_agent_contract(
     return record.draft.contract_bundle.model_dump(mode="json")
 
 
-@router.get("/{agent_id}/versions")
+@agent_router.patch("/{agent_id}/drafts/{draft_id}/contract")
+def update_production_agent_contract(
+    agent_id: str,
+    draft_id: str,
+    body: ProductionAgentContractUpdateRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Validate and atomically update one production Draft Contract candidate."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    try:
+        record = cast(
+            AgentDraftRecord,
+            _application(request).update_contract(
+                agent_id=agent_id,
+                draft_id=draft_id,
+                expected_revision=body.expected_revision,
+                agent_yaml=body.agent_yaml,
+                policy_yaml=body.policy_yaml,
+                tools_yaml=body.tools_yaml,
+                actor=_audit_actor(request, identity),
+            ),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except (KeyError, ValueError, ProofAgentError) as exc:
+        raise HTTPException(status_code=400, detail="agent_contract_invalid") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_contract_update_failed",
+        ) from exc
+    return record.draft.contract_bundle.model_dump(mode="json")
+
+
+@agent_router.get("/{agent_id}/drafts/{draft_id}/skills")
+def get_production_agent_skill_packs(
+    agent_id: str,
+    draft_id: str,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return a revisioned, trace-safe production Skill Pack projection."""
+
+    require_operator_permission(identity, Permission.AGENT_VIEW)
+    try:
+        result = _application(request).get_business_flow_skill_packs(
+            agent_id=agent_id,
+            draft_id=draft_id,
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except (KeyError, ValueError, ProofAgentError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_skill_pack_configuration_invalid",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_skill_pack_read_failed",
+        ) from exc
+    return business_flow_skill_pack_result_payload(result)
+
+
+@agent_router.get("/{agent_id}/drafts/{draft_id}/knowledge-binding")
+def get_production_agent_knowledge_binding(
+    agent_id: str,
+    draft_id: str,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return Draft authoring intent plus a trace-safe live KSS Release catalog."""
+
+    require_operator_permission(identity, Permission.AGENT_VIEW)
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
+    try:
+        result = _application(request).get_knowledge_release_binding_candidate(
+            agent_id=agent_id,
+            draft_id=draft_id,
+        )
+    except AgentConfigurationNotFound as exc:
+        raise _configuration_exception(exc) from exc
+    except AgentConfigurationConflict as exc:
+        raise _knowledge_binding_exception(exc) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="agent_knowledge_catalog_unavailable",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_knowledge_binding_read_failed",
+        ) from exc
+    return _knowledge_binding_payload(result)
+
+
+@agent_router.patch("/{agent_id}/drafts/{draft_id}/knowledge-binding")
+def update_production_agent_knowledge_binding(
+    agent_id: str,
+    draft_id: str,
+    body: ProductionKnowledgeReleaseBindingUpdateRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Save non-executable exact KSS Release authoring intent with revision CAS."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
+    try:
+        result = _application(request).update_knowledge_release_binding_candidate(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=body.expected_revision,
+            candidate=DraftKnowledgeReleaseBindingCandidate(
+                knowledge_space_id=body.knowledge_space_id,
+                knowledge_base_id=body.knowledge_base_id,
+                knowledge_base_version_id=body.knowledge_base_version_id,
+                knowledge_base_release_id=body.knowledge_base_release_id,
+            ),
+            actor=_audit_actor(request, identity),
+        )
+    except AgentConfigurationNotFound as exc:
+        raise _configuration_exception(exc) from exc
+    except AgentConfigurationConflict as exc:
+        raise _knowledge_binding_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_knowledge_binding_invalid",
+        ) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="agent_knowledge_catalog_unavailable",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_knowledge_binding_update_failed",
+        ) from exc
+    return _knowledge_binding_payload(result)
+
+
+@agent_router.post("/{agent_id}/drafts/{draft_id}/skills/business-flows")
+def create_production_agent_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    body: ProductionBusinessFlowSkillPackCreateRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Create a complete production Draft Skill Pack in one command."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    try:
+        result = _application(request).create_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=body.expected_revision,
+            command=business_flow_skill_pack_create_command(body),
+            actor=_audit_actor(request, identity),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except (KeyError, ValueError, ProofAgentError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_skill_pack_configuration_invalid",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_skill_pack_update_failed",
+        ) from exc
+    return business_flow_skill_pack_result_payload(result)
+
+
+@agent_router.patch(
+    "/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}"
+)
+def update_production_agent_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    pack_id: str,
+    body: ProductionBusinessFlowSkillPackUpdateRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Update one production Draft Skill Pack with revision CAS."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    try:
+        result = _application(request).update_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            pack_id=pack_id,
+            expected_revision=body.expected_revision,
+            command=business_flow_skill_pack_update_command(body),
+            actor=_audit_actor(request, identity),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except (KeyError, ValueError, ProofAgentError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_skill_pack_configuration_invalid",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_skill_pack_update_failed",
+        ) from exc
+    return business_flow_skill_pack_result_payload(result)
+
+
+@agent_router.delete(
+    "/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}"
+)
+def delete_production_agent_skill_pack(
+    agent_id: str,
+    draft_id: str,
+    pack_id: str,
+    request: Request,
+    expected_revision: int = Query(ge=1),
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Delete one production Draft Skill Pack with revision CAS."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    try:
+        result = _application(request).delete_business_flow_skill_pack(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            pack_id=pack_id,
+            expected_revision=expected_revision,
+            actor=_audit_actor(request, identity),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except (KeyError, ValueError, ProofAgentError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_skill_pack_configuration_invalid",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_skill_pack_update_failed",
+        ) from exc
+    return business_flow_skill_pack_result_payload(result)
+
+
+@agent_router.patch("/{agent_id}/drafts/{draft_id}/workflow-stages")
+def update_production_agent_workflow_stages(
+    agent_id: str,
+    draft_id: str,
+    body: ProductionWorkflowStagesUpdateRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Validate and atomically replace production Draft Workflow Stages."""
+
+    require_operator_permission(identity, Permission.AGENT_EDIT)
+    try:
+        record = cast(
+            AgentDraftRecord,
+            _application(request).update_workflow_stages(
+                agent_id=agent_id,
+                draft_id=draft_id,
+                expected_revision=body.expected_revision,
+                template=body.template,
+                template_descriptor_version=body.template_descriptor_version,
+                stages=tuple(
+                    workflow_stage_config_request(item) for item in body.stages
+                ),
+                actor=_audit_actor(request, identity),
+            ),
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_workflow_stage_configuration_invalid",
+        ) from exc
+    except ProofAgentError as exc:
+        raise proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_workflow_stage_configuration_failed",
+        ) from exc
+    return record.draft.contract_bundle.model_dump(mode="json")
+
+
+@agent_router.post(
+    "/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview"
+)
+def preview_production_agent_workflow_stage(
+    agent_id: str,
+    draft_id: str,
+    stage_id: str,
+    body: WorkflowStagePreviewRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Render a bounded Workflow Stage preview without executing a Run."""
+
+    require_operator_permission(identity, Permission.AGENT_VALIDATE)
+    try:
+        result = _application(request).preview_workflow_stage(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            stage_id=stage_id,
+            prompt=workflow_stage_prompt_config(body.prompt),
+            context_options=body.context,
+        )
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_workflow_stage_preview_invalid",
+        ) from exc
+    except ProofAgentError as exc:
+        raise proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_workflow_stage_preview_failed",
+        ) from exc
+    return cast(dict[str, Any], result)
+
+
+@agent_router.get("/{agent_id}/versions")
 def list_production_agent_versions(
     agent_id: str,
     request: Request,
@@ -245,11 +708,35 @@ def _audit_actor(
 
 
 def _draft_payload(record: AgentDraftRecord) -> dict[str, Any]:
-    payload = record.draft.model_dump(mode="json", exclude={"contract_bundle"})
+    payload = record.draft.model_dump(
+        mode="json",
+        exclude={"contract_bundle", "knowledge_release_binding_candidate"},
+    )
     payload["revision"] = record.revision
     payload["capabilities"] = {
         "mode": "production",
-        "editable_modules": ["general"],
+        "visible_modules": [
+            "general",
+            "workflow",
+            "skills",
+            "knowledge",
+            "tools",
+            "policy",
+            "model",
+            "memory",
+            "response",
+        ],
+        "editable_modules": [
+            "general",
+            "workflow",
+            "skills",
+            "knowledge",
+            "tools",
+            "policy",
+            "model",
+            "memory",
+            "response",
+        ],
         "lifecycle_tabs": ["versions", "contract", "monitor"],
         "actions": {
             "can_validate": False,
@@ -299,3 +786,29 @@ def _configuration_exception(
         409 if isinstance(error, AgentConfigurationConflict) else 404
     )
     return HTTPException(status_code=status_code, detail=error.code)
+
+
+def _knowledge_binding_exception(error: AgentConfigurationConflict) -> HTTPException:
+    if error.code == "agent_knowledge_catalog_unavailable":
+        return HTTPException(status_code=503, detail=error.code)
+    if error.code == "agent_knowledge_release_not_queryable":
+        return HTTPException(status_code=400, detail=error.code)
+    return _configuration_exception(error)
+
+
+def _knowledge_binding_payload(result: Any) -> dict[str, Any]:
+    candidate = result.record.draft.knowledge_release_binding_candidate
+    return {
+        "revision": result.record.revision,
+        "candidate": (
+            None if candidate is None else candidate.model_dump(mode="json")
+        ),
+        "readiness": result.catalog.readiness.model_dump(mode="json"),
+        "releases": [
+            release.model_dump(mode="json") for release in result.catalog.releases
+        ],
+    }
+
+
+router.include_router(workflow_template_router)
+router.include_router(agent_router)

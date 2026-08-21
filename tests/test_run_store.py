@@ -572,6 +572,63 @@ def test_get_run_detail_extracts_evidence_summary(store: RunStore) -> None:
     assert not hasattr(detail.evidence_chunks[0], "content")
 
 
+def test_get_run_detail_accepts_authoritative_evidence_event_without_legacy_retrieval(
+    store: RunStore,
+) -> None:
+    run_dir = store.create_run_dir("run_kss_evidence")
+    _write_trace(
+        run_dir / "trace.jsonl",
+        "run_kss_evidence",
+        [
+            {
+                "event_type": "evidence_evaluation",
+                "sequence": 1,
+                "timestamp": "2026-08-20T10:00:00Z",
+                "payload": {
+                    "metadata": {
+                        "evidence": [
+                            {
+                                "source": "knowledge://release/source/version/unit",
+                                "citation": "knowledge://release/source/version/unit#text-lines=1-2",
+                                "admission_score": 0.9,
+                                "status": "accepted",
+                            }
+                        ]
+                    }
+                },
+            },
+            {
+                "event_type": "final_output",
+                "sequence": 2,
+                "timestamp": "2026-08-20T10:00:01Z",
+                "payload": {
+                    "outcome": ReceiptOutcome.ANSWERED_WITH_CITATIONS.value,
+                    "question": "What does the governed evidence say?",
+                },
+            },
+        ],
+    )
+    _write_receipt(run_dir / "governance_receipt.md")
+    store.write_run_meta(
+        RunIndex(
+            run_id="run_kss_evidence",
+            question="What does the governed evidence say?",
+            outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            created_at="2026-08-20T10:00:00Z",
+            updated_at="2026-08-20T10:00:01Z",
+        )
+    )
+
+    detail = store.get_run_detail("run_kss_evidence")
+
+    assert detail is not None
+    assert len(detail.evidence_chunks) == 1
+    assert detail.evidence_chunks[0].status == "accepted"
+    assert detail.evidence_chunks[0].citation == (
+        "knowledge://release/source/version/unit#text-lines=1-2"
+    )
+
+
 def test_run_store_extracts_governance_details_for_react_run(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "history")
     execute_agent_package_run(

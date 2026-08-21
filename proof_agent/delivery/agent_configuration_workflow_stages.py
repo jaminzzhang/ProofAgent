@@ -14,7 +14,7 @@ from proof_agent.control.agent_configuration_workspace import (
 
 
 class LocalAgentConfigurationWorkflowStageAdapter:
-    """Compile one development Draft and return bounded manifest facts."""
+    """Compile one Draft candidate and return bounded manifest facts."""
 
     def inspect(
         self,

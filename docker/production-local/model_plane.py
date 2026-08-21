@@ -121,6 +121,79 @@ def rerank(payload: dict[str, Any]) -> dict[str, object]:
     return {"model_revision": payload["model_revision"], "scores": scores}
 
 
+@app.post("/reranker/v1/evidence-admission-scores")
+def evidence_admission_scores(
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
+    """Serve ProofAgent's strict Admission Scorer contract for local validation."""
+
+    _require_bearer(
+        authorization,
+        environment_name="KSS_ADMISSION_SCORER_BEARER_TOKEN",
+        detail="KSS admission scorer credential is invalid",
+    )
+    _require_fields(
+        payload,
+        {
+            "schema_version",
+            "scorer_id",
+            "scorer_revision",
+            "knowledge_query_id",
+            "knowledge_base_release_id",
+            "question",
+            "candidates",
+        },
+    )
+    candidates = payload["candidates"]
+    text_fields = (
+        payload["scorer_id"],
+        payload["scorer_revision"],
+        payload["knowledge_query_id"],
+        payload["knowledge_base_release_id"],
+        payload["question"],
+    )
+    if (
+        payload["schema_version"] != "knowledge-admission-score-request.v1"
+        or any(not isinstance(value, str) or not value.strip() for value in text_fields)
+        or not isinstance(candidates, list)
+        or not 1 <= len(candidates) <= 100
+    ):
+        raise HTTPException(status_code=422, detail="invalid admission score request")
+    candidate_ids: list[str] = []
+    expected_candidate_fields = {
+        "candidate_evidence_id",
+        "knowledge_source_id",
+        "knowledge_source_version_id",
+        "evidence_unit_id",
+        "content",
+        "content_hash",
+        "citation_locator",
+        "retrieval_lineage",
+    }
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or set(candidate) != expected_candidate_fields:
+            raise HTTPException(status_code=422, detail="invalid admission candidate")
+        candidate_id = candidate["candidate_evidence_id"]
+        if not isinstance(candidate_id, str) or not candidate_id.strip():
+            raise HTTPException(status_code=422, detail="invalid admission candidate")
+        candidate_ids.append(candidate_id)
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise HTTPException(status_code=422, detail="duplicate admission candidate")
+    return {
+        "schema_version": "knowledge-admission-score-response.v1",
+        "scorer_id": payload["scorer_id"],
+        "scorer_revision": payload["scorer_revision"],
+        "scores": [
+            {
+                "candidate_evidence_id": candidate_id,
+                "admission_score": 0.9,
+            }
+            for candidate_id in candidate_ids
+        ],
+    }
+
+
 @app.post("/docling/v1/parse")
 def docling_parse(payload: dict[str, Any]) -> dict[str, object]:
     return _parser_response(payload, adapter="docling")
@@ -528,7 +601,20 @@ def _require_fields(payload: dict[str, Any], expected: set[str]) -> None:
 
 
 def _require_kss_model_bearer(authorization: str | None) -> None:
-    expected = os.environ.get("KSS_MODEL_BEARER_TOKEN", "")
+    _require_bearer(
+        authorization,
+        environment_name="KSS_MODEL_BEARER_TOKEN",
+        detail="KSS model credential is invalid",
+    )
+
+
+def _require_bearer(
+    authorization: str | None,
+    *,
+    environment_name: str,
+    detail: str,
+) -> None:
+    expected = os.environ.get(environment_name, "")
     presented = "" if authorization is None else authorization
     if (
         len(expected) < 16
@@ -536,6 +622,6 @@ def _require_kss_model_bearer(authorization: str | None) -> None:
     ):
         raise HTTPException(
             status_code=401,
-            detail="KSS model credential is invalid",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )

@@ -585,7 +585,7 @@ export function extractAgentYamlSection(
   return lines.slice(start, findBlockEnd(lines, start, 0)).join('\n')
 }
 
-function extractAgentYamlPathSection(agentYaml: string, path: string[]): string {
+export function extractAgentYamlPathSection(agentYaml: string, path: string[]): string {
   const lines = agentYaml.split('\n')
   const start = findYamlPathLineIndex(lines, path)
   if (start === -1) return ''

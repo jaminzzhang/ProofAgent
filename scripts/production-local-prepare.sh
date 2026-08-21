@@ -64,7 +64,49 @@ ensure_random_secret() {
 ensure_random_secret KSS_MODEL_BEARER_TOKEN
 ensure_random_secret KSS_OPERATOR_BEARER_TOKEN
 ensure_random_secret KSS_AGENT_CLIENT_BEARER_TOKEN
+ensure_random_secret KSS_ADMISSION_SCORER_BEARER_TOKEN
 ensure_random_secret KSS_POSTGRES_PASSWORD
+
+refresh_public_setting() {
+  key=$1
+  value=$2
+  temporary=$(mktemp "$ENV_FILE.public.XXXXXX")
+  awk -v prefix="${key}=" -v assignment="${key}=${value}" '
+    index($0, prefix) == 1 {
+      if (!replaced) print assignment
+      replaced = 1
+      next
+    }
+    { print }
+    END { if (!replaced) print assignment }
+  ' "$ENV_FILE" > "$temporary"
+  chmod 0600 "$temporary"
+  mv "$temporary" "$ENV_FILE"
+}
+
+PROOF_AGENT_MODEL_EGRESS_CIDRS=$(python3 -c '
+import ipaddress
+import socket
+
+try:
+    records = socket.getaddrinfo("api.deepseek.com", 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+except OSError:
+    records = ()
+networks = {
+    str(ipaddress.ip_network(f"{record[4][0]}/{ipaddress.ip_address(record[4][0]).max_prefixlen}"))
+    for record in records
+    if (
+        ipaddress.ip_address(record[4][0]).is_global
+        or (
+            isinstance(ipaddress.ip_address(record[4][0]), ipaddress.IPv4Address)
+            and ipaddress.ip_address(record[4][0])
+            in ipaddress.ip_network("198.18.0.0/15")
+        )
+    )
+}
+print(",".join(sorted(networks)))
+')
+refresh_public_setting PROOF_AGENT_MODEL_EGRESS_CIDRS "$PROOF_AGENT_MODEL_EGRESS_CIDRS"
 chmod 0600 "$ENV_FILE"
 
 if [ ! -f "$MODEL_CREDENTIAL_KEYRING" ]; then
