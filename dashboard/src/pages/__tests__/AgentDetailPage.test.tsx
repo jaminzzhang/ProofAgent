@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createModelConnection,
   fetchConfigDraftKnowledgeBinding,
+  fetchConfigDraftPublicationConfiguration,
   fetchConfigDraftSkills,
   fetchRunDetail,
   fetchValidationCapture,
@@ -33,6 +34,7 @@ vi.mock('../../api/client', () => ({
   createConfigDraftSkillPack: vi.fn(),
   deleteConfigDraftSkillPack: vi.fn(),
   fetchConfigDraftKnowledgeBinding: vi.fn(),
+  fetchConfigDraftPublicationConfiguration: vi.fn(),
   fetchConfigDraftSkills: vi.fn(),
   fetchRunDetail: vi.fn(),
   fetchRuns: vi.fn(),
@@ -329,6 +331,47 @@ describe('AgentDetailPage', () => {
           state: 'queryable',
         },
       ],
+    })
+    vi.mocked(fetchConfigDraftPublicationConfiguration).mockResolvedValue({
+      draft_revision: 11,
+      authoring_configuration_state: 'blocked',
+      formal_publication_state: 'workspace_draft_not_bound',
+      can_publish_from_dashboard: false,
+      workflow: {
+        template: 'react_enterprise_qa_v3',
+        template_descriptor_version: 'react_enterprise_qa.v3',
+      },
+      knowledge: {
+        candidate: {
+          knowledge_space_id: 'space_insurance',
+          knowledge_base_id: 'base_claims',
+          knowledge_base_version_id: 'base_version_3',
+          knowledge_base_release_id: 'release_7',
+        },
+        queryable: true,
+      },
+      model_roles: [
+        {
+          role: 'final_answer',
+          connection_id: 'model_deepseek',
+          provider: 'deepseek',
+          model_identifier: 'deepseek-chat',
+          lifecycle_state: 'ACTIVE',
+          configuration_state: 'ready',
+        },
+      ],
+      configuration_blockers: [
+        {
+          code: 'memory_must_be_disabled',
+          module_id: 'memory',
+          message: 'Initial production publication requires Memory to be disabled.',
+        },
+      ],
+      formal_requirements: {
+        phase_f_evidence: ['shadow', 'capacity', 'acceptance', 'recovery'],
+        online_smoke_required: true,
+        activation_mode: 'postgres_atomic_cas',
+      },
     })
     vi.mocked(updateConfigDraftKnowledgeBinding).mockImplementation(
       async (_agentId, _draftId, payload) => ({
@@ -740,6 +783,48 @@ describe('AgentDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Versions' }))
     expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rollback' })).not.toBeInTheDocument()
+  })
+
+  it('shows server-authoritative publication configuration without exposing a Dashboard publish bypass', async () => {
+    enableProductionKnowledgeEditing(11)
+    mockDraft = {
+      ...mockDraft,
+      capabilities: {
+        ...mockDraft.capabilities!,
+        lifecycle_tabs: ['publication', 'versions', 'contract', 'monitor'],
+      },
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=publication')
+
+    expect(await screen.findByRole('heading', { name: 'Publication Configuration' })).toBeInTheDocument()
+    expect(screen.getByText('Draft revision 11')).toBeInTheDocument()
+    expect(screen.getByText('release_7')).toBeInTheDocument()
+    expect(screen.getByText('model_deepseek')).toBeInTheDocument()
+    expect(screen.getByText('Initial production publication requires Memory to be disabled.')).toBeInTheDocument()
+    expect(screen.getAllByText('Workspace Draft not bound')).toHaveLength(2)
+    expect(screen.getByText('Formal publisher requirements')).toBeInTheDocument()
+    expect(screen.getByText('shadow, capacity, acceptance, recovery')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument()
+    expect(fetchConfigDraftPublicationConfiguration).toHaveBeenCalledTimes(1)
+    expect(fetchConfigDraftPublicationConfiguration).toHaveBeenCalledWith('agent-1', 'draft-1')
+  })
+
+  it('does not request production publication configuration for Development Drafts', async () => {
+    mockDraft = {
+      ...mockDraft,
+      capabilities: {
+        ...mockDraft.capabilities!,
+        lifecycle_tabs: ['publication', 'validate', 'versions', 'contract', 'monitor'],
+      },
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=publication')
+
+    await waitFor(() => {
+      expect(fetchConfigDraftPublicationConfiguration).not.toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('heading', { name: 'Publication Configuration' })).not.toBeInTheDocument()
   })
 
   it('keeps production configuration modules visible as read-only Contract projections', async () => {

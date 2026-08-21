@@ -49,6 +49,10 @@ from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceManagementWorkspace,
 )
 from proof_agent.control.production_agent_publication import SOLE_PRODUCTION_AGENT_ID
+from proof_agent.control.production_agent_publication_configuration import (
+    ProductionAgentPublicationConfiguration,
+    ProductionAgentPublicationConfigurationProjector,
+)
 from proof_agent.control.agent_configuration_skill_packs import (
     BusinessFlowSkillPackConfiguration,
     BusinessFlowSkillPackCreateCommand,
@@ -309,6 +313,9 @@ class AgentConfigurationWorkspace:
         workflow_stage_inspector: AgentConfigurationWorkflowStageInspector | None = None,
         skill_pack_inspector: AgentConfigurationSkillPackInspector | None = None,
         knowledge_release_catalog: AgentConfigurationKnowledgeReleaseCatalog | None = None,
+        publication_configuration_projector: (
+            ProductionAgentPublicationConfigurationProjector | None
+        ) = None,
         scope: AgentConfigurationScope = AgentConfigurationScope.SOLE_AGENT,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -321,6 +328,7 @@ class AgentConfigurationWorkspace:
         self._workflow_stage_inspector = workflow_stage_inspector
         self._skill_pack_inspector = skill_pack_inspector
         self._knowledge_release_catalog = knowledge_release_catalog
+        self._publication_configuration_projector = publication_configuration_projector
         self._scope = scope
         self._clock = clock
 
@@ -733,6 +741,29 @@ class AgentConfigurationWorkspace:
         catalog = self._require_knowledge_release_catalog().workspace()
         return AgentConfigurationKnowledgeBindingResult(
             record=current,
+            catalog=catalog,
+        )
+
+    def get_publication_configuration(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+    ) -> ProductionAgentPublicationConfiguration:
+        """Return a server-authoritative snapshot of Draft authoring checks."""
+
+        self._require_agent_scope(agent_id)
+        self._require_draft_scope(draft_id)
+        if self._publication_configuration_projector is None:
+            raise AgentConfigurationConflict(
+                code="agent_publication_configuration_unavailable",
+                detail="Production publication configuration is unavailable.",
+            )
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        catalog = self._require_knowledge_release_catalog().workspace()
+        return self._publication_configuration_projector.project(
+            draft=current.draft,
+            revision=current.revision,
             catalog=catalog,
         )
 

@@ -4,17 +4,17 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 建议结论 | Slice 8D KSS Knowledge binding 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
+| 建议结论 | Slice 8E Production 发布前作者侧配置快照 `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS`；本结论不是正式发布或生产批准 |
 | 最高风险等级 | P1 |
-| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；Slice 8A/8B/8C 依次恢复 Production Contract、Workflow 与 Skill Pack 交互；Slice 8D 恢复 KSS exact Release Draft candidate 交互 |
+| 模式 | 行为保护重构；Slice 1—7 已完成本地验证与独立复验；Slice 8A/8B/8C/8D 依次恢复 Production Contract、Workflow、Skill Pack 与 KSS exact Release 交互；Slice 8E 补充发布前作者侧配置快照与正式 publisher 未绑定状态 |
 
 ## 2. 测试目标与范围
 
 | 项 | 内容 |
 | --- | --- |
-| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration、raw Contract、Skill Pack 专用编辑，以及 Production Contract、Workflow、Skill Pack 与 KSS Knowledge Draft candidate 保存/预览 |
+| 测试目标 | 证明 Delivery 可通过 Workspace interface 完成 Draft lifecycle、development validation/publication、Agent Version pointer rollback、Workflow Stage Configuration、raw Contract、Skill Pack 专用编辑，以及 Production Contract、Workflow、Skill Pack、KSS Knowledge Draft candidate 与发布配置聚合 |
 | 测试范围 | Control module、focused persistence ports、Local/PostgreSQL adapters、Development/Production Delivery routes、本地 inspectors、KSS management catalog seam 与 Dashboard capability 驱动流程 |
-| 不覆盖范围 | production validation/publish、正式 Phase F publisher、executable KSS binding/profile、Source rollback-Draft、Blue/Green deployment rollback、canonical seed bootstrap |
+| 不覆盖范围 | production validation/publish mutation、正式 Phase F publisher 执行、executable KSS binding/profile、Source rollback-Draft、Blue/Green deployment rollback、canonical seed bootstrap |
 
 ## 3. 测试场景
 
@@ -54,6 +54,12 @@
 | ACW-T32 | KSS candidate 使用 Draft revision CAS，并与 Draft/global audit 原子提交 | consistency/concurrency | P1 | P1 |
 | ACW-T33 | Production Knowledge route 强制 Agent 与 KSS 权限，返回稳定 400/404/409/500/503 | API/security | P1 | P1 |
 | ACW-T34 | Dashboard 409 保留 exact Release 选择、冻结重放并要求显式 Reload Latest | concurrency/UX | P1 | P1 |
+| ACW-T35 | 发布配置聚合同一 Draft revision、live KSS catalog 与 trace-safe Shared Model Connection facts | authority/contract | P1 | P1 |
+| ACW-T36 | 作者侧检查通过时仍保持 `workspace_draft_not_bound`，不声称 ready-to-publish，也不提供 Dashboard publish/activate | authority/negative | P1 | P1 |
+| ACW-T37 | 发布配置 route 强制 Agent/KSS 双权限并稳定映射 400/404/503/500，不泄漏 secret/path | API/security | P1 | P1 |
+| ACW-T38 | Dashboard 只在 Production capability 中读取发布配置，并导航到源模块，不建立第二写权威 | architecture/UX | P1 | P1 |
+| ACW-T39 | 模型角色含 inline credential marker 时作者侧检查失败关闭，且 blocker/API 不回显 marker 值 | security/authority | P1 | P1 |
+| ACW-T40 | Contract `name` 与 revisioned Draft `agent_id` 不一致时作者侧检查失败关闭 | identity/authority | P1 | P1 |
 
 ## 4. Given-When-Then 用例
 
@@ -397,3 +403,23 @@
 | VERIFY-MAIN-13 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard/Chat、静态、构建与领域检查 | focused backend 112 passed、4 skipped；backend 2026 passed、122 skipped、2 deselected；Dashboard 214、Agent Detail 56、Chat 35；Ruff、Mypy（356 source files）、TypeScript、共享 UI/两端 build、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
 | VERIFY-AGENT-13 | 独立子 Agent 对抗复验 Slice 8D，并复验 strict candidate 与 Development 只读兼容修正 | scope→diff、KSS 权威、权限、strict contract、CAS/audit、错误映射、stale UX、composition、lifecycle/runtime 隔离与全门禁 | `PASS_WITH_ENV_LIMITATION`；无未关闭 P0–P3；focused backend 37 passed、1 skipped，相关后端 222 passed、15 skipped，backend 2026 passed、122 skipped、2 deselected，Dashboard focused 76、全量 214，Chat 35；Ruff、Mypy（356 source files）、TypeScript、build、domain-context、diff、lock 全部通过 |
 | ENV-9 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | 真实 PostgreSQL Configuration UoW | 2 项真实 PostgreSQL UoW 用例 skip，标记 `PARTIAL_VERIFICATION`；既往 disposable PostgreSQL 证据不冒充本次连接证明 |
+
+## 21. Slice 8E TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 服务端作者侧配置聚合、公开只读 HTTP 契约扩展与行为保护重构 |
+| 公开 interface | Workspace `get_publication_configuration(...)`；Production `GET /api/config/agents/{agent_id}/drafts/{draft_id}/publication-configuration`；Dashboard `publication` lifecycle tab |
+| 当前状态 | 主代理本地门禁通过；独立子 Agent `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS`；正式 publisher 仍固定为 `workspace_draft_not_bound` |
+| 不测试的实现细节 | 私有 helper、UI 内部 state、catalog transport 细节 |
+| 范围外 | Workspace Draft 到正式 publisher 的 authority integration、publish/activate mutation、Phase F evidence 保存、credential resolve、正式 online smoke、Blue/Green rollback、部署 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-41 | Publication projector、Workspace interface、Production GET 与 Dashboard tab | projector/API/Agent Detail tests | projector import 不存在；route 返回 404；页面无「发布配置」 |
+| GREEN-41 | 同一 revision 聚合 Contract、live exact KSS Release 与 trace-safe Shared Model Connection facts | Control、Workspace、API tests | 双权限 GET 返回无 secret/base URL/path 的作者侧快照；无持久化、publish、activate 或 credential resolve side effect |
+| GREEN-42 | Dashboard 在 Release 分组展示 Workflow、Knowledge、Model、作者侧 blockers 与正式 publisher 通用 Gate | client/Agent Detail tests | Production capability 才请求专用 route；Development 隔离；源模块导航保留；无 Publish/Activate 按钮 |
+| REFACTOR-11 | 对抗复验收紧正式发布边界与 admission parity | projector、API、i18n、feature evidence | `authoring_configuration_state` 与 `workspace_draft_not_bound` 取代 ready-to-publish claim；inline credential、role badge、catalog 503、Contract/Draft identity 与旧 docstring 问题全部关闭 |
+| VERIFY-MAIN-14 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard/Chat、静态、构建与领域检查 | focused backend 115 passed；backend 2038 passed、122 skipped、2 deselected；Dashboard 217、Chat 35；Ruff、Mypy（357 source files）、TypeScript、共享 UI/两端 build、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
+| VERIFY-AGENT-14 | 独立子 Agent 对抗复验 Slice 8E，并复验全部修正 | scope→diff、正式 publisher 对照、权限、KSS/model authority、identity、inline credential、错误映射、Development 隔离、AST/side-effect 与全门禁 | `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS`；无未关闭 P0–P3；focused backend 126，backend 2039 passed、122 skipped、2 deselected，Dashboard 217，Chat 35；Ruff、Mypy（357 source files）、TypeScript、build、domain-context、diff、lock 全部通过 |
+| ENV-10 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | `test_postgres_agent_repository.py`、`test_postgres_configuration_uow.py` | 11 项真实 PostgreSQL 用例 skip，标记 `PARTIAL_VERIFICATION`；本切片不修改正式 publisher 或 PostgreSQL CAS，不把单元回归冒充新的真实数据库证据 |

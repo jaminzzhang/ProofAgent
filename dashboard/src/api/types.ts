@@ -800,6 +800,39 @@ export interface AgentKnowledgeReleaseBindingConfiguration {
   releases: KnowledgeServiceReleaseProjection[]
 }
 
+export interface ProductionAgentPublicationConfiguration {
+  draft_revision: number
+  authoring_configuration_state: 'ready' | 'blocked'
+  formal_publication_state: 'workspace_draft_not_bound'
+  can_publish_from_dashboard: false
+  workflow: {
+    template: string | null
+    template_descriptor_version: string | null
+  }
+  knowledge: {
+    candidate: DraftKnowledgeReleaseBindingCandidate | null
+    queryable: boolean
+  }
+  model_roles: Array<{
+    role: string
+    connection_id: string | null
+    provider: string | null
+    model_identifier: string | null
+    lifecycle_state: string | null
+    configuration_state: 'ready' | 'blocked'
+  }>
+  configuration_blockers: Array<{
+    code: string
+    module_id: string
+    message: string
+  }>
+  formal_requirements: {
+    phase_f_evidence: string[]
+    online_smoke_required: boolean
+    activation_mode: 'postgres_atomic_cas'
+  }
+}
+
 export type ConfigurationOperation =
   | 'created'
   | 'imported'

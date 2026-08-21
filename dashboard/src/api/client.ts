@@ -25,6 +25,7 @@ import type {
   ModelCredentialReference,
   ModelConnectionsResponse,
   PublishedAgentVersion,
+  ProductionAgentPublicationConfiguration,
   RunDetail,
   RunPurposeFilter,
   RunsListResponse,
@@ -566,6 +567,15 @@ export function fetchConfigDraftKnowledgeBinding(
 ): Promise<AgentKnowledgeReleaseBindingConfiguration> {
   return fetchJson<AgentKnowledgeReleaseBindingConfiguration>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-binding`,
+  )
+}
+
+export function fetchConfigDraftPublicationConfiguration(
+  agentId: string,
+  draftId: string,
+): Promise<ProductionAgentPublicationConfiguration> {
+  return fetchJson<ProductionAgentPublicationConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/publication-configuration`,
   )
 }
 

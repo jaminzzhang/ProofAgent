@@ -203,6 +203,10 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         captured["agent_configuration_workspace"]._knowledge_release_catalog
         is captured["knowledge_service_management_client"]
     )
+    assert isinstance(
+        captured["agent_configuration_workspace"]._publication_configuration_projector,
+        production_roles.ProductionAgentPublicationConfigurationProjector,
+    )
 
 
 def test_embedded_reference_profile_source_selection_is_removed() -> None:

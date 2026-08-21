@@ -40,6 +40,18 @@
   197 Dashboard tests and 35 Chat tests; both production builds passed. Ruff,
   strict mypy over 354 source files, domain-context, diff and lock checks passed.
   This does not authorize production.
+- `[KNOWN | HIGH]` As of 2026-08-22, Production Agent Detail restores governed
+  Contract, Workflow, Skill Pack, exact KSS Release and publication-configuration
+  interactions through the Agent Configuration Workspace. The publication tab is
+  a read-only authoring snapshot over one Draft revision plus live KSS and Shared
+  Model Connection facts. It explicitly reports `workspace_draft_not_bound`:
+  the current formal publisher still uses independent candidate inputs, and the
+  Dashboard exposes no publish or activate command.
+- `[COMPUTED | HIGH]` Slice 8E passed 2039 backend tests, 217 Dashboard tests and
+  35 Chat tests. Ruff, mypy over 357 source files, TypeScript, all UI builds,
+  domain-context, diff and lock checks passed. Eleven real-PostgreSQL tests were
+  skipped because the current shell had no `PROOF_AGENT_TEST_POSTGRES_DSN`, so
+  the Slice 8E evidence remains `PASS_WITH_ENV_LIMITATION`, not production approval.
 - `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
   same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS
   operator credential from Vault and calls the independent service through the

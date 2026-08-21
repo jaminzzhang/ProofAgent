@@ -606,3 +606,44 @@
 - RED：Production Knowledge 无 selector 或保存控件。
 - GREEN：Production 显示 authoring-only 状态、readiness 与 queryable Releases；保存发送 projection revision；409 保留选择并要求显式 Reload Latest；Development 保留 Knowledge Contract 只读投影且不请求 Production 专用 route。
 - 验证：Workspace/API/PostgreSQL 聚焦、Dashboard Knowledge、权限/错误/审计/隔离负向、静态与全门禁；完成后启动独立子 Agent 复验。
+
+## 45. Slice 8E 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | `TDD_INPUT_READY`；补充发布前作者侧配置只读聚合，显式展示正式 publisher 未绑定 Workspace Draft，不开放正式生产发布命令 |
+| 最高风险等级 | P1 |
+| 公开 interface | Workspace `get_publication_configuration(...)`；Production `GET /api/config/agents/{agent_id}/drafts/{draft_id}/publication-configuration`；Dashboard `publication` lifecycle tab |
+| 可观察行为 | 展示同一 Draft revision 的 Workflow、精确 KSS Release、生产模型角色、作者侧检查项，以及正式 publisher 的通用 Phase F、online smoke 和 PostgreSQL 原子激活要求；正式状态固定为 `workspace_draft_not_bound` |
+| 权威边界 | Workflow、Knowledge、Model、Tools、Memory 等源模块继续拥有各自保存命令；发布配置不新增持久化字段，也不读取凭据或生成发布批准 |
+| 兼容边界 | Production 只新增 GET route 与 capability tab；Development 不请求该 route；现有 `ProductionAgentPublicationService`、CLI、独立候选输入、权限和 Phase F Gate 行为不变，不声称它消费 Workspace Draft |
+| 范围外 | Dashboard publish/activate、Phase F evidence 上传或保存、smoke question 保存、credential 解析、正式 online smoke、Blue/Green deployment、rollback |
+| ADR 判断 | 不新增 ADR；复用 ADR-0168 的服务端就绪度聚合模式、ADR-0208 的 Gate 不减配原则，以及 ADR-0211 的 Draft candidate/正式发布边界 |
+
+## 46. Slice 8E 设计树与 TDD 任务
+
+| 节点 | 触发条件 | 处理方案 | 结果 | 验证点 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| ACW-PPC-ROOT | Production Operator 打开「发布配置」 | Workspace 从同一 Draft revision 读取 Contract，结合 live KSS catalog 与 Shared Model Connection reader | trace-safe publication projection | 双权限、revision identity、无 credential/base URL/path | P1 |
+| ACW-PPC-MAIN-1 | Draft 合同可解析 | projector 检查 Contract/Draft identity、production workflow、package/legacy Knowledge 禁令、Tools/Memory、fail-closed review、inline credential 禁令与所有模型角色 | 作者侧 `ready` 或稳定 blockers | 与 production admission 规则对齐；identity mismatch、未知、缺失或 inline credential 配置失败关闭 | P1 |
+| ACW-PPC-MAIN-2 | Draft 选择 exact KSS Release | 对实时 catalog 做完整父级身份与 `queryable` 匹配 | Knowledge candidate 状态 | 不接受 `latest`、不构造 executable binding | P1 |
+| ACW-PPC-MAIN-3 | 配置聚合完成 | Dashboard 在 Release 分组展示来源、作者侧检查项、正式 Gate 要求和未绑定状态，并提供源模块导航 | 可审查的发布前作者侧快照 | 不出现 ready-to-publish 或 Publish 按钮；Development 不调用专用 route | P1 |
+| ACW-PPC-BRANCH-1 | KSS/model catalog 或 Contract 不可用 | 返回稳定 blocker 或 400/503/500 | 无 side effect | 不泄漏内部 detail，不读取 secret | P1 |
+| ACW-PPC-BOUND-1 | 作者侧配置检查通过 | 仍保持 `workspace_draft_not_bound` 与 `can_publish_from_dashboard=false` | 不产生正式发布就绪、发布或激活结论 | 现有正式 publisher 继续使用独立候选输入；绑定 Workspace Draft 必须另立 authority integration 切片 | P1 |
+
+### Task ACW-PPC1：Control projector 与 Workspace 聚合
+
+- RED：不存在发布配置 projector 和 Workspace interface。
+- GREEN：生成无密钥 Workflow、KSS、Model role 与 blocker projection；KSS 和模型均读取 live authority。
+- 停止条件：需要保存 Phase F evidence、credential、smoke question 或 release approval。
+
+### Task ACW-PPC2：Production HTTP 与 Dashboard
+
+- RED：Production route 为 404，Release 分组只有「版本」。
+- GREEN：新增双权限 GET route、稳定错误映射和 capability 驱动的「发布配置」页；源配置继续在各模块保存。
+- 停止条件：需要开放 publish、activate 或 rollback mutation。
+
+### Task ACW-PPC3：验证与独立复核
+
+- 覆盖完整/阻断 Draft、KSS queryability、Shared Model Connection lifecycle/provider/credential authority、权限、错误不泄漏、Development 隔离和无 publication side effect。
+- 运行聚焦与仓库级 backend、Dashboard/Chat、Ruff、Mypy、TypeScript、build、domain-context、diff 与 lock；完成后启动独立子 Agent 复验。

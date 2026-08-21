@@ -56,6 +56,9 @@ from proof_agent.control.agent_configuration_workspace import (
 from proof_agent.control.production_agent_publication import (
     ProductionAgentPublicationService,
 )
+from proof_agent.control.production_agent_publication_configuration import (
+    ProductionAgentPublicationConfigurationProjector,
+)
 from proof_agent.control.run_execution import RunExecutionSnapshotAuthority
 from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,
@@ -323,6 +326,11 @@ def create_production_api_application(
             workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
             skill_pack_inspector=LocalAgentConfigurationSkillPackAdapter(),
             knowledge_release_catalog=knowledge_service_management,
+            publication_configuration_projector=(
+                ProductionAgentPublicationConfigurationProjector(
+                    configuration_store=runtime_configuration,
+                )
+            ),
         )
         application = create_app(
             mode="production",

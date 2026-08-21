@@ -463,6 +463,51 @@ def update_production_agent_knowledge_binding(
     return _knowledge_binding_payload(result)
 
 
+@agent_router.get(
+    "/{agent_id}/drafts/{draft_id}/publication-configuration"
+)
+def get_production_agent_publication_configuration(
+    agent_id: str,
+    draft_id: str,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return a server-authoritative Draft authoring snapshot."""
+
+    require_operator_permission(identity, Permission.AGENT_VIEW)
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
+    try:
+        result = _application(request).get_publication_configuration(
+            agent_id=agent_id,
+            draft_id=draft_id,
+        )
+    except AgentConfigurationNotFound as exc:
+        raise _configuration_exception(exc) from exc
+    except AgentConfigurationConflict as exc:
+        if exc.code in {
+            "agent_publication_configuration_unavailable",
+            "agent_knowledge_catalog_unavailable",
+        }:
+            raise HTTPException(status_code=503, detail=exc.code) from exc
+        raise _configuration_exception(exc) from exc
+    except ProofAgentError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="agent_publication_configuration_unavailable",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_publication_configuration_invalid",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="agent_publication_configuration_read_failed",
+        ) from exc
+    return _publication_configuration_payload(result)
+
+
 @agent_router.post("/{agent_id}/drafts/{draft_id}/skills/business-flows")
 def create_production_agent_skill_pack(
     agent_id: str,
@@ -737,7 +782,7 @@ def _draft_payload(record: AgentDraftRecord) -> dict[str, Any]:
             "memory",
             "response",
         ],
-        "lifecycle_tabs": ["versions", "contract", "monitor"],
+        "lifecycle_tabs": ["publication", "versions", "contract", "monitor"],
         "actions": {
             "can_validate": False,
             "can_publish": False,
@@ -807,6 +852,52 @@ def _knowledge_binding_payload(result: Any) -> dict[str, Any]:
         "releases": [
             release.model_dump(mode="json") for release in result.catalog.releases
         ],
+    }
+
+
+def _publication_configuration_payload(result: Any) -> dict[str, Any]:
+    candidate = result.knowledge_release_candidate
+    return {
+        "draft_revision": result.draft_revision,
+        "authoring_configuration_state": result.authoring_configuration_state,
+        "formal_publication_state": result.formal_publication_state,
+        "can_publish_from_dashboard": result.can_publish_from_dashboard,
+        "workflow": {
+            "template": result.workflow_template,
+            "template_descriptor_version": (
+                result.workflow_template_descriptor_version
+            ),
+        },
+        "knowledge": {
+            "candidate": (
+                None if candidate is None else candidate.model_dump(mode="json")
+            ),
+            "queryable": result.knowledge_release_queryable,
+        },
+        "model_roles": [
+            {
+                "role": item.role,
+                "connection_id": item.connection_id,
+                "provider": item.provider,
+                "model_identifier": item.model_identifier,
+                "lifecycle_state": item.lifecycle_state,
+                "configuration_state": item.configuration_state,
+            }
+            for item in result.model_roles
+        ],
+        "configuration_blockers": [
+            {
+                "code": item.code,
+                "module_id": item.module_id,
+                "message": item.message,
+            }
+            for item in result.configuration_blockers
+        ],
+        "formal_requirements": {
+            "phase_f_evidence": list(result.phase_f_evidence_requirements),
+            "online_smoke_required": result.online_smoke_required,
+            "activation_mode": result.activation_mode,
+        },
     }
 
 

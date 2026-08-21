@@ -13,6 +13,7 @@ import {
   deleteConfigDraftSkillPack,
   fetchConfigAgents,
   fetchConfigDraftKnowledgeBinding,
+  fetchConfigDraftPublicationConfiguration,
   fetchConfigDraftSkills,
   fetchEvaluationCampaign,
   fetchEvaluationCampaignCases,
@@ -945,6 +946,28 @@ test('fetchConfigDraftKnowledgeBinding requests the live KSS Release catalog pro
     sameOriginRequest(),
   )
   expect(response.readiness.revision).toBe('catalog-3')
+})
+
+test('fetchConfigDraftPublicationConfiguration requests the server-authoritative publication projection', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({
+      draft_revision: 11,
+      authoring_configuration_state: 'ready',
+      formal_publication_state: 'workspace_draft_not_bound',
+      can_publish_from_dashboard: false,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+
+  const response = await fetchConfigDraftPublicationConfiguration('enterprise_qa', 'draft_1')
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/config/agents/enterprise_qa/drafts/draft_1/publication-configuration',
+    sameOriginRequest(),
+  )
+  expect(response.formal_publication_state).toBe('workspace_draft_not_bound')
 })
 
 test('updateConfigDraftKnowledgeBinding patches one exact KSS Release tuple with Draft CAS', async () => {

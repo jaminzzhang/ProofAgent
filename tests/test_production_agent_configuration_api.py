@@ -41,6 +41,11 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationSummary,
     AgentConfigurationVersions,
 )
+from proof_agent.control.production_agent_publication_configuration import (
+    ProductionAgentPublicationConfiguration,
+    ProductionAgentPublicationConfigurationBlocker,
+    ProductionAgentPublicationModelRole,
+)
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
 
 
@@ -328,6 +333,21 @@ class RecordingApplication:
         )
         return _knowledge_binding_result(revision=1)
 
+    def get_publication_configuration(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+    ) -> ProductionAgentPublicationConfiguration:
+        self.calls.append(
+            {
+                "agent_id": agent_id,
+                "draft_id": draft_id,
+                "operation": "publication_configuration_read",
+            }
+        )
+        return _publication_configuration()
+
     def update_knowledge_release_binding_candidate(
         self,
         *,
@@ -407,6 +427,44 @@ def _knowledge_binding_candidate() -> DraftKnowledgeReleaseBindingCandidate:
         knowledge_base_id="insurance-guidance",
         knowledge_base_version_id="insurance-guidance-v3",
         knowledge_base_release_id="insurance-guidance-release-7",
+    )
+
+
+def _publication_configuration() -> ProductionAgentPublicationConfiguration:
+    return ProductionAgentPublicationConfiguration(
+        draft_revision=11,
+        authoring_configuration_state="blocked",
+        formal_publication_state="workspace_draft_not_bound",
+        can_publish_from_dashboard=False,
+        workflow_template="react_enterprise_qa_v3",
+        workflow_template_descriptor_version="react_enterprise_qa.v3",
+        knowledge_release_candidate=_knowledge_binding_candidate(),
+        knowledge_release_queryable=True,
+        model_roles=(
+            ProductionAgentPublicationModelRole(
+                role="final_answer",
+                connection_id="model_deepseek",
+                provider="deepseek",
+                model_identifier="deepseek-chat",
+                lifecycle_state="ACTIVE",
+                configuration_state="ready",
+            ),
+        ),
+        configuration_blockers=(
+            ProductionAgentPublicationConfigurationBlocker(
+                code="memory_must_be_disabled",
+                module_id="memory",
+                message="Initial production publication requires Memory to be disabled.",
+            ),
+        ),
+        phase_f_evidence_requirements=(
+            "shadow",
+            "capacity",
+            "acceptance",
+            "recovery",
+        ),
+        online_smoke_required=True,
+        activation_mode="postgres_atomic_cas",
     )
 
 
@@ -493,7 +551,7 @@ def test_create_production_agent_uses_server_owned_contract_and_returns_revision
                 "memory",
                 "response",
             ],
-            "lifecycle_tabs": ["versions", "contract", "monitor"],
+            "lifecycle_tabs": ["publication", "versions", "contract", "monitor"],
             "actions": {
                 "can_validate": False,
                 "can_publish": False,
@@ -1501,6 +1559,155 @@ def test_create_rejects_browser_paths_and_requires_an_idempotency_key() -> None:
     assert service.calls == []
 
 
+def test_production_publication_configuration_returns_trace_safe_authoritative_projection() -> None:
+    application, service = _application()
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/"
+        "drafts/019ba001-1111-7000-8000-000000000701/publication-configuration"
+    )
+
+    response = TestClient(application).get(route)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "draft_revision": 11,
+        "authoring_configuration_state": "blocked",
+        "formal_publication_state": "workspace_draft_not_bound",
+        "can_publish_from_dashboard": False,
+        "workflow": {
+            "template": "react_enterprise_qa_v3",
+            "template_descriptor_version": "react_enterprise_qa.v3",
+        },
+        "knowledge": {
+            "candidate": _knowledge_binding_candidate().model_dump(mode="json"),
+            "queryable": True,
+        },
+        "model_roles": [
+            {
+                "role": "final_answer",
+                "connection_id": "model_deepseek",
+                "provider": "deepseek",
+                "model_identifier": "deepseek-chat",
+                "lifecycle_state": "ACTIVE",
+                "configuration_state": "ready",
+            }
+        ],
+        "configuration_blockers": [
+            {
+                "code": "memory_must_be_disabled",
+                "module_id": "memory",
+                "message": (
+                    "Initial production publication requires Memory to be disabled."
+                ),
+            }
+        ],
+        "formal_requirements": {
+            "phase_f_evidence": ["shadow", "capacity", "acceptance", "recovery"],
+            "online_smoke_required": True,
+            "activation_mode": "postgres_atomic_cas",
+        },
+    }
+    assert "credential" not in response.text
+    assert "base_url" not in response.text
+    assert service.calls == [
+        {
+            "agent_id": "agent_management_insurance_specialist",
+            "draft_id": "019ba001-1111-7000-8000-000000000701",
+            "operation": "publication_configuration_read",
+        }
+    ]
+
+
+def test_production_publication_configuration_requires_agent_and_knowledge_view() -> None:
+    application, service = _application()
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/"
+        "drafts/019ba001-1111-7000-8000-000000000701/publication-configuration"
+    )
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("agent.view")})
+    )
+
+    missing_knowledge_view = TestClient(application).get(route)
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("knowledge_source.view")})
+    )
+    missing_agent_view = TestClient(application).get(route)
+
+    assert missing_knowledge_view.status_code == 403
+    assert missing_agent_view.status_code == 403
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (
+            AgentConfigurationNotFound(
+                code="agent_draft_not_found",
+                detail="internal-path:/private/draft",
+            ),
+            404,
+            "agent_draft_not_found",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="agent_publication_configuration_unavailable",
+                detail="internal-path:/private/configuration",
+            ),
+            503,
+            "agent_publication_configuration_unavailable",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="agent_knowledge_catalog_unavailable",
+                detail="internal-path:/private/catalog",
+            ),
+            503,
+            "agent_knowledge_catalog_unavailable",
+        ),
+        (
+            ProofAgentError(
+                "PA_KNOWLEDGE_002",
+                "internal-path:/private/kss",
+                "Do not expose this path.",
+            ),
+            503,
+            "agent_publication_configuration_unavailable",
+        ),
+        (
+            ValueError("internal-path:/private/invalid"),
+            400,
+            "agent_publication_configuration_invalid",
+        ),
+        (
+            OSError("internal-path:/private/failure"),
+            500,
+            "agent_publication_configuration_read_failed",
+        ),
+    ],
+)
+def test_production_publication_configuration_maps_failures_without_internal_detail(
+    error: Exception,
+    status_code: int,
+    detail: str,
+) -> None:
+    application, _ = _application()
+    application.state.agent_configuration_workspace = (
+        _FailingPublicationConfigurationApplication(error)
+    )
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/"
+        "drafts/019ba001-1111-7000-8000-000000000701/publication-configuration"
+    )
+
+    response = TestClient(application, raise_server_exceptions=False).get(route)
+
+    assert response.status_code == status_code
+    assert response.json() == {"detail": detail}
+    assert "/private" not in response.text
+
+
 def test_production_agent_commands_enforce_permissions_and_stable_conflicts() -> None:
     application, service = _application()
     application.state.operator_identity_provider = _StaticIdentityProvider(
@@ -1568,6 +1775,16 @@ class _FailingContractApplication(RecordingApplication):
         self._error = error
 
     def update_contract(self, **kwargs: Any) -> AgentDraftRecord:
+        del kwargs
+        raise self._error
+
+
+class _FailingPublicationConfigurationApplication(RecordingApplication):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    def get_publication_configuration(self, **kwargs: Any) -> Any:
         del kwargs
         raise self._error
 

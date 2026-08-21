@@ -6,6 +6,7 @@ import {
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
   fetchConfigDraftKnowledgeBinding,
+  fetchConfigDraftPublicationConfiguration,
   fetchConfigDraftSkills,
   fetchWorkflowTemplate,
   fetchModelConnections,
@@ -25,6 +26,7 @@ import type {
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
   DraftKnowledgeReleaseBindingCandidate,
+  ProductionAgentPublicationConfiguration,
   SharedModelConnection,
   WorkflowTemplateDescriptor,
 } from '../api/types'
@@ -40,6 +42,7 @@ import { MemoryModuleEditor } from '../components/agent/MemoryModuleEditor'
 import { KnowledgeModuleEditor } from '../components/agent/KnowledgeModuleEditor'
 import type { KnowledgeBindingMutationResult } from '../components/agent/KnowledgeModuleEditor'
 import { ReadOnlyConfigurationModule } from '../components/agent/ReadOnlyConfigurationModule'
+import { PublicationConfigurationModule } from '../components/agent/PublicationConfigurationModule'
 import type { ConfigurationSection } from '../components/agent/ReadOnlyConfigurationModule'
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import type { SkillPackMutationResult } from '../components/agent/SkillsModuleEditor'
@@ -60,7 +63,7 @@ import {
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
-type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'versions' | 'contract' | 'monitor'
+type Tab = 'general' | 'workflow' | 'skills' | 'knowledge' | 'tools' | 'policy' | 'model' | 'memory' | 'response' | 'validate' | 'publication' | 'versions' | 'contract' | 'monitor'
 
 const SAFE_EDITABLE_MODULES: readonly Tab[] = ['general']
 const SAFE_LIFECYCLE_TABS: readonly Tab[] = []
@@ -89,7 +92,10 @@ export function AgentDetailPage() {
   const canPublish = draft?.capabilities?.actions.can_publish ?? false
   const canRollback = draft?.capabilities?.actions.can_rollback ?? false
   const lifecycleTabIds = advertisedLifecycleTabs.filter(
-    (tab) => tab !== 'validate' || canValidate,
+    (tab) => (
+      (tab !== 'validate' || canValidate)
+      && (tab !== 'publication' || draft?.capabilities?.mode === 'production')
+    ),
   )
   const activeTab = (
     visibleModuleIds.includes(requestedTab) || lifecycleTabIds.includes(requestedTab)
@@ -110,6 +116,8 @@ export function AgentDetailPage() {
   const [knowledgeConfig, setKnowledgeConfig] = useState<AgentKnowledgeReleaseBindingConfiguration | null>(null)
   const [knowledgeLoaded, setKnowledgeLoaded] = useState(false)
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
+  const [publicationConfiguration, setPublicationConfiguration] = useState<ProductionAgentPublicationConfiguration | null>(null)
+  const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
   const [selectedRunDetailId, setSelectedRunDetailId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -226,6 +234,30 @@ export function AgentDetailPage() {
       mounted = false
     }
   }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded])
+
+  useEffect(() => {
+    if (
+      activeTab !== 'publication'
+      || draft?.capabilities?.mode !== 'production'
+      || !agentId
+      || !draftId
+    ) return
+    let mounted = true
+    setPublicationConfiguration(null)
+    setPublicationConfigurationError(null)
+    fetchConfigDraftPublicationConfiguration(agentId, draftId)
+      .then((response) => {
+        if (!mounted) return
+        setPublicationConfiguration(response)
+      })
+      .catch((err) => {
+        if (!mounted) return
+        setPublicationConfigurationError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      mounted = false
+    }
+  }, [activeTab, agentId, draft?.capabilities?.mode, draft?.revision, draftId])
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
   const memoryReadinessBlockers = useMemo(
@@ -473,6 +505,7 @@ export function AgentDetailPage() {
 
   const LIFECYCLE_TABS = [
     { id: 'validate', label: t('agentDetail.tabValidate') },
+    { id: 'publication', label: t('agentDetail.tabPublication') },
     { id: 'versions', label: t('agentDetail.tabVersions') },
     { id: 'contract', label: t('agentDetail.tabContract') },
     { id: 'monitor', label: t('agentDetail.tabMonitor') },
@@ -866,6 +899,15 @@ export function AgentDetailPage() {
         </ConfigPanel>
       )}
 
+      {activeTab === 'publication' && (
+        <PublicationConfigurationModule
+          configuration={publicationConfiguration}
+          loading={!publicationConfiguration && !publicationConfigurationError}
+          error={publicationConfigurationError}
+          onNavigate={setActiveTab}
+        />
+      )}
+
       {activeTab === 'contract' && (
         <div className="grid gap-5">
           <section>
@@ -999,6 +1041,7 @@ function agentDetailTab(value: string | null): Tab {
     'memory',
     'response',
     'validate',
+    'publication',
     'versions',
     'contract',
     'monitor',

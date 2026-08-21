@@ -55,6 +55,9 @@ from proof_agent.control.agent_configuration_skill_packs import (
     BusinessFlowSkillPackCreateCommand,
     BusinessFlowSkillPackUpdateCommand,
 )
+from proof_agent.control.production_agent_publication_configuration import (
+    ProductionAgentPublicationConfigurationProjector,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -2371,6 +2374,49 @@ def test_workspace_reads_and_atomically_saves_exact_kss_release_candidate() -> N
     )
     assert "credential" not in str(factory.audit.events[-1].metadata).lower()
     assert catalog.calls == 2
+    assert factory.agents.active == {}
+    assert factory.agents.published == {}
+
+
+def test_workspace_projects_publication_configuration_from_one_revision_and_live_catalog() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000899",
+        updated_at="2026-08-21T01:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    catalog = StaticKnowledgeReleaseCatalog(_knowledge_release_catalog())
+
+    class EmptyModelConnections:
+        def get_model_connection(self, connection_id: str):
+            del connection_id
+            return None
+
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        publication_configuration_projector=(
+            ProductionAgentPublicationConfigurationProjector(
+                configuration_store=EmptyModelConnections()
+            )
+        ),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    projection = workspace.get_publication_configuration(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+    )
+
+    assert projection.draft_revision == 1
+    assert projection.authoring_configuration_state == "blocked"
+    assert projection.formal_publication_state == "workspace_draft_not_bound"
+    assert projection.can_publish_from_dashboard is False
+    assert "knowledge_release_candidate_required" in {
+        item.code for item in projection.configuration_blockers
+    }
+    assert catalog.calls == 1
     assert factory.agents.active == {}
     assert factory.agents.published == {}
 

@@ -9,6 +9,7 @@ import {
   FileText,
   GitBranch,
   LayoutDashboard,
+  Rocket,
   type LucideIcon,
   ScrollText,
   Settings2,
@@ -51,6 +52,7 @@ const TAB_ICON: Record<string, LucideIcon> = {
   memory: Brain,
   response: ScrollText,
   validate: ClipboardList,
+  publication: Rocket,
   versions: GitBranch,
   contract: Settings2,
   monitor: Eye,
@@ -92,7 +94,7 @@ export function AgentDetailShell({
     },
     {
       title: t('agentDetail.groupRelease'),
-      items: ['versions']
+      items: ['publication', 'versions']
         .map((id) => lifecycleById.get(id))
         .filter((item): item is Tab => Boolean(item)),
     },

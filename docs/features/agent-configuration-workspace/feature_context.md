@@ -10,7 +10,7 @@
 | 所属版本 | 待确认；本轮仅处理本地架构切片 |
 | 业务、研发、测试、发布负责人 | 未提供；不在本地实现中推定 |
 | 当前状态 | `IN_PROGRESS` |
-| 当前切片 | Slice 8：恢复 Production Agent Detail 配置交互；8D KSS Knowledge binding 主代理 `LOCAL_VERIFIED`，等待独立复验 |
+| 当前切片 | Slice 8E：补齐 Production Agent 发布前作者侧配置快照，并显式标记正式发布器未绑定 Workspace Draft；独立复验 `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS` |
 
 ## 2. 需求目标与范围
 
@@ -68,6 +68,7 @@
 | MAIN-11 | Production Contract 模块编辑 | Production Operator 修改 Tools、Policy、Model、Memory 或 Response | Production Delivery 调用既有 `update_contract(...)`；Workspace 校验完整候选并经 PostgreSQL UoW CAS 提交 | 新 Draft revision 与 Contract Bundle | 权限、revision、双层 audit、稳定 400/409/500、无 lifecycle side effect | P1 | Slice 8A 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
 | MAIN-12 | Production 专用模块编辑 | Operator 修改 Workflow Stage 或 Skill Pack | Production route 复用既有 typed Workspace command 与 inspector | 新 Draft revision 或受控 preview | 权限、CAS、audit、stale recovery、临时路径安全 | P1 | Slice 8B Workflow 独立复验 `PASS / NO_BLOCKING_FINDINGS`；Slice 8C Skill Pack 独立复验 `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS` |
 | MAIN-13 | KSS Knowledge binding | Operator 从 KSS 已发布 release 中选择 Agent Draft 精确绑定 | typed Workspace command 只保存 KSS binding candidate，不恢复旧 Source authority | revisioned KSS binding projection | exact release、权限、CAS、审计、旧权威隔离 | P1 | Slice 8D 主代理 `LOCAL_VERIFIED`；独立复验 `PASS_WITH_ENV_LIMITATION` |
+| MAIN-14 | Production 发布配置 | Operator 查看当前 Draft 的发布前作者侧配置 | Workspace 读取同一 Draft revision、实时 KSS catalog 与共享模型连接，由专用 projector 生成无密钥作者侧检查快照 | 源模块检查项、正式 publisher 通用 Gate，以及 `workspace_draft_not_bound` 边界 | 不把作者侧 `ready` 表述为正式发布就绪；无第二写权威、secret/path 或 publish/activate side effect | P1 | Slice 8E 独立复验 `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS` |
 | BRANCH-1 | adapter 失败 | Local/PostgreSQL repository 抛错 | 不建立 fallback，由 Delivery 映射稳定错误 | 无部分写入 | fault 与 rollback 行为 | P1 | 已确认 |
 | BOUND-1 | rollback 范围 | Agent Version rollback 完成 | 不执行 Source rollback-Draft、Phase F 或 Blue/Green deployment rollback | 其他权威不变 | 负向回归 | P1 | 已确认 |
 
@@ -91,6 +92,7 @@
 | ACW-R14 | Production Contract 保存 | Tools、Policy、Model、Memory、Response 保存必须复用 `update_contract(...)`，并要求调用方提供当前 revision | Agent YAML candidate、expected revision、actor | 新 Draft revision | stale writer 返回 409；失败不写 Draft/audit；不触发生命周期操作 | 已确认 |
 | ACW-R15 | 旧交互恢复边界 | Workflow 与 Skill Pack 复用现有 typed command；Production Knowledge 只复用交互布局并写入 KSS Draft candidate；Development Knowledge 保持 Contract 只读投影，不调用 Production 专用 route | 模块交互请求 | 专用 command 或只读投影 | 不恢复旧 Knowledge Source/Hybrid authority；KSS 仍是唯一知识权威 | 已确认 |
 | ACW-R16 | KSS Draft 候选边界 | Knowledge 保存只能写入一个无密钥的 exact KSS Space/Base/Base Version/Release tuple，并在保存时验证 live catalog `ready`、Release `queryable` 与完整父级身份 | KSS catalog、Draft revision、actor | 新 Draft revision 与双层 audit | 不接受 `latest`、credential、scorer 或本地 fallback；不改变 Active Version 和当前问答运行时 | 已确认 |
+| ACW-R17 | 发布配置聚合边界 | 发布配置只能聚合同一 Draft revision、实时 KSS Release 状态和 trace-safe Shared Model Connection facts；各源配置仍由 Workflow、Knowledge、Model、Tools、Memory 等模块保存 | Draft、KSS catalog、Model Connection reader | 只读 authoring snapshot 与 `workspace_draft_not_bound` | 现有正式 publisher 不消费该 Workspace Draft；不保存 smoke question/Phase F evidence，不读取 credential/base URL，不提供 Dashboard publish/activate command | 已确认 |
 
 ## 5. 高严谨业务系统风险基线
 
@@ -129,7 +131,7 @@
 
 ## 8. 待确认问题
 
-无未关闭 P0/P1 准入问题。Slice 8A 已恢复 Production Contract 模块交互，Slice 8B Workflow、Slice 8C Skill Pack 与 Slice 8D KSS exact Release Draft candidate 均已独立复验通过。当前环境未配置真实 PostgreSQL DSN，相关证据继续标记 `PARTIAL_VERIFICATION`。canonical seed bootstrap、正式生产 Phase F publication、Blue/Green deployment rollback 仍不在本轮范围内，本轮结果不代表 Agent Configuration Workspace 已全部迁移。
+无未关闭 P0/P1 准入问题。Slice 8A 已恢复 Production Contract 模块交互，Slice 8B Workflow、Slice 8C Skill Pack 与 Slice 8D KSS exact Release Draft candidate 均已独立复验通过。Slice 8E 只补充发布前作者侧配置快照，并明确现有正式 publisher 尚未绑定 Workspace Draft；不开放正式发布命令，也不产生 ready-to-publish 结论。当前环境未配置真实 PostgreSQL DSN，相关证据继续标记 `PARTIAL_VERIFICATION`。canonical seed bootstrap、正式生产 Phase F publication、Blue/Green deployment rollback 仍不在本轮范围内，本轮结果不代表 Agent Configuration Workspace 已全部迁移。
 
 ## 9. Slice 2：Draft validation orchestration
 
