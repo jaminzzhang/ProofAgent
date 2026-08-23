@@ -28,6 +28,12 @@ describe('module configuration field options', () => {
     expect(optionsFor(MODEL_FIELDS, 'Review Mode')).toEqual(['rules_only', 'auto'])
     expect(optionsFor(MODEL_FIELDS, 'Reviewer Provider')).toEqual(modelProviders)
     expect(optionsFor(MODEL_FIELDS, 'Review Fail Closed')).toEqual(['true'])
+    expect(fieldPaths(MODEL_FIELDS)).toEqual(expect.arrayContaining([
+      'react.max_plan_rounds',
+      'react.max_tool_calls',
+      'review.low_risk_fast_path',
+    ]))
+    expect(fieldPaths(MODEL_FIELDS)).not.toContain('react.max_steps')
     expect(optionsFor(MEMORY_FIELDS, 'Memory Provider')).toEqual(['session', 'local', 'mem0'])
     expect(fieldPaths(MEMORY_FIELDS)).toEqual(expect.arrayContaining([
       'capabilities.memory.enabled',

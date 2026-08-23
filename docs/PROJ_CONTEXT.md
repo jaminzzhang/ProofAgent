@@ -52,6 +52,35 @@
   domain-context, diff and lock checks passed. Eleven real-PostgreSQL tests were
   skipped because the current shell had no `PROOF_AGENT_TEST_POSTGRES_DSN`, so
   the Slice 8E evidence remains `PASS_WITH_ENV_LIMITATION`, not production approval.
+- `[KNOWN | HIGH]` As of 2026-08-23, Slice 8F closes the verified Agent Detail
+  Development flow gaps without changing publication authority. Metadata PATCH
+  honors a caller-provided Draft revision; the Dashboard exposes saved/unsaved and
+  Validation-freshness state, blocks Validation of unsaved configuration and
+  publication from stale Validation, counts Draft Validation Records directly,
+  and confirms Agent Version pointer rollback. Development auth session projection
+  now returns the local Operator instead of raising a missing-middleware 500.
+- `[COMPUTED | HIGH]` Slice 8F passed 96 focused backend tests with 4
+  environment skips (91 Agent Configuration API plus 5 security-composition tests),
+  221 Dashboard tests, Agent Detail 62 tests, Dashboard build,
+  Ruff, focused mypy, domain-context and diff checks. A temporary local store real
+  browser run verified metadata revision 2→3, auth session 200, unsaved/stale
+  lifecycle blockers, Validation count 1 and rollback confirmation. This remains
+  local Development evidence; Production PostgreSQL, Phase F publication, online
+  KSS smoke and deployment Gates were not executed.
+- `[KNOWN | HIGH]` As of 2026-08-23, Slice 8G aligns every Agent Detail
+  configuration surface with its current write authority. Workflow no longer
+  reintroduces retired runtime fields; Model writes `react.max_plan_rounds` and
+  always exposes Review controls; Tools writes only `capabilities.tools`;
+  optional Contract sections can be inserted; and save actions cannot commit a
+  different module's unsaved state or advance the revision on a no-op.
+- `[COMPUTED | HIGH]` Slice 8G passed 225 Dashboard tests, the Dashboard
+  production build, 96 focused backend tests with 4 environment skips, Ruff,
+  strict Mypy over 357 source files, domain-context and diff checks. A temporary
+  Development browser run saved canonical Model configuration, completed exact
+  revision Validation with expected `REFUSED_NO_EVIDENCE`, published an immutable
+  Development version, observed separate Run/Validation counts, and confirmed
+  active-pointer rollback. This is local workflow evidence, not Production
+  publication or deployment approval.
 - `[KNOWN | HIGH]` As of 2026-08-13, Dashboard KSS management uses the
   same-origin `/api/config/knowledge-service` BFF. ProofAgent resolves the KSS
   operator credential from Vault and calls the independent service through the

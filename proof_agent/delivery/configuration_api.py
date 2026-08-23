@@ -152,6 +152,7 @@ class DraftUpdateRequest(BaseModel):
 
     display_name: str | None = None
     purpose: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class ContractUpdateRequest(BaseModel):
@@ -850,11 +851,16 @@ def update_config_draft(
     _require_operator(identity, OperatorPermission.AGENT_EDIT)
     workspace = _get_agent_configuration_workspace(app_request)
     try:
-        current = workspace.get_draft(agent_id=agent_id, draft_id=draft_id)
+        expected_revision = request.expected_revision
+        if expected_revision is None:
+            expected_revision = workspace.get_draft(
+                agent_id=agent_id,
+                draft_id=draft_id,
+            ).revision
         updated = workspace.update_draft(
             agent_id=agent_id,
             draft_id=draft_id,
-            expected_revision=current.revision,
+            expected_revision=expected_revision,
             display_name=request.display_name,
             purpose=request.purpose,
             actor=_workspace_audit_actor(identity),

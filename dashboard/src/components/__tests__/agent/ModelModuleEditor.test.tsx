@@ -15,7 +15,7 @@ model:
     temperature: 0
     max_output_tokens: 800
 react:
-  max_steps: 5
+  max_plan_rounds: 5
   max_tool_calls: 2
   record_reasoning_summary: true
   planner:
@@ -36,6 +36,30 @@ review:
 `
 
 describe('ModelModuleEditor', () => {
+  it('edits the active plan-round budget and always exposes review controls', () => {
+    const onFieldChange = vi.fn()
+
+    render(
+      <ModelModuleEditor
+        agentYaml={AGENT_YAML}
+        modelConnections={[]}
+        onFieldChange={onFieldChange}
+        onModelConfigChange={vi.fn()}
+        onSave={vi.fn()}
+        busy={false}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Max Plan Rounds'), {
+      target: { value: '7' },
+    })
+    fireEvent.click(screen.getByRole('switch', { name: 'Low-Risk Fast Path' }))
+
+    expect(onFieldChange).toHaveBeenCalledWith(['react', 'max_plan_rounds'], '7')
+    expect(onFieldChange).toHaveBeenCalledWith(['review', 'low_risk_fast_path'], 'false')
+    expect(screen.getByLabelText('Review Mode')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Fail Closed' })).toBeInTheDocument()
+  })
   it('selects a shared model connection for the answer role', () => {
     const onModelConfigChange = vi.fn()
 
@@ -381,7 +405,7 @@ model:
   model_source: shared
   connection_id: model_deepseek_default
 react:
-  max_steps: 5
+  max_plan_rounds: 5
   max_tool_calls: 1
   record_reasoning_summary: true
   planner:
@@ -414,7 +438,7 @@ model:
   model_source: shared
   connection_id: model_deepseek_default
 react:
-  max_steps: 5
+  max_plan_rounds: 5
   max_tool_calls: 1
   record_reasoning_summary: true
   planner:

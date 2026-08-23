@@ -30,7 +30,6 @@ import {
   WORKFLOW_FIELDS,
   WORKFLOW_TEMPLATE_FALLBACK,
   WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS,
-  WORKFLOW_TEMPLATE_RUNTIMES,
 } from './module-configs/workflow'
 import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
@@ -152,10 +151,6 @@ export function WorkflowModuleEditor({
       ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[value]
     if (descriptorVersion) {
       onFieldChange(['workflow', 'template_descriptor_version'], descriptorVersion)
-    }
-    const runtime = WORKFLOW_TEMPLATE_RUNTIMES[value]
-    if (runtime) {
-      onFieldChange(['workflow', 'runtime'], runtime)
     }
   }
 
@@ -784,8 +779,6 @@ function topologicalWorkflowStages(stages: WorkflowStageDescriptor[]) {
 
 function workflowFieldHelp(path: string): string {
   switch (path) {
-    case 'workflow.runtime':
-      return 'Selects the workflow runtime that executes this Agent flow. This should match a backend-supported orchestrator.'
     case 'workflow.template':
       return 'Selects the backend-owned workflow template. react_enterprise_qa_v3 is the only production workflow template.'
     case 'workflow.checkpointer.provider':

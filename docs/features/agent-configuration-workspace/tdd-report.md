@@ -423,3 +423,48 @@
 | VERIFY-MAIN-14 | 主代理执行聚焦与仓库级门禁 | backend、Dashboard/Chat、静态、构建与领域检查 | focused backend 115 passed；backend 2038 passed、122 skipped、2 deselected；Dashboard 217、Chat 35；Ruff、Mypy（357 source files）、TypeScript、共享 UI/两端 build、domain-context、diff、lock 全部通过；1 个既有 Authlib warning，Chat 保留既有 chunk-size warning |
 | VERIFY-AGENT-14 | 独立子 Agent 对抗复验 Slice 8E，并复验全部修正 | scope→diff、正式 publisher 对照、权限、KSS/model authority、identity、inline credential、错误映射、Development 隔离、AST/side-effect 与全门禁 | `PASS_WITH_ENV_LIMITATION / NO_BLOCKING_FINDINGS`；无未关闭 P0–P3；focused backend 126，backend 2039 passed、122 skipped、2 deselected，Dashboard 217，Chat 35；Ruff、Mypy（357 source files）、TypeScript、build、domain-context、diff、lock 全部通过 |
 | ENV-10 | 当前 shell 未配置 `PROOF_AGENT_TEST_POSTGRES_DSN` | `test_postgres_agent_repository.py`、`test_postgres_configuration_uow.py` | 11 项真实 PostgreSQL 用例 skip，标记 `PARTIAL_VERIFICATION`；本切片不修改正式 publisher 或 PostgreSQL CAS，不把单元回归冒充新的真实数据库证据 |
+
+## 22. Slice 8F TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 真实 UI 流程审计、公开 Development HTTP 契约修复与行为保护 |
+| 公开 interface | Development Draft metadata PATCH 的可选 `expected_revision`；Development `/api/auth/session` 本地投影 |
+| 当前状态 | `LOCAL_VERIFIED`；真实 Dashboard 使用临时 Configuration/History 完成关键路径复验 |
+| 不测试的实现细节 | React 私有 state、对话框组件内部、临时目录随机名称 |
+| 范围外 | 正式 publisher binding、Phase F evidence、Production online smoke/activation、生产 PostgreSQL 与部署验证 |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-42 | Dashboard metadata PATCH 发送 `expected_revision` | 真实 Dashboard 与 `tests/test_agent_configuration_api.py` | 真实请求返回 422 `extra_forbidden`；2 个聚焦测试按预期失败 |
+| GREEN-43 | Development metadata request 接受可选 revision，并将 caller revision 交给 Workspace | Delivery 与 API tests | 成功写入 revision +1；stale writer 返回 409，赢家保持不变 |
+| RED-44 | 未保存 YAML 可跨 tab 存在，但 Validation 仍运行保存态；Draft 修改后旧 Validation 仍呈现可发布 | Agent Detail tests 与真实 Dashboard | 新增未保存 blocker/freshness 预期失败 |
+| GREEN-44 | 页面显示流程、revision、保存状态；Validation 阻断未保存配置；publish 按最新 validation operation/revision 失败关闭 | Agent Detail tests 与真实 Dashboard | 未保存状态可见且 Run Validation disabled；metadata 保存后显示 Validation stale，Publish disabled |
+| RED/GREEN-45 | Monitor Validation 计数与 Draft Record 脱节；rollback 无确认 | Agent Detail tests 与真实 Dashboard | Monitor 采用 Draft count；确认框显示 current/target version，取消不切换 pointer |
+| RED/GREEN-46 | Development session route 缺少 Production middleware state | security composition test 与真实 backend 日志 | 旧实现抛 `AttributeError`/500；修复后 `/api/auth/session` 为 200，Production resolution 语义不变 |
+| VERIFY-MAIN-15 | 聚焦与仓库级门禁 | API、Dashboard、静态与构建 | backend focused 96 passed、4 skipped（Agent Configuration API 91 + security composition 5）；Dashboard 221 passed；Agent Detail 62 passed；Dashboard build、Ruff、聚焦 Mypy、domain-context、diff-check 通过 |
+| VERIFY-BROWSER-1 | 临时 local store 真实浏览器复验 | Agent Detail revision 2→3、Validation/Versions/Monitor、rollback dialog、backend access log | metadata PATCH 200；auth session 200；Draft Validation Record 为 1 且 Overview/Monitor 为 1；旧 Validation 明确阻断发布；rollback 仅打开确认框，取消后 active version 不变 |
+
+[SOURCE: 本轮聚焦测试输出、真实临时开发服务与 Browser 截图 | CONFIDENCE: HIGH] 上述证据只覆盖本地 Development composition。未配置真实 PostgreSQL DSN，也未执行正式 Phase F publisher、Production KSS smoke 或部署 Gate，因此结论不是生产发布批准。
+
+## 23. Slice 8G TDD 记录
+
+| 项 | 内容 |
+| --- | --- |
+| 模式 | 真实 UI 缺陷复现、canonical Contract 行为保护、模块保存隔离与本地主流程验证 |
+| 公开 interface | 无新增后端 interface；修正 Dashboard 对既有接口的 payload 与交互约束 |
+| 当前状态 | `LOCAL_VERIFIED`；真实 Dashboard 操作只使用临时 Configuration/History store |
+| 范围外 | 正式 publisher binding、Phase F evidence、Production online smoke、真实 PostgreSQL 与部署 Gate |
+
+| 步骤 | 行为 | 证据 | 结果 |
+| --- | --- | --- | --- |
+| RED-47 | Model 的 `Max ReAct Steps` 写入 retired `react.max_steps` | 真实 Dashboard + backend validation | PATCH 返回 `400 agent_contract_invalid`，主配置流程断开 |
+| RED-48 | Tools 编辑顶层 `tools.file`，而 canonical manifest 只有 `capabilities.tools` | 真实 Dashboard | 缺失顶层 section 时输入变化未进入 YAML；点击保存却把 revision 3 推进到 4 |
+| RED-49 | 跨模块共用 `agentYaml` save | Agent Detail behavior test | Policy 的未保存修改可由 Model 保存动作提交；新增 6 个预期失败，既有 95 个场景保持通过 |
+| GREEN-47 | Model 改写 `react.max_plan_rounds`，Review controls 对统一/分角色模式一致可见；Workflow 不再补 runtime | Model/Workflow tests + 真实 UI | canonical Model 保存成功，revision 4→5；YAML 无 `max_steps`、`workflow.runtime` |
+| GREEN-48 | Tools 专用 editor/normalizer 只写 `capabilities.tools`；optional root 插入与 no-op guard | YAML/Agent Detail tests + 真实 UI | disabled Tools 无变更保存保持 revision 4；启用缺 file 时阻断 |
+| GREEN-49 | dirty module 所有权绑定保存动作；Workflow core/stages 保留单命令语义 | Agent Detail tests | 跨模块保存失败关闭，同模块保存正常；聚焦 101 passed |
+| VERIFY-MAIN-16 | Dashboard 全量与仓库级门禁 | Vitest、build、backend、static checks | Dashboard 225 passed；production build 通过；backend focused 96 passed、4 skipped；Ruff、Mypy（357 source files）、domain-context 与 `git diff --check` 通过 |
+| VERIFY-BROWSER-2 | 临时 Development 主链路 | revision、Validation、Versions、Monitor、rollback dialog | Model 保存 4→5；Validation 保存问题并覆盖 revision 6，结果按证据准入规则为 `REFUSED_NO_EVIDENCE`；发布 `version_b7eeeef1`；Monitor 显示 2 条 Draft Validation Record 与 0 条实际 Run；确认回滚后 active pointer 切换到 `version_1b325f5f`，历史版本未改写 |
+
+[SOURCE: 本轮测试输出、真实临时 Development 服务与 Browser 截图 | CONFIDENCE: HIGH] `REFUSED_NO_EVIDENCE` 是缺少可准入知识证据时的预期失败关闭结果，不是回答成功。Development version/pointer 流程已本地走通，但不等于正式 Production publication 或部署批准。

@@ -49,8 +49,26 @@ def oidc_callback(
 
 @router.get("/session")
 def session(request: Request) -> dict[str, object]:
-    resolution = cast(SessionResolution, request.state.session_resolution)
-    return resolution.projection.model_dump(mode="json")
+    resolution = getattr(request.state, "session_resolution", None)
+    if isinstance(resolution, SessionResolution):
+        return resolution.projection.model_dump(mode="json")
+    if getattr(request.app.state, "proof_agent_mode", None) == "development":
+        identity = request.app.state.operator_identity_provider.current_identity()
+        return {
+            "session_id": "development-local-session",
+            "principal": {
+                "subject": identity.operator_id,
+                "display_name": identity.display_name,
+            },
+            "absolute_expires_at": "9999-12-31T23:59:59Z",
+            "idle_expires_at": "9999-12-31T23:59:59Z",
+            "claims_refresh_due_at": "9999-12-31T23:59:59Z",
+            "csrf_token": "development-mode-no-csrf-enforcement-00000000000000000000000000000000",
+            "effective_permissions": sorted(
+                permission.value for permission in identity.permissions
+            ),
+        }
+    raise HTTPException(status_code=401, detail="authentication_required")
 
 
 @router.post("/logout", status_code=204)

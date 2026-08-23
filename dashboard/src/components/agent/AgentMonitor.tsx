@@ -11,10 +11,11 @@ import { RunStatusBadge } from '../RunStatusBadge'
 
 interface AgentMonitorProps {
   agentId: string
+  draftValidationCount?: number
   onOpenRunDetail?: (runId: string) => void
 }
 
-export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
+export function AgentMonitor({ agentId, draftValidationCount, onOpenRunDetail }: AgentMonitorProps) {
   const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,7 +39,13 @@ export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard label={t('agentMonitor.totalRuns')} value={String(summary.stats.total)} subtitle={t('agentMonitor.allProductionRuns')} />
         <StatCard label={t('agentMonitor.answeredRate')} value={`${summary.stats.answerRate}%`} subtitle={t('agentMonitor.withCitations')} />
-        <StatCard label={t('agentMonitor.validations')} value={String(summary.validationRuns.length)} subtitle={t('agentMonitor.testRuns')} />
+        <StatCard
+          label={t('agentMonitor.validations')}
+          value={String(draftValidationCount ?? summary.validationRuns.length)}
+          subtitle={draftValidationCount === undefined
+            ? t('agentMonitor.testRuns')
+            : t('agentMonitor.savedDraftValidationRecords')}
+        />
       </div>
 
       {/* Outcome distribution */}
@@ -119,7 +126,7 @@ export function AgentMonitor({ agentId, onOpenRunDetail }: AgentMonitorProps) {
   )
 }
 
-export function AgentMonitorSummary({ agentId, onOpenRunDetail }: AgentMonitorProps) {
+export function AgentMonitorSummary({ agentId, draftValidationCount, onOpenRunDetail }: AgentMonitorProps) {
   const { t, formatDateTime } = useLocale()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -167,7 +174,13 @@ export function AgentMonitorSummary({ agentId, onOpenRunDetail }: AgentMonitorPr
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <StatCard label={t('agentMonitor.productionRuns')} value={String(summary.stats.total)} subtitle={t('agentMonitor.publishedTraffic')} />
         <StatCard label={t('agentMonitor.answeredRate')} value={`${summary.stats.answerRate}%`} subtitle={t('agentMonitor.withCitations')} />
-        <StatCard label={t('agentMonitor.validations')} value={String(summary.validationRuns.length)} subtitle={t('agentMonitor.draftTestRuns')} />
+        <StatCard
+          label={t('agentMonitor.validations')}
+          value={String(draftValidationCount ?? summary.validationRuns.length)}
+          subtitle={draftValidationCount === undefined
+            ? t('agentMonitor.draftTestRuns')
+            : t('agentMonitor.savedDraftValidationRecords')}
+        />
       </div>
 
       <div className="overflow-hidden border border-[var(--border)] bg-[var(--bg-surface)]">

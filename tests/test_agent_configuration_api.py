@@ -1139,10 +1139,13 @@ def test_import_agent_package_creates_draft_and_list_entry(tmp_path: Path) -> No
 def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
     client = _client(tmp_path)
     draft = _import_enterprise_qa(client)
+    draft_path = f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
+    initial_revision = client.get(draft_path).json()["revision"]
 
     updated = client.patch(
-        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}",
+        draft_path,
         json={
+            "expected_revision": initial_revision,
             "display_name": "Enterprise QA Workspace",
             "purpose": "Answer support policy questions with governed evidence.",
         },
@@ -1154,12 +1157,41 @@ def test_read_update_draft_and_contract_view(tmp_path: Path) -> None:
 
     assert updated.status_code == 200
     assert updated.json()["display_name"] == "Enterprise QA Workspace"
+    assert updated.json()["revision"] == initial_revision + 1
     assert loaded.status_code == 200
     assert loaded.json()["purpose"] == "Answer support policy questions with governed evidence."
     assert contract.status_code == 200
     assert contract.json()["agent_yaml"].startswith("name: react_enterprise_qa_v3")
     assert contract.json()["policy_yaml"].startswith("rules:")
     assert contract.json()["extra_files"] == {}
+
+
+def test_update_draft_rejects_stale_revision_without_overwriting(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    draft = _import_enterprise_qa(client)
+    draft_path = f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
+    initial_revision = client.get(draft_path).json()["revision"]
+
+    first = client.patch(
+        draft_path,
+        json={
+            "expected_revision": initial_revision,
+            "display_name": "First writer",
+        },
+    )
+    stale = client.patch(
+        draft_path,
+        json={
+            "expected_revision": initial_revision,
+            "display_name": "Stale writer",
+        },
+    )
+
+    assert first.status_code == 200
+    assert stale.status_code == 409
+    assert stale.json() == {"detail": "agent_draft_revision_conflict"}
+    loaded = client.get(draft_path)
+    assert loaded.json()["display_name"] == "First writer"
 
 
 def test_update_contract_view_revalidates_and_persists_agent_yaml(tmp_path: Path) -> None:

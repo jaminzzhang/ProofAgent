@@ -339,7 +339,7 @@ workflow:
     expect(optionValues).toEqual(['react_enterprise_qa_v3'])
   })
 
-  it('keeps workflow runtime aligned when the Template selector changes', () => {
+  it('updates template identity without reintroducing retired workflow runtime fields', () => {
     const onFieldChange = vi.fn()
 
     render(
@@ -361,7 +361,7 @@ workflow:
 
     expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template'], 'react_enterprise_qa_v3')
     expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template_descriptor_version'], 'react_enterprise_qa.v3')
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'runtime'], 'controlled_react')
+    expect(onFieldChange).not.toHaveBeenCalledWith(['workflow', 'runtime'], expect.anything())
   })
 
   it('falls back to the static template list when the catalog fails to load', () => {

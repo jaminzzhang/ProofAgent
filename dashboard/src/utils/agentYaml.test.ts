@@ -5,6 +5,7 @@ import {
   replaceAgentContextConfiguration,
   replaceAgentYamlMapping,
   replaceMemoryCapabilityConfiguration,
+  replaceToolCapabilityConfiguration,
   replaceWorkflowStages,
   updateAgentYamlField,
 } from './agentYaml'
@@ -206,6 +207,40 @@ policy:
   params:
     api_key_env: DEEPSEEK_API_KEY
 policy:`)
+  })
+
+  it('inserts an optional top-level configuration section when it is absent', () => {
+    const updated = updateAgentYamlField(
+      `name: response_test
+policy:
+  file: ./policy.yaml
+`,
+      ['response', 'include_review_results'],
+      'true',
+    )
+
+    expect(updated).toContain(`response:
+  include_review_results: true`)
+  })
+
+  it('writes canonical Tool Capability configuration and removes the retired top-level section', () => {
+    const updated = replaceToolCapabilityConfiguration(
+      `name: tools_test
+tools:
+  file: ./legacy-tools.yaml
+capabilities:
+  tools:
+    enabled: false
+`,
+      ['capabilities', 'tools', 'file'],
+      './tools.yaml',
+    )
+
+    expect(updated).toContain(`capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml`)
+    expect(updated).not.toContain('\ntools:\n')
   })
 
   it('replaces one mapping block without preserving stale sibling keys', () => {

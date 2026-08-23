@@ -151,6 +151,35 @@ export function replaceMemoryCapabilityConfiguration(
   return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'memory'], memoryConfig)
 }
 
+export function replaceToolCapabilityConfiguration(
+  agentYaml: string,
+  changedPath: string[],
+  changedValue: string,
+): string {
+  const normalizedYaml = removeTopLevelYamlSection(agentYaml, 'tools')
+  const enabledPath = ['capabilities', 'tools', 'enabled']
+  const filePath = ['capabilities', 'tools', 'file']
+  const changedEnabled = samePath(changedPath, enabledPath)
+  const changedFile = samePath(changedPath, filePath)
+  const enabled = changedEnabled
+    ? changedValue === 'true'
+    : changedFile || readAgentYamlField(normalizedYaml, enabledPath) === 'true'
+
+  if (!enabled) {
+    return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'tools'], {
+      enabled: false,
+    })
+  }
+
+  const file = changedFile
+    ? changedValue.trim()
+    : readAgentYamlField(normalizedYaml, filePath).trim()
+  return replaceAgentYamlMapping(normalizedYaml, ['capabilities', 'tools'], {
+    enabled: true,
+    ...(file ? { file } : {}),
+  })
+}
+
 export function replaceAgentContextConfiguration(
   agentYaml: string,
   changedPath: string[],
@@ -360,7 +389,6 @@ function insertYamlPath(lines: string[], path: string[], value: string): string[
     const indent = depth * 2
     const lineIndex = findLineIndex(lines, indent, path[depth], start, end)
     if (lineIndex === -1) {
-      if (depth === 0) return lines
       const insertedLines: string[] = []
       for (let missingDepth = depth; missingDepth < path.length - 1; missingDepth += 1) {
         insertedLines.push(`${' '.repeat(missingDepth * 2)}${path[missingDepth]}:`)
@@ -368,6 +396,9 @@ function insertYamlPath(lines: string[], path: string[], value: string): string[
       insertedLines.push(
         `${' '.repeat((path.length - 1) * 2)}${path[path.length - 1]}: ${formatYamlValue(value)}`,
       )
+      if (depth === 0) {
+        return [...trimTrailingEmptyLines(lines), ...insertedLines]
+      }
       lines.splice(end, 0, ...insertedLines)
       return lines
     }

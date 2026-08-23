@@ -193,3 +193,34 @@
 | 验收标准 | 四个 route 不读取 Local store/compiler/manifest/YAML；一次 create 同时保存全部 Skill Pack 字段；stale revision 和 inspection 期间并发写入失败关闭；manifest binding、definition 与双层 audit 同一事务；无派生包残留或临时路径泄漏 |
 | 最高风险 | P1：旧创建流程 POST 后再 PATCH，且 mutation 先校验后 last-write-wins 保存，可能形成部分 Skill Pack 或覆盖并发赢家 |
 | 当前证据 | Slice 7 主代理聚焦 196 passed、4 skipped，独立复验聚焦 216 passed、4 skipped；补充真实 PostgreSQL 验证为 84 passed、11 个 S3 endpoint skip，全量 backend 为 2050 passed、36 skipped、2 deselected；PG 补充独立复验最小集 3 passed，并确认无 P0–P3；Dashboard 197、Chat 35；两端与共享 UI build、Ruff、Mypy（354 source files）、TypeScript、domain-context、diff、lock、AST/deletion 与 production isolation 全部通过 |
+
+## 15. Slice 8F：Agent Detail 配置闭环与真实体验修复
+
+[SOURCE: `AgentDetailPage.tsx`、Development API、真实本地 Dashboard 审计 | CONFIDENCE: HIGH]
+
+本切片把 Agent Detail 的推荐流程明确为「配置并保存 → 验证该精确 Draft revision → 审查发布配置与版本 → 观察或回滚」。模块编辑仍可往返，不把 Workspace 改造成强制线性 wizard；生命周期动作只消费服务端已保存状态。
+
+| 规则编号 | 业务域 | 规则说明 | 状态 |
+| --- | --- | --- | --- |
+| ACW-R18 | revision CAS | Development Draft 基础信息 PATCH 接受可选 `expected_revision`；Dashboard 提供时必须使用该 revision，兼容旧调用方时才读取当前 revision | 已确认 |
+| ACW-R19 | 保存边界 | 页面必须持续显示当前 Draft revision 和已保存/未保存状态；存在未保存 Contract 或基础信息时，不得运行会消费另一份服务端状态的 Validation | 已确认 |
+| ACW-R20 | Validation freshness | Dashboard 的发布入口按与 Workspace 相同的 operation audit/revision 规则失败关闭；旧 Validation 不得呈现为当前 Draft 可发布证据 | 已确认 |
+| ACW-R21 | 可观察性 | Agent Detail 的 Validation 计数来自 Draft `validation_records`；Run Store 继续只提供其实际可见的 Run 列表，两者不互相冒充 | 已确认 |
+| ACW-R22 | 回滚交互 | Agent Version pointer rollback 必须先展示当前 active version、目标 version 和 immutable-history 影响，再由 Operator 显式确认 | 已确认 |
+| ACW-R23 | Development session | Development `/api/auth/session` 返回本地 Operator 的无密钥投影；Production 仍只接受 Session Middleware 注入的 OIDC resolution | 已确认 |
+
+正式生产发布边界不变：`workspace_draft_not_bound`、`can_publish_from_dashboard=false`。[SOURCE: `ProductionAgentPublicationConfigurationProjector`、`ProductionAgentPublicationService` | CONFIDENCE: HIGH] 把 Workspace Draft 物化为正式候选、绑定 Phase F evidence、执行在线 KSS smoke 和 PostgreSQL 原子激活仍需独立 authority-integration 切片；本切片不伪造该闭环已经完成。
+
+## 16. Slice 8G：Agent Detail 配置项 canonical 写入与模块保存边界
+
+[SOURCE: `AgentDetailPage.tsx`、各 Module Editor、`bootstrap/validation.py`、真实本地 Dashboard 审计 | CONFIDENCE: HIGH]
+
+| 规则编号 | 业务域 | 规则说明 | 状态 |
+| --- | --- | --- | --- |
+| ACW-R24 | canonical Contract | Dashboard 只能写入当前 manifest 接受的字段；不得重新引入已退役的 `workflow.runtime`、`workflow.checkpointer`、`react.max_steps` 或顶层 `tools` | 已确认 |
+| ACW-R25 | 模块保存所有权 | Contract 编辑必须记录产生修改的模块；一个模块的保存动作不得提交另一模块尚未保存的局部 state | 已确认 |
+| ACW-R26 | optional section | `response` 等可选顶层 section 不存在时，第一次编辑必须插入 canonical section；无实际变更的保存不得推进 Draft revision | 已确认 |
+| ACW-R27 | Tools | Tools 配置唯一写入 `capabilities.tools`；禁用时保存最小 `{enabled: false}`，启用时必须提供包内 Tool Contract file，并继续由服务端 bundle validation 失败关闭 | 已确认 |
+| ACW-R28 | Model/Review | ReAct 预算使用 `max_plan_rounds` 与 `max_tool_calls`；Review mode、low-risk fast path、fail-closed controls 在统一和分角色 Model 模式下均可见 | 已确认 |
+
+以上规则只修复 Dashboard authoring Contract 的准确性与保存隔离，不新增 Production publication authority。Knowledge exact Release、Skill Pack typed CRUD、Workflow Stage typed command、Development publication/version pointer 与 Production 只读 publication snapshot 继续由各自既有接口负责。

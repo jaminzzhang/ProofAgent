@@ -647,3 +647,97 @@
 
 - 覆盖完整/阻断 Draft、KSS queryability、Shared Model Connection lifecycle/provider/credential authority、权限、错误不泄漏、Development 隔离和无 publication side effect。
 - 运行聚焦与仓库级 backend、Dashboard/Chat、Ruff、Mypy、TypeScript、build、domain-context、diff 与 lock；完成后启动独立子 Agent 复验。
+
+## 47. Slice 8F 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | `TDD_INPUT_READY`；修复 Agent Detail 已复现的 revision、脏状态、Validation freshness、计数、回滚确认和 Development session 断点 |
+| 最高风险等级 | P1 |
+| 公开 interface | Development Draft metadata PATCH 增加可选 `expected_revision`；Development `/api/auth/session` 返回本地 Operator 投影；其他 HTTP path/method 不变 |
+| 可观察行为 | 页面显示配置流程、当前 revision、保存状态和 Validation freshness；未保存配置阻断 Validation；旧 Validation 阻断 Development publish；Monitor 采用 Draft Validation Record 计数；rollback 先确认 |
+| 权威边界 | Dashboard 只投影并前置失败关闭；Workspace 继续最终校验 validation freshness、执行 revision CAS 和 active pointer CAS |
+| 兼容边界 | 未提供 `expected_revision` 的 Development 调用方继续由服务端读取当前 revision；Production metadata request 和 OIDC session 语义不变 |
+| 范围外 | Workspace Draft 到正式 publisher 的 candidate binding、Phase F evidence、在线 KSS smoke、生产激活、Blue/Green deployment rollback、全站中英文重写 |
+| ADR 判断 | 不新增 ADR；本切片执行 ADR-0009/0011 的 Draft 与 lifecycle 分离，以及现有 Workspace CAS/rollback 权威规则 |
+
+## 48. Slice 8F 目标流程
+
+[SOURCE: ADR-0009、ADR-0011、Slice 8E publication projector 与当前实现 | CONFIDENCE: HIGH]
+
+| 阶段 | Operator 行为 | 服务端权威 | 完成条件 | 失败关闭点 |
+| --- | --- | --- | --- | --- |
+| 1. 创建与身份 | 从服务端模板创建 Draft，填写名称与用途 | Agent Configuration Workspace | Draft ID 与 revision 可读 | 不从浏览器传 manifest path |
+| 2. 模块配置 | 在 Workflow、Skills、Knowledge、Tools、Policy、Model、Memory、Response 间迭代 | 各模块 typed command 或 Contract command | 所有修改已保存到一个明确 revision | 跨模块未保存状态不触发生命周期动作 |
+| 3. 作者侧预检 | 查看配置流程和 Production 发布配置聚合 | 服务端 projector | authoring blockers 可定位到源模块 | 作者侧通过不等于正式发布批准 |
+| 4. Validation | 对已保存的精确 revision 运行 governed Harness | Workspace validation orchestration | Validation Record 与 operation audit 绑定同一 Draft/revision | 未保存配置、运行冲突或 blocker 均拒绝 |
+| 5. 发布准备 | Development 选择当前 Validation；Production 查看 exact KSS/model/Phase F 通用要求 | Development Workspace 或独立正式 publisher | Development freshness 通过；Production 仍显示正式绑定状态 | 旧 Validation、KSS 不可查或 `workspace_draft_not_bound` 不得绕过 |
+| 6. 发布与激活 | Development 生成 immutable version；未来 Production 由正式 publisher 执行 smoke 与 CAS | Workspace 或 ProductionAgentPublicationService | immutable version 与 active pointer 原子提交 | Dashboard 不成为第二发布权威 |
+| 7. 观察与回滚 | 对照 Draft Validation Record、Run Store 和 active version；确认后切换历史 version pointer | Run/Trace authority 与 Configuration Workspace | 计数语义明确，rollback target 可审查 | 不删除或改写 Published Version history |
+
+## 49. Slice 8F TDD 任务
+
+### Task ACW-FLOW1：Development metadata revision contract
+
+- RED：真实 Dashboard PATCH 携带 `expected_revision`，Development request 因 unknown field 返回 422。
+- GREEN：request 接受可选正整数 revision；提供时原样交给 Workspace，未提供时保留兼容读取；stale writer 返回稳定 409 且不覆盖赢家。
+
+### Task ACW-FLOW2：保存状态与生命周期门禁
+
+- RED：Policy 等模块的未保存 YAML 可跨 tab 保留，但 Validation 仍运行服务端旧 Draft；旧 Validation 在 Draft 保存后仍显示可发布。
+- GREEN：记录脏模块，持续展示 revision/保存状态；Validation 加入未保存 blocker；Development publish 复用 Workspace 的最新 operation/revision 判定在 UI 失败关闭。
+
+### Task ACW-FLOW3：计数、回滚与 Development session
+
+- RED：Draft 已有 Validation Record 时 Monitor 仍显示 0；rollback 单击立即执行；Development `/api/auth/session` 因缺少 middleware state 返回 500。
+- GREEN：Monitor 接收 Draft Validation Record count；rollback 使用显式确认对话框；Development session 投影本地 Operator，Production 缺失 resolution 仍返回 401。
+
+### Task ACW-FLOW4：真实页面复验
+
+- 使用临时 Configuration/History 目录启动真实 backend 与 Dashboard；不重置用户 canonical store。
+- 复验 metadata PATCH 200/revision +1、未保存 Validation blocker、旧 Validation publish blocker、Monitor 计数、rollback 确认和 auth session 200；保存关键截图。
+- 运行聚焦 backend、Dashboard 全量、TypeScript/build、Ruff、Mypy、domain-context 与 diff-check；不把本地 Development 结果表述为 Production approval。
+
+## 50. Slice 8G 准入结论
+
+| 项 | 内容 |
+| --- | --- |
+| 建议结论 | `LOCAL_VERIFIED`；Agent Detail 配置项已按写入 authority 与 canonical schema 重新核对，修复实际阻断主流程的字段漂移和跨模块保存问题 |
+| 最高风险等级 | P1 |
+| 公开 interface | 不新增后端 interface；Dashboard 继续使用 metadata PATCH、raw Contract PATCH、Workflow Stage command、Skill Pack CRUD、Knowledge binding、Validation、Development publication/version pointer 与 Production publication snapshot |
+| 兼容边界 | 移除 Dashboard 对已退役 manifest 字段的写入；不接受旧字段作为兼容别名，继续由编译校验失败关闭 |
+| 范围外 | Workspace Draft 到正式 publisher 的 binding、Phase F evidence、Production online KSS smoke、PostgreSQL activation 与部署 Gate |
+
+## 51. Slice 8G 配置责任矩阵
+
+| Agent Detail 项 | 写入/读取 authority | 核对结果 |
+| --- | --- | --- |
+| 概览 | Draft metadata PATCH + revision CAS | 基础信息与 Contract dirty state 隔离；无变更不写 |
+| Workflow | Contract core + typed Workflow Stage command | Template 同步 descriptor version；不再写 retired runtime/checkpointer |
+| Skills | typed Business Flow Skill Pack CRUD | revisioned create/update/delete；不经 raw YAML 旁路 |
+| Knowledge | Production exact KSS Release candidate；Development Contract 只读投影 | KSS authority 与环境边界不变 |
+| Tools | raw Contract 的 `capabilities.tools` | 移除错误顶层 `tools` 投影；启用缺 file 时前端阻断，服务端继续校验完整 Tool Contract |
+| Policy | raw Contract `policy.file` + bundle policy YAML | 文件引用与规则内容边界保持 |
+| Model | raw Contract `model`、`react`、`review`、`context` | `max_plan_rounds`、Review controls 与 role/shared model source 对齐 |
+| Memory | raw Contract `capabilities.memory` + `context.source_policies.memory_recall` | capability 与 recall policy 分层；不把 Memory 冒充 governed evidence |
+| Response | raw Contract `response` | optional root 缺失时可首次插入并保存 |
+| 验证与测试 | saved exact Draft revision | 未保存配置阻断；无可准入证据时返回 `REFUSED_NO_EVIDENCE` |
+| Contract 视图 | 服务端保存态只读投影 | 不承担编辑 authority |
+| 发布配置 | Production authoring snapshot | 继续只读且报告 `workspace_draft_not_bound` |
+| 版本/监控 | Development immutable version + active pointer；Run Store/Validation Record 分源统计 | 发布、观察和显式确认回滚主链路通过 |
+
+## 52. Slice 8G TDD 任务
+
+### Task ACW-ADF4：canonical schema 与 optional section
+
+- RED：Model 保存 `react.max_steps` 被服务端拒绝；Workflow template 变更重新写入 retired runtime；Tools 编辑顶层 section 且缺失时形成无效 no-op；Response 缺失时无法插入。
+- GREEN：字段只投影到当前 manifest canonical path；通用 YAML helper 支持安全插入缺失顶层 section；Tools 使用专用 normalizer。
+
+### Task ACW-ADF5：模块级保存隔离
+
+- RED：Policy 未保存修改可被 Model 的保存按钮提交；Tools no-op 仍推进 revision。
+- GREEN：记录 dirty module，跨模块保存失败关闭；同模块保存和 Workflow Stage 原子 command 仍可执行；无差异保存直接返回。
+
+### Task ACW-ADF6：真实流程复验
+
+- 验证：临时 Development store 中验证 Model canonical 保存、Tools no-op、精确 revision Validation、immutable Development publication、Monitor 投影和确认式 active-pointer rollback。

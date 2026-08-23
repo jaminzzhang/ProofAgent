@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
 import type { AgentYamlMapping } from '../../utils/agentYaml'
 import {
   Badge,
@@ -162,6 +161,12 @@ export function ModelModuleEditor({
   const recordReasoningPath = ['react', 'record_reasoning_summary']
   const recordReasoning =
     readAgentYamlField(agentYaml, recordReasoningPath) !== 'false'
+  const lowRiskFastPathPath = ['review', 'low_risk_fast_path']
+  const lowRiskFastPath =
+    readAgentYamlField(agentYaml, lowRiskFastPathPath) !== 'false'
+  const reviewFailClosedPath = ['review', 'subagent', 'fail_closed']
+  const reviewFailClosed =
+    readAgentYamlField(agentYaml, reviewFailClosedPath) !== 'false'
 
   return (
     <ConfigPanel
@@ -265,51 +270,66 @@ export function ModelModuleEditor({
               onFieldChange={(path, value) => onFieldChange(path, value)}
               onSaveAsShared={() => handleSaveAsShared(REVIEWER_ROLE)}
               creatingShared={creatingShared === REVIEWER_ROLE.title}
-              extraFields={
-                <FieldGrid cols={2} gap="md" className="mb-4">
-                  <SectionField
-                    label="Review Mode"
-                    htmlFor="review-mode"
-                    description="Rules-only enforces deterministic checks; Auto also reasons with the reviewer model."
-                  >
-                    <NativeSelect
-                      id="review-mode"
-                      value={readAgentYamlField(agentYaml, ['review', 'mode']) || 'rules_only'}
-                      onChange={(value) => onFieldChange(['review', 'mode'], value)}
-                      options={[
-                        { value: 'rules_only', label: 'Rules Only' },
-                        { value: 'auto', label: 'Auto' },
-                      ]}
-                    />
-                  </SectionField>
-                  <SectionField
-                    label="Fail Closed"
-                    htmlFor="review-fail-closed"
-                    description="When on, a reviewer error blocks the answer rather than passing it through."
-                    inline
-                  >
-                    <Switch
-                      id="review-fail-closed"
-                      checked={
-                        readAgentYamlField(agentYaml, [
-                          'review',
-                          'subagent',
-                          'fail_closed',
-                        ]) !== 'false'
-                      }
-                      onCheckedChange={(checked) =>
-                        onFieldChange(
-                          ['review', 'subagent', 'fail_closed'],
-                          checked ? 'true' : 'false',
-                        )
-                      }
-                    />
-                  </SectionField>
-                </FieldGrid>
-              }
             />
           </div>
         )}
+
+        <ConfigPanel
+          variant="nested"
+          headingLevel={4}
+          title={t('model.reviewControls')}
+        >
+          <p className="-mt-2 mb-4 text-xs text-[var(--text-muted)]">
+            {t('model.reviewControlsDescription')}
+          </p>
+          <FieldGrid cols={3} gap="md">
+            <SectionField
+              label="Review Mode"
+              htmlFor="review-mode"
+              description={t('model.reviewModeDescription')}
+            >
+              <NativeSelect
+                id="review-mode"
+                value={readAgentYamlField(agentYaml, ['review', 'mode']) || 'rules_only'}
+                onChange={(value) => onFieldChange(['review', 'mode'], value)}
+                options={[
+                  { value: 'rules_only', label: 'Rules Only' },
+                  { value: 'auto', label: 'Auto' },
+                ]}
+              />
+            </SectionField>
+            <SectionField
+              label="Low-Risk Fast Path"
+              htmlFor="review-low-risk-fast-path"
+              description={t('model.lowRiskFastPathDescription')}
+              inline
+            >
+              <Switch
+                id="review-low-risk-fast-path"
+                aria-label="Low-Risk Fast Path"
+                checked={lowRiskFastPath}
+                onCheckedChange={(checked) =>
+                  onFieldChange(lowRiskFastPathPath, checked ? 'true' : 'false')
+                }
+              />
+            </SectionField>
+            <SectionField
+              label="Fail Closed"
+              htmlFor="review-fail-closed"
+              description={t('model.failClosedDescription')}
+              inline
+            >
+              <Switch
+                id="review-fail-closed"
+                aria-label="Fail Closed"
+                checked={reviewFailClosed}
+                onCheckedChange={(checked) =>
+                  onFieldChange(reviewFailClosedPath, checked ? 'true' : 'false')
+                }
+              />
+            </SectionField>
+          </FieldGrid>
+        </ConfigPanel>
 
         {localStatus && (
           <div
@@ -386,12 +406,14 @@ export function ModelModuleEditor({
             {t('model.reactControlsDescription')}
           </p>
           <FieldGrid cols={3} gap="md">
-            <SectionField htmlFor="react-max-steps" label="Max ReAct Steps">
+            <SectionField htmlFor="react-max-plan-rounds" label="Max Plan Rounds">
               <Input
-                id="react-max-steps"
+                id="react-max-plan-rounds"
                 type="number"
-                value={readAgentYamlField(agentYaml, ['react', 'max_steps'])}
-                onChange={(e) => onFieldChange(['react', 'max_steps'], e.target.value)}
+                value={readAgentYamlField(agentYaml, ['react', 'max_plan_rounds'])}
+                onChange={(e) =>
+                  onFieldChange(['react', 'max_plan_rounds'], e.target.value)
+                }
               />
             </SectionField>
             <SectionField htmlFor="react-max-tool-calls" label="Max Tool Calls">
@@ -430,7 +452,6 @@ function ModelRoleCard({
   agentYaml,
   modelConnections,
   unified = false,
-  extraFields,
   onSourceChange,
   onFieldChange,
   onSaveAsShared,
@@ -440,7 +461,6 @@ function ModelRoleCard({
   agentYaml: string
   modelConnections: readonly SharedModelConnection[]
   unified?: boolean
-  extraFields?: ReactNode
   onSourceChange: (value: string) => void
   onFieldChange: (path: string[], value: string) => void
   onSaveAsShared?: () => void
@@ -512,7 +532,6 @@ function ModelRoleCard({
       }
       description={role.subtitle}
     >
-      {extraFields}
       <FieldGrid cols={2} gap="md">
         <SectionField htmlFor={sourceId} label={role.sourceLabel}>
           <NativeSelect

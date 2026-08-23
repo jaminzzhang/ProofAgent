@@ -15,6 +15,7 @@ import {
   fetchWorkflowTemplate,
   fetchModelConnections,
   previewWorkflowStageContext,
+  rollbackConfigVersion,
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
   updateConfigDraft,
@@ -713,6 +714,7 @@ describe('AgentDetailPage', () => {
   })
 
   it('saves overview identity fields through the draft configuration API', async () => {
+    mockDraft = { ...mockDraft, revision: 2 }
     renderPage()
 
     fireEvent.change(screen.getByDisplayValue('Insurance Agent'), {
@@ -727,8 +729,37 @@ describe('AgentDetailPage', () => {
       expect(updateConfigDraft).toHaveBeenCalledWith('agent-1', 'draft-1', {
         display_name: 'Claims QA Agent',
         purpose: 'Handle governed claims questions.',
+        expected_revision: 2,
       })
     })
+  })
+
+  it('marks unsaved Contract edits and blocks validation of a different saved revision', () => {
+    mockDraft = { ...mockDraft, revision: 2 }
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'policy:',
+        '  file: ./policy.yaml',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=policy')
+
+    fireEvent.change(screen.getByLabelText('Policy File'), {
+      target: { value: './unsaved-policy.yaml' },
+    })
+    expect(screen.getByText('Unsaved configuration')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate & Test' }))
+    expect(screen.getByText(/Save the configuration before validation/)).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Enter a test question...'), {
+      target: { value: 'What documents are required?' },
+    })
+    expect(screen.getByRole('button', { name: 'Run Validation' })).toBeDisabled()
+    expect(validateConfigDraft).not.toHaveBeenCalled()
   })
 
   it('honors production capabilities and sends the Draft revision on save', async () => {
@@ -798,7 +829,7 @@ describe('AgentDetailPage', () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=publication')
 
     expect(await screen.findByRole('heading', { name: 'Publication Configuration' })).toBeInTheDocument()
-    expect(screen.getByText('Draft revision 11')).toBeInTheDocument()
+    expect(screen.getAllByText('Draft revision 11')).toHaveLength(2)
     expect(screen.getByText('release_7')).toBeInTheDocument()
     expect(screen.getByText('model_deepseek')).toBeInTheDocument()
     expect(screen.getByText('Initial production publication requires Memory to be disabled.')).toBeInTheDocument()
@@ -2203,14 +2234,127 @@ workflow:
     )
   })
 
+  it('uses Draft validation records for the Monitor validation count', async () => {
+    mockDraft = {
+      ...mockDraft,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          draft_id: 'draft-1',
+          run_id: 'run-validation-1',
+          status: 'completed',
+          summary: 'First validation.',
+          errors: [],
+          created_at: '2026-05-28T01:00:00Z',
+        },
+        {
+          validation_id: 'validation-2',
+          draft_id: 'draft-1',
+          run_id: 'run-validation-2',
+          status: 'completed',
+          summary: 'Second validation.',
+          errors: [],
+          created_at: '2026-05-28T02:00:00Z',
+        },
+      ],
+    }
+    vi.mocked(fetchRuns).mockResolvedValue({
+      data: [],
+      meta: { total: 0, limit: 50, offset: 0 },
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=monitor')
+
+    const validationCard = (await screen.findByText('Validations')).parentElement
+    expect(validationCard).toHaveTextContent('2')
+    expect(validationCard).toHaveTextContent('Saved Draft validation records')
+  })
+
+  it('disables publication when the latest validation predates the current Draft revision', () => {
+    mockDraft = {
+      ...mockDraft,
+      revision: 5,
+      validation_records: [
+        {
+          validation_id: 'validation-1',
+          draft_id: 'draft-1',
+          run_id: 'run-validation-1',
+          status: 'completed',
+          summary: 'Ready before a later edit.',
+          errors: [],
+          created_at: '2026-05-28T01:00:00Z',
+        },
+      ],
+      operation_audit: [
+        {
+          operation_id: 'operation-1',
+          operation: 'validated',
+          actor: 'dashboard',
+          created_at: '2026-05-28T01:00:00Z',
+          summary: 'Validated revision 3.',
+          metadata: { run_id: 'run-validation-1', draft_revision: 3 },
+        },
+      ],
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
+
+    expect(screen.getByText(/latest validation does not cover Draft revision 5/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
+  })
+
+  it('requires explicit confirmation before switching the active version pointer', async () => {
+    mockVersions = [
+      {
+        agent_id: 'agent-1',
+        version_id: 'version-1',
+        source_draft_id: 'draft-1',
+        validation_run_id: 'run-1',
+        display_name: 'Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        published_at: '2026-05-28T01:00:00Z',
+        published_by: 'dashboard',
+        operation_audit: [],
+      },
+      {
+        agent_id: 'agent-1',
+        version_id: 'version-2',
+        source_draft_id: 'draft-1',
+        validation_run_id: 'run-2',
+        display_name: 'Insurance Agent',
+        purpose: 'Answer governed insurance questions.',
+        published_at: '2026-05-28T02:00:00Z',
+        published_by: 'dashboard',
+        operation_audit: [],
+      },
+    ]
+    mockActiveVersionId = 'version-2'
+    vi.mocked(rollbackConfigVersion).mockResolvedValue({
+      agent_id: 'agent-1',
+      version_id: 'version-1',
+      activated_at: '2026-05-28T03:00:00Z',
+      activated_by: 'dashboard',
+      rollback_from_version_id: 'version-2',
+    })
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rollback' }))
+    const rollbackDialog = screen.getByRole('dialog', { name: 'Confirm rollback' })
+    expect(rollbackDialog).toBeInTheDocument()
+    expect(within(rollbackDialog).getByText('version-2')).toBeInTheDocument()
+    expect(within(rollbackDialog).getByText('version-1')).toBeInTheDocument()
+    expect(rollbackConfigVersion).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm rollback' }))
+
+    await waitFor(() => {
+      expect(rollbackConfigVersion).toHaveBeenCalledWith('agent-1', 'version-1')
+      expect(refreshVersions).toHaveBeenCalled()
+    })
+  })
+
   it.each([
-    {
-      tab: 'tools',
-      label: 'Tools Config File',
-      initialYaml: ['name: insurance', 'tools:', '  file: config/tools.yaml', ''].join('\n'),
-      value: 'config/tools-v2.yaml',
-      expected: 'file: config/tools-v2.yaml',
-    },
     {
       tab: 'policy',
       label: 'Policy File',
@@ -2261,6 +2405,74 @@ workflow:
     expect(latestSavedAgentYaml()).toContain(expected)
   })
 
+  it('saves Tools through canonical capabilities.tools configuration', async () => {
+    enableProductionContractEditing()
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  tools:',
+        '    enabled: false',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=tools')
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable Tools' }))
+    fireEvent.change(screen.getByLabelText('Tool Contract File'), {
+      target: { value: './tools.yaml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Tools' }))
+
+    await waitFor(() => expect(updateConfigDraftContract).toHaveBeenCalled())
+    const savedYaml = latestSavedAgentYaml()
+    expect(savedYaml).toContain(`capabilities:
+  tools:
+    enabled: true
+    file: ./tools.yaml`)
+    expect(savedYaml).not.toContain('\ntools:\n')
+  })
+
+  it('does not save one module under another module action', async () => {
+    enableProductionContractEditing()
+    mockContract = {
+      ...mockContract,
+      agent_yaml: [
+        'name: insurance',
+        'policy:',
+        '  file: ./policy.yaml',
+        'model:',
+        '  provider: deterministic',
+        '  name: answer',
+        'react:',
+        '  max_plan_rounds: 4',
+        '  max_tool_calls: 0',
+        '  planner:',
+        '    provider: deterministic',
+        '    name: planner',
+        'review:',
+        '  subagent:',
+        '    provider: deterministic',
+        '    name: reviewer',
+        '',
+      ].join('\n'),
+    }
+
+    renderPage('/agents/agent-1/drafts/draft-1?tab=policy')
+    fireEvent.change(screen.getByLabelText('Policy File'), {
+      target: { value: './policy-unsaved.yaml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Save the current configuration before changing another Draft module.',
+    )
+    expect(updateConfigDraftContract).not.toHaveBeenCalled()
+  })
+
   it.each([
     'agent_contract_invalid',
     'agent_draft_revision_conflict',
@@ -2269,15 +2481,22 @@ workflow:
     enableProductionContractEditing()
     mockContract = {
       ...mockContract,
-      agent_yaml: ['name: insurance', 'tools:', '  file: config/tools.yaml', ''].join('\n'),
+      agent_yaml: [
+        'name: insurance',
+        'capabilities:',
+        '  tools:',
+        '    enabled: true',
+        '    file: config/tools.yaml',
+        '',
+      ].join('\n'),
     }
     vi.mocked(updateConfigDraftContract).mockRejectedValueOnce(new Error(detail))
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=tools')
 
-    const toolsFile = screen.getByLabelText('Tools Config File')
+    const toolsFile = screen.getByLabelText('Tool Contract File')
     fireEvent.change(toolsFile, { target: { value: 'config/tools-local-edit.yaml' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Tools' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(detail)
     expect(toolsFile).toHaveValue('config/tools-local-edit.yaml')
@@ -2495,7 +2714,7 @@ workflow:
         '    max_output_tokens: 800',
         '    timeout_seconds: 20',
         'react:',
-        '  max_steps: 6',
+        '  max_plan_rounds: 6',
         '  max_tool_calls: 4',
         '  record_reasoning_summary: true',
         '  planner:',
@@ -2537,7 +2756,7 @@ workflow:
     fireEvent.change(screen.getByLabelText('Temperature'), {
       target: { value: '0.2' },
     })
-    fireEvent.change(screen.getByLabelText('Max ReAct Steps'), {
+    fireEvent.change(screen.getByLabelText('Max Plan Rounds'), {
       target: { value: '9' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
@@ -2554,7 +2773,8 @@ workflow:
     expect(savedYaml).toContain('planner:\n    provider: openai\n    name: gpt-4.1-mini')
     expect(savedYaml).toContain('subagent:\n    provider: openai\n    name: gpt-4.1-mini')
     expect(savedYaml).toContain('temperature: 0.2')
-    expect(savedYaml).toContain('max_steps: 9')
+    expect(savedYaml).toContain('max_plan_rounds: 9')
+    expect(savedYaml).not.toContain('max_steps:')
   })
 
   it('saves Context Window budget from the Model module to top-level context configuration', async () => {
@@ -2568,7 +2788,7 @@ workflow:
         '  params:',
         '    temperature: 0',
         'react:',
-        '  max_steps: 6',
+        '  max_plan_rounds: 6',
         '  max_tool_calls: 4',
         '  record_reasoning_summary: true',
         '  planner:',

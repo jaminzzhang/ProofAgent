@@ -17,10 +17,6 @@ export const WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS: Record<string, string> = {
   [PRODUCTION_WORKFLOW_TEMPLATE.name]: PRODUCTION_WORKFLOW_TEMPLATE.descriptorVersion,
 }
 
-export const WORKFLOW_TEMPLATE_RUNTIMES: Record<string, string> = {
-  [PRODUCTION_WORKFLOW_TEMPLATE.name]: PRODUCTION_WORKFLOW_TEMPLATE.runtime,
-}
-
 export const WORKFLOW_FIELDS = [
   {
     label: 'Template',

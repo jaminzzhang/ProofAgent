@@ -111,6 +111,28 @@ def test_production_app_fails_closed_without_oidc_session_composition(
         )
 
 
+def test_development_auth_session_projects_the_local_operator(tmp_path: Path) -> None:
+    application = create_app(
+        mode="development",
+        history_dir=tmp_path / "history",
+        runs_dir=tmp_path / "latest",
+        conversations_dir=tmp_path / "conversations",
+        agent_configuration_dir=tmp_path / "configuration",
+    )
+
+    response = TestClient(application).get("/api/auth/session")
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "development-local-session"
+    assert response.json()["principal"] == {
+        "subject": "local-user",
+        "display_name": "Local Operator",
+    }
+    assert response.json()["effective_permissions"] == sorted(
+        permission.value for permission in Permission
+    )
+
+
 def test_production_app_installs_oidc_routes_and_no_cors_middleware(
     tmp_path: Path,
 ) -> None:

@@ -25,6 +25,7 @@ import type {
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
+  DraftAgent,
   DraftKnowledgeReleaseBindingCandidate,
   ProductionAgentPublicationConfiguration,
   SharedModelConnection,
@@ -33,7 +34,17 @@ import type {
 import { CodeBlock } from '../components/CodeBlock'
 import { EmptyState } from '../components/EmptyState'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
-import { Badge, Button, ConfigPanel } from '@proofagent/ui'
+import {
+  Badge,
+  Button,
+  ConfigPanel,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@proofagent/ui'
 import { AgentDetailShell } from '../components/agent/AgentDetailShell'
 import { AgentMonitor, AgentMonitorSummary } from '../components/agent/AgentMonitor'
 import { ModuleEditor } from '../components/agent/ModuleEditor'
@@ -47,9 +58,9 @@ import type { ConfigurationSection } from '../components/agent/ReadOnlyConfigura
 import { SkillsModuleEditor } from '../components/agent/SkillsModuleEditor'
 import type { SkillPackMutationResult } from '../components/agent/SkillsModuleEditor'
 import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
+import { ToolsModuleEditor } from '../components/agent/ToolsModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
-import { TOOLS_FIELDS } from '../components/agent/module-configs/tools'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
@@ -60,6 +71,7 @@ import {
   replaceAgentContextConfiguration,
   replaceAgentYamlMapping,
   replaceMemoryCapabilityConfiguration,
+  replaceToolCapabilityConfiguration,
   updateAgentYamlField,
 } from '../utils/agentYaml'
 
@@ -103,6 +115,7 @@ export function AgentDetailPage() {
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
+  const [dirtyConfigurationModule, setDirtyConfigurationModule] = useState<Tab | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -119,6 +132,7 @@ export function AgentDetailPage() {
   const [publicationConfiguration, setPublicationConfiguration] = useState<ProductionAgentPublicationConfiguration | null>(null)
   const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
   const [selectedRunDetailId, setSelectedRunDetailId] = useState<string | null>(null)
+  const [rollbackTargetVersionId, setRollbackTargetVersionId] = useState<string | null>(null)
 
   useEffect(() => {
     if (draft) {
@@ -128,7 +142,10 @@ export function AgentDetailPage() {
   }, [draft])
 
   useEffect(() => {
-    if (contract) setAgentYaml(contract.agent_yaml)
+    if (contract) {
+      setAgentYaml(contract.agent_yaml)
+      setDirtyConfigurationModule(null)
+    }
   }, [contract])
 
   useEffect(() => {
@@ -260,10 +277,41 @@ export function AgentDetailPage() {
   }, [activeTab, agentId, draft?.capabilities?.mode, draft?.revision, draftId])
 
   const latestValidation = draft?.validation_records[draft.validation_records.length - 1]
+  const basicsDirty = Boolean(
+    draft && (displayName !== draft.display_name || purpose !== draft.purpose),
+  )
+  const contractDirty = Boolean(
+    dirtyConfigurationModule && contract && agentYaml !== contract.agent_yaml,
+  )
+  const hasUnsavedChanges = basicsDirty || contractDirty
+  const latestValidationFresh = Boolean(
+    draft && latestValidation && validationCoversCurrentRevision(draft, latestValidation.run_id),
+  )
   const memoryReadinessBlockers = useMemo(
     () => memoryConfigurationBlockers(agentYaml, t),
     [agentYaml, t],
   )
+  const unsavedValidationBlocker = hasUnsavedChanges
+    ? t('agentDetail.unsavedValidationBlocker').replace(
+        '{revision}',
+        String(draft?.revision ?? t('agentDetail.unknownRevision')),
+      )
+    : null
+  const validationReadinessBlockers = [
+    ...memoryReadinessBlockers,
+    ...(unsavedValidationBlocker ? [unsavedValidationBlocker] : []),
+  ]
+  const publicationReadinessBlockers = [
+    ...validationReadinessBlockers,
+    ...(latestValidation && !latestValidationFresh
+      ? [
+          t('agentDetail.staleValidationBlocker').replace(
+            '{revision}',
+            String(draft?.revision ?? t('agentDetail.unknownRevision')),
+          ),
+        ]
+      : []),
+  ]
 
   async function runAction(label: string, action: () => Promise<void>) {
     setBusy(label)
@@ -344,6 +392,11 @@ export function AgentDetailPage() {
 
   async function saveBasics() {
     if (!agentId || !draftId || !canEditGeneral) return
+    if (contractDirty) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return
+    }
+    if (!basicsDirty) return
     await runAction('basics', async () => {
       await updateConfigDraft(agentId, draftId, {
         display_name: displayName,
@@ -355,13 +408,22 @@ export function AgentDetailPage() {
     })
   }
 
-  async function saveAgentYaml(successMessage = t('agentDetail.configurationSaved')) {
+  async function saveAgentYaml(
+    module: Tab,
+    successMessage = t('agentDetail.configurationSaved'),
+  ) {
     if (!agentId || !draftId) return
-    await runAction('workflow', async () => {
+    if (basicsDirty || (dirtyConfigurationModule && dirtyConfigurationModule !== module)) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return
+    }
+    if (!contractDirty) return
+    await runAction(module, async () => {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
         ...(draft?.revision === undefined ? {} : { expected_revision: draft.revision }),
       })
+      setDirtyConfigurationModule(null)
       setStatus(successMessage)
       refresh()
     })
@@ -369,6 +431,10 @@ export function AgentDetailPage() {
 
   async function saveWorkflowStages(payload: Parameters<typeof updateWorkflowStages>[2]) {
     if (!agentId || !draftId) return
+    if (basicsDirty || (contractDirty && dirtyConfigurationModule !== 'workflow')) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return
+    }
     await runAction('workflow-stages', async () => {
       const updated = await updateWorkflowStages(agentId, draftId, {
         ...payload,
@@ -377,6 +443,7 @@ export function AgentDetailPage() {
           : { expected_revision: draft.revision }),
       })
       setAgentYaml(updated.agent_yaml)
+      setDirtyConfigurationModule(null)
       setStatus(t('agentDetail.workflowStagesSaved'))
       refresh()
     })
@@ -392,6 +459,10 @@ export function AgentDetailPage() {
 
   async function createSkillPack(payload: BusinessFlowSkillPackCreateRequest) {
     if (!agentId || !draftId) return 'failed' as const
+    if (hasUnsavedChanges) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return 'failed' as const
+    }
     return runSkillMutation(async () => {
       const expectedRevision = skillsConfig?.revision ?? draft?.revision
       const updated = await createConfigDraftSkillPack(agentId, draftId, {
@@ -410,6 +481,10 @@ export function AgentDetailPage() {
 
   async function updateSkillPack(packId: string, payload: BusinessFlowSkillPackUpdateRequest) {
     if (!agentId || !draftId) return 'failed' as const
+    if (hasUnsavedChanges) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return 'failed' as const
+    }
     return runSkillMutation(async () => {
       const expectedRevision = skillsConfig?.revision ?? draft?.revision
       const updated = await updateConfigDraftSkillPack(agentId, draftId, packId, {
@@ -428,6 +503,10 @@ export function AgentDetailPage() {
 
   async function deleteSkillPack(packId: string) {
     if (!agentId || !draftId) return 'failed' as const
+    if (hasUnsavedChanges) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return 'failed' as const
+    }
     return runSkillMutation(async () => {
       const expectedRevision = skillsConfig?.revision ?? draft?.revision
       const updated = await deleteConfigDraftSkillPack(
@@ -448,6 +527,10 @@ export function AgentDetailPage() {
     candidate: DraftKnowledgeReleaseBindingCandidate,
   ): Promise<KnowledgeBindingMutationResult> {
     if (!agentId || !draftId || !knowledgeConfig) return 'failed'
+    if (hasUnsavedChanges) {
+      setActionError(t('agentDetail.saveCurrentModuleFirst'))
+      return 'failed'
+    }
     return runKnowledgeMutation(async () => {
       const updated = await updateConfigDraftKnowledgeBinding(agentId, draftId, {
         expected_revision: knowledgeConfig.revision,
@@ -462,7 +545,13 @@ export function AgentDetailPage() {
   }
 
   async function publishDraft() {
-    if (!agentId || !draftId || !latestValidation || memoryReadinessBlockers.length > 0) return
+    if (
+      !agentId
+      || !draftId
+      || !latestValidation
+      || !latestValidationFresh
+      || publicationReadinessBlockers.length > 0
+    ) return
     await runAction('publish', async () => {
       const version = await publishConfigDraft(agentId, draftId, {
         validation_run_id: latestValidation.run_id,
@@ -479,15 +568,21 @@ export function AgentDetailPage() {
     if (path[0] === 'capabilities' && path[1] === 'memory') {
       return replaceMemoryCapabilityConfiguration(current, path, value)
     }
+    if (path[0] === 'capabilities' && path[1] === 'tools') {
+      return replaceToolCapabilityConfiguration(current, path, value)
+    }
     return updateAgentYamlField(current, path, value)
   }
 
-  async function rollback(versionId: string) {
+  async function confirmRollback() {
+    const versionId = rollbackTargetVersionId
     if (!agentId) return
+    if (!versionId) return
     await runAction(`rollback-${versionId}`, async () => {
       await rollbackConfigVersion(agentId, versionId)
       setStatus(t('agentDetail.activeVersionSet').replace('{version}', versionId))
       refreshVersions()
+      setRollbackTargetVersionId(null)
     })
   }
 
@@ -560,6 +655,44 @@ export function AgentDetailPage() {
       activeModule={activeTab}
       onModuleChange={setActiveTab}
     >
+      <section
+        aria-label={t('agentDetail.configurationFlow')}
+        className="mb-5 flex flex-col gap-3 border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 md:flex-row md:items-center md:justify-between"
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-[var(--text-primary)]">
+              {t('agentDetail.configurationFlow')}
+            </span>
+            <Badge variant="outline">
+              {t('agentDetail.draftRevisionValue').replace(
+                '{revision}',
+                String(draft.revision ?? t('agentDetail.unknownRevision')),
+              )}
+            </Badge>
+            <Badge variant={hasUnsavedChanges ? 'warning' : 'success'}>
+              {t(
+                hasUnsavedChanges
+                  ? 'agentDetail.unsavedConfiguration'
+                  : 'agentDetail.savedConfiguration',
+              )}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            {t('agentDetail.configurationFlowDescription')}
+          </p>
+        </div>
+        {latestValidation && (
+          <Badge variant={latestValidationFresh ? 'success' : 'warning'} className="w-fit shrink-0">
+            {t(
+              latestValidationFresh
+                ? 'agentDetail.validationCurrent'
+                : 'agentDetail.validationStale',
+            )}
+          </Badge>
+        )}
+      </section>
+
       {activeTab === 'general' && (
         <div className="space-y-5">
           <section className="border border-[var(--border)] bg-[var(--bg-surface)] p-6">
@@ -642,6 +775,7 @@ export function AgentDetailPage() {
           {agentId && (
             <AgentMonitorSummary
               agentId={agentId}
+              draftValidationCount={draft.validation_records.length}
               onOpenRunDetail={setSelectedRunDetailId}
             />
           )}
@@ -654,8 +788,11 @@ export function AgentDetailPage() {
             agentYaml={agentYaml}
             descriptor={workflowDescriptor}
             descriptorError={workflowDescriptorError}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-            onSaveCore={() => saveAgentYaml(t('agentDetail.workflowSaved'))}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('workflow')
+              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
+            }}
+            onSaveCore={() => saveAgentYaml('workflow', t('agentDetail.workflowSaved'))}
             onSaveStages={saveWorkflowStages}
             onPreviewStage={previewWorkflowStage}
             busy={busy === 'workflow'}
@@ -703,19 +840,17 @@ export function AgentDetailPage() {
 
       {activeTab === 'tools' && (
         editableModuleIds.includes('tools') ? (
-          <ModuleEditor
-            title={t('agentDetail.toolsTitle')}
-            description={t('agentDetail.toolsDescription')}
-            fields={TOOLS_FIELDS}
-            yamlSection="tools"
+          <ToolsModuleEditor
             agentYaml={agentYaml}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-            onSave={() => saveAgentYaml(t('agentDetail.toolsSaved'))}
-            busy={busy === 'workflow'}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('tools')
+              setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))
+            }}
+            onSave={() => saveAgentYaml('tools', t('agentDetail.toolsSaved'))}
+            busy={busy === 'tools'}
           />
         ) : readOnlyConfiguration(t('agentDetail.tabTools'), [
           { label: 'capabilities.tools', path: ['capabilities', 'tools'] },
-          { label: 'tools', path: ['tools'] },
           { label: 'tools.yaml', content: contract.tools_yaml },
         ])
       )}
@@ -728,9 +863,12 @@ export function AgentDetailPage() {
             fields={POLICY_FIELDS}
             yamlSection="policy"
             agentYaml={agentYaml}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-            onSave={() => saveAgentYaml(t('agentDetail.policySaved'))}
-            busy={busy === 'workflow'}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('policy')
+              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
+            }}
+            onSave={() => saveAgentYaml('policy', t('agentDetail.policySaved'))}
+            busy={busy === 'policy'}
           />
         ) : readOnlyConfiguration(t('agentDetail.tabPolicy'), [
           { label: 'policy', path: ['policy'] },
@@ -743,15 +881,21 @@ export function AgentDetailPage() {
           <ModelModuleEditor
             agentYaml={agentYaml}
             modelConnections={modelConnections}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
-            onModelConfigChange={(path, value) => setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('model')
+              setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))
+            }}
+            onModelConfigChange={(path, value) => {
+              setDirtyConfigurationModule('model')
+              setAgentYaml((current: string) => replaceAgentYamlMapping(current, path, value))
+            }}
             onCreateSharedModelConnection={async (payload) => {
               const connection = await createModelConnection(payload)
               setModelConnections((current) => [...current, connection])
               return connection
             }}
-            onSave={() => saveAgentYaml(t('agentDetail.modelSaved'))}
-            busy={busy === 'workflow'}
+            onSave={() => saveAgentYaml('model', t('agentDetail.modelSaved'))}
+            busy={busy === 'model'}
           />
         ) : readOnlyConfiguration(t('agentDetail.tabModel'), [
           { label: 'model', path: ['model'] },
@@ -764,9 +908,12 @@ export function AgentDetailPage() {
         editableModuleIds.includes('memory') ? (
           <MemoryModuleEditor
             agentYaml={agentYaml}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))}
-            onSave={() => saveAgentYaml(t('agentDetail.memorySaved'))}
-            busy={busy === 'workflow'}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('memory')
+              setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))
+            }}
+            onSave={() => saveAgentYaml('memory', t('agentDetail.memorySaved'))}
+            busy={busy === 'memory'}
           />
         ) : readOnlyConfiguration(t('agentDetail.tabMemory'), [
           { label: 'capabilities.memory', path: ['capabilities', 'memory'] },
@@ -785,9 +932,12 @@ export function AgentDetailPage() {
             fields={RESPONSE_FIELDS}
             yamlSection="response"
             agentYaml={agentYaml}
-            onFieldChange={(path, value) => setAgentYaml((current: string) => updateAgentYamlField(current, path, value))}
-            onSave={() => saveAgentYaml(t('agentDetail.responseSaved'))}
-            busy={busy === 'workflow'}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('response')
+              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
+            }}
+            onSave={() => saveAgentYaml('response', t('agentDetail.responseSaved'))}
+            busy={busy === 'response'}
           />
         ) : readOnlyConfiguration(t('agentDetail.tabResponse'), [
           { label: 'response', path: ['response'] },
@@ -815,7 +965,7 @@ export function AgentDetailPage() {
             })
           }
           busy={busy === 'validation'}
-          readinessBlockers={memoryReadinessBlockers}
+          readinessBlockers={validationReadinessBlockers}
         />
       )}
 
@@ -829,14 +979,14 @@ export function AgentDetailPage() {
               variant="outline"
               size="sm"
               onClick={publishDraft}
-              disabled={busy === 'publish' || !latestValidation || memoryReadinessBlockers.length > 0}
+              disabled={busy === 'publish' || !latestValidationFresh || publicationReadinessBlockers.length > 0}
             >
               {t('agentDetail.publish')}
             </Button>
           ) : undefined}
         >
-          {canPublish && memoryReadinessBlockers.length > 0 && (
-            <BlockingReasons title={t('validate.readinessBlocked')} reasons={memoryReadinessBlockers} />
+          {canPublish && publicationReadinessBlockers.length > 0 && (
+            <BlockingReasons title={t('validate.readinessBlocked')} reasons={publicationReadinessBlockers} />
           )}
           {versionsLoading ? (
             <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>
@@ -884,7 +1034,7 @@ export function AgentDetailPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => rollback(version.version_id)}
+                        onClick={() => setRollbackTargetVersionId(version.version_id)}
                         disabled={busy === `rollback-${version.version_id}`}
                         className="shrink-0"
                       >
@@ -926,8 +1076,66 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'monitor' && agentId && (
-        <AgentMonitor agentId={agentId} onOpenRunDetail={setSelectedRunDetailId} />
+        <AgentMonitor
+          agentId={agentId}
+          draftValidationCount={draft.validation_records.length}
+          onOpenRunDetail={setSelectedRunDetailId}
+        />
       )}
+
+      <Dialog
+        open={rollbackTargetVersionId !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy?.startsWith('rollback-')) setRollbackTargetVersionId(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('agentDetail.rollbackConfirmTitle')}</DialogTitle>
+            <DialogDescription>
+              {t('agentDetail.rollbackConfirmDescription')}
+            </DialogDescription>
+          </DialogHeader>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <div className="border border-[var(--border)] bg-[var(--bg-base)] p-3">
+              <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                {t('agentDetail.rollbackCurrentVersion')}
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">
+                {activeVersionId ?? t('agentDetail.noActiveVersion')}
+              </dd>
+            </div>
+            <div className="border border-[var(--border)] bg-[var(--bg-base)] p-3">
+              <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                {t('agentDetail.rollbackTargetVersion')}
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">
+                {rollbackTargetVersionId}
+              </dd>
+            </div>
+          </dl>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRollbackTargetVersionId(null)}
+              disabled={Boolean(busy?.startsWith('rollback-'))}
+            >
+              {t('agentDetail.rollbackCancel')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={confirmRollback}
+              disabled={!rollbackTargetVersionId || Boolean(busy?.startsWith('rollback-'))}
+            >
+              {busy?.startsWith('rollback-')
+                ? t('agentDetail.rollbackRunning')
+                : t('agentDetail.rollbackConfirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <RunDetailDrawer
         runId={selectedRunDetailId}
@@ -956,6 +1164,19 @@ export function AgentDetailPage() {
 
 function isConflictError(error: unknown): error is { status: 409 } {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 409
+}
+
+function validationCoversCurrentRevision(draft: DraftAgent, runId: string): boolean {
+  if (draft.revision === undefined) return false
+  const latestOperation = draft.operation_audit[draft.operation_audit.length - 1]
+  const validatedRevision = latestOperation?.metadata.draft_revision
+  return Boolean(
+    latestOperation
+    && latestOperation.operation === 'validated'
+    && latestOperation.metadata.run_id === runId
+    && typeof validatedRevision === 'number'
+    && validatedRevision + 1 === draft.revision,
+  )
 }
 
 function BlockingReasons({ title, reasons }: { title: string; reasons: string[] }) {
