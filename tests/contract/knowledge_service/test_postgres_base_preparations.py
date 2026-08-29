@@ -653,25 +653,33 @@ def test_management_reads_running_without_exposing_worker_claim_and_replays_queu
         assert [event["action"] for event in audited.json()["events"]] == ["save_draft", "start"]
 
 
-def test_management_reads_cancelled_without_exposing_a_cancel_command_or_lease(
+def test_management_cancels_queued_preparation_idempotently_without_exposing_internals(
     preparation_database: PreparationDatabase,
 ) -> None:
     database = preparation_database
     app = application(database.dsn)
     app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
     queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
-    assert worker(database.dsn).claim_next() is not None
-    cancelled = app.cancel(
-        queued.release_preparation_id,
-        operator_id="operator-canceller",
-        idempotency_key="cancel",
-    )
     location = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
 
     with management_client(database) as client:
+        cancelled = client.post(f"{location}:cancel", headers=headers("cancel-http"))
+        replay = client.post(f"{location}:cancel", headers=headers("cancel-http"))
+        terminal_retry = client.post(
+            f"{location}:cancel",
+            headers=headers("cancel-http-second-command"),
+        )
         current = client.get(location, headers=headers())
+
+        assert cancelled.status_code == 200
+        assert cancelled.headers["Location"] == location
+        assert cancelled.json()["state"] == "cancelled"
+        assert replay.status_code == 200
+        assert replay.json() == cancelled.json()
+        assert terminal_retry.status_code == 409
+        assert terminal_retry.json()["code"] == "base_preparation_not_cancellable"
         assert current.status_code == 200
-        assert current.json() == cancelled.model_dump(mode="json")
+        assert current.json() == cancelled.json()
         assert not {
             "candidate_json",
             "lease_worker_id",
@@ -679,10 +687,93 @@ def test_management_reads_cancelled_without_exposing_a_cancel_command_or_lease(
             "lease_expires_at",
             "published_release_id",
         } & set(current.json())
+        assert [event.action for event in app.audit("base-claims")] == [
+            "save_draft",
+            "start",
+            "cancel",
+        ]
+        assert app.rejections("base-claims")[-1].operation == "cancel"
+        assert app.rejections("base-claims")[-1].code == "base_preparation_not_cancellable"
         assert (
-            client.post(f"{location}:cancel", headers=headers("cancel-http"), json={}).status_code
-            == 405
+            database.catalog.list_releases(
+                knowledge_space_id="space-claims", knowledge_base_id="base-claims"
+            )
+            == ()
         )
+
+
+def test_management_cancellation_rejects_a_body_without_consuming_the_key(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    location = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        rejected = client.post(
+            f"{location}:cancel",
+            headers=headers("cancel-http"),
+            json={"token": "synthetic-private-cancellation-token"},
+        )
+
+        assert rejected.status_code == 422
+        assert rejected.json()["code"] == "invalid_management_request"
+        assert "synthetic-private-cancellation-token" not in rejected.text
+        assert client.get(location, headers=headers()).json()["state"] == "queued"
+        assert client.post(f"{location}:cancel", headers=headers("cancel-http")).status_code == 200
+        audit = client.get(f"{BASE_PATH}/preparation-audit", headers=headers()).json()
+        assert audit["rejections"][-1]["operation"] == "cancel"
+        assert audit["rejections"][-1]["code"] == "invalid_management_request"
+
+
+def test_management_cancellation_rejects_path_scope_drift_before_mutation(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    location = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        rejected = client.post(
+            f"{location.replace('space-claims', 'space-other')}:cancel",
+            headers=headers("cancel-http"),
+        )
+
+        assert rejected.status_code == 409
+        assert rejected.json()["code"] == "base_scope_mismatch"
+        assert client.get(location, headers=headers()).json()["state"] == "queued"
+        assert client.post(f"{location}:cancel", headers=headers("cancel-http")).status_code == 200
+
+
+def test_management_cancellation_key_cannot_be_rebound_to_another_preparation(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    first = app.start(start_request(), operator_id="operator-1", idempotency_key="start-first")
+    second = app.start(start_request(), operator_id="operator-1", idempotency_key="start-second")
+    first_location = f"{BASE_PATH}/release-preparations/{first.release_preparation_id}"
+    second_location = f"{BASE_PATH}/release-preparations/{second.release_preparation_id}"
+
+    with management_client(database) as client:
+        assert (
+            client.post(f"{first_location}:cancel", headers=headers("cancel-shared")).status_code
+            == 200
+        )
+        conflict = client.post(
+            f"{second_location}:cancel",
+            headers=headers("cancel-shared"),
+        )
+
+        assert conflict.status_code == 409
+        assert conflict.json()["code"] == "base_preparation_idempotency_conflict"
+        assert client.get(second_location, headers=headers()).json()["state"] == "queued"
+    assert [event.action for event in app.audit("base-claims")].count("cancel") == 1
 
 
 def test_management_reads_ready_as_a_secret_free_non_queryable_candidate(
@@ -734,7 +825,7 @@ def test_management_reads_ready_as_a_secret_free_non_queryable_candidate(
         )
 
 
-def test_management_reads_consumed_without_exposing_publication_internals_or_command(
+def test_management_reads_consumed_without_exposing_internals_and_rejects_republication(
     preparation_database: PreparationDatabase,
 ) -> None:
     database = preparation_database
@@ -765,10 +856,217 @@ def test_management_reads_consumed_without_exposing_publication_internals_or_com
             "lease_fencing_token",
             "lease_expires_at",
         } & set(current.json())
-        assert (
-            client.post(f"{location}:publish", headers=headers("publish"), json={}).status_code
-            == 405
+        republished = client.post(
+            f"{location}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
         )
+        assert republished.status_code == 409
+        assert republished.json()["code"] == "base_preparation_not_ready"
+        assert client.get(location, headers=headers()).json() == consumed.model_dump(mode="json")
+
+
+def test_management_api_publishes_one_ready_preparation_and_exposes_recovery_location(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        published = client.post(
+            f"{resource_path}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert published.status_code == 200
+        assert published.headers["Location"] == resource_path
+        assert published.json()["state"] == "consumed"
+        assert published.json()["knowledge_base_release_id"] == (ready.knowledge_base_release_id)
+        assert client.get(resource_path, headers=headers()).json() == published.json()
+    releases = database.catalog.list_releases(
+        knowledge_space_id="space-claims",
+        knowledge_base_id="base-claims",
+    )
+    assert len(releases) == 1
+    assert releases[0].knowledge_base_release_id == ready.knowledge_base_release_id
+    assert [event.action for event in app.publication_audit("base-claims")] == ["consumed"]
+
+
+def test_management_publication_rejects_a_request_body_without_exposing_it(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        rejected = client.post(
+            f"{resource_path}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={"token": "synthetic-private-publication-token"},
+        )
+
+        assert rejected.status_code == 422
+        assert rejected.json()["code"] == "invalid_management_request"
+        assert "synthetic-private-publication-token" not in rejected.text
+        assert client.get(resource_path, headers=headers()).json()["state"] == "ready"
+        audit = client.get(f"{BASE_PATH}/preparation-audit", headers=headers()).json()
+        assert audit["rejections"][-1]["operation"] == "publish"
+        assert audit["rejections"][-1]["code"] == "invalid_management_request"
+    assert (
+        database.catalog.list_releases(
+            knowledge_space_id="space-claims",
+            knowledge_base_id="base-claims",
+        )
+        == ()
+    )
+
+
+def test_management_publication_requires_edit_permission_before_consuming(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(
+        database,
+        permissions=frozenset({"knowledge_source.view"}),
+        operator_id="operator-viewer",
+    ) as viewer:
+        denied = viewer.post(
+            f"{resource_path}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert denied.status_code == 403
+    assert app.get_preparation(queued.release_preparation_id) == ready
+    assert (
+        database.catalog.list_releases(
+            knowledge_space_id="space-claims",
+            knowledge_base_id="base-claims",
+        )
+        == ()
+    )
+    assert app.rejections("base-claims")[-1].operation == "publish"
+    assert app.rejections("base-claims")[-1].code == "knowledge_operator_permission_denied"
+
+
+def test_management_publication_rejects_path_scope_drift_before_consuming(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+
+    with management_client(database) as client:
+        rejected = client.post(
+            (
+                "/v1/knowledge-spaces/space-other/knowledge-bases/base-claims/"
+                f"release-preparations/{queued.release_preparation_id}:publish"
+            ),
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert rejected.status_code == 409
+        assert rejected.json()["code"] == "base_scope_mismatch"
+    assert app.get_preparation(queued.release_preparation_id) == ready
+    assert (
+        database.catalog.list_releases(
+            knowledge_space_id="space-claims",
+            knowledge_base_id="base-claims",
+        )
+        == ()
+    )
+
+
+def test_management_publication_persists_expiry_for_get_recovery(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    expire_test_candidate(database.dsn, ready.release_preparation_id)
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        rejected = client.post(
+            f"{resource_path}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert rejected.status_code == 409
+        assert rejected.json()["code"] == "base_preparation_expired"
+        recovered = client.get(resource_path, headers=headers())
+        assert recovered.status_code == 200
+        assert recovered.json()["state"] == "expired"
+        assert recovered.json()["expired_at"] >= recovered.json()["expires_at"]
+    assert (
+        database.catalog.list_releases(
+            knowledge_space_id="space-claims",
+            knowledge_base_id="base-claims",
+        )
+        == ()
+    )
+    assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
     assert app.start(start_request(), operator_id="operator-1", idempotency_key="start") == queued
 
 
@@ -2474,10 +2772,12 @@ def test_http_reads_are_scoped_and_cannot_treat_a_preparation_as_published(
             client.get(f"{BASE_PATH}/release-preparations/absent", headers=headers()).status_code
             == 404
         )
-        assert (
-            client.post(f"{location}:publish", headers=headers("publish"), json={}).status_code
-            == 405
+        rejected_publish = client.post(
+            f"{location}:publish",
+            headers={"Authorization": f"Bearer {TOKEN}"},
         )
+        assert rejected_publish.status_code == 409
+        assert rejected_publish.json()["code"] == "base_preparation_not_ready"
         conflict = client.post(
             f"{BASE_PATH}/release-preparations",
             headers=headers("prepare"),

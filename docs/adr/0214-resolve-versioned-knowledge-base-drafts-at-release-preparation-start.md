@@ -29,4 +29,8 @@ if a latest-ready member has no eligible version, or if the submitted Draft revi
 is stale. We accept an additional Draft and preparation state machine to avoid
 repeating complete exact-version selections for routine updates while preserving
 immutable Releases and reproducible queries. The current direct Release API remains
-an implementation fact until this target flow is implemented and verified.
+an implementation fact. TDD-02A through 02G implement the local Draft/Preparation
+core, and TDD-04C exposes Draft save/exact read plus Preparation start/status through
+the ProofAgent same-origin BFF. Preparation execution, public one-use publication,
+Dashboard operation and system-wide removal of the direct Release bypass remain
+unimplemented; local verification is not Production GO.

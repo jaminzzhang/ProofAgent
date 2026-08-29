@@ -27,8 +27,24 @@ from knowledge_source_service.application.connection_profiles import ConnectionP
 from knowledge_source_service.adapters.postgres.base_preparations import (
     PostgresBasePreparationRepository,
 )
+from knowledge_source_service.adapters.postgres.release_references import (
+    PostgresReleaseLifecycleRepository,
+)
 from knowledge_source_service.application.base_preparations import (
     KnowledgeBasePreparationApplication,
+)
+from knowledge_source_service.application.base_preparation_builder import (
+    KnowledgeReleaseCandidateBuilder,
+)
+from knowledge_source_service.application.base_preparation_worker import (
+    BasePreparationExecutor,
+    BasePreparationWorker,
+)
+from knowledge_source_service.application.knowledge_releases import (
+    KnowledgeReleaseApplication,
+)
+from knowledge_source_service.application.release_references import (
+    KnowledgeBaseReleaseLifecycleApplication,
 )
 from knowledge_source_service.ports.connection_profiles import (
     ConnectionProfileDeploymentPolicy,
@@ -71,12 +87,22 @@ from knowledge_source_service.ports.snapshot_connections import (
 
 
 @dataclass(frozen=True)
+class BasePreparationExecutionConfiguration:
+    """Server-owned one-shot execution policy for Release Preparation."""
+
+    worker_id: str
+    lease_duration: timedelta
+    candidate_ttl: timedelta
+
+
+@dataclass(frozen=True)
 class KnowledgeServiceRuntime:
     """Explicit role handles without an in-memory authority singleton."""
 
     http_application: FastAPI
     query_executor: KnowledgeQueryExecutor
     synchronization_executor: KnowledgeSourceSynchronizationExecutor | None = None
+    base_preparation_executor: BasePreparationExecutor | None = None
 
 
 def compose_runtime(
@@ -107,6 +133,7 @@ def compose_runtime(
     connection_profile_id_factory: Callable[[], str] | None = None,
     profile_snapshot_readers: ConnectionProfileSnapshotReaders | None = None,
     base_preparation_id_factory: Callable[[], str] | None = None,
+    base_preparation_execution: BasePreparationExecutionConfiguration | None = None,
 ) -> KnowledgeServiceRuntime:
     """Compose all online authority ports from durable PostgreSQL/S3 dependencies."""
 
@@ -177,6 +204,24 @@ def compose_runtime(
         worker_id=worker_id,
         lease_duration=lease_duration,
     )
+    base_preparation_executor: BasePreparationExecutor | None = None
+    if base_preparation_execution is not None:
+        base_preparation_executor = BasePreparationExecutor(
+            worker=BasePreparationWorker(
+                repository=PostgresBasePreparationRepository.from_dsn(postgres_dsn),
+                worker_id=base_preparation_execution.worker_id,
+                lease_duration=base_preparation_execution.lease_duration,
+            ),
+            builder=KnowledgeReleaseCandidateBuilder(
+                releases=KnowledgeReleaseApplication(
+                    artifacts=artifacts,
+                    catalog=catalog,
+                    projection=projection,
+                    encoder=encoder,
+                )
+            ),
+            candidate_ttl=base_preparation_execution.candidate_ttl,
+        )
     synchronization_application: KnowledgeSourceSynchronizationApplication | None = None
     synchronization_executor: KnowledgeSourceSynchronizationExecutor | None = None
     profiles = (
@@ -252,6 +297,9 @@ def compose_runtime(
                 if base_preparation_id_factory is not None
                 else None
             ),
+            release_lifecycle=KnowledgeBaseReleaseLifecycleApplication(
+                repository=PostgresReleaseLifecycleRepository.from_dsn(postgres_dsn)
+            ),
         )
         http_application.include_router(management.router)
         http_application.exception_handlers.update(management.exception_handlers)
@@ -259,4 +307,5 @@ def compose_runtime(
         http_application=http_application,
         query_executor=query_executor,
         synchronization_executor=synchronization_executor,
+        base_preparation_executor=base_preparation_executor,
     )

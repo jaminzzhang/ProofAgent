@@ -1127,7 +1127,7 @@ export interface KnowledgeServiceReleaseProjection {
   knowledge_base_version_id: string
   knowledge_base_release_id: string
   source_version_count: number
-  state: 'queryable' | 'retired'
+  state: 'queryable' | 'deprecated' | 'retired' | 'revoked'
 }
 
 export interface KnowledgeServiceManagementWorkspace {

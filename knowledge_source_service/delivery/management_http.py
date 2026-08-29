@@ -49,10 +49,15 @@ from knowledge_source_service.application.connection_profiles import ConnectionP
 from knowledge_source_service.application.base_preparations import (
     KnowledgeBasePreparationApplication,
 )
+from knowledge_source_service.application.release_references import (
+    KnowledgeBaseReleaseLifecycleApplication,
+)
 from knowledge_source_service.contracts.base_preparations import (
     BaseIdentifier,
     BasePreparationAuditCollection,
     BasePreparationRejectionEntry,
+    CancelledReleasePreparation,
+    ConsumedReleasePreparation,
     KnowledgeBaseDraft,
     QueuedReleasePreparation,
     ReleasePreparationResource,
@@ -78,6 +83,11 @@ from knowledge_source_service.contracts.synchronizations import (
 )
 from knowledge_source_service.contracts.results import Sha256Digest
 from knowledge_source_service.domain.knowledge_catalog import StructuredValueType
+from knowledge_source_service.contracts.release_references import (
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
+    KnowledgeBaseReleaseDeletionEligibilityAssessment,
+)
+from knowledge_source_service.domain.release_references import ReleaseLifecycleError
 from knowledge_source_service.domain.synchronizations import (
     KnowledgeSourceSynchronizationPersistenceConflict,
 )
@@ -271,6 +281,7 @@ def create_management_application(
     synchronization_application: KnowledgeSourceSynchronizationApplication | None = None,
     connection_profiles: ConnectionProfileApplication | None = None,
     base_preparations: KnowledgeBasePreparationApplication | None = None,
+    release_lifecycle: KnowledgeBaseReleaseLifecycleApplication | None = None,
 ) -> FastAPI:
     """Build a storage-opaque management surface over durable service authority."""
 
@@ -386,6 +397,8 @@ def create_management_application(
             "get_base_draft": "get_draft",
             "start_release_preparation": "start",
             "get_release_preparation": "get_preparation",
+            "cancel_release_preparation": "cancel",
+            "publish_release_preparation": "publish",
             "base_preparation_audit": "audit",
         }
         operation = operations.get(getattr(request.scope.get("route"), "name", ""))
@@ -682,6 +695,88 @@ def create_management_application(
             )
             return preparation
 
+        @application.post(
+            f"{base_path}/release-preparations/{{preparation_id}}:cancel",
+            response_model=CancelledReleasePreparation,
+        )
+        async def cancel_release_preparation(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            preparation_id: BaseIdentifier,
+            request: Request,
+            response: Response,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> CancelledReleasePreparation:
+            if await request.body():
+                raise ValueError("cancellation request body is not accepted")
+            current = preparations.get_preparation(preparation_id)
+            if current is None:
+                raise BasePreparationError("base_preparation_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                current.knowledge_space_id,
+                current.knowledge_base_id,
+            )
+            cancelled = preparations.cancel(
+                preparation_id,
+                operator_id=operator.operator_id,
+                idempotency_key=idempotency_key,
+            )
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                cancelled.knowledge_space_id,
+                cancelled.knowledge_base_id,
+            )
+            response.headers["Location"] = (
+                f"/v1/knowledge-spaces/{knowledge_space_id}/"
+                f"knowledge-bases/{knowledge_base_id}/"
+                f"release-preparations/{preparation_id}"
+            )
+            return cancelled
+
+        @application.post(
+            f"{base_path}/release-preparations/{{preparation_id}}:publish",
+            response_model=ConsumedReleasePreparation,
+        )
+        async def publish_release_preparation(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            preparation_id: BaseIdentifier,
+            request: Request,
+            response: Response,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> ConsumedReleasePreparation:
+            if await request.body():
+                raise ValueError("publication request body is not accepted")
+            current = preparations.get_preparation(preparation_id)
+            if current is None:
+                raise BasePreparationError("base_preparation_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                current.knowledge_space_id,
+                current.knowledge_base_id,
+            )
+            published = preparations.publish(
+                preparation_id,
+                operator_id=operator.operator_id,
+            )
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                published.knowledge_space_id,
+                published.knowledge_base_id,
+            )
+            response.headers["Location"] = (
+                f"/v1/knowledge-spaces/{knowledge_space_id}/"
+                f"knowledge-bases/{knowledge_base_id}/"
+                f"release-preparations/{preparation_id}"
+            )
+            return published
+
         @application.get(
             f"{base_path}/preparation-audit", response_model=BasePreparationAuditCollection
         )
@@ -830,6 +925,38 @@ def create_management_application(
                 "status": 503,
                 "code": "knowledge_catalog_integrity_unavailable",
                 "detail": "Exact Knowledge artifact integrity could not be verified.",
+            },
+            media_type="application/problem+json",
+        )
+
+    @application.exception_handler(ReleaseLifecycleError)
+    def handle_release_lifecycle_error(
+        _request: Request,
+        error: ReleaseLifecycleError,
+    ) -> JSONResponse:
+        if error.code in {
+            "release_lifecycle_release_not_found",
+            "release_lifecycle_release_scope_mismatch",
+        }:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "type": "urn:knowledge-source-service:problem:release-lifecycle-not-found",
+                    "title": "Knowledge Base Release lifecycle not found",
+                    "status": 404,
+                    "code": "release_lifecycle_not_found",
+                    "detail": "The exact Release lifecycle is unavailable in the requested scope.",
+                },
+                media_type="application/problem+json",
+            )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "type": "urn:knowledge-source-service:problem:release-lifecycle-unavailable",
+                "title": "Knowledge Base Release lifecycle unavailable",
+                "status": 503,
+                "code": "release_lifecycle_unavailable",
+                "detail": "The exact Release lifecycle could not be verified.",
             },
             media_type="application/problem+json",
         )
@@ -1263,6 +1390,30 @@ def create_management_application(
             data=data,
             summary=ManagementCollectionSummary(total=len(data)),
         )
+
+    if release_lifecycle is not None:
+
+        @application.get(
+            (
+                "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/"
+                "{knowledge_base_id}/releases/{knowledge_base_release_id}/"
+                "deletion-eligibility"
+            ),
+            response_model=KnowledgeBaseReleaseDeletionEligibilityAssessment,
+        )
+        def get_release_deletion_eligibility(
+            knowledge_space_id: str,
+            knowledge_base_id: str,
+            knowledge_base_release_id: str,
+            _operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> KnowledgeBaseReleaseDeletionEligibilityAssessment:
+            return release_lifecycle.assess_deletion_eligibility(
+                AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+                    knowledge_space_id=knowledge_space_id,
+                    knowledge_base_id=knowledge_base_id,
+                    knowledge_base_release_id=knowledge_base_release_id,
+                )
+            )
 
     return application
 

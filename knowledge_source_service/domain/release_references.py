@@ -82,3 +82,25 @@ class ReleaseLifecycleReceipt:
 class ReleaseRetentionPolicy:
     policy_id: str
     minimum_age: timedelta
+
+
+@dataclass(frozen=True)
+class ReleaseDeletionFacts:
+    knowledge_space_id: str
+    knowledge_base_id: str
+    knowledge_base_release_id: str
+    state: Literal["queryable", "deprecated", "retired", "revoked"]
+    managed_retirement: bool
+    active_reference_count: int
+    deregistered_reference_count: int
+    retired_at: datetime | None
+    revoked_at: datetime | None
+    assessed_at: datetime
+
+
+@dataclass(frozen=True)
+class ReleaseArtifactRetentionAssessment:
+    authority_id: str
+    assessment_id: str
+    knowledge_base_release_id: str
+    status: Literal["clear", "blocked"]

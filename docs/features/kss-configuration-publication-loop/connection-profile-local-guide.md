@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-[KNOWN | HIGH] 本说明对应 TDD-01B 的 KSS PostgreSQL、管理 API 和 Worker 协议接线。它不是生产启用步骤。`bootstrap/processes.py` 仍使用静态 registry；ProofAgent BFF、Dashboard 和三角色包映射尚未接入 Profile 操作。
+[KNOWN | HIGH] 本说明对应 TDD-01B 的 KSS PostgreSQL、管理 API 和 Worker 协议接线，以及 TDD-04B 的 ProofAgent guarded client 与同源 BFF。它不是生产启用步骤。`bootstrap/processes.py` 仍使用静态 registry；Dashboard 页面、真实上游 adapter、生产三角色部署映射和终端操作者到 KSS audit 的委托身份链尚未接入。
 
 [FRAME | HIGH] 配置和数据权威保持分离：KSS 保存非敏感 Profile revision 和数据版本，Vault 保存凭据值，部署策略控制 connector、egress、trust root 和硬限制。Knowledge Operator 不因发布 Profile 获得 Agent 发布或激活权限。
 
@@ -18,7 +18,7 @@
 
 ## 调用顺序
 
-所有路径均为 KSS 服务端管理接口。变更 Profile 的请求必须携带认证和 `Idempotency-Key`；这里不展示凭据值。
+下表路径为 KSS 服务端管理接口。变更 Profile 的请求必须携带认证和 `Idempotency-Key`；这里不展示凭据值。
 
 | 顺序 | 方法与路径 | 输入要点 | 成功结果 |
 | --- | --- | --- | --- |
@@ -29,6 +29,19 @@
 | 5 | `POST /v1/knowledge-source-synchronizations` | exact `connection_profile`，见下例 | `202`，v2 queued resource，包含配置 digest 和轮询链接 |
 | 6 | Worker 执行，然后 `GET` 同步资源的 `Location` | API 身份必须与任务 owner 一致 | `succeeded` 和 Source Version ID，或不泄漏上游错误的 `failed` |
 | 7 | `GET /v1/connection-profiles/{id}?revision=1`；`GET /v1/connection-profiles/{id}/audit` | 读权限 | 安全 Profile 投影、成功事件和受限拒绝事件 |
+
+ProofAgent TDD-04B 暴露以下同源路径。浏览器会话不能直接使用 KSS operator credential：
+
+| 行为 | ProofAgent BFF | 权限 | 状态与投影 |
+| --- | --- | --- | --- |
+| 创建 Profile | `POST /api/config/knowledge-service/connection-profiles` | `knowledge_source.edit` | `201`；返回 ID/revision/digest/state，不返回完整配置 |
+| 读取 Profile | `GET /api/config/knowledge-service/connection-profiles/{id}?revision={n}` | `knowledge_source.view` | current 或 exact revision 的安全投影 |
+| 编辑 Profile | `PUT /api/config/knowledge-service/connection-profiles/{id}` | `knowledge_source.edit` | 完整 Draft 加 `expected_revision`；返回新 Draft revision |
+| 校验/发布 | `POST .../{id}:validate`；`POST .../{id}:publish` | `knowledge_source.edit` | exact revision 状态推进；不授予 Agent 发布权限 |
+| 提交同步 | `POST /api/config/knowledge-service/synchronizations` | `knowledge_source.edit` | 首次 `202`，同命令重放 `200`；返回同源 `Location` |
+| 读取同步 | `GET /api/config/knowledge-service/synchronizations/{id}` | `knowledge_source.view` | `queued/running/succeeded/failed` 的最小化状态 |
+
+所有 BFF 变更路径精确转发 `Idempotency-Key`。非法结构返回固定安全 `422`，不回显 endpoint、Secret Handle 或未知输入；同步失败投影只保留稳定 `code`、`retryable` 和 blocker code，不返回 KSS raw detail、trace 或外部连接事实。
 
 同步请求示例（虚构业务字段）：
 
@@ -58,10 +71,12 @@ Profile `configuration` 当前只支持 `http_json`：静态 HTTPS endpoint、�
 - 当前没有 revision、receipt 或 audit 的自动清理、删除接口或保留期限推断。需要独立的保留/恢复方案后才能清理。
 - 本步骤只生成 Source Version，不自动创建 KSS Release、更新 Agent Draft 或激活 Agent。
 
-Source Version 可用于下一步 [Base Draft 与 Preparation 本地接口](base-preparation-local-guide.md)。TDD-02B 至 02D 已有 `queued/running/ready/failed`、租约协调与 fenced candidate 结果；`ready` 仍不可查询，尚不能一次性发布 Release。
+Source Version 可用于下一步 [Base Draft 与 Preparation 本地接口](base-preparation-local-guide.md)。TDD-02B 至 02G 已有 Draft CAS、`queued/running/ready/failed/cancelled/expired/consumed`、租约协调、fenced candidate 和 application-only 一次性发布核心；对应 BFF、Dashboard、自动调度与生产切换仍未接入。
 
 ## 切换限制
 
 [KNOWN | HIGH] 静态 v1 请求和回执保持原样，不自动导入 Profile。一个运行组合只接受一种连接权威；受管模式不回退到静态 `connection_id`。未来切换需要协调 API/Worker、处理遗留 v1 工作并验证真实上游适配器；不能让旧 Worker 消费 v2 任务，也不能把回滚二进制等同于可安全消费新数据。
 
 [KNOWN | HIGH] PostgreSQL、MinIO 和 OpenSearch 的本地测试不替代真实 Vault/egress/TLS、Worker 发布窗口验证、Phase F、正式发布或恢复演练。详细证据和残余风险见 [TDD 报告](tdd-report.md)。
+
+[KNOWN | HIGH] TDD-04B 的 KSS 写入审计当前识别 ProofAgent 配置的服务 operator，而不是浏览器终端操作者。生产启用前必须定义并验证不可伪造的委托身份/审计关联；不能把 BFF 权限测试推断为完整端到端审计归因。

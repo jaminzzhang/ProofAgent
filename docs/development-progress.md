@@ -15,6 +15,201 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-08-29 controlled Release Preparation cancellation BFF (TDD-04F)
+
+- [KNOWN | HIGH] KSS and ProofAgent now expose a no-body `POST :cancel` command for
+  one exact queued/running Preparation. Both require `Idempotency-Key`; the BFF also
+  requires `knowledge_source.edit`. The guarded client revalidates exact identity,
+  cancelled state and same-resource `Location`; KSS checks path Scope before using
+  the existing database-time, operator-scoped cancellation transaction.
+- [KNOWN | HIGH] Exact replay returns the original cancelled result with one success
+  audit. Rebinding the key to another Preparation returns idempotency conflict; a new
+  command against a terminal state is not cancellable. Body input, Scope drift and
+  upstream identity/state/Location drift fail closed without exposing private input.
+  A real BFF → KSS → PostgreSQL vertical proved queued → cancelled and no additional
+  queryable Release, Worker, lease, fence, artifact or secret authority.
+- [COMPUTED | HIGH] Focused local and PostgreSQL affected suites passed 238 tests.
+  The final full backend passed 2471 tests with 24 existing declared skips and 2
+  deselected; 2 explicit Hybrid integrations passed separately. Mypy over 454 product
+  files, full Ruff, 9-file formatting, `git diff --check`, TypeScript, Dashboard 225,
+  Chat 35 and all frontend builds passed. Canonical KSS OpenAPI is bound to
+  `ce34e8b4fbcd16c90201890cb8e466980132aedbbfc0dce35dedec155749ce3a`;
+  migration head and dependency locks are unchanged.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04F, while the feature remains
+  `PARTIAL_VERIFICATION`. No expiry BFF, Dashboard command, continuous process role,
+  artifact cleanup, ready quarantine, Agent formal publication, deployment,
+  production configuration or Production GO was added.
+
+## 2026-08-29 controlled Release Preparation publication BFF (TDD-04E)
+
+- [KNOWN | HIGH] KSS and ProofAgent now expose a no-body `POST :publish` command for
+  one exact Preparation. The BFF requires `knowledge_source.edit`; the guarded client
+  revalidates exact identity, consumed state and same-resource `Location`; KSS checks
+  path Scope before delegating to the existing one-use PostgreSQL publication CAS.
+- [KNOWN | HIGH] The command adds no Idempotency-Key or second receipt authority.
+  Uncertain response, replay or expiry is recovered by reading the exact Preparation.
+  A real BFF → KSS → PostgreSQL vertical proved queued → ready → consumed, an empty
+  catalog before publication and exactly one queryable Release afterwards, with no
+  Worker, lease, fence, artifact, secret or raw failure field in the browser projection.
+- [COMPUTED | HIGH] The fail-if-missing KSS plus ProofAgent KSS/BFF impact set passed
+  480 tests with zero skips. The full backend passed 2461 tests with 24 existing
+  declared skips and 2 deselected; 2 explicit Hybrid integrations passed separately.
+  Mypy over 454 product files, full Ruff, 9-file formatting, domain/diff, root/KSS lock
+  checks, TypeScript, Dashboard 225, Chat 35 and all frontend builds passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04E, while the feature remains
+  `PARTIAL_VERIFICATION`. No cancel/expiry BFF, Dashboard command, continuous process
+  role, Agent formal publication, deployment, production configuration or Production
+  GO was added.
+
+## 2026-08-29 KSS one-shot Release Preparation execution runtime (TDD-04D)
+
+- [KNOWN | HIGH] KSS runtime composition now optionally accepts a distinct
+  `BasePreparationExecutionConfiguration` with Worker identity, lease duration and
+  candidate TTL. The resulting `base_preparation_executor.run_once()` processes at
+  most one durable queued or recoverable running Preparation through the existing
+  frozen-plan builder and fenced `ready/failed` transaction. The default API runtime
+  leaves this handle disabled, so management requests do not execute background work.
+- [KNOWN | HIGH] A real BFF → KSS → PostgreSQL tracer created a queued Preparation
+  through the default API runtime, rebuilt a separate execution runtime against the
+  same durable authority, and reached ready without creating a queryable Release.
+  The BFF current-state projection still omitted Worker, lease/fence and artifact
+  fields. Separate core contracts confirmed one call advances at most one queued
+  resource and rejects invalid candidate TTL before claim.
+- [COMPUTED | HIGH] Preparation core, PostgreSQL lease/fence/recovery and runtime
+  composition passed 160 tests. The KSS plus ProofAgent KSS/BFF impact set passed
+  460 tests with zero skips. The full backend passed 2449 tests with 24 existing
+  declared skips and 2 deselected; 2 explicit Hybrid integrations passed separately.
+  Mypy over 454 product files, full Ruff, affected formatting, domain/diff, root/KSS
+  lock checks, TypeScript, Dashboard 225, Chat 35 and all frontend builds passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04D, while the feature remains
+  `PARTIAL_VERIFICATION`. No CLI, continuous Preparation process role, batch loop,
+  automatic retry, publish/cancel/expiry BFF, Dashboard, deployment, production
+  configuration or Production GO was added.
+
+## 2026-08-29 KSS Base Draft → Release Preparation BFF (TDD-04C)
+
+- [KNOWN | HIGH] ProofAgent now exposes same-origin Base Draft save and exact
+  revision read, plus exact Draft revision Preparation start and exact current
+  status read. Space/Base identity belongs to the path; browser bodies contain only
+  `expected_revision + members` or `draft_revision`. Reads require
+  `knowledge_source.view`, mutations require `knowledge_source.edit`, and writes
+  preserve the exact KSS `Idempotency-Key`. KSS returns `202` for both first start
+  and exact replay of the immutable queued admission receipt.
+- [KNOWN | HIGH] Browser projections contain exact Draft, Base Version and
+  Preparation identity, digests, members, state, safe terminal fields and a
+  same-origin link. They exclude KSS credentials, Worker identity, fencing token,
+  lease deadline, artifact capability/reference and raw failure detail. The guarded
+  client rejects malformed states, unknown fields, Scope/revision/Preparation drift
+  and foreign or missing Location. Fixed non-echoing `422` behavior covers invalid
+  request input.
+- [COMPUTED | HIGH] Focused BFF/client tests passed 36 checks. The focused affected
+  set passed 115 checks, including the complete PostgreSQL Preparation contract. A
+  real ProofAgent BFF → guarded client → KSS HTTP → PostgreSQL contract saved and
+  read exact Draft history, started/replayed/read a queued Preparation and confirmed
+  that no Release was created. The complete backend passed 2445 tests with 24
+  declared skips and 2 deselected; 2 explicit Hybrid integrations passed separately.
+  Ruff, format, Mypy over 454 product files, root/KSS lock checks, domain/diff,
+  TypeScript, Dashboard 225, Chat 35 and all frontend builds passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04C, while the feature remains
+  `PARTIAL_VERIFICATION`. There is no Preparation execution process,
+  publish/cancel/expiry BFF, Dashboard page, verified terminal-operator delegation,
+  deployment or Production GO. A queued Preparation therefore remains visible but
+  cannot become a queryable Release through the product chain yet.
+
+## 2026-08-29 KSS Connection Profile → Synchronization BFF (TDD-04B)
+
+- [KNOWN | HIGH] ProofAgent now exposes same-origin Connection Profile create,
+  current/exact revision read, revision-CAS revise, validate and publish, plus
+  exact-profile synchronization submit and status read. Reads require
+  `knowledge_source.view`; mutations require `knowledge_source.edit`. Browser
+  commands preserve the exact KSS `Idempotency-Key`; a new synchronization returns
+  `202` and an exact replay returns `200`.
+- [KNOWN | HIGH] The BFF accepts only strict HTTPS profile configuration and
+  versioned Secret Handle references. Profile responses omit endpoint, Handle,
+  egress/trust references and KSS credentials. Synchronization responses include
+  only exact Scope/task/Profile identities, state, timestamps, materialized Source
+  Version, same-origin link and stable failure codes; raw problem detail and trace
+  are removed. Invalid request structure returns a fixed safe `422` without input
+  echo. The guarded client rejects unknown fields, identity drift, redirects and
+  malformed task state.
+- [COMPUTED | HIGH] The two focused BFF/client files passed 22 tests. A real
+  ProofAgent BFF → guarded client → KSS HTTP → PostgreSQL contract passed. The
+  KSS plus ProofAgent affected set passed 440 tests; the complete backend passed
+  2429 tests with 24 existing declared skips and 2 deselected, and the 2 explicit
+  Hybrid integrations passed separately. Ruff, Mypy over 454 product files,
+  affected formatting, root/KSS lock checks, TypeScript, Dashboard 225 tests,
+  Chat 35 tests and all frontend builds passed. KSS OpenAPI and migration
+  fingerprints remain unchanged.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04B, while the feature remains
+  `PARTIAL_VERIFICATION`. There is no Dashboard Profile page, real Vault/egress/TLS
+  reader, managed-profile process cutover, Base Draft/Preparation BFF, deployment
+  or Production GO. KSS audit currently records the configured ProofAgent service
+  operator; verified terminal-operator delegation/audit correlation remains a P1
+  production gap.
+
+## 2026-08-29 KSS lifecycle/reference-summary BFF read (TDD-04A)
+
+- [KNOWN | HIGH] KSS now exposes one authenticated exact
+  `GET .../releases/{knowledge_base_release_id}/deletion-eligibility` resource.
+  ProofAgent exposes the corresponding same-origin
+  `/api/config/knowledge-service/.../deletion-eligibility` BFF resource. Both read
+  paths require `knowledge_source.view`; identities without that permission receive
+  `403` before KSS assessment is invoked.
+- [KNOWN | HIGH] The BFF projection includes exact Release identity, lifecycle
+  state, stable blockers, active/deregistered Reference counts, lifecycle times and
+  artifact-retention state. It omits the KSS operator credential and endpoint,
+  external-resource identity, artifact authority/assessment identity and raw
+  upstream problem. The guarded client rejects exact-identity drift and unknown
+  secret-bearing fields.
+- [KNOWN | HIGH] Production-shaped KSS composition uses
+  `PostgresReleaseLifecycleRepository`. No artifact-retention authority was added;
+  therefore an otherwise ordinary retired Release returns
+  `artifact_retention_unverified` and remains ineligible. Release catalog clients
+  and Dashboard types now recognize `queryable`, `deprecated`, `retired` and
+  `revoked` without enabling lifecycle commands.
+- [COMPUTED | HIGH] Four focused files passed 32 tests. The final KSS plus
+  ProofAgent KSS/BFF affected regression passed 427 tests with zero skips against
+  isolated PostgreSQL/MinIO/OpenSearch. The full backend passed 2416 tests with 24
+  existing declared skips and 2 deselected; the two explicit Hybrid integrations
+  passed separately. Ruff, Mypy over 454 product files, affected format, domain,
+  diff and both lock checks passed. Dashboard 225 and Chat 35 tests, TypeScript and
+  all frontend builds passed. Canonical KSS OpenAPI changed to
+  `e75e6d8e677017f22397d91d8d71bcc89b4888ad3f18b5246b997c35bc94b4c5`;
+  the migration contract remains unchanged.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no lifecycle or
+  Reference command over HTTP/BFF, affected-reference detail or notification,
+  Dashboard lifecycle page, production artifact-retention adapter, physical
+  deletion, ProofAgent verifier/reconciler/runtime integration, deployment,
+  production migration or Production GO.
+
+## 2026-08-29 KSS Release deletion eligibility (TDD-03F)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseLifecycleApplication.assess_deletion_eligibility()`
+  reads one exact Release identity and returns a secret-free eligibility projection;
+  it accepts no operator, idempotency key, caller time, Reference count, retention
+  verdict or delete reason.
+- [KNOWN | HIGH] Only an ordinary `retired` Release with complete `retired_at`, zero
+  active KSS References and an explicit `clear` result from the server-injected
+  artifact-retention authority is eligible. Deregistered References remain counted
+  history without blocking. Queryable/deprecated Releases remain ordinary lifecycle
+  blockers; revoked Releases retain an incident-response blocker and do not call the
+  artifact authority.
+- [KNOWN | HIGH] PostgreSQL returns state, lifecycle time, active/deregistered counts
+  and database `assessed_at` in one read. The assessment writes no state, receipt or
+  audit and is not deletion authority; a future physical-delete command must recheck
+  atomically and audit independently. No migration or OpenAPI change was made.
+- [COMPUTED | HIGH] Memory contracts passed 28 tests and Release PostgreSQL contracts
+  passed 34. The KSS plus ProofAgent KSS/BFF affected regression passed 422 tests with
+  zero skips against isolated PostgreSQL/MinIO/OpenSearch. The corrected full backend
+  run passed 2408 tests with 24 existing declared skips and 2 deselected; the two
+  explicit hybrid integrations passed separately. Ruff, Mypy over 454 product files,
+  affected formatting, domain-context, diff and both lock checks passed. Dashboard
+  225 and Chat 35 tests, typecheck and all frontend builds passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no production
+  artifact-retention adapter, physical deletion command, incident clearance,
+  lifecycle HTTP/BFF/Dashboard, ProofAgent verifier/reconciler/runtime integration,
+  deployment, production migration or Production GO.
+
 ## 2026-08-29 KSS emergency Release revocation (TDD-03E)
 
 - [KNOWN | HIGH] `KnowledgeBaseReleaseLifecycleApplication.revoke()` accepts one

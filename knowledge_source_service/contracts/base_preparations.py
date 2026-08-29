@@ -179,7 +179,15 @@ class BasePreparationRejectionEntry(BasePreparationContract):
     knowledge_space_id: BaseIdentifier | None = None
     knowledge_base_id: BaseIdentifier | None = None
     release_preparation_id: BaseIdentifier | None = None
-    operation: Literal["save_draft", "get_draft", "start", "get_preparation", "audit"]
+    operation: Literal[
+        "save_draft",
+        "get_draft",
+        "start",
+        "get_preparation",
+        "cancel",
+        "publish",
+        "audit",
+    ]
     code: BaseIdentifier
     recorded_at: AwareDatetime
 

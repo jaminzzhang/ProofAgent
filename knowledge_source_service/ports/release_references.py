@@ -18,6 +18,8 @@ from knowledge_source_service.contracts.release_references import (
 )
 from knowledge_source_service.domain.release_references import (
     PermanentExternalResourceRetirementVerification,
+    ReleaseArtifactRetentionAssessment,
+    ReleaseDeletionFacts,
     ReleaseLifecycleCommand,
     ReleaseLifecycleTarget,
     ReleaseReferenceCommand,
@@ -35,6 +37,12 @@ class ReleaseReferenceDeregistrationVerifier(Protocol):
     def verify_permanent_retirement(
         self, reference: KnowledgeBaseReleaseReference
     ) -> PermanentExternalResourceRetirementVerification | None: ...
+
+
+class ReleaseArtifactRetentionAuthority(Protocol):
+    def assess_release_deletion(
+        self, knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment | None: ...
 
 
 class ReleaseReferenceTransaction(Protocol):
@@ -118,6 +126,8 @@ class ReleaseLifecycleTransaction(Protocol):
 
 class ReleaseLifecycleRepository(Protocol):
     def transaction(self) -> AbstractContextManager[ReleaseLifecycleTransaction]: ...
+
+    def deletion_facts(self, knowledge_base_release_id: str) -> ReleaseDeletionFacts | None: ...
 
     def lifecycle_audit(
         self, knowledge_base_release_id: str

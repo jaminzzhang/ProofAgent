@@ -35,6 +35,7 @@ from knowledge_source_service.application.release_references import (
     KnowledgeBaseReleaseReferenceApplication,
 )
 from knowledge_source_service.contracts.release_references import (
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
     DeregisterKnowledgeBaseReleaseReferenceRequest,
     DeprecateKnowledgeBaseReleaseRequest,
     RegisterKnowledgeBaseReleaseReferenceRequest,
@@ -45,9 +46,13 @@ from knowledge_source_service.contracts.knowledge_query import CreateKnowledgeQu
 from knowledge_source_service.domain.knowledge_catalog import KnowledgeBaseReleaseSnapshot
 from knowledge_source_service.domain.release_references import (
     PermanentExternalResourceRetirementVerification,
+    ReleaseArtifactRetentionAssessment,
     ReleaseLifecycleError,
     ReleaseRetentionPolicy,
     ReleaseReferenceError,
+)
+from knowledge_source_service.ports.release_references import (
+    ReleaseArtifactRetentionAuthority,
 )
 
 
@@ -96,11 +101,26 @@ def lifecycle_application(
     dsn: str,
     *,
     retention_policy: ReleaseRetentionPolicy | None = None,
+    artifact_retention_authority: ReleaseArtifactRetentionAuthority | None = None,
 ) -> KnowledgeBaseReleaseLifecycleApplication:
     return KnowledgeBaseReleaseLifecycleApplication(
         repository=PostgresReleaseLifecycleRepository.from_dsn(dsn),
         retention_policy=retention_policy,
+        artifact_retention_authority=artifact_retention_authority,
     )
+
+
+@dataclass(frozen=True)
+class ClearPostgresArtifactRetention:
+    def assess_release_deletion(
+        self, knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment:
+        return ReleaseArtifactRetentionAssessment(
+            authority_id="artifact-retention-authority",
+            assessment_id="artifact-retention-postgres-clear-001",
+            knowledge_base_release_id=knowledge_base_release_id,
+            status="clear",
+        )
 
 
 def request(
@@ -604,6 +624,162 @@ def test_postgres_unreferenced_deprecated_release_retires_and_becomes_non_querya
             operator_id="another-operator",
             idempotency_key="another-deprecation",
         )
+
+
+def test_postgres_retired_release_deletion_assessment_uses_database_facts(
+    release_reference_database: ReleaseReferenceDatabase,
+) -> None:
+    database = release_reference_database
+    lifecycle = lifecycle_application(
+        database.dsn,
+        retention_policy=zero_retention_policy(),
+        artifact_retention_authority=ClearPostgresArtifactRetention(),
+    )
+    lifecycle.deprecate(
+        deprecation_request(database.release),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-postgres-deletion-assessment",
+    )
+    with psycopg.connect(database.dsn) as connection:
+        before = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+    retired = lifecycle.retire(
+        retirement_request(database.release),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-before-postgres-deletion-assessment",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+            knowledge_space_id=database.release.knowledge_space_id,
+            knowledge_base_id=database.release.knowledge_base_id,
+            knowledge_base_release_id=database.release.knowledge_base_release_id,
+        )
+    )
+    with psycopg.connect(database.dsn) as connection:
+        after = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+
+    assert assessment.eligible is True
+    assert assessment.blockers == ()
+    assert assessment.release_state == "retired"
+    assert assessment.retired_at == retired.retired_at
+    assert before <= assessment.assessed_at <= after
+    assert assessment.active_reference_count == 0
+    assert assessment.deregistered_reference_count == 0
+    assert assessment.artifact_retention_state == "clear"
+    assert tuple(
+        event.action for event in lifecycle.audit(database.release.knowledge_base_release_id)
+    ) == ("deprecated", "retired")
+
+
+def test_postgres_deregistered_reference_is_historical_not_a_deletion_blocker(
+    release_reference_database: ReleaseReferenceDatabase,
+) -> None:
+    database = release_reference_database
+    registered = application(database.dsn).register(
+        request(database.release),
+        authenticated_client_id="proof-agent",
+        idempotency_key="register-before-postgres-deletion-history",
+    )
+    verified_application(
+        database.dsn,
+        release_reference_id=registered.release_reference_id,
+    ).deregister(
+        DeregisterKnowledgeBaseReleaseReferenceRequest(
+            release_reference_id=registered.release_reference_id
+        ),
+        authenticated_client_id="proof-agent",
+        idempotency_key="deregister-before-postgres-deletion-history",
+    )
+    lifecycle = lifecycle_application(
+        database.dsn,
+        retention_policy=zero_retention_policy(),
+        artifact_retention_authority=ClearPostgresArtifactRetention(),
+    )
+    lifecycle.deprecate(
+        deprecation_request(database.release),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-after-postgres-reference-deregistration",
+    )
+    lifecycle.retire(
+        retirement_request(database.release),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-after-postgres-reference-deregistration",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+            knowledge_space_id=database.release.knowledge_space_id,
+            knowledge_base_id=database.release.knowledge_base_id,
+            knowledge_base_release_id=database.release.knowledge_base_release_id,
+        )
+    )
+
+    assert assessment.eligible is True
+    assert assessment.active_reference_count == 0
+    assert assessment.deregistered_reference_count == 1
+    assert assessment.blockers == ()
+
+
+def test_postgres_revoked_release_fails_closed_for_deletion(
+    release_reference_database: ReleaseReferenceDatabase,
+) -> None:
+    database = release_reference_database
+    application(database.dsn).register(
+        request(database.release),
+        authenticated_client_id="proof-agent",
+        idempotency_key="reference-before-postgres-revoked-assessment",
+    )
+    revoked_lifecycle = lifecycle_application(database.dsn)
+    revoked = revoked_lifecycle.revoke(
+        revocation_request(database.release),
+        operator_id="security-operator",
+        idempotency_key="revoke-before-postgres-deletion-assessment",
+    )
+    revoked_assessment = revoked_lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+            knowledge_space_id=database.release.knowledge_space_id,
+            knowledge_base_id=database.release.knowledge_base_id,
+            knowledge_base_release_id=database.release.knowledge_base_release_id,
+        )
+    )
+
+    assert revoked_assessment.eligible is False
+    assert revoked_assessment.blockers == (
+        "emergency_revocation_incident_retention",
+        "active_release_references_present",
+    )
+    assert revoked_assessment.revoked_at == revoked.revoked_at
+    assert revoked_assessment.artifact_retention_state == "not_assessed"
+
+
+def test_postgres_retirement_without_command_history_fails_closed_for_deletion(
+    release_reference_database: ReleaseReferenceDatabase,
+) -> None:
+    database = release_reference_database
+    with psycopg.connect(database.dsn) as connection:
+        connection.execute(
+            """UPDATE knowledge_base_releases
+               SET state = 'retired',
+                   deprecated_at = clock_timestamp() - interval '1 day',
+                   retired_at = clock_timestamp()
+               WHERE knowledge_base_release_id = %s""",
+            (database.release.knowledge_base_release_id,),
+        )
+    legacy_assessment = lifecycle_application(
+        database.dsn,
+        artifact_retention_authority=ClearPostgresArtifactRetention(),
+    ).assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+            knowledge_space_id=database.release.knowledge_space_id,
+            knowledge_base_id=database.release.knowledge_base_id,
+            knowledge_base_release_id=database.release.knowledge_base_release_id,
+        )
+    )
+
+    assert legacy_assessment.eligible is False
+    assert legacy_assessment.blockers == ("release_retirement_history_unavailable",)
+    assert legacy_assessment.retired_at is not None
+    assert legacy_assessment.artifact_retention_state == "not_assessed"
 
 
 def test_postgres_retirement_fails_closed_while_an_active_reference_exists(

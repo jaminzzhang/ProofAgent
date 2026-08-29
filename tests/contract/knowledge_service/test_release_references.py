@@ -12,6 +12,7 @@ from knowledge_source_service.application.release_references import (
     KnowledgeBaseReleaseReferenceApplication,
 )
 from knowledge_source_service.contracts.release_references import (
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
     DeregisterKnowledgeBaseReleaseReferenceRequest,
     DeprecateKnowledgeBaseReleaseRequest,
     RegisterKnowledgeBaseReleaseReferenceRequest,
@@ -21,6 +22,7 @@ from knowledge_source_service.contracts.release_references import (
 from knowledge_source_service.domain.knowledge_catalog import KnowledgeBaseReleaseSnapshot
 from knowledge_source_service.domain.release_references import (
     PermanentExternalResourceRetirementVerification,
+    ReleaseArtifactRetentionAssessment,
     ReleaseLifecycleError,
     ReleaseRetentionPolicy,
     ReleaseReferenceError,
@@ -58,6 +60,49 @@ class UnexpectedRetirementVerification:
         self, _reference: object
     ) -> PermanentExternalResourceRetirementVerification:
         raise AssertionError("verification must not run before ownership succeeds")
+
+
+class ClearArtifactRetention:
+    def assess_release_deletion(
+        self, knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment:
+        return ReleaseArtifactRetentionAssessment(
+            authority_id="artifact-retention-authority",
+            assessment_id="artifact-retention-clear-001",
+            knowledge_base_release_id=knowledge_base_release_id,
+            status="clear",
+        )
+
+
+class UnexpectedArtifactRetention:
+    def assess_release_deletion(
+        self, _knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment:
+        raise AssertionError("artifact authority must not run for an ineligible lifecycle state")
+
+
+class BlockedArtifactRetention:
+    def assess_release_deletion(
+        self, knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment:
+        return ReleaseArtifactRetentionAssessment(
+            authority_id="artifact-retention-authority",
+            assessment_id="artifact-retention-blocked-001",
+            knowledge_base_release_id=knowledge_base_release_id,
+            status="blocked",
+        )
+
+
+class MismatchedArtifactRetention:
+    def assess_release_deletion(
+        self, _knowledge_base_release_id: str
+    ) -> ReleaseArtifactRetentionAssessment:
+        return ReleaseArtifactRetentionAssessment(
+            authority_id="artifact-retention-authority",
+            assessment_id="artifact-retention-mismatch-001",
+            knowledge_base_release_id="release-other",
+            status="clear",
+        )
 
 
 def environment(
@@ -311,6 +356,273 @@ def test_unreferenced_deprecated_release_retires_after_server_retention() -> Non
         )
 
 
+def test_ordinary_retired_release_is_deletion_eligible_after_artifact_clearance() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        retention_policy=ReleaseRetentionPolicy(
+            policy_id="release-retention-zero-test",
+            minimum_age=timedelta(0),
+        ),
+        artifact_retention_authority=ClearArtifactRetention(),
+    )
+    exact_identity = {
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+    }
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-deletion-assessment",
+    )
+    retired = lifecycle.retire(
+        RetireKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-before-deletion-assessment",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(**exact_identity)
+    )
+
+    assert assessment.model_dump(mode="python") == {
+        "schema_version": "knowledge-base-release-deletion-eligibility.v1",
+        **exact_identity,
+        "release_state": "retired",
+        "eligible": True,
+        "blockers": (),
+        "active_reference_count": 0,
+        "deregistered_reference_count": 0,
+        "retired_at": retired.retired_at,
+        "revoked_at": None,
+        "assessed_at": NOW,
+        "artifact_retention_state": "clear",
+        "artifact_retention_authority_id": "artifact-retention-authority",
+        "artifact_retention_assessment_id": "artifact-retention-clear-001",
+    }
+    assert tuple(event.action for event in lifecycle.audit(release.knowledge_base_release_id)) == (
+        "deprecated",
+        "retired",
+    )
+
+
+def test_retired_release_deletion_assessment_fails_closed_without_artifact_authority() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        retention_policy=ReleaseRetentionPolicy(
+            policy_id="release-retention-zero-test",
+            minimum_age=timedelta(0),
+        ),
+    )
+    exact_identity = {
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+    }
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-unverified-artifact-assessment",
+    )
+    lifecycle.retire(
+        RetireKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-before-unverified-artifact-assessment",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(**exact_identity)
+    )
+
+    assert assessment.eligible is False
+    assert assessment.blockers == ("artifact_retention_unverified",)
+    assert assessment.artifact_retention_state == "unverified"
+    assert assessment.artifact_retention_authority_id is None
+    assert assessment.artifact_retention_assessment_id is None
+
+
+def test_retired_release_remains_ineligible_while_artifact_retention_blocks() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        retention_policy=ReleaseRetentionPolicy(
+            policy_id="release-retention-zero-test",
+            minimum_age=timedelta(0),
+        ),
+        artifact_retention_authority=BlockedArtifactRetention(),
+    )
+    exact_identity = {
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+    }
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-blocked-artifact-assessment",
+    )
+    lifecycle.retire(
+        RetireKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-before-blocked-artifact-assessment",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(**exact_identity)
+    )
+
+    assert assessment.eligible is False
+    assert assessment.blockers == ("artifact_retention_blocked",)
+    assert assessment.artifact_retention_state == "blocked"
+    assert assessment.artifact_retention_authority_id == "artifact-retention-authority"
+    assert assessment.artifact_retention_assessment_id == "artifact-retention-blocked-001"
+
+
+def test_deregistered_reference_is_retained_as_history_without_blocking_deletion() -> None:
+    reference_application, repository, _catalog, release = environment()
+    registered = reference_application.register(
+        request(release),
+        authenticated_client_id="proof-agent",
+        idempotency_key="register-before-deletion-history",
+    )
+    verified_reference_application = KnowledgeBaseReleaseReferenceApplication(
+        repository=repository,
+        deregistration_verifier=VerifiedPermanentRetirement(
+            release_reference_id=registered.release_reference_id
+        ),
+    )
+    verified_reference_application.deregister(
+        DeregisterKnowledgeBaseReleaseReferenceRequest(
+            release_reference_id=registered.release_reference_id
+        ),
+        authenticated_client_id="proof-agent",
+        idempotency_key="deregister-before-deletion-history",
+    )
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        retention_policy=ReleaseRetentionPolicy(
+            policy_id="release-retention-zero-test",
+            minimum_age=timedelta(0),
+        ),
+        artifact_retention_authority=ClearArtifactRetention(),
+    )
+    exact_identity = {
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+    }
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-after-reference-deregistration",
+    )
+    lifecycle.retire(
+        RetireKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-after-reference-deregistration",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(**exact_identity)
+    )
+
+    assert assessment.eligible is True
+    assert assessment.active_reference_count == 0
+    assert assessment.deregistered_reference_count == 1
+    assert assessment.blockers == ()
+    assert reference_application.get(registered.release_reference_id).state == "deregistered"
+
+
+def test_queryable_and_deprecated_releases_are_not_deletion_eligible() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        artifact_retention_authority=UnexpectedArtifactRetention(),
+    )
+    exact_request = AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+        knowledge_space_id=release.knowledge_space_id,
+        knowledge_base_id=release.knowledge_base_id,
+        knowledge_base_release_id=release.knowledge_base_release_id,
+    )
+
+    queryable = lifecycle.assess_deletion_eligibility(exact_request)
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_request.model_dump(mode="python")),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-ineligible-assessment",
+    )
+    deprecated = lifecycle.assess_deletion_eligibility(exact_request)
+
+    assert (queryable.release_state, queryable.eligible, queryable.blockers) == (
+        "queryable",
+        False,
+        ("release_not_retired",),
+    )
+    assert (deprecated.release_state, deprecated.eligible, deprecated.blockers) == (
+        "deprecated",
+        False,
+        ("release_not_retired",),
+    )
+    assert queryable.artifact_retention_state == "not_assessed"
+    assert deprecated.artifact_retention_state == "not_assessed"
+
+
+def test_deletion_assessment_requires_an_exact_existing_release_scope() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(repository=repository)
+
+    with pytest.raises(ReleaseLifecycleError, match="release_lifecycle_release_not_found"):
+        lifecycle.assess_deletion_eligibility(
+            AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+                knowledge_space_id=release.knowledge_space_id,
+                knowledge_base_id=release.knowledge_base_id,
+                knowledge_base_release_id="release-missing",
+            )
+        )
+    with pytest.raises(ReleaseLifecycleError, match="release_lifecycle_release_scope_mismatch"):
+        lifecycle.assess_deletion_eligibility(
+            AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+                knowledge_space_id="space-other",
+                knowledge_base_id=release.knowledge_base_id,
+                knowledge_base_release_id=release.knowledge_base_release_id,
+            )
+        )
+
+
+def test_deletion_assessment_rejects_mismatched_artifact_authority_facts() -> None:
+    _reference_application, repository, _catalog, release = environment()
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        retention_policy=ReleaseRetentionPolicy(
+            policy_id="release-retention-zero-test",
+            minimum_age=timedelta(0),
+        ),
+        artifact_retention_authority=MismatchedArtifactRetention(),
+    )
+    exact_identity = {
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+    }
+    lifecycle.deprecate(
+        DeprecateKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="deprecate-before-mismatched-artifact-assessment",
+    )
+    lifecycle.retire(
+        RetireKnowledgeBaseReleaseRequest(**exact_identity),
+        operator_id="knowledge-operator",
+        idempotency_key="retire-before-mismatched-artifact-assessment",
+    )
+
+    with pytest.raises(ReleaseLifecycleError, match="release_lifecycle_integrity_unavailable"):
+        lifecycle.assess_deletion_eligibility(
+            AssessKnowledgeBaseReleaseDeletionEligibilityRequest(**exact_identity)
+        )
+
+
 def test_retirement_fails_closed_while_an_active_reference_exists() -> None:
     reference_application, repository, catalog, release = environment()
     existing = reference_application.register(
@@ -416,6 +728,53 @@ def test_referenced_deprecated_release_can_be_emergency_revoked_without_fallback
             authenticated_client_id="proof-agent",
             idempotency_key="registration-after-revocation",
         )
+
+
+def test_revoked_release_is_retained_for_incident_response_without_artifact_assessment() -> None:
+    reference_application, repository, _catalog, release = environment()
+    reference_application.register(
+        request(release),
+        authenticated_client_id="proof-agent",
+        idempotency_key="referenced-before-revoked-deletion-assessment",
+    )
+    lifecycle = KnowledgeBaseReleaseLifecycleApplication(
+        repository=repository,
+        artifact_retention_authority=UnexpectedArtifactRetention(),
+    )
+    lifecycle.revoke(
+        RevokeKnowledgeBaseReleaseRequest(
+            knowledge_space_id=release.knowledge_space_id,
+            knowledge_base_id=release.knowledge_base_id,
+            knowledge_base_release_id=release.knowledge_base_release_id,
+            reason_code="security_incident",
+            confirmation="fail_closed_without_fallback",
+        ),
+        operator_id="security-operator",
+        idempotency_key="revoke-before-deletion-assessment",
+    )
+
+    assessment = lifecycle.assess_deletion_eligibility(
+        AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+            knowledge_space_id=release.knowledge_space_id,
+            knowledge_base_id=release.knowledge_base_id,
+            knowledge_base_release_id=release.knowledge_base_release_id,
+        )
+    )
+
+    assert assessment.eligible is False
+    assert assessment.release_state == "revoked"
+    assert assessment.blockers == (
+        "emergency_revocation_incident_retention",
+        "active_release_references_present",
+    )
+    assert assessment.active_reference_count == 1
+    assert assessment.deregistered_reference_count == 0
+    assert assessment.retired_at is None
+    assert assessment.revoked_at == NOW
+    assert assessment.artifact_retention_state == "not_assessed"
+    assert tuple(event.action for event in lifecycle.audit(release.knowledge_base_release_id)) == (
+        "revoked",
+    )
 
 
 @pytest.mark.parametrize(

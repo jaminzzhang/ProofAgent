@@ -24,11 +24,19 @@ bounded reason, authorized actor identity, audit record, affected-reference summ
 and explicit operator confirmation; availability or routine cleanup is not a valid
 reason to bypass reference protection.
 
-[KNOWN | HIGH] TDD-03B through 03E now implement the application-only lifecycle
-core and KSS Reference protection described here. Emergency revocation records one
+[KNOWN | HIGH] TDD-03B through 03F now implement the lifecycle application core,
+KSS Reference protection and read-only deletion-eligibility assessment described
+here. TDD-04A exposes only that assessment through an authenticated KSS management
+GET and a same-origin, secret-free ProofAgent BFF GET; both require
+`knowledge_source.view`. Emergency revocation records one
 bounded reason, exact confirmation, authorized-operator identity, database time and
 KSS-computed affected-active-reference count in the same PostgreSQL transaction as
-the `revoked` state and permanent receipt. This still does not provide lifecycle
-HTTP/BFF authorization, affected-reference detail projection or notification,
-ProofAgent runtime/rollback integration, physical deletion, production migration or
-Production GO.
+the `revoked` state and permanent receipt. Only an ordinary `retired` Release with
+complete retirement history, zero active References and an explicit clear result from
+the server-injected artifact-retention authority is deletion-eligible; deregistered
+References remain historical facts, while revoked Releases remain retained for incident
+response. The assessment is read-only and is never deletion authority. This still does
+not provide lifecycle or Reference command HTTP/BFF authorization,
+affected-reference detail projection or notification, ProofAgent runtime/rollback
+integration, a production artifact-retention adapter, physical deletion, production
+migration or Production GO.

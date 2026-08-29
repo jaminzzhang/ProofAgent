@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Request
 
@@ -27,8 +27,14 @@ from knowledge_source_service.application.connection_profiles import ConnectionP
 from knowledge_source_service.adapters.memory.base_preparations import (
     InMemoryBasePreparationRepository,
 )
+from knowledge_source_service.adapters.memory.release_references import (
+    InMemoryReleaseReferenceRepository,
+)
 from knowledge_source_service.application.base_preparations import (
     KnowledgeBasePreparationApplication,
+)
+from knowledge_source_service.application.release_references import (
+    KnowledgeBaseReleaseLifecycleApplication,
 )
 from knowledge_source_service.application.knowledge_queries import (
     KnowledgeQueryApplication,
@@ -43,6 +49,7 @@ from knowledge_source_service.delivery.management_http import (
     create_management_application,
 )
 from knowledge_source_service.ports.authorization import KnowledgeQueryAdmission
+from knowledge_source_service.ports.release_references import ReleaseLifecycleRepository
 
 
 _CONTRACT_TIME = datetime(2026, 1, 1, tzinfo=UTC)
@@ -84,8 +91,9 @@ def build_openapi_contract_bytes() -> bytes:
         id_factory=lambda: "openapi-synchronization",
         admit_connection=lambda _connection_id: True,
     )
+    management_catalog = InMemoryKnowledgeCatalog()
     management = create_management_application(
-        catalog=InMemoryKnowledgeCatalog(),  # type: ignore[arg-type]
+        catalog=management_catalog,  # type: ignore[arg-type]
         artifacts=artifacts,
         authenticate_operator=_openapi_operator,
         document_pipeline_revision="openapi-document-pipeline-v1",
@@ -103,6 +111,15 @@ def build_openapi_contract_bytes() -> bytes:
             repository=InMemoryBasePreparationRepository(),
             clock=lambda: _CONTRACT_TIME,
             id_factory=lambda: "openapi-preparation",
+        ),
+        release_lifecycle=KnowledgeBaseReleaseLifecycleApplication(
+            repository=cast(
+                ReleaseLifecycleRepository,
+                InMemoryReleaseReferenceRepository(
+                    catalog=management_catalog,
+                    clock=lambda: _CONTRACT_TIME,
+                ),
+            )
         ),
     )
     application.include_router(management.router)

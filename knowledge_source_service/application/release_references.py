@@ -5,11 +5,14 @@ import re
 from typing import Literal
 
 from knowledge_source_service.contracts.release_references import (
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
+    DeletionEligibilityBlocker,
     DeregisteredKnowledgeBaseReleaseReference,
     DeregisterKnowledgeBaseReleaseReferenceRequest,
     DeprecatedKnowledgeBaseRelease,
     DeprecateKnowledgeBaseReleaseRequest,
     KnowledgeBaseReleaseLifecycleAuditEntry,
+    KnowledgeBaseReleaseDeletionEligibilityAssessment,
     KnowledgeBaseReleaseReference,
     RegisterKnowledgeBaseReleaseReferenceRequest,
     RetiredKnowledgeBaseRelease,
@@ -26,6 +29,7 @@ from knowledge_source_service.domain.identities import (
 )
 from knowledge_source_service.domain.release_references import (
     PermanentExternalResourceRetirementVerification,
+    ReleaseArtifactRetentionAssessment,
     ReleaseLifecycleCommand,
     ReleaseLifecycleError,
     ReleaseRetentionPolicy,
@@ -33,6 +37,7 @@ from knowledge_source_service.domain.release_references import (
     ReleaseReferenceError,
 )
 from knowledge_source_service.ports.release_references import (
+    ReleaseArtifactRetentionAuthority,
     ReleaseLifecycleRepository,
     ReleaseReferenceAuditEntry,
     ReleaseReferenceDeregistrationVerifier,
@@ -170,9 +175,11 @@ class KnowledgeBaseReleaseLifecycleApplication:
         *,
         repository: ReleaseLifecycleRepository,
         retention_policy: ReleaseRetentionPolicy | None = None,
+        artifact_retention_authority: ReleaseArtifactRetentionAuthority | None = None,
     ) -> None:
         self._repository = repository
         self._retention_policy = retention_policy
+        self._artifact_retention_authority = artifact_retention_authority
         if retention_policy is not None:
             _validate_retention_policy(retention_policy)
 
@@ -294,6 +301,70 @@ class KnowledgeBaseReleaseLifecycleApplication:
             )
             return transaction.persist_revocation(result, command)
 
+    def assess_deletion_eligibility(
+        self,
+        request: AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
+    ) -> KnowledgeBaseReleaseDeletionEligibilityAssessment:
+        facts = self._repository.deletion_facts(request.knowledge_base_release_id)
+        if facts is None:
+            raise ReleaseLifecycleError("release_lifecycle_release_not_found")
+        if (facts.knowledge_space_id, facts.knowledge_base_id) != (
+            request.knowledge_space_id,
+            request.knowledge_base_id,
+        ):
+            raise ReleaseLifecycleError("release_lifecycle_release_scope_mismatch")
+
+        blockers: list[DeletionEligibilityBlocker] = []
+        artifact_state: Literal["not_assessed", "unverified", "blocked", "clear"] = "not_assessed"
+        artifact_authority_id: str | None = None
+        artifact_assessment_id: str | None = None
+        if facts.state == "revoked":
+            blockers.append("emergency_revocation_incident_retention")
+        elif facts.state != "retired":
+            blockers.append("release_not_retired")
+        elif facts.retired_at is None or not facts.managed_retirement:
+            blockers.append("release_retirement_history_unavailable")
+
+        if facts.active_reference_count > 0:
+            blockers.append("active_release_references_present")
+
+        if not blockers:
+            authority = self._artifact_retention_authority
+            if authority is None:
+                artifact_state = "unverified"
+                blockers.append("artifact_retention_unverified")
+            else:
+                artifact = _validated_artifact_retention_assessment(
+                    authority.assess_release_deletion(request.knowledge_base_release_id),
+                    request.knowledge_base_release_id,
+                )
+                if artifact is None:
+                    artifact_state = "unverified"
+                    blockers.append("artifact_retention_unverified")
+                else:
+                    artifact_state = artifact.status
+                    artifact_authority_id = artifact.authority_id
+                    artifact_assessment_id = artifact.assessment_id
+                    if artifact.status == "blocked":
+                        blockers.append("artifact_retention_blocked")
+
+        return KnowledgeBaseReleaseDeletionEligibilityAssessment(
+            knowledge_space_id=facts.knowledge_space_id,
+            knowledge_base_id=facts.knowledge_base_id,
+            knowledge_base_release_id=facts.knowledge_base_release_id,
+            release_state=facts.state,
+            eligible=not blockers,
+            blockers=tuple(blockers),
+            active_reference_count=facts.active_reference_count,
+            deregistered_reference_count=facts.deregistered_reference_count,
+            retired_at=facts.retired_at,
+            revoked_at=facts.revoked_at,
+            assessed_at=facts.assessed_at,
+            artifact_retention_state=artifact_state,
+            artifact_retention_authority_id=artifact_authority_id,
+            artifact_retention_assessment_id=artifact_assessment_id,
+        )
+
     def audit(
         self, knowledge_base_release_id: str
     ) -> tuple[
@@ -397,3 +468,22 @@ def _validate_retention_policy(policy: ReleaseRetentionPolicy) -> None:
         raise ReleaseLifecycleError("release_lifecycle_invalid_retention_policy")
     if not isinstance(policy.minimum_age, timedelta) or policy.minimum_age < timedelta(0):
         raise ReleaseLifecycleError("release_lifecycle_invalid_retention_policy")
+
+
+def _validated_artifact_retention_assessment(
+    assessment: ReleaseArtifactRetentionAssessment | None,
+    knowledge_base_release_id: str,
+) -> ReleaseArtifactRetentionAssessment | None:
+    if assessment is None:
+        return None
+    if (
+        not isinstance(assessment, ReleaseArtifactRetentionAssessment)
+        or assessment.knowledge_base_release_id != knowledge_base_release_id
+        or not isinstance(assessment.authority_id, str)
+        or not _CLIENT_ID.fullmatch(assessment.authority_id)
+        or not isinstance(assessment.assessment_id, str)
+        or not _CLIENT_ID.fullmatch(assessment.assessment_id)
+        or assessment.status not in {"clear", "blocked"}
+    ):
+        raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
+    return assessment

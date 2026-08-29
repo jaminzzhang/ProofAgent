@@ -25,7 +25,17 @@ Version. Moving new connection facts into production therefore requires a new
 synchronization, Source Version, KSS Release, Draft revision, and formal Agent
 publication.
 
-[LIMIT | HIGH] The current `KSS_SNAPSHOT_CONNECTIONS_JSON` registry remains an
-implementation fact until a separately verified cutover. This ADR defines the
-target authority boundary; it is not evidence that dynamic profile management is
-already implemented or production-ready.
+[KNOWN | HIGH] TDD-01B implements the KSS PostgreSQL lifecycle, protected
+management HTTP and exact-profile synchronization core. TDD-04B adds a guarded
+ProofAgent management client and same-origin BFF for create/read/revise/validate/
+publish plus synchronization submit/status. Browser responses omit endpoint,
+Secret Handle, egress/trust references, KSS credentials and raw upstream problem;
+read and mutation paths require `knowledge_source.view` and
+`knowledge_source.edit`, respectively.
+
+[LIMIT | HIGH] The current `KSS_SNAPSHOT_CONNECTIONS_JSON` production process
+registry remains an implementation fact until a separately verified cutover.
+There is no Dashboard page, production Vault/egress/TLS reader, or verified
+end-user delegation from ProofAgent identity into KSS audit; KSS currently sees
+the configured ProofAgent service operator. These local slices implement the
+management boundary but are not production-readiness evidence.

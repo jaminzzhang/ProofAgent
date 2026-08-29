@@ -19,6 +19,7 @@ from knowledge_source_service.contracts.release_references import (
     RevokedKnowledgeBaseReleaseAuditEntry,
 )
 from knowledge_source_service.domain.release_references import (
+    ReleaseDeletionFacts,
     ReleaseLifecycleCommand,
     ReleaseLifecycleError,
     ReleaseLifecycleReceipt,
@@ -60,6 +61,8 @@ class InMemoryReleaseReferenceRepository:
             | RevokedKnowledgeBaseReleaseAuditEntry
         ] = []
         self._deprecated_at: dict[str, datetime] = {}
+        self._retired_at: dict[str, datetime] = {}
+        self._revoked_at: dict[str, datetime] = {}
         self._lock = RLock()
 
     @contextmanager
@@ -174,6 +177,7 @@ class InMemoryReleaseReferenceRepository:
         )
         receipt = ReleaseLifecycleReceipt(command=command, result=result)
         self._release_states[result.knowledge_base_release_id] = "retired"
+        self._retired_at[result.knowledge_base_release_id] = result.retired_at
         self._lifecycle_receipts[(command.operator_id, command.key_digest)] = receipt
         self._lifecycle_events.append(event)
         return result
@@ -218,6 +222,7 @@ class InMemoryReleaseReferenceRepository:
         )
         receipt = ReleaseLifecycleReceipt(command=command, result=result)
         self._release_states[result.knowledge_base_release_id] = "revoked"
+        self._revoked_at[result.knowledge_base_release_id] = result.revoked_at
         self._lifecycle_receipts[(command.operator_id, command.key_digest)] = receipt
         self._lifecycle_events.append(event)
         return result
@@ -351,4 +356,33 @@ class InMemoryReleaseReferenceRepository:
                 event
                 for event in self._lifecycle_events
                 if event.knowledge_base_release_id == knowledge_base_release_id
+            )
+
+    def deletion_facts(self, knowledge_base_release_id: str) -> ReleaseDeletionFacts | None:
+        with self._lock:
+            release = self._catalog.get_release(knowledge_base_release_id)
+            if release is None:
+                return None
+            state = self._release_states.get(knowledge_base_release_id, "queryable")
+            return ReleaseDeletionFacts(
+                knowledge_space_id=release.knowledge_space_id,
+                knowledge_base_id=release.knowledge_base_id,
+                knowledge_base_release_id=release.knowledge_base_release_id,
+                state=state,
+                managed_retirement=(
+                    state == "retired" and knowledge_base_release_id in self._retired_at
+                ),
+                active_reference_count=sum(
+                    reference.knowledge_base_release_id == knowledge_base_release_id
+                    and reference.state == "active"
+                    for reference in self._references.values()
+                ),
+                deregistered_reference_count=sum(
+                    reference.knowledge_base_release_id == knowledge_base_release_id
+                    and reference.state == "deregistered"
+                    for reference in self._references.values()
+                ),
+                retired_at=self._retired_at.get(knowledge_base_release_id),
+                revoked_at=self._revoked_at.get(knowledge_base_release_id),
+                assessed_at=self._clock(),
             )

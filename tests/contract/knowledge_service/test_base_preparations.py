@@ -19,7 +19,10 @@ from knowledge_source_service.adapters.memory.knowledge_catalog import InMemoryK
 from knowledge_source_service.application.base_preparations import (
     KnowledgeBasePreparationApplication,
 )
-from knowledge_source_service.application.base_preparation_worker import BasePreparationWorker
+from knowledge_source_service.application.base_preparation_worker import (
+    BasePreparationExecutor,
+    BasePreparationWorker,
+)
 from knowledge_source_service.contracts.base_preparations import (
     KnowledgeBaseVersion,
     SaveKnowledgeBaseDraftRequest,
@@ -407,6 +410,61 @@ def test_worker_builds_the_frozen_plan_and_commits_a_non_queryable_ready_candida
     assert app.get_preparation(queued.release_preparation_id) == ready
     assert app.start(start_request(), operator_id="operator-1", idempotency_key="start") == queued
     assert [event.action for event in execution.audit("base-claims")] == ["claimed", "ready"]
+
+
+def test_executor_run_once_processes_at_most_one_queued_preparation() -> None:
+    app, repository, request = environment(lease_clock=lambda: NOW)
+    app.save_draft(request, operator_id="operator-1", idempotency_key="save")
+    first = app.start(start_request(), operator_id="operator-1", idempotency_key="start-1")
+    second = app.start(start_request(), operator_id="operator-1", idempotency_key="start-2")
+
+    class Builder:
+        def build(self, base_version):  # type: ignore[no-untyped-def]
+            return publishable_candidate(base_version)
+
+    executor = BasePreparationExecutor(
+        worker=BasePreparationWorker(
+            repository=repository,
+            worker_id="worker-1",
+            lease_duration=timedelta(seconds=30),
+        ),
+        builder=Builder(),
+        candidate_ttl=timedelta(hours=1),
+    )
+
+    result = executor.run_once()
+
+    assert result is not None and result.state == "ready"
+    assert result.release_preparation_id == first.release_preparation_id
+    assert app.get_preparation(first.release_preparation_id) == result
+    assert app.get_preparation(second.release_preparation_id) == second
+
+
+@pytest.mark.parametrize("candidate_ttl", [timedelta(0), timedelta(seconds=-1), True])
+def test_executor_rejects_invalid_candidate_ttl_before_claiming_work(
+    candidate_ttl: Any,
+) -> None:
+    app, repository, _request = environment(lease_clock=lambda: NOW)
+
+    class Builder:
+        def build(self, base_version):  # type: ignore[no-untyped-def]
+            return publishable_candidate(base_version)
+
+    with pytest.raises(
+        BasePreparationError,
+        match="^base_preparation_invalid_candidate_ttl$",
+    ):
+        BasePreparationExecutor(
+            worker=BasePreparationWorker(
+                repository=repository,
+                worker_id="worker-1",
+                lease_duration=timedelta(seconds=30),
+            ),
+            builder=Builder(),
+            candidate_ttl=candidate_ttl,
+        )
+
+    assert app.audit("base-claims") == ()
 
 
 def test_unexpired_ready_candidate_is_published_once_and_consumed_atomically() -> None:

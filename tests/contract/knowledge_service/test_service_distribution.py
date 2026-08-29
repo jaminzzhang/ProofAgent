@@ -110,7 +110,10 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/draft",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:cancel",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:publish",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/preparation-audit",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility",
     } <= set(payload["paths"])
     schemas = payload["components"]["schemas"]
     assert {
@@ -145,8 +148,37 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "retired",
         "revoked",
     ]
+    deletion_properties = schemas["KnowledgeBaseReleaseDeletionEligibilityAssessment"]["properties"]
+    assert {
+        "release_state",
+        "eligible",
+        "blockers",
+        "active_reference_count",
+        "deregistered_reference_count",
+        "artifact_retention_state",
+    } <= set(deletion_properties)
+    assert not {
+        "external_resource_id",
+        "release_reference_id",
+        "credential",
+        "token",
+    } & set(deletion_properties)
+    publication_operation = payload["paths"][
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:publish"
+    ]["post"]
+    assert "requestBody" not in publication_operation
+    assert publication_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ConsumedReleasePreparation"
+    }
+    cancellation_operation = payload["paths"][
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:cancel"
+    ]["post"]
+    assert "requestBody" not in cancellation_operation
+    assert cancellation_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CancelledReleasePreparation"
+    }
     assert hashlib.sha256(contract).hexdigest() == (
-        "d5ac3702b27a3c829fa6d5cf4d84e632162f9b12aeb934afba09f11edb7ee51c"
+        "ce34e8b4fbcd16c90201890cb8e466980132aedbbfc0dce35dedec155749ce3a"
     )
 
 

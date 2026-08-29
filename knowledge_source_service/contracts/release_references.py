@@ -12,6 +12,15 @@ ReferenceIdentifier = Annotated[
     StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
 ]
 
+DeletionEligibilityBlocker = Literal[
+    "release_not_retired",
+    "emergency_revocation_incident_retention",
+    "release_retirement_history_unavailable",
+    "active_release_references_present",
+    "artifact_retention_unverified",
+    "artifact_retention_blocked",
+]
+
 
 class ReleaseReferenceContract(StrictContract):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
@@ -48,6 +57,32 @@ class RevokeKnowledgeBaseReleaseRequest(ReleaseReferenceContract):
     knowledge_base_release_id: ReferenceIdentifier
     reason_code: Literal["security_incident", "severe_data_integrity_failure"]
     confirmation: Literal["fail_closed_without_fallback"]
+
+
+class AssessKnowledgeBaseReleaseDeletionEligibilityRequest(ReleaseReferenceContract):
+    knowledge_space_id: ReferenceIdentifier
+    knowledge_base_id: ReferenceIdentifier
+    knowledge_base_release_id: ReferenceIdentifier
+
+
+class KnowledgeBaseReleaseDeletionEligibilityAssessment(ReleaseReferenceContract):
+    schema_version: Literal["knowledge-base-release-deletion-eligibility.v1"] = (
+        "knowledge-base-release-deletion-eligibility.v1"
+    )
+    knowledge_space_id: ReferenceIdentifier
+    knowledge_base_id: ReferenceIdentifier
+    knowledge_base_release_id: ReferenceIdentifier
+    release_state: Literal["queryable", "deprecated", "retired", "revoked"]
+    eligible: bool
+    blockers: tuple[DeletionEligibilityBlocker, ...]
+    active_reference_count: NonNegativeInt
+    deregistered_reference_count: NonNegativeInt
+    retired_at: AwareDatetime | None
+    revoked_at: AwareDatetime | None
+    assessed_at: AwareDatetime
+    artifact_retention_state: Literal["not_assessed", "unverified", "blocked", "clear"]
+    artifact_retention_authority_id: ReferenceIdentifier | None = None
+    artifact_retention_assessment_id: ReferenceIdentifier | None = None
 
 
 class KnowledgeBaseReleaseReferenceFacts(RegisterKnowledgeBaseReleaseReferenceRequest):

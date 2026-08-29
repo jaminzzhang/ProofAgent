@@ -1,6 +1,6 @@
 # KSS Release Reference 与 Release lifecycle 本地调用指南
 
-[KNOWN | HIGH] TDD-03A 至 03E 仅提供可信 application Interface。它们用于在外部 Published Agent Version 可执行前持久化 exact KSS Release 引用，在可信 verifier 证明该 immutable external resource 永久失去执行与回滚资格后注销引用，把不再允许新采用的 Release 标记为 `deprecated`，在零 active Reference 且满足服务端 retention policy 后执行普通退役，或因安全/严重数据完整性事件紧急撤销；没有 HTTP/BFF/Dashboard 命令，也不会激活、替换或通知 Agent。
+[KNOWN | HIGH] TDD-03A 至 03F 提供可信 application Interface，用于注册和可信注销 exact KSS Release 引用、执行 Release deprecation/ordinary retirement/emergency revocation，以及只读评估删除资格。TDD-04A 只把删除资格评估接入受 `knowledge_source.view` 保护的 KSS 管理 GET 和同源 ProofAgent BFF GET；没有 lifecycle/Reference HTTP/BFF 命令或 Dashboard 页面，也不会删除 artifact、激活、替换或通知 Agent。
 
 ## 注册
 
@@ -158,6 +158,49 @@ revoked = lifecycle_application.revoke(
 - 撤销与 registration、deregistration、deprecation、ordinary retirement 竞争时由 Release/Reference 锁收敛。`retired` 与 `revoked` 是不同终态，不能相互覆盖。
 - 当前 `affected_active_reference_count` 是 KSS 事务内的精确汇总，不是 affected-reference 明细、通知完成证明或 ProofAgent Run/rollback 隔离证明。
 
+## 删除资格评估
+
+```python
+from knowledge_source_service.contracts.release_references import (
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest,
+)
+
+lifecycle_application = KnowledgeBaseReleaseLifecycleApplication(
+    repository=release_lifecycle_repository,
+    artifact_retention_authority=artifact_retention_authority,
+)
+assessment = lifecycle_application.assess_deletion_eligibility(
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+        knowledge_space_id="space-claims",
+        knowledge_base_id="base-claims",
+        knowledge_base_release_id="release-exact",
+    )
+)
+```
+
+- 该 Interface 是只读评估，不是物理删除命令。请求只含 exact Space/Base/Release identity，不接受 operator、idempotency key、调用者时间、Reference 数、retention 结论或删除原因。
+- 只有普通 `retired`、具有完整 `retired_at`、零 active Reference，且服务端注入的 artifact-retention authority 对 exact Release 明确返回 `clear` 时，`eligible` 才为 `true`。
+- `deregistered_reference_count` 是保留的历史事实，不阻断资格；active Reference 产生独立 blocker。旧版无完整 retirement history 的 retired Release 失败关闭。
+- `queryable`/`deprecated` 返回 ordinary-lifecycle blocker；`revoked` 返回 incident-response retention blocker，并且不会调用 artifact-retention authority。缺少 authority、authority 返回 `None` 或明确 `blocked` 都失败关闭。
+- 结果中的 `assessed_at` 来自 PostgreSQL 数据库时间。评估不写 state、receipt 或 audit，也不存在 command replay 语义；未来物理删除命令不得信任历史评估，必须在删除事务中重验引用、lifecycle、artifact retention 并单独记录可存续审计。
+
+## 通过 KSS 与 ProofAgent BFF 读取
+
+前置条件：KSS 管理端和 ProofAgent Operator Session 都必须为认证身份授予
+`knowledge_source.view`。浏览器只访问同源 BFF，不持有 KSS operator token。
+
+1. KSS 管理客户端读取：
+   `GET /v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility`。
+2. Dashboard 或其他同源浏览器调用方读取：
+   `GET /api/config/knowledge-service/spaces/{knowledge_space_id}/bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility`。
+3. 调用方只把结果作为当前观察事实。结果不得缓存为删除权限；后续状态或
+   Reference 变化会使旧结果失效。
+
+KSS 资源保留 trace-safe artifact authority/assessment identity。BFF 投影删除这两个
+identity，并且不返回 KSS endpoint、operator credential、外部 Published Agent Version
+identity 或 raw upstream problem。生产组合尚未配置 artifact-retention authority；普通
+retired Release 因此返回 `artifact_retention_unverified`，不会被推断为可删除。
+
 ## 稳定错误
 
 | code | 含义 |
@@ -195,4 +238,4 @@ revoked = lifecycle_application.revoke(
 
 ## 当前边界
 
-[FRAME | HIGH] 注册成功不代表 Agent 已发布或激活。跨服务顺序仍应是“先注册 KSS Reference，后尝试 ProofAgent publication/activation”；后续失败保留引用是安全孤儿。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销只提供 KSS 本地 query denial 和受影响数量。当前尚未实现 ProofAgent publication/activation 接线、真实注销 verifier、后台认证对账、lifecycle 网络权限、affected-reference 明细/通知、ProofAgent runtime/rollback 失败关闭接线、删除资格、生产 retention 配置或部署，因此 application-only 核心不能外推为生产退役或完整紧急止损授权。
+[FRAME | HIGH] 注册成功不代表 Agent 已发布或激活。跨服务顺序仍应是“先注册 KSS Reference，后尝试 ProofAgent publication/activation”；后续失败保留引用是安全孤儿。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销只提供 KSS 本地 query denial 和受影响数量；删除资格 GET 只是只读 blocker projection。当前尚未实现 ProofAgent publication/activation 接线、真实注销 verifier、后台认证对账、lifecycle/Reference 网络命令、生产 artifact-retention adapter、物理删除、affected-reference 明细/通知、Dashboard lifecycle 页面、ProofAgent runtime/rollback 失败关闭接线、生产 retention 配置或部署，因此该本地投影不能外推为生产退役、删除授权或完整紧急止损授权。

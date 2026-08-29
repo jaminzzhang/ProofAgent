@@ -6,15 +6,15 @@
 | --- | --- |
 | 建议结论 | `PARTIAL_VERIFICATION` |
 | 最高风险等级 | P1 |
-| 模式 | 受控实现：TDD-01A/01B + TDD-02A 至 02G Preparation 核心 + TDD-03A 至 03E Reference Ledger 与 Release lifecycle 核心 |
+| 模式 | 受控实现：TDD-01A/01B + TDD-02A 至 02G Preparation 核心 + TDD-03A 至 03F Reference/lifecycle 核心 + TDD-04A 至 04F ProofAgent 管理 BFF 与 one-shot execution composition |
 | 日期 | 2026-08-29 |
 | 依据 | 用户确认按既定 Scope 启动开发并继续下一 TDD 切片；ADR-0213/0214/0217、`feature_context.md`、`scope-plan.md`、仓库编码规则 |
 
 [KNOWN | HIGH] TDD-01B 已将 HTTP snapshot Profile 生命周期接入 KSS PostgreSQL、受保护管理 HTTP 和显式受管运行组合。同步任务固定 Published Profile 的 ID、revision 和 configuration digest，Worker 重启后仍解析该 exact revision；Source Version 的不可变 artifact 保留并校验血缘。现有生产进程仍使用静态 registry，尚未切换。完整 TDD-01 和整体配置发布流程仍未完成。
 
-[KNOWN | HIGH] TDD-02A/02B 已有持久化准入和管理 HTTP；TDD-02C 增加 lease/fencing；TDD-02D 增加 frozen-plan candidate 构建和 fenced `ready/failed` 最终提交；TDD-02E 增加服务端核心 `ready → expired/consumed` 和 exact Release 单事务发布；TDD-02F 增加 application-only `expire_next()`；TDD-02G 增加 application-only queued/running 协作取消、幂等收据/审计和 stale-result fencing。GET 可读全部已实现状态，POST start 重放仍返回原始 queued 回执；没有 `:publish`、expiry 或 cancel HTTP 命令。本轮真实 PostgreSQL/MinIO/OpenSearch 受影响回归为 357 passed、0 skipped。尚无常驻 Worker、自动过期调度、ready quarantine、ProofAgent 接线或生产切换；既有直接 Release 发布路径仍可绕过 Preparation，因此不能声称系统级唯一发布入口或生产发布流程完成。
+[KNOWN | HIGH] TDD-02A/02B 已有持久化准入和管理 HTTP；TDD-02C 增加 lease/fencing；TDD-02D 增加 frozen-plan candidate 构建和 fenced `ready/failed` 最终提交；TDD-02E 增加服务端核心 `ready → expired/consumed` 和 exact Release 单事务发布；TDD-02F 增加 application-only `expire_next()`；TDD-02G 增加 application-only queued/running 协作取消、幂等收据/审计和 stale-result fencing。GET 可读全部已实现状态，POST start 重放仍返回原始 queued 回执；TDD-04C/04D 已接 start/status BFF 与可选 one-shot execution runtime，TDD-04E 已接 controlled `:publish` KSS/BFF，TDD-04F 已接 controlled、Idempotency-Key-bound `:cancel` KSS/BFF。expiry 仍无网络命令。TDD-04F 当前本地与真实 PostgreSQL affected files 合计 238 passed；全仓后端 2471 passed、24 个既有声明 skip、2 deselected。尚无常驻 Worker、自动过期调度、ready quarantine、Dashboard 或生产切换；既有直接 Release 发布路径仍可绕过 Preparation，因此不能声称系统级唯一发布入口或生产发布流程完成。
 
-[KNOWN | HIGH] TDD-03A 至 03E 新增 application-only exact Release Reference registration、可信 deregistration admission、`queryable → deprecated → retired` 普通生命周期、`queryable/deprecated → revoked` 紧急生命周期和 PostgreSQL migrations `0014` 至 `0018`。只有 owning authenticated client 加服务端注入 verifier 的 exact permanent-ineligibility 证明，才能把 Reference 从 `active` 转为 `deregistered`；普通退役仍由 active Reference、服务端 retention policy 和数据库时间共同控制。紧急撤销仅接受两个受控原因和 exact fail-closed 确认，由 KSS 锁定/统计 active References 并保留全部 Reference facts。Retired/revoked Release 均不可 Catalog query、不进入完整性扫描且既有 Query authorization 失败关闭。没有 Reference/lifecycle HTTP/BFF、ProofAgent verifier/证明签发、后台 reconciler、affected-reference 明细/通知、ProofAgent runtime/rollback 接线或生产配置，因此这仍是局部本地权威证据。
+[KNOWN | HIGH] TDD-03A 至 03F 新增 application-only exact Release Reference registration、可信 deregistration admission、`queryable → deprecated → retired` 普通生命周期、`queryable/deprecated → revoked` 紧急生命周期、只读删除资格和 PostgreSQL migrations `0014` 至 `0018`。只有 owning authenticated client 加服务端注入 verifier 的 exact permanent-ineligibility 证明，才能把 Reference 从 `active` 转为 `deregistered`；普通退役仍由 active Reference、服务端 retention policy 和数据库时间共同控制。紧急撤销仅接受两个受控原因和 exact fail-closed 确认，由 KSS 锁定/统计 active References 并保留全部 Reference facts。Retired/revoked Release 均不可 Catalog query、不进入完整性扫描且既有 Query authorization 失败关闭。删除资格还要求 ordinary retired history、零 active Reference 和服务端 artifact-retention clear，但不执行物理删除。没有 Reference/lifecycle HTTP/BFF、ProofAgent verifier/证明签发、后台 reconciler、生产 artifact-retention adapter、physical delete、affected-reference 明细/通知、ProofAgent runtime/rollback 接线或生产配置，因此这仍是局部本地权威证据。
 
 ## 2. TDD-01A 范围记录（历史）
 
@@ -105,7 +105,7 @@ uv run --extra dev pytest -q tests/contract/knowledge_service/test_connection_pr
 | 真实策略与上游连接适配器未装配 | P1 | 本轮 `DeploymentPolicy`、snapshot reader 为外部边界测试替身。真实 adapter 必须校验 connector、exact Secret 引用、egress、trust root 和硬限制，并只在 Worker 中解析凭据；字符串 revision 不是依赖准入证明 |
 | 生产进程未切换 | P1 | `bootstrap/processes.py` 仍使用 `KSS_SNAPSHOT_CONNECTIONS_JSON`。新增能力只在显式 `compose_runtime(managed_connection_profiles=True, ...)` 组合中启用。切换前必须验证真实 adapter，协调 API/Worker、处理旧 v1 队列；旧二进制不能消费 v2 工作 |
 | ProofAgent BFF/Dashboard/角色包未贯通 | P1 | KSS 已检查可信身份的 `knowledge_source.view/edit`；OIDC 三角色包到 BFF/KSS 的完整映射仍属 TDD-04。没有新增本地用户或 per-Space ACL |
-| Preparation publication 仅完成核心事务与显式回收/取消原语 | P1 | TDD-02E 已实现 `ready → expired/consumed` 和 exact Release 单事务 CAS；TDD-02F 可显式回收一个到期 ready candidate；TDD-02G 可取消 queued/running 并 fence 旧结果，但没有对应 HTTP 命令、自动调度、常驻 Worker 或 ProofAgent 接线。既有直接 Release 发布路径仍可绕过 Preparation。旧构建可以留下未绑定的 immutable object/projection；后续需要对象回收、ready quarantine 与恢复策略。生产进程未启用；应用重建不等于数据库故障恢复演练 |
+| Preparation publication 仍非完整运行闭环 | P1 | TDD-02E 已实现 `ready → expired/consumed` 和 exact Release 单事务 CAS；TDD-02F 可显式回收一个到期 ready candidate；TDD-02G 可取消 queued/running 并 fence 旧结果；TDD-04E/04F 已公开 controlled publish/cancel KSS/BFF。仍没有 expiry HTTP、自动调度、常驻 Worker 或 Dashboard，既有直接 Release 发布路径也可绕过 Preparation。旧构建可以留下未绑定的 immutable object/projection；后续需要对象回收、ready quarantine 与恢复策略。生产进程未启用；应用重建不等于数据库故障恢复演练 |
 | 整体流程未完成 | P1 | Reference Ledger、正式 Agent 发布候选绑定、回滚与 Phase F 仍按后续切片实施；Source Version 和 Preparation 均不自动发布 KSS Release 或激活 Agent |
 | 审计与保留边界 | P2 | 成功状态和回执原子写入；Profile 和 Preparation 管理路由的认证/权限/校验/状态拒绝写入独立安全审计。不是所有 KSS 管理命令的通用审计。当前不自动清理 revision、receipt 或 audit；分页、保留、备份恢复演练仍待补齐 |
 | 新迁移的生产执行尚未评估 | P1 | `0009` 建立管理表与 exact Source 外键；`0010` 新增 lease/fence；`0011` 新增 ready/failed 与内部候选结果；`0012` 新增 expired/consumed、exact Release 外键和发布审计；`0013` 新增 cancelled 时间/约束并扩展命令收据 action。只在隔离测试库应用；旧二进制不能读取新状态，生产锁影响、切换顺序、备份和回滚需要独立评估与授权 |
@@ -113,7 +113,7 @@ uv run --extra dev pytest -q tests/contract/knowledge_service/test_connection_pr
 
 ## 10. 上下文更新
 
-[KNOWN | HIGH] Feature 维持 `PARTIAL_VERIFICATION`。TDD-01B 的本地持久化、HTTP 和同步 Worker 协议接线，以及 TDD-02A 至 02G 的 Preparation 准入、租约、候选构建、fenced 结果、一次性核心发布、显式主动过期和协作取消已有证据；仍不代表真实 Secret/egress/TLS、系统级唯一发布入口、ProofAgent 管理流程、生产进程切换或完整 TDD-01/02。已批准的设计不重新 grilling。
+[KNOWN | HIGH] Feature 维持 `PARTIAL_VERIFICATION`。TDD-01B 的本地持久化、HTTP 和同步 Worker 协议接线，TDD-02A 至 02G 的 Preparation 准入、租约、候选构建、fenced 结果、一次性核心发布、显式主动过期和协作取消，以及 TDD-04C 至 04F 的 start/status、one-shot execution、controlled publication/cancellation 接线已有本地证据；仍不代表真实 Secret/egress/TLS、系统级唯一发布入口、Dashboard 闭环、连续生产进程切换或完整 TDD-01/02。已批准的设计不重新 grilling。
 
 ## 11. TDD-01B 实现与验证
 
@@ -1283,3 +1283,645 @@ OpenAPI 变化只来自只读 `KnowledgeBaseReleaseSummaryResource.state` 增加
 - 没有新增 lifecycle HTTP/BFF、角色映射、affected-reference 明细/通知、ProofAgent runtime/rollback 接线、物理删除、部署或生产 SQL；没有提交、推送、合并或发布。
 
 [FRAME | HIGH] TDD-03E 证明 KSS 本地紧急 query denial 权威，不证明受影响 Agent 已被通知、阻止运行或禁止回滚。下一片若继续核心优先，建议冻结 TDD-03F deletion-eligibility assessment：只计算可删除资格，不执行物理删除；明确 ordinary retired 与 emergency revoked 的不同保留/事件响应规则、active/deregistered Reference 与 artifact retention blocker，以及审计/幂等边界。若优先产品闭环，则应进入 TDD-04 lifecycle/affected-reference BFF 与角色接线。Feature 保持 `PARTIAL_VERIFICATION`。
+
+## 24. TDD-03F：Release 删除资格只读评估
+
+### 24.1 模式、Interface 与权威边界
+
+[FRAME | HIGH] 本片是 P1 完整留痕受控实现。可信 application-only Interface 为：
+
+```python
+assessment = lifecycle_application.assess_deletion_eligibility(
+    AssessKnowledgeBaseReleaseDeletionEligibilityRequest(
+        knowledge_space_id="space-claims",
+        knowledge_base_id="base-claims",
+        knowledge_base_release_id="release-exact",
+    )
+)
+```
+
+请求只含 exact Space/Base/Release identity，不接受 operator、idempotency key、调用者时间、Reference 数、artifact-retention 结论或删除原因。评估使用 KSS PostgreSQL lifecycle 与 active/deregistered Reference facts；只有普通 `retired`、完整 `retired_at`、零 active Reference，且服务端注入的 `ReleaseArtifactRetentionAuthority` 对 exact Release 明确返回 `clear` 时才输出 `eligible=true`。
+
+| Interface | 可观察行为 | 隐藏实现与限制 |
+| --- | --- | --- |
+| `assess_deletion_eligibility()` | 返回 exact identity、Release state、eligible、稳定 blockers、active/deregistered counts、lifecycle time、数据库 assessed time 与 trace-safe artifact assessment identity | PostgreSQL 一次 read、lifecycle row integrity、Reference state 聚合、artifact authority 校验；无 HTTP/OpenAPI |
+| `audit()` | 评估前后 lifecycle audit 不变 | 评估不是 command，不写 receipt/audit，也没有幂等重放 |
+| 未来 physical delete | 本片没有该 Interface | 不得信任旧 assessment；必须在未来删除事务中重验并写可存续审计 |
+
+范围外：物理删除、incident clearance、生产 artifact-retention adapter、lifecycle HTTP/BFF/Dashboard/CLI、ProofAgent verifier/reconciler/runtime/rollback 接线、部署、生产配置、生产 SQL 和 Production GO。
+
+### 24.2 Given-When-Then 与 blocker 规则
+
+| 场景 | Given / When | Then |
+| --- | --- | --- |
+| 普通正路径 | application-command retired、完整 `retired_at`、零 active、artifact `clear` | eligible；空 blockers；评估不新增审计 |
+| artifact 未确认 | authority 缺失/返回 `None`/返回 `blocked` | `artifact_retention_unverified` 或 `artifact_retention_blocked`；失败关闭 |
+| 历史 Reference | 一个 Reference 已由可信 verifier 注销 | active=0、deregistered=1；历史保留但不阻断 |
+| 普通状态 | queryable 或 deprecated | `release_not_retired`；不调用 artifact authority |
+| 紧急状态 | revoked，可仍有 active Reference | incident-retention 与 active-reference blockers；不调用 artifact authority |
+| 旧版/旁路历史 | retired 即使带时间戳，但没有匹配的 ordinary-retirement command history | `release_retirement_history_unavailable`；不推断资格或调用 artifact authority |
+| 作用域/完整性 | missing/scope mismatch 或 artifact assessment 绑定其他 Release | 稳定 not-found/scope/integrity failure；不输出 permissive assessment |
+
+Blocker 顺序稳定为 lifecycle/history、active Reference、artifact retention。`deregistered` 只进入历史计数。Revoked 即使未来 artifact clear 也不能由本 Interface 变为 eligible；incident clearance 必须作为独立、明确授权的未来设计。
+
+### 24.3 RED → GREEN → REFACTOR
+
+| 轮次 | 实际 RED | GREEN / 说明 |
+| --- | --- | --- |
+| R1 | 内存 tracer 收集失败：无法导入 `AssessKnowledgeBaseReleaseDeletionEligibilityRequest` | 增加 strict request/result、只读 application Interface、deletion facts 与 artifact-retention port；普通 retired + clear 主路径转绿 |
+| R2 | 真实 PostgreSQL tracer 失败：`PostgresReleaseLifecycleRepository` 没有 `deletion_facts()` | 增加单次数据库 facts read，返回数据库 assessed time 与 active/deregistered counts；未新增 migration |
+| R3 | 最终审阅新增 PostgreSQL RED：手工设置 retired 与完整时间戳但没有 retirement receipt 时被误判 eligible | deletion facts 额外要求 exact Space/Base/Release、deprecated/retired time 和 retention boundary 匹配唯一 ordinary-retirement command；无匹配 history 失败关闭 |
+| 行为保护 | revoked、missing/blocked artifact、deregistered history、queryable/deprecated、missing/scope mismatch、mismatched artifact、legacy retired history | 内存 28 项、Release PostgreSQL 34 项全部通过 |
+| REFACTOR | lifecycle row integrity 在 locked command read 与 deletion facts read 重复 | 抽取同 adapter 内部 `_validated_lifecycle_row()`，保持 application Interface 与合同不变；完整 PG 回归后仍为 GREEN |
+
+一次 revoked 测试的首个断言只期望 incident blocker，实际实现还返回独立 active-reference blocker。依据已冻结的“active Reference 必须阻断删除”规则，测试改为同时要求两个 blocker；这是补强独立阻断事实，不是降低断言或隐藏失败。
+
+### 24.4 验证结果与限定
+
+隔离真实依赖项目为 `proofagent-kss-deletion-tdd`，端口为 PostgreSQL `55469`、MinIO `59047`、OpenSearch `19237`；首个 PostgreSQL RED 使用独立 `proofagent-tdd03f-postgres` 容器和端口 `55468`。所有数据库 fixture 使用随机 schema，S3 fixture 使用随机 bucket 或版本化测试 bucket；没有读取 `.env`、生产配置、生产凭据、生产数据或生产日志。
+
+| 检查 | 本轮结果 | 限定 |
+| --- | --- | --- |
+| 内存 / Release PostgreSQL | 28 passed / 34 passed | application Interface 与真实 PostgreSQL facts；不是生产 artifact authority |
+| KSS + ProofAgent KSS/BFF/cutover 受影响回归 | 422 passed、0 skipped | PostgreSQL/MinIO/OpenSearch 均 fail-if-missing；无 physical delete |
+| 全仓后端 | 2408 passed、24 个既有声明 skip、2 deselected | 修正 DSN 后退出码 0；不是 Release Gate |
+| 显式 hybrid integration | 2 passed、2432 deselected | PostgreSQL/MinIO 隔离互操作；不是 deletion E2E |
+| Mypy / Ruff | 454 个产品源文件无类型错误；全量 Ruff 通过 | 未降低检查或增加 ignore |
+| 格式 / domain / diff / locks | 8 个受影响 Python 文件格式、domain-context、`git diff --check`、根项目 117 packages 与 KSS 34 packages lock check 通过 | 无 dependency、migration 或 OpenAPI 变化 |
+| 前端 | TypeScript 通过；Dashboard 225、Chat 35 tests；UI/Dashboard/Chat build 通过 | 本片无 UI/API 改动；Chat 保留既有 600.22 kB chunk warning |
+
+```text
+openapi.sha256=d5ac3702b27a3c829fa6d5cf4d84e632162f9b12aeb934afba09f11edb7ee51c
+migrations.sha256=7a382fd03b767c56b13bf8f8260b6a808ddec91ff0fb41ff014f6b6a64669fef
+head_revision=0018_release_revocation
+```
+
+第一次全仓运行给 SQLAlchemy 使用了 `postgresql://`，导致它选择未安装的 `psycopg2` 并产生 72 个同因 setup errors；当次已有 2336 passed。未安装依赖或改测试，改用仓库支持的 `postgresql+psycopg://` 后完整重跑为 2408 passed。显式 hybrid 首次因缺 `PROOF_AGENT_TEST_S3_BUCKET` 得到两个可见 skip；补齐隔离 Compose 已创建的 versioned bucket 与标准 AWS 测试凭据变量后，同两项最终 2 passed。两次环境问题都没有作为业务 RED，也没有删除 skip 或降低 fail-if-missing。
+
+最终候选在 managed-retirement 修正后重新取得 422 项受影响回归、2408 项全仓主套件和 2 项显式 hybrid 的完整 GREEN；未沿用修正前的总回归结果。
+
+验证结束后删除了精确命名的 `proofagent-kss-deletion-tdd` Compose 容器、网络和可重建卷，以及 RED 使用的 `proofagent-tdd03f-postgres`、`proofagent-tdd03f-history-postgres` 容器及其匿名卷。没有执行全局 prune，也没有操作其他 Compose 项目或 production-local 数据；最终 Compose 项目和 `proofagent-tdd03f*` 容器清单均为空。
+
+OpenAPI 与 migration canonical bytes 未变化；上述指纹继续绑定当前本地候选，不表示生产 migration、部署、发布、合并或 Production GO。
+
+### 24.5 文件、状态与下一片
+
+- 扩展 Release lifecycle strict contracts、domain facts、application Interface、ports 与 memory/PostgreSQL adapters；没有新增 SQL 或网络命令。
+- 更新 ADR-0215、Scope、Feature context、本报告、领域上下文/决策、项目索引、开发进度与本地调用指南。
+- 本片建议结论为 `LOCAL_VERIFIED`；Feature 仍为 `PARTIAL_VERIFICATION`。
+- 本轮开始前已按用户授权把 TDD-01 至 TDD-03E 提交为 `f755b3c`；TDD-03F 当前改动尚未提交。没有 push、merge、deploy、production migration 或 physical delete。
+
+[FRAME | HIGH] 下一核心切片不应直接实现 physical delete：生产 artifact-retention authority、事件清除权威、可存续删除审计和跨存储原子/恢复语义尚未冻结。若继续产品闭环，优先进入 TDD-04 lifecycle/affected-reference BFF 与三类简单角色权限接线；若继续后端 authority，先冻结独立 physical-delete command 的保留、审计与恢复合同，再由用户单独确认。
+
+## 25. TDD-04A：Release lifecycle/reference-summary 同源只读 BFF
+
+### 25.1 模式、Interface 与范围
+
+[FRAME | HIGH] 本片沿用 P1 完整留痕受控实现。它把 TDD-03F 的 exact Release
+删除资格评估接入两个只读资源：
+
+```text
+GET /v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility
+GET /api/config/knowledge-service/spaces/{knowledge_space_id}/bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility
+```
+
+KSS 资源和 ProofAgent BFF 都要求认证主体具有 `knowledge_source.view`。ProofAgent
+通过受保护的服务端客户端读取 exact KSS resource，浏览器只接收
+`knowledge-service-release-deletion-eligibility.v1` 投影。
+
+| Interface | 可观察行为 | 隐藏或删除的内容 |
+| --- | --- | --- |
+| KSS management GET | 返回 exact identity、Release state、eligible、稳定 blockers、active/deregistered Reference 数、lifecycle/assessment time 与 artifact-retention state | KSS 内部持久化与 authority 调用仍由 application 管理 |
+| guarded management client | 要求 exact response identity 与 strict wire schema | identity drift、额外字段和非合同 state 失败关闭 |
+| ProofAgent same-origin BFF | 返回独立、secret-free 的浏览器投影 | 不返回 KSS endpoint/token、外部资源 identity、artifact authority/assessment identity 或 raw problem |
+
+本片只扩展既有 Release 列表类型以读取 `queryable`、`deprecated`、`retired`、
+`revoked` 四种状态。范围外包括 lifecycle/Reference 命令、affected-reference 明细或
+通知、Dashboard 页面或动作、physical delete、角色管理、SQL/migration、部署、生产
+配置和 Git 操作。
+
+### 25.2 Given-When-Then 与失败关闭
+
+| 场景 | Given / When | Then |
+| --- | --- | --- |
+| 授权 exact read | KSS 与 BFF 调用方均有 `knowledge_source.view`，response identity 精确匹配 | 返回 200 与 secret-free 投影 |
+| ProofAgent 权限缺失 | Operator Session 没有 `knowledge_source.view` | BFF 在调用 KSS client 前返回 403 |
+| KSS 权限缺失 | KSS 调用方只有 edit 等其他权限 | KSS 返回 403 |
+| 上游漂移 | KSS response 的 Space/Base/Release identity 与请求不一致 | guarded client 拒绝响应，不建立浏览器事实 |
+| 合同外字段 | KSS response 注入 `token` 等未知字段 | strict wire contract 拒绝响应 |
+| 生产形态组合 | PostgreSQL 中是 ordinary retired，但 runtime 未注入 production artifact-retention authority | 返回 `artifact_retention_unverified`，不得推断 eligible |
+| 信息最小化 | KSS 结果含 trace-safe authority/assessment identity | BFF 投影删除这些 identity，只保留浏览器所需状态 |
+
+### 25.3 RED → GREEN → REFACTOR
+
+| 轮次 | 实际 RED | GREEN / 说明 |
+| --- | --- | --- |
+| R1 | ProofAgent public API tracer 期望 200，实际因路由不存在返回 404 | 增加 BFF strict projection、权限检查与 exact GET route |
+| R2 | management client tracer 因没有 deletion-eligibility 方法产生 `AttributeError` | 增加 guarded exact KSS client method、strict wire model 和 identity drift 检查 |
+| R3 | KSS HTTP tracer 因 app builder 不接受 `release_lifecycle` 失败 | 对 management HTTP 注入 lifecycle application，并增加 `knowledge_source.view` 保护的 exact GET |
+| R4 | canonical OpenAPI contract 因新增资源与 schema 保持旧 hash 而失败 | 把资源纳入 canonical OpenAPI，并更新与当前 bytes 绑定的 hash |
+| 行为保护 | BFF/KSS 缺权限、identity drift、unknown secret-like field、敏感 authority identity 投影 | 对应负向测试全部保持 GREEN |
+| REFACTOR | production runtime 与 OpenAPI composition 需要同一 lifecycle application seam | runtime 使用 PostgreSQL lifecycle repository；OpenAPI 使用 in-memory repository；公开合同不暴露 adapter |
+
+### 25.4 验证结果与限定
+
+隔离真实依赖项目为 `proofagent-kss-bff-tdd04a`，端口为 PostgreSQL `55470`、
+MinIO `59048`、OpenSearch `19238`。Compose `up --wait` 的命令退出码为 1，是因为
+一次性 `minio-init` 成功退出；后续 `compose ps` 显示 PostgreSQL、MinIO 和 OpenSearch
+均为 healthy。该基础设施状态没有被当作业务失败或放宽测试条件。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 四个核心 tracer 文件 | 32 passed | BFF、guarded client、KSS HTTP 与 canonical OpenAPI |
+| production-shaped PostgreSQL runtime | 1 passed | 首次受 sandbox loopback 限制，获准在同一隔离依赖上重跑后通过 |
+| KSS + ProofAgent KSS/BFF 受影响回归 | 427 passed、0 skipped | PostgreSQL/MinIO/OpenSearch 均 fail-if-missing；无命令或 physical delete |
+| 全仓后端 | 2416 passed、24 个既有声明 skip、2 deselected | 退出码 0；不是 Release Gate |
+| 显式 hybrid integration | 2 passed、2440 deselected | 隔离互操作；不是生产 E2E |
+| Mypy / Ruff | 454 个产品源文件无类型错误；全量 Ruff 通过 | 未降低检查或新增 ignore |
+| 锁文件 | 根项目 117 packages、KSS 34 packages lock check 通过 | 无 dependency 变更 |
+| 前端 | TypeScript 通过；Dashboard 225、Chat 35 tests；UI/Dashboard/Chat build 通过 | 仅类型兼容；Chat 保留既有 600.22 kB chunk warning |
+
+```text
+openapi.sha256=e75e6d8e677017f22397d91d8d71bcc89b4888ad3f18b5246b997c35bc94b4c5
+migrations.sha256=7a382fd03b767c56b13bf8f8260b6a808ddec91ff0fb41ff014f6b6a64669fef
+head_revision=0018_release_revocation
+```
+
+[KNOWN | HIGH] 全仓、受影响套件和前端结果均来自当前本地候选；测试没有读取
+`.env`、生产凭据、生产数据或生产日志。OpenAPI hash 因新增只读 resource/schema
+变化，migration bytes 与 head 未变化。这些证据不表示 deployment、Production GO、
+release、merge 或生产删除授权。
+
+验证结束后，已用 `down -v` 删除精确命名的 `proofagent-kss-bff-tdd04a`
+容器、网络和可重建卷，最终该 Compose 项目清单为空。没有执行全局 prune，也没有
+停止或修改 `proofagent-production-local` 项目。
+
+### 25.5 文件、状态与下一片
+
+- 增加 KSS deletion-eligibility management GET、runtime composition、OpenAPI 合同、
+  ProofAgent guarded management client、same-origin BFF strict projection 与权限测试。
+- 更新 Dashboard API Release state 类型，使既有列表可读取四种 lifecycle state；没有
+  增加页面或操作。
+- 更新 ADR-0215、Scope、Feature context、本报告、领域上下文/决策、项目索引、开发
+  进度与本地调用指南。
+- [KNOWN | HIGH] 本片建议结论为 `LOCAL_VERIFIED`；Feature 仍为
+  `PARTIAL_VERIFICATION`。TDD-03F 与 TDD-04A 改动均尚未提交。
+
+[FRAME | HIGH] 下一核心垂直切片建议为 TDD-04B：在当前同源、secret-free、exact
+identity 和简单角色权限模型上，接通 Connection Profile 的只读/变更生命周期与 exact
+Synchronization Task 发起/状态读取，让 “Profile → Sync” 成为首个可操作闭环。该片应
+先冻结权限、secret-handle 投影、幂等、任务身份与失败状态；不同时引入 lifecycle
+commands、物理删除、复杂角色管理或生产切换。
+
+## 26. TDD-04B：Connection Profile → Synchronization 同源管理 BFF
+
+### 26.1 冻结范围与权威
+
+[FRAME | HIGH] 本片不修改 KSS Profile、同步、Secret、egress 或数据权威，只把既有
+KSS TDD-01B 核心通过 ProofAgent guarded management client 和同源 BFF 暴露给受信
+浏览器会话。公开路径为：
+
+- `POST /api/config/knowledge-service/connection-profiles`；
+- `GET|PUT /api/config/knowledge-service/connection-profiles/{id}`；
+- `POST /api/config/knowledge-service/connection-profiles/{id}:validate`；
+- `POST /api/config/knowledge-service/connection-profiles/{id}:publish`；
+- `POST /api/config/knowledge-service/synchronizations`；
+- `GET /api/config/knowledge-service/synchronizations/{id}`。
+
+读取检查 `knowledge_source.view`，变更检查 `knowledge_source.edit`。浏览器可提交
+结构化 HTTPS endpoint、versioned Secret Handle 引用、egress/trust policy 引用和
+硬大小限制，但响应不得返回这些配置、KSS operator token 或 raw upstream problem。
+所有变更精确转发 `Idempotency-Key`；同步首次创建保持 `202`，相同 KSS receipt
+重放保持 `200`。本片不增加 Dashboard 页面、真实 Vault/egress/TLS reader、生产
+进程切换、终端操作者委托身份、Base Draft/Preparation BFF、Reference/lifecycle
+command、SQL/migration、部署、生产配置或 Git 操作。
+
+### 26.2 Given / When / Then 与负向矩阵
+
+| 场景 | Given | When | Then |
+| --- | --- | --- | --- |
+| Profile 创建 | 受权 Knowledge editor 和完整严格 Draft | 经 BFF 创建 | `201 draft`；只返回 ID/revision/digest/state，`Location` 为同源路径 |
+| exact lifecycle | 已存在 Profile revision | current/exact GET、revision CAS PUT、validate、publish | exact identity/state 保持；上游漂移或额外字段失败关闭 |
+| 同步准入 | exact Published Profile ID/revision | 提交同步 | 首次 `202 queued`；固定 Profile ID/revision/digest 和同源 self link |
+| 幂等重放 | 同 operator/key/fingerprint 已有同步 receipt | 重放提交 | 返回同一任务且 BFF 状态为 `200`，不创建第二任务 |
+| 状态读取 | exact synchronization ID | viewer GET | 返回严格状态字段；成功才有 Source Version，失败才有最小 problem |
+| secret-like 输入 | Profile 或同步含 `token` 等未知字段 | BFF 校验 | 固定安全 `422`，不回显请求输入，不调用 KSS |
+| 权限拒绝 | viewer 执行变更，或 editor 缺少 view 执行读取 | 调用 BFF | `403`，client 不执行对应操作 |
+| 上游错误 | KSS problem 带 detail/trace/blocker detail | guarded client 投影 | 只保留 code/retryable/blocker code；其余字段不进入浏览器响应 |
+| 身份漂移 | KSS 返回不同 Profile/Space/Source/task/link | guarded client 解析 | `PA_KNOWLEDGE_002` 失败关闭，不建立浏览器事实 |
+
+### 26.3 RED → GREEN → REFACTOR
+
+| 轮次 | 实际 RED | GREEN / 说明 |
+| --- | --- | --- |
+| R1 | Profile create BFF tracer 期望 `201`，实际路由不存在返回 `404` | 增加 strict secret-sensitive input、safe Profile projection、edit permission 和同源 `Location` |
+| R2 | guarded client create tracer 因无方法产生 `AttributeError` | 增加 exact KSS wire model、`Idempotency-Key` 转发和 create identity/state 校验 |
+| R3 | Profile current/exact read、revise、validate、publish BFF tracer 返回 `404` | 增加 view/edit 权限、revision/CAS 命令和四个生命周期路径 |
+| R4 | guarded client lifecycle tracer 因无 read/revise/transition 方法产生 `AttributeError` | 增加 current/exact URL、strict revision/state/Scope 检查和 validate/publish helper |
+| R5 | unknown `token: synthetic-inline-secret` 触发 FastAPI 默认 `422` 并回显输入 | router-local validation route 返回固定 `invalid_knowledge_service_management_request`，不序列化原始错误 input |
+| R6 | Synchronization submit/status BFF tracer 返回 `404` | 增加 strict request/projection、同源 link、`202` create / `200` replay 和 view/edit 权限 |
+| R7 | guarded client synchronization tracer 因无方法产生 `AttributeError` | 增加 v2 wire contract、exact Scope/Profile/task/link 校验和 raw problem 最小化 |
+| 行为保护 | replay、权限拒绝、invalid identity、extra token、raw detail/trace 泄漏 | 对应负向测试全部保持 GREEN |
+| REFACTOR | Profile transition helper 接受任意字符串，输入模型的不可变映射需稳定序列化 | operation 收窄为 `validate | publish`；field type 映射冻结后显式序列化；未新增 fallback 或 ignore |
+
+### 26.4 纵向合同与验证结果
+
+[KNOWN | HIGH] 新增真实纵向合同在隔离 PostgreSQL 上组合 KSS managed Profile runtime，
+使用 in-process guarded HTTPS adapter 接入 ProofAgent management client，再通过真实
+ProofAgent BFF 依次创建 Space/Source、创建/校验/发布 Profile、提交与重放同步、读取
+状态。该测试验证 BFF → client → KSS HTTP → PostgreSQL，而非只验证 mock；上游
+reader 未配置，因此任务保持 `queued`，没有伪造 Source Version 成功事实。
+
+隔离项目为 `proofagent-kss-profile-bff-tdd04b`，端口为 PostgreSQL `55471`、MinIO
+`59049`、OpenSearch `19239`。Compose `up --wait` 因一次性 `minio-init` 成功退出而
+返回 1；`compose ps` 随后确认三个长期服务均 healthy。纵向测试首次在沙箱内因
+loopback `Operation not permitted` 失败，在获准使用同一隔离服务重跑后通过；没有
+修改代码或放宽断言来掩盖环境失败。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| BFF + guarded client focused | 22 passed | Profile、同步、权限、脱敏与 fail-closed wire contract |
+| BFF → KSS → PostgreSQL 纵向合同 | 1 passed | 真实 KSS Profile/receipt/task 持久化；无上游 reader |
+| KSS + ProofAgent KSS/BFF 影响集 | 440 passed | PostgreSQL/MinIO/OpenSearch 均 fail-if-missing |
+| 全仓后端 | 2429 passed、24 个既有声明 skip、2 deselected | 同时配置 ProofAgent/KSS PostgreSQL 与 S3；退出码 0 |
+| 显式 Hybrid integration | 2 passed、2453 deselected | PostgreSQL/S3 互操作；不是生产 E2E |
+| Mypy / Ruff / format | 454 个产品源无类型错误；Ruff 全量通过；6 个受影响文件格式通过 | 无新增 ignore 或降低检查 |
+| 锁文件 | 根项目 117 packages、KSS 34 packages | 无 dependency 变更 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build 均通过 | 本片没有 Dashboard 页面；Chat 保留既有 600.22 kB warning |
+
+```text
+openapi.sha256=e75e6d8e677017f22397d91d8d71bcc89b4888ad3f18b5246b997c35bc94b4c5
+migrations.sha256=7a382fd03b767c56b13bf8f8260b6a808ddec91ff0fb41ff014f6b6a64669fef
+head_revision=0018_release_revocation
+```
+
+[KNOWN | HIGH] 本片没有修改 KSS HTTP/OpenAPI 或数据库 schema；以上指纹由影响集中的
+canonical distribution contract 复核并保持不变。验证后已用 `down -v` 删除精确命名
+项目的容器、网络和可重建卷，并确认项目清单为空；没有全局 prune，也没有停止或修改
+`proofagent-production-local`。
+
+### 26.5 状态与剩余风险
+
+- [KNOWN | HIGH] TDD-04B 建议结论为 `LOCAL_VERIFIED`；Feature 仍为
+  `PARTIAL_VERIFICATION`。当前工作树同时包含尚未提交的 TDD-03F、TDD-04A 和
+  TDD-04B，不能把本片验证误称为独立 commit 或 merge 证据。
+- [KNOWN | HIGH] 浏览器无法读取 endpoint、Secret Handle 或 egress/trust 配置；因此
+  当前 BFF 支持安全状态读取，但编辑时必须由受信操作者重新提供完整 Draft。尚无
+  Dashboard 交互或安全的 detail-edit projection。
+- [KNOWN | HIGH] KSS 写入审计当前记录 ProofAgent 配置的服务 operator；BFF 已验证
+  终端权限，但尚无不可伪造的终端操作者委托/关联进入 KSS audit。这是生产启用前的
+  P1 可追责性缺口。
+- [KNOWN | HIGH] 无真实 Vault Secret Provider、default-deny egress、TLS trust-root 或
+  upstream reader 证据；`bootstrap/processes.py` 仍选择静态 registry。不能据此声明
+  managed Profile 已切换到生产。
+- [FRAME | HIGH] 下一核心切片建议为 TDD-04C：复用同一 guarded、same-origin、
+  secret-free 与简单 named-permission 模型，接通 Base Draft save/exact read 和
+  Preparation start/status，使已物化 Source Version 能进入异步 Release candidate。
+  应先覆盖 Draft revision CAS、exact task identity、`Idempotency-Key`、状态最小化和
+  权限拒绝；暂不同时引入 Dashboard 页面、publish/cancel/expiry command、常驻
+  Worker 调度、Reference/lifecycle command 或生产切换。
+
+## 27. TDD-04C：Base Draft → Release Preparation 同源管理 BFF
+
+### 27.1 冻结范围与公开合同
+
+[FRAME | HIGH] 2026-08-29 用户要求继续下一切片。本片只把既有 KSS Base Draft 与
+Preparation authority 接入 ProofAgent guarded management client 和同源 BFF；没有
+修改 KSS 核心、OpenAPI、migration 或持久化模型。Graphify 查询没有返回与当前 Draft/
+Preparation 接线相关的可靠节点，因此只用于排除旧导航路径；以下实现事实以当前源码、
+ADR-0214/0217 和可执行合同为准。
+
+| BFF Interface | 行为 | 权限与边界 |
+| --- | --- | --- |
+| `PUT /api/config/knowledge-service/spaces/{space}/bases/{base}/draft` | 保存 `expected_revision + members`；client 注入 path Scope 并精确转发 `Idempotency-Key` | `knowledge_source.edit`；body 不能重复声明或改写 Scope |
+| `GET .../draft?revision={n}` | 只读取一个 exact Draft revision | `knowledge_source.view`；不提供 mutable latest 读取 |
+| `POST .../release-preparations` | 以 exact `draft_revision` 启动；首次与 exact replay 都保留 KSS `202` queued receipt | `knowledge_source.edit`；不伪造 created/replayed 差异 |
+| `GET .../release-preparations/{id}` | 读取 exact current state | `knowledge_source.view`；不推进状态、不触发 Worker 或过期 |
+
+公开 `knowledge-service-base-draft.v1` 投影只含 Scope、revision、digest、更新时间和
+typed members。`knowledge-service-release-preparation.v1` 投影覆盖
+`queued/running/ready/failed/cancelled/expired/consumed`，保留 frozen Base Version、
+安全终态字段和同源 self link，但拒绝 Worker ID、fencing token、lease deadline、
+artifact reference、未知字段和 raw failure detail。Draft/Preparation 写入仍由 KSS
+负责 CAS、幂等 receipt 与审计；BFF 不是第二权威。
+
+本片明确不增加 Worker/调度、publish/cancel/expiry command、Preparation audit、
+Dashboard 页面、终端操作者委托身份、SQL、部署、生产配置或 Git 操作。Preparation
+`ready` 仍不可查询；本片不会创建或激活 Release/Agent。
+
+### 27.2 RED → GREEN → REFACTOR 与负向矩阵
+
+| 阶段 | RED 证据 | GREEN / 保护结果 |
+| --- | --- | --- |
+| Base Draft BFF | PUT/GET tracer 均返回 `404` | route-owned Scope、strict member union、revision CAS request、exact read 与 view/edit permission 通过 |
+| Base Draft client | `save_base_draft()` 不存在，产生 `AttributeError` | KSS body 注入 exact Space/Base，PUT/GET URL、revision、members、digest 与 identity 全量核对 |
+| Preparation BFF | POST/GET tracer 均返回 `404` | `202`、same-origin Location、Retry-After、queued admission 与 ready status 投影通过 |
+| Preparation client | `start_release_preparation()` 不存在，产生 `AttributeError` | exact KSS Location、Scope/Draft/Base Version/Preparation identity 与全部状态结构 fail closed |
+| 安全负向 | viewer 写、editor 读、unknown worker token、identity/state/Location 漂移 | 在调用权威前返回 `403/422`，或映射为稳定 `PA_KNOWLEDGE_002`；测试私有值不回显 |
+| REFACTOR | 五个文件不符合 canonical format | Ruff 机械格式化后 focused、纵向、lint、format、Mypy 和 diff 再验证通过 |
+
+客户端 wire model 对每个状态执行封闭校验：queued/running 不得带终态字段；failed 只
+允许稳定 `failure_code/failed_at`；ready/expired/consumed 必须有完整 Release candidate
+字段和对应终态时间；cancelled 只接受 `cancelled_at`。任何额外 Worker/lease/fence 或
+raw detail 都由 `extra=forbid` 拒绝。BFF 路由级安全 validation 继续返回固定
+`invalid_knowledge_service_management_request`，不序列化原始输入。
+
+### 27.3 真实纵向合同
+
+[KNOWN | HIGH] 新增合同在隔离 PostgreSQL 上组合启用 Base Preparation 的 KSS runtime，
+使用 in-process guarded HTTPS adapter 接入 ProofAgent client，再通过真实 BFF 创建
+Space/Source/Base。测试使用同一 PostgreSQL catalog 和测试内存 artifact adapter 物化
+一个 synthetic Source Version，随后只通过 BFF 保存/读取 Draft、启动/重放/读取
+Preparation。结果保持 `queued`，frozen Base Version 只含 exact Source Version，KSS
+Release catalog 仍为空。
+
+隔离 Compose 项目为 `proofagent-kss-base-preparation-bff-tdd04c`，端口为 PostgreSQL
+`55472`、MinIO `59050`、OpenSearch `19240`。第一次纵向 pytest 在默认沙箱内连接
+loopback 时收到 `Operation not permitted`；获准连接同一隔离服务后通过，未修改代码
+或断言。最终已用 `down -v --remove-orphans` 删除这个精确命名的测试项目，并由
+`compose ps -a` 确认无残留容器；没有操作 `proofagent-production-local`。
+
+### 27.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| BFF + guarded client focused | 37 passed | Draft、Preparation、权限、脱敏和 fail-closed wire contract |
+| BFF → KSS → PostgreSQL 纵向合同 | 1 passed | 真实 Draft history、queued receipt/current state；无 Release |
+| focused 影响集 | 115 passed | 上述 BFF/client/runtime 加完整 PostgreSQL Preparation 合同 |
+| 全仓后端 | 2445 passed、24 个既有声明 skip、2 deselected | ProofAgent/KSS PostgreSQL 与 KSS S3/Search 均配置；退出码 0 |
+| 显式 Hybrid integration | 2 passed、2469 deselected | PostgreSQL/S3 互操作；不是生产 E2E |
+| Mypy / Ruff / format | 454 个产品源无类型错误；Ruff 全量通过；6 个受影响文件格式通过 | 无新增 ignore 或降低检查 |
+| 锁文件与文档检查 | 根项目 117 packages、KSS 34 packages；domain 与 `git diff --check` 通过 | 无 dependency 变更 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build 均通过 | 本片没有 Dashboard 页面；Chat 保留既有 600.22 kB warning |
+
+第一次全仓命令只配置 KSS PostgreSQL，虽以 `2372 passed / 96 skipped / 2 deselected`
+退出 0，但因 ProofAgent PostgreSQL 合同未执行，不采纳为最终全量证据；补齐两个 DSN
+后得到上表结果。两个 `uv lock --check` 第一次因沙箱无法读取现有 `~/.cache/uv` 失败，
+获准读取同一缓存后分别解析 117 与 34 packages。Authlib deprecation 和 Chat chunk
+size 均为既有 warning，本片未扩大或静默消除。
+
+### 27.5 状态、文件边界与下一片
+
+- [KNOWN | HIGH] TDD-04C 建议结论为 `LOCAL_VERIFIED`；Feature 仍为
+  `PARTIAL_VERIFICATION`。当前工作树包含多片累计未提交改动，不能把本片证据称为
+  独立 commit、merge、部署或 Production GO。
+- [KNOWN | HIGH] 本片产品代码只扩展 ProofAgent management contracts、guarded client
+  和 BFF；测试扩展两个 focused 文件与一个真实 runtime composition 文件。KSS 产品
+  实现、OpenAPI、migration、依赖和 Dashboard 页面均未变化。
+- [KNOWN | HIGH] 浏览器现在可以把已物化 Source Version 冻结为 queued Preparation，
+  但没有常驻 Preparation Worker 或公开 publication Interface，因此还不能通过产品链
+  得到 queryable Release。KSS audit 仍只看到配置的 ProofAgent service operator，终端
+  操作者委托/关联仍是生产前 P1 缺口。
+- [FRAME | HIGH] 下一核心切片建议为 TDD-04D：先冻结并接入一个受控、可停止、容量有界
+  的 Preparation execution responsibility，使 queued frozen plan 能推进为 ready/failed，
+  并验证重启、lease/fence、失败恢复和私有 artifact 边界。publish/cancel/expiry BFF、
+  Dashboard、终端操作者委托、Reference/lifecycle commands 与生产切换继续分片，避免
+  在一个切片中同时引入执行调度和发布权限。
+
+## 28. TDD-04D：one-shot Release Preparation execution runtime
+
+### 28.1 冻结范围与 Interface
+
+[FRAME | HIGH] 本片只组合 TDD-02C/02D 已验证的 Worker、frozen-plan candidate builder
+和 candidate TTL，不新增另一套领取、构建或结果提交逻辑。新增外部 Interface 为：
+
+```python
+runtime = compose_runtime(
+    ...,
+    base_preparation_execution=BasePreparationExecutionConfiguration(
+        worker_id="base-preparation-worker-local-1",
+        lease_duration=timedelta(seconds=30),
+        candidate_ttl=timedelta(hours=1),
+    ),
+)
+result = runtime.base_preparation_executor.run_once()
+```
+
+`run_once()` 一次最多处理一个 queued 或可接管 running Preparation，返回
+`ReadyReleasePreparation`、`FailedReleasePreparation` 或 `None`。Worker identity、lease
+和 candidate TTL 由可信 runtime composition 持有，调用者不再逐次传入 builder 或 TTL。
+没有提供 `base_preparation_execution` 时，runtime handle 为 `None`，API runtime 不会在
+请求内隐式执行后台工作。
+
+本片明确不增加 CLI、`PROCESS_ROLES`、常驻循环、batch size、自动重试、健康/积压信号、
+publish/cancel/expiry HTTP/BFF、Dashboard、终端操作者委托、SQL/migration、OpenAPI、
+部署、生产配置或 Git 操作。`ready` 仍不可查询，Release catalog 只会由既有可信
+publication CAS 或旧兼容直接入口改变。
+
+### 28.2 可观察行为与负向边界
+
+| 场景 | Given / When | Then |
+| --- | --- | --- |
+| 主路径与重建 | 默认 API runtime 已经通过 BFF 保存 queued Preparation；重新组合 execution runtime 并调用一次 | 同一 durable identity 进入 ready；默认 runtime handle 仍为 `None` |
+| 容量上限 | 同一 frozen Draft 有两个 queued Preparation | 一次 `run_once()` 只推进按既有确定顺序领取的一个；另一个保持 queued |
+| 配置失败关闭 | candidate TTL 为零、负值或布尔值 | runtime/executor 构造阶段拒绝；不领取任务、不产生 Worker audit |
+| 私有边界 | execution 已生成 candidate | BFF current status 只显示 safe ready identity；无 Worker、lease、fence 或 artifact 字段 |
+| 发布隔离 | execution 成功返回 ready | exact Release catalog 仍为空；没有 query authority 或 Agent activation |
+| 恢复与竞争 | 既有 lease 到期、接管、stale completion、构建异常或结果事务失败 | 继续由完整 PostgreSQL Preparation 合同验证；本片 wrapper 不绕过现有 fence/rollback |
+
+重建测试复用同一个测试内存 artifact adapter 和同一隔离 PostgreSQL；它证明 runtime
+composition 与应用对象重建后可继续 durable work，不是 S3 进程重启、数据库故障切换、
+备份恢复或生产进程演练。
+
+### 28.3 RED → GREEN → REFACTOR
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| runtime tracer | 测试收集因 `BasePreparationExecutionConfiguration` 不存在而 `ImportError` | 增加 optional config、runtime handle 与 executor；真实 PostgreSQL vertical `1 passed` |
+| composition reconstruction | 默认沙箱连接隔离 PostgreSQL 被 `Operation not permitted` 拒绝 | 在获准连接同一测试服务后，默认 API runtime 不执行、重建 execution runtime 进入 ready |
+| 容量保护 | 既有 Worker 已满足单次领取，本轮未伪造 RED | 通过新增 executor Interface 验证一次只推进一个 queued resource |
+| 配置保护 | 新 executor 构造校验 candidate TTL | 三个非法值在领取前稳定失败，无 Worker audit |
+| REFACTOR | runtime caller 需要同时了解 Worker、builder 和 candidate TTL | 把三者封装到一个 `run_once()` 深 module Interface；Ruff/format/Mypy 后保持 GREEN |
+
+### 28.4 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-preparation-executor-tdd04d`，端口为 PostgreSQL
+`55473`、MinIO `59051`、OpenSearch `19241`。所有数据库 fixture 使用随机 schema；S3
+fixture 使用随机或仓库 versioned 测试 bucket。未读取 `.env`、生产配置、生产凭据、
+生产数据或生产日志。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 单个 runtime tracer | 真实 RED 后 `1 passed` | BFF queued → 重建 execution runtime → ready；无 Release |
+| one-shot / 配置保护 | `1 passed` + `3 passed` | 一次最多一个；非法 TTL 在 claim 前拒绝 |
+| Preparation 核心 + PostgreSQL + runtime composition | 160 passed | 包含 lease takeover、stale fence、构建失败、事务回滚和安全管理投影 |
+| KSS + ProofAgent KSS/BFF 影响集 | 460 passed、0 skipped | PostgreSQL/MinIO/OpenSearch 全部 fail-if-missing |
+| 全仓后端 | 2449 passed、24 个既有声明 skip、2 deselected | 退出码 0；默认排除的 Hybrid integrations 另行执行 |
+| 显式 Hybrid integration | 2 passed | 隔离 PostgreSQL/S3 互操作；不是 Preparation 生产进程 E2E |
+| Mypy / Ruff / format | 454 个产品源无类型错误；全量 Ruff 与 4 个受影响文件格式通过 | 无新增 ignore 或降低检查 |
+| domain / diff / locks | domain-context、`git diff --check`；根 117、KSS 34 packages | 无 dependency、migration 或 OpenAPI 变化 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build | 本片无页面；Chat 保留既有 600.22 kB warning |
+
+全仓保留一个既有 Authlib deprecation warning。24 个 skip 与 2 个默认排除均为既有
+声明范围，没有因 TDD-04D 增加或删除。锁检查首次受沙箱 uv cache 权限限制，获准进行
+同一只读检查后通过。所有长测试均检查最终退出码，没有把进度行当作完成。
+
+### 28.5 文件、状态与下一边界
+
+- 产品代码只更新 `application/base_preparation_worker.py` 与 `bootstrap/runtime.py`；
+  测试只扩展 Preparation core 和 service runtime composition。
+- 没有修改 `bootstrap/processes.py`、`cli.py`、KSS OpenAPI、migration、ProofAgent BFF、
+  Dashboard、部署配置或生产 SQL。
+- [KNOWN | HIGH] 本片建议结论为 `LOCAL_VERIFIED`；Feature 仍为
+  `PARTIAL_VERIFICATION`。当前工作树包含多个累计未提交切片，不能把结果称为独立
+  commit、merge、部署或 Production GO。
+- [FRAME | HIGH] 下一片不应立即加入常驻循环。若继续核心管理流程，优先单独接入
+  Preparation publication BFF，使一个未到期 ready candidate 通过既有 one-use CAS 进入
+  consumed/queryable Release；该命令必须先冻结权限、幂等恢复、状态/Location、浏览器
+  投影和失败原子性。取消、过期、Dashboard、process role 和生产切换继续分片。
+
+## 29. TDD-04E：受控 Preparation publication BFF
+
+### 29.1 冻结范围与接口
+
+[FRAME | HIGH] 本片只把既有 one-use publication CAS 接到 KSS 管理 HTTP、ProofAgent
+guarded management client 和同源 BFF：
+
+```text
+POST /v1/knowledge-spaces/{space}/knowledge-bases/{base}/release-preparations/{id}:publish
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{id}:publish
+```
+
+两个命令都不接受 request body。ProofAgent BFF 要求 `knowledge_source.edit`，KSS 操作者
+身份继续由可信服务端认证组合提供。成功返回 `200`、`state="consumed"`，`Location` 指向
+同一个 Preparation GET 资源。命令不增加 `Idempotency-Key`：既有 application CAS 只允许
+一个未过期 ready candidate 成功消费；响应不确定、重复调用、到期或其他终态都必须 GET
+exact Preparation 恢复权威状态，不能把网络重试伪装成新的发布。
+
+本片没有新增 publication 事务、SQL、migration、依赖、Worker 进程或 Agent publication。
+KSS HTTP 只在变更前核对路径 Scope，再复用既有 `KnowledgeBasePreparationApplication.publish()`；
+Release 与 consumed Preparation 仍在同一个 PostgreSQL 事务提交。取消/主动过期 BFF、
+Dashboard、常驻 execution process role、CLI、终端操作者委托、系统级旧入口移除、部署与
+生产配置继续在范围外。
+
+### 29.2 RED → GREEN 与负向合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| ProofAgent BFF tracer | 发布路径返回 `405 Method Not Allowed` | 新增 edit-protected、no-body 同源命令和同源 `Location`；focused `1 passed` |
+| guarded client tracer | concrete client 没有 publication Interface | 固定 exact path、无 body/Idempotency-Key、强校验 consumed identity 与 KSS `Location` |
+| KSS HTTP tracer | 管理发布路径返回 `405` | 复用既有 one-use CAS；真实 PostgreSQL ready → consumed/queryable `1 passed` |
+| body 边界 | KSS/BFF 曾接受带合成 token 的 body 并发布 | 两层均固定拒绝 `422`，不回显 body；KSS 记录 trace-safe publish rejection audit |
+| public contract | canonical OpenAPI 保留旧 fingerprint | 新增 no-requestBody/consumed-response 断言，指纹更新为 `97e8667b7bc14b28cc7d34a6aab927cce6ab2b184ecfc64003b745039ea221a1` |
+
+负向合同覆盖缺少 edit permission、路径 Space/Base 漂移、queued/consumed 重放、数据库时间
+到期、响应 identity/state/额外字段/Location 漂移。真实纵向合同从 BFF 创建 queued，重组
+one-shot execution runtime 得到 ready，再由 BFF 发布为 consumed；发布前 catalog 为空，
+发布后只有一个 exact queryable Release，Preparation GET 可恢复同一 consumed 终态，浏览器
+投影不含 Worker、lease、fence、artifact 或 secret。
+
+### 29.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-preparation-publication-bff-tdd04e`，端口为 PostgreSQL
+`55474`、MinIO `59052`、OpenSearch `19242`。数据库 fixture 使用随机 schema，S3 fixture
+使用随机 versioned bucket；显式 Hybrid 使用仓库 versioned 测试桶。没有读取 `.env`、
+生产配置、生产凭据、生产数据或生产日志。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| BFF/client/KSS focused 与真实纵向合同 | 全部通过 | 包含实际 RED、权限、body、drift、expiry、replay 与 catalog 可见性 |
+| KSS + ProofAgent KSS/BFF 影响集 | 480 passed、0 skipped | PostgreSQL/MinIO/OpenSearch 均 fail-if-missing；不是生产 E2E |
+| 全仓后端 | 2461 passed、24 个既有声明 skip、2 deselected | 退出码 0；默认排除的 Hybrid integrations 另行执行 |
+| 显式 Hybrid integration | 2 passed、2485 deselected | 隔离 PostgreSQL/S3 互操作；不是 publication 生产流程证明 |
+| Mypy / Ruff / format | 454 个产品源无类型错误；全量 Ruff；9 个本片文件格式通过 | 无新增 ignore 或降低检查 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build | 无新增页面；Chat 保留既有 600.22 kB warning |
+| domain / diff / locks | domain-context、`git diff --check`；根 117、KSS 34 packages | 无 dependency 或 migration 变化；OpenAPI 变化已精确绑定 |
+
+第一次影响集运行得到 `468 passed` 后出现 `1 failed + 11 errors`，全部是 MinIO endpoint
+拒绝连接。原因是一次初始化命令遗漏本切片端口变量，Compose 将 MinIO 从 `59052` 重建到
+默认 `59000`；没有业务断言失败。按同一隔离项目恢复 `59052`、重新确认 healthy/versioned
+bucket 后，原命令完整复跑为 480 passed。没有修改产品代码、删除测试或降低 fail-if-missing。
+全仓保留一个既有 Authlib deprecation warning；所有长测试均核对最终退出码。
+最终使用 `down -v --remove-orphans` 删除上述精确命名的隔离项目，并由 `compose ps -a`
+确认无残留；没有操作其他 Compose 项目或 production-local。
+
+### 29.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-04E 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树未形成独立 commit、merge、部署或 Production GO。
+- [KNOWN | HIGH] 本片新增的是受控 KSS/ProofAgent 网络入口，未改变 KSS 作为唯一可执行
+  Knowledge authority，也未让 Preparation lease、ready 或 Release publication 激活 Agent。
+- [FRAME | HIGH] 下一片仍应保持小步。优先在“cancel BFF”与“continuous execution process
+  role”中择一并单独冻结；不要把取消、调度、Dashboard、Agent formal publication 与生产
+  切换合并为一个切片。
+
+## 30. TDD-04F：受控 Preparation cancellation BFF
+
+### 30.1 冻结范围与接口
+
+[FRAME | HIGH] 本片只把 TDD-02G 已有的 queued/running 协作取消事务接到 KSS 管理
+HTTP、ProofAgent guarded management client 和同源 BFF：
+
+```text
+POST /v1/knowledge-spaces/{space}/knowledge-bases/{base}/release-preparations/{id}:cancel
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{id}:cancel
+```
+
+两个命令都不接受 request body，并要求 `Idempotency-Key`。ProofAgent BFF 要求
+`knowledge_source.edit`；KSS operator identity 只来自可信服务端认证。成功返回 `200`、
+`state="cancelled"` 和指向同一 Preparation GET 的 `Location`。相同 operator、key、action
+和 Preparation identity 重放原结果；key 改绑另一个 Preparation 失败冲突，以新 key
+操作终态资源返回 not-cancellable。响应不确定时读取 exact Preparation，不创建第二个状态
+权威。
+
+本片不新增取消算法、SQL、migration、依赖、Worker/调度进程、Dashboard、CLI 或部署配置。
+KSS HTTP 在变更前读取 exact Preparation 并核对路径 Scope，再调用既有
+`KnowledgeBasePreparationApplication.cancel()`。数据库锁、数据库时间、running lease
+清理、fencing token 保留、stale Worker result 阻断、cancelled 状态、幂等收据和成功审计
+仍由同一个 PostgreSQL 事务负责。取消不强杀外部 I/O，不清理 artifact，不允许取消
+ready/terminal，不发布 Release，也不激活 Agent。
+
+### 30.2 RED → GREEN 与负向合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| ProofAgent BFF tracer | `:cancel` 返回 `405 Method Not Allowed` | 新增 edit-protected、no-body、Idempotency-Key-bound 同源命令；focused `1 passed` |
+| guarded client tracer | concrete client 没有 cancellation Interface，触发 `AttributeError` | 固定 exact KSS path、无 body、原样转发 key，并强校验 cancelled identity/state/Location |
+| KSS HTTP tracer | 真实 PostgreSQL 下 `:cancel` 返回 `405` | 复用既有 cancellation 事务；queued → cancelled、exact replay 与单审计通过 |
+| public contract | canonical OpenAPI 仍绑定旧 fingerprint | 新增 no-requestBody/cancelled-response 断言，指纹更新为 `ce34e8b4fbcd16c90201890cb8e466980132aedbbfc0dce35dedec155749ce3a` |
+
+负向合同覆盖缺少 BFF edit permission、缺少 Idempotency-Key、KSS/BFF body、路径
+Space/Base 漂移、key 改绑另一个 Preparation、终态新命令、上游 identity/state/额外字段/
+Location 漂移。body 与 Scope 拒绝均发生在取消前，且同一 key 随后的合法 exact 请求仍可
+成功；取消成功不会创建 Release，浏览器投影不含 Worker、lease、fence、artifact、KSS
+credential 或 raw problem。真实纵向在同一 BFF → guarded client → KSS HTTP → PostgreSQL
+链上新增 queued target，取消及 exact replay 后 GET 恢复同一 cancelled 终态；原先 published
+Release 数量保持不变。
+
+### 30.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-preparation-cancel-bff-tdd04f`，端口为 PostgreSQL
+`55475`、MinIO `59053`、OpenSearch `19243`。数据库 fixture 使用随机 schema，KSS S3
+fixture 使用随机 versioned bucket；显式 Hybrid 使用仓库测试桶。没有读取 `.env`、生产配置、
+生产凭据、生产数据或生产日志。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 本片 local affected files | 152 passed | BFF/client、in-memory core 与 distribution/OpenAPI |
+| 真实 PostgreSQL affected files | 86 passed | KSS cancellation、replay/conflict/Scope/body 与真实 BFF vertical |
+| 全仓后端 | 2471 passed、24 个既有声明 skip、2 deselected | 退出码 0；默认排除的 Hybrid integrations 另行执行 |
+| 显式 Hybrid integration | 2 passed、2495 deselected | 隔离 PostgreSQL/S3 互操作；不是生产流程证明 |
+| Mypy / Ruff / format | 454 个产品源无类型错误；全量 Ruff；9 个本片文件格式通过 | 无新增 ignore 或降低检查 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build | 本片无页面；Chat 保留既有 600.22 kB warning |
+| diff / contract | `git diff --check`；canonical OpenAPI exact hash | migration head、依赖和 lock 未变化 |
+
+第一次全仓命令只配置 KSS DSN，得到 `2399 passed、96 skipped`；其中 72 条
+ProofAgent PostgreSQL 测试被环境条件跳过，因此没有用作最终完整证据。第二次补充普通
+`postgresql://` ProofAgent DSN 后，SQLAlchemy 选择未安装的 psycopg2，得到 72 个 setup
+error；改用仓库实际依赖的 `postgresql+psycopg://` 后完整复跑为上述 2471 passed。
+显式 Hybrid 首跑也因误用项目名前缀凭据变量而得到 2 个 `NoCredentialsError`；改用 boto3
+标准测试变量后原命令为 2 passed。以上均为测试命令配置，不是产品断言失败；没有修改
+产品逻辑、删测试或降低 fail-if-missing。全仓保留一个既有 Authlib deprecation warning。
+最终使用 `down -v --remove-orphans` 删除上述精确命名的隔离项目，并由后续
+`compose ps -a` 空结果确认无残留；没有操作其他 Compose 项目或 production-local。
+
+### 30.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-04F 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树未形成新的 commit、merge、部署或 Production GO。
+- [KNOWN | HIGH] 本片没有改变 KSS 是唯一可执行 Knowledge authority，也没有把取消解释为
+  物理中断、artifact cleanup、ready quarantine、Release publication 或 Agent activation。
+- [FRAME | HIGH] 若继续保持简单核心切片，下一片优先考虑只读 Preparation audit 同源 BFF，
+  先冻结安全投影、view permission、分页/上限和 ProofAgent service-operator 与终端 operator
+  的身份边界；暂不同时引入 Dashboard、连续 execution process、expiry scheduler、artifact
+  cleanup、Agent formal publication 或生产切换。

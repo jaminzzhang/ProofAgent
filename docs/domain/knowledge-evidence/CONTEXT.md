@@ -260,9 +260,17 @@ _Avoid_: ProofAgent-only callback, distributed transaction, expiring heartbeat l
 The idempotent KSS transition from an active Reference to a retained deregistered lifecycle fact. Only the owning authenticated client may request it, and only a server-injected verifier may establish that the immutable external resource is permanently ineligible for both execution and rollback. Unavailable, uncertain, stale, mismatched, or caller-authored claims leave the Reference active.
 _Avoid_: TTL expiry, caller-reported inactive flag, deleting audit history, compensation after failed publication, emergency Release revocation
 
-[KNOWN | HIGH] TDD-03A through 03E implement application-only registration,
+**Knowledge Base Release Deletion Eligibility Assessment**:
+The read-only KSS assessment of whether an exact Release may be considered by a future separately authorized physical-deletion command. Only an ordinary `retired` Release with complete retirement history, zero active References and explicit clear artifact-retention facts is eligible. Deregistered References remain counted history but do not block; emergency-revoked Releases remain ineligible for incident-response retention. The assessment is not a receipt or permission, and a future delete command must atomically revalidate every fact.
+_Avoid_: Physical deletion command, cached deletion permission, caller-reported retention, revoked-release cleanup, audit substitute
+
+**Knowledge Service Release Deletion Eligibility Projection**:
+The same-origin, permission-protected browser projection of one exact KSS deletion-eligibility assessment. It exposes lifecycle state, stable blockers, active and deregistered Reference counts, lifecycle timestamps and artifact-retention state. It omits KSS credentials and endpoint, external-resource identities, artifact authority and assessment identities, and raw upstream problems. The projection is read-only and does not grant a lifecycle or deletion command.
+_Avoid_: Browser KSS token, Reference detail, delete button authority, cached permission, raw service problem
+
+[KNOWN | HIGH] TDD-03A through 03F implement application-only registration,
 trusted deregistration admission, deprecation, ordinary retirement and emergency
-revocation cores. Migrations `0014` through `0017` provide durable References and
+revocation cores plus read-only deletion eligibility. Migrations `0014` through `0017` provide durable References and
 the ordinary lifecycle; `0018` adds `queryable/deprecated → revoked` for only
 `security_incident` or `severe_data_integrity_failure`, with exact
 `fail_closed_without_fallback` confirmation, authorized operator identity,
@@ -270,10 +278,17 @@ database time and a KSS-computed affected-active-reference count in one atomic
 state/receipt/audit commit. Existing Reference current/history facts remain intact.
 Deprecated Releases preserve existing query and authorization while rejecting new
 adoption; retired and revoked Releases are absent from Catalog query, integrity
-work and established Query authorization. There is still no lifecycle network
-Interface, ProofAgent verifier, background reconciliation, affected-reference
-detail/notification, ProofAgent runtime/rollback integration, deletion eligibility,
-production retention configuration or production migration, so this local core is
+work and established Query authorization. Eligibility reads database lifecycle time
+and active/deregistered counts, fails closed without explicit artifact-retention
+clearance, and adds no state, receipt or audit. TDD-04A exposes only that exact
+read through authenticated KSS management HTTP and a same-origin secret-free BFF;
+both require `knowledge_source.view`, and production-shaped composition fails closed
+without an artifact-retention authority. There is still no lifecycle or Reference
+command network Interface, ProofAgent verifier, background reconciliation,
+affected-reference detail/notification, Dashboard lifecycle page, ProofAgent
+runtime/rollback integration, production
+artifact-retention adapter, physical deletion, production retention
+configuration or production migration, so this local core is
 not production lifecycle authority.
 
 **Prepared Knowledge Base Release**:
@@ -287,6 +302,53 @@ _Avoid_: Synchronous Release endpoint, frontend workflow state, in-memory job, l
 **Knowledge Base Release Preparation State**:
 The lifecycle `queued`, `running`, `ready`, `failed`, `cancelled`, `expired`, or `consumed`. Only unexpired `ready` may be atomically published once; `consumed` points to the created exact Release, while retry after any unsuccessful terminal state creates a new Preparation identity.
 _Avoid_: Mutable retry-in-place, reusable prepared candidate, hidden Worker status, queryable partial Release
+
+**Knowledge Service Base Draft Projection**:
+The same-origin browser projection of one exact KSS Base Draft revision. It contains exact Space/Base identity, revision, draft digest, update time and typed exact/latest-ready members. Scope belongs to the BFF path; the projection is non-queryable and grants no Release or Agent authority.
+_Avoid_: Mutable latest read, browser-owned Base, duplicated body Scope, runtime Source list, credential
+
+**Knowledge Service Release Preparation Projection**:
+The same-origin browser projection of one exact KSS Preparation current state. It contains frozen Draft and Base Version identity, exact members, state, safe terminal fields and a same-origin self link while excluding KSS credentials, Worker identity, lease/fence and artifact capability fields, and raw failure detail. Reading it never advances, retries, publishes, cancels or expires the Preparation; separate controlled publication and cancellation commands may return the same projection only after KSS has durably made it `consumed` or `cancelled`.
+_Avoid_: Frontend workflow authority, Worker claim, external KSS URL, artifact reference, inferred transition
+
+[KNOWN | HIGH] TDD-04C exposes Draft save/exact read and Preparation start/status
+through the ProofAgent guarded management client and same-origin BFF. Reads require
+`knowledge_source.view`; writes require `knowledge_source.edit` and preserve the
+exact KSS `Idempotency-Key`. Space/Base Scope belongs to the path and is injected
+into the KSS body by the client. KSS `202` semantics are preserved for both first
+start and exact replay of the immutable queued receipt. There is no Preparation
+execution process, publish/cancel/expiry BFF, Dashboard page or production cutover.
+
+[KNOWN | HIGH] TDD-04D adds only an optional one-shot runtime execution
+responsibility. A trusted `BasePreparationExecutionConfiguration` binds a distinct
+Worker identity, lease duration and candidate TTL; the runtime exposes one
+`run_once()` Interface that delegates to the existing frozen-plan builder and
+leased/fenced Worker, processing at most one resource into `ready/failed` or
+returning `None`. API composition remains execution-disabled unless explicitly
+configured, and recomposition against the same PostgreSQL authority can resume
+durable work. No continuous loop, CLI/process role, automatic retry, publication,
+cancel/expiry BFF, Dashboard or production configuration exists.
+
+[KNOWN | HIGH] TDD-04E exposes only controlled Preparation publication through
+KSS management HTTP and the ProofAgent same-origin BFF. The no-body command requires
+`knowledge_source.edit`, validates exact path Scope before mutation and delegates to
+the existing one-use publication CAS. Success returns `200`, the `consumed` safe
+projection and a `Location` for the same Preparation GET. It adds no independent
+Idempotency-Key: uncertain response, replay, expiry and terminal-state recovery read
+the exact Preparation instead of creating a second publication authority. There is
+still no cancel/expiry BFF, Dashboard, continuous process role, Agent activation,
+deployment or production configuration.
+
+[KNOWN | HIGH] TDD-04F exposes only controlled cooperative cancellation through KSS
+management HTTP and the ProofAgent same-origin BFF. The no-body command requires
+`Idempotency-Key`; ProofAgent also requires `knowledge_source.edit`. KSS validates
+the exact path Scope before mutation and delegates to the existing operator-scoped,
+database-time cancellation transaction. Exact replay returns the original cancelled
+projection and same-resource `Location` without duplicating success audit; key
+rebinding, terminal-state retries, Scope drift, body input and response contract
+drift fail closed. There is still no expiry BFF, Dashboard, continuous process role,
+artifact cleanup, ready quarantine, Agent activation, deployment or production
+configuration.
 
 [KNOWN | HIGH] TDD-02A through TDD-02G implements Draft revision CAS and durable preparation
 admission through `KnowledgeBasePreparationApplication`, PostgreSQL migration
@@ -309,16 +371,21 @@ legitimate retirement preserves the consumed Preparation and original queued rec
 TDD-02F adds trusted application-only `expire_next()`: it selects one due ready
 resource by database time and deterministic order, skips locked rows, revalidates
 the frozen candidate and atomically commits expired plus the existing lifecycle
-audit. Management GET still does not mutate expiry. Publication and expiry have no
-HTTP/BFF routes. Migration `0013` and trusted application-only `cancel()` add an
+audit. Management GET still does not mutate expiry. TDD-04E now exposes publication
+through the controlled no-body KSS/BFF command; expiry still has no HTTP/BFF route.
+Migration `0013` and trusted `cancel()` add an
 operator-scoped idempotent queued/running → cancelled transaction using database
 time. State and receipt/success audit commit atomically; running cancellation clears
 the active lease while preserving the fence, so an in-flight Worker result becomes
 stale. Ready and terminal Preparations are not cancellable, retry creates a new
 Preparation identity, and management GET exposes only the terminal resource rather
-than lease or command capability fields. No automatic reaper, cancel HTTP command,
-quarantine or Preparation Worker loop is enabled in production process roles. The existing direct Release path has not
-been replaced, so this is not yet the unique system-wide publication authority.
+than lease or command capability fields. TDD-04F exposes that same transaction through
+KSS and ProofAgent no-body, Idempotency-Key-bound commands; it adds no scheduler or
+new cancellation authority. No automatic reaper, quarantine or continuous Preparation
+Worker loop is enabled in production process roles. TDD-04D
+only provides an explicitly composed one-shot runtime handle. TDD-04E exposes the
+Preparation publication CAS, but the existing direct Release path has not been replaced,
+so this is not yet the unique system-wide publication authority.
 Feature TDD report sections 12 through 18 record the core, real-PostgreSQL/HTTP,
 lease, result, publication, one-shot expiry and cooperative cancellation evidence.
 
@@ -558,9 +625,23 @@ _Avoid_: Latest-at-worker-start, mutable live connection, secret value, implicit
 management HTTP. Explicit managed synchronization v2 pins the Profile ID,
 revision and configuration digest; the Worker revalidates that tuple and records
 it in immutable dataset v2 processing lineage. Static synchronization v1 remains
-an explicit pre-cutover contract, not a fallback. The current production process
-entry points have not switched to managed Profiles; real upstream policy and
-Secret/egress/TLS validation remain outside the local evidence.
+an explicit pre-cutover contract, not a fallback. TDD-04B adds a guarded
+ProofAgent BFF for Profile create/current-or-exact read/revise/validate/publish
+and exact-profile synchronization submit/status. Reads require
+`knowledge_source.view`; mutations require `knowledge_source.edit`. Its safe
+projection excludes endpoint, Secret Handle, egress/trust references, KSS token
+and raw upstream problem/trace. The current production process entry points have
+not switched to managed Profiles; real upstream policy and Secret/egress/TLS
+validation, a Dashboard page and verified terminal-operator delegation into KSS
+audit remain outside the local evidence.
+
+**Knowledge Service Connection Profile Projection**:
+The same-origin browser view of one KSS Connection Profile revision. It contains exact Profile/Space/Source identity, revision, connector kind, configuration digest, lifecycle state and update time, while excluding every connection detail and authority reference. It is management evidence, not a credential or synchronization authority.
+_Avoid_: Endpoint echo, Secret Handle projection, egress configuration, KSS token, editable full-detail response
+
+**Knowledge Service Synchronization Projection**:
+The same-origin browser view of one exact-profile KSS synchronization. It contains task identity, Scope, state, timestamps, materialized Source Version when successful, pinned Profile ID/revision/digest, a same-origin self link and only stable failure codes. It does not expose raw service problem text, trace identity or connection configuration.
+_Avoid_: Browser-owned job state, raw upstream exception, mutable latest Profile, external KSS URL, credential-bearing task
 
 **Hybrid Knowledge Configuration Role Bundle**:
 The first-slice, deployment-mapped bundle of global named permissions for one of three operator roles: Knowledge Operator manages KSS Connection Profiles, Source intake and synchronization, Base Drafts, and KSS Release preparation/publication; Agent Editor edits and validates ProofAgent Drafts including exact KSS Release bindings; Release Operator formally publishes, activates, and rolls back Agent Versions. An identity may hold multiple bundles and receives their permission union.

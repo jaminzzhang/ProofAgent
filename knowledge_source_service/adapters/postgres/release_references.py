@@ -23,6 +23,7 @@ from knowledge_source_service.contracts.release_references import (
     RevokedKnowledgeBaseReleaseAuditEntry,
 )
 from knowledge_source_service.domain.release_references import (
+    ReleaseDeletionFacts,
     ReleaseLifecycleCommand,
     ReleaseLifecycleError,
     ReleaseLifecycleTarget,
@@ -150,56 +151,12 @@ class _Transaction:
         ).fetchone()
         if row is None:
             return None
-        state = row["state"]
-        if state not in {"queryable", "deprecated", "retired", "revoked"}:
-            raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
-        deprecated_at = cast(datetime | None, row["deprecated_at"])
-        retired_at = cast(datetime | None, row["retired_at"])
-        revoked_at = cast(datetime | None, row["revoked_at"])
-        reason_code = row["revocation_reason_code"]
-        valid = (
-            (
-                state == "queryable"
-                and deprecated_at is None
-                and retired_at is None
-                and revoked_at is None
-                and reason_code is None
-            )
-            or (
-                state == "deprecated"
-                and deprecated_at is not None
-                and retired_at is None
-                and revoked_at is None
-                and reason_code is None
-            )
-            or (
-                state == "retired"
-                and revoked_at is None
-                and reason_code is None
-                and (
-                    (deprecated_at is None and retired_at is None)
-                    or (
-                        deprecated_at is not None
-                        and retired_at is not None
-                        and retired_at >= deprecated_at
-                    )
-                )
-            )
-            or (
-                state == "revoked"
-                and retired_at is None
-                and revoked_at is not None
-                and reason_code in {"security_incident", "severe_data_integrity_failure"}
-                and (deprecated_at is None or revoked_at >= deprecated_at)
-            )
-        )
-        if not valid:
-            raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
+        state, deprecated_at, _retired_at, _revoked_at = _validated_lifecycle_row(row)
         return ReleaseLifecycleTarget(
             knowledge_space_id=str(row["knowledge_space_id"]),
             knowledge_base_id=str(row["knowledge_base_id"]),
             knowledge_base_release_id=str(row["knowledge_base_release_id"]),
-            state=cast(Literal["queryable", "deprecated", "retired", "revoked"], state),
+            state=state,
             deprecated_at=deprecated_at,
         )
 
@@ -613,6 +570,68 @@ class PostgresReleaseLifecycleRepository:
         except psycopg.Error:
             raise ReleaseLifecycleError("release_lifecycle_storage_unavailable") from None
 
+    def deletion_facts(self, knowledge_base_release_id: str) -> ReleaseDeletionFacts | None:
+        try:
+            with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """SELECT release.knowledge_space_id,
+                              release.knowledge_base_id,
+                              release.knowledge_base_release_id,
+                              release.state,
+                              release.deprecated_at,
+                              release.retired_at,
+                              release.revoked_at,
+                              release.revocation_reason_code,
+                              (SELECT count(*)
+                               FROM knowledge_base_release_references AS reference
+                               WHERE reference.knowledge_base_release_id =
+                                     release.knowledge_base_release_id
+                                 AND reference.state = 'active')
+                                  AS active_reference_count,
+                              (SELECT count(*)
+                               FROM knowledge_base_release_references AS reference
+                               WHERE reference.knowledge_base_release_id =
+                                     release.knowledge_base_release_id
+                                 AND reference.state = 'deregistered')
+                                  AS deregistered_reference_count,
+                              (SELECT count(*)
+                               FROM knowledge_base_release_retirement_commands AS command
+                               WHERE command.knowledge_space_id =
+                                     release.knowledge_space_id
+                                 AND command.knowledge_base_id =
+                                     release.knowledge_base_id
+                                 AND command.knowledge_base_release_id =
+                                     release.knowledge_base_release_id
+                                 AND command.deprecated_at = release.deprecated_at
+                                 AND command.retired_at = release.retired_at
+                                 AND command.retention_eligible_at <= command.retired_at)
+                                  AS retirement_command_count,
+                              clock_timestamp() AS assessed_at
+                       FROM knowledge_base_releases AS release
+                       WHERE release.knowledge_base_release_id = %s""",
+                    (knowledge_base_release_id,),
+                ).fetchone()
+        except psycopg.Error:
+            raise ReleaseLifecycleError("release_lifecycle_storage_unavailable") from None
+        if row is None:
+            return None
+        state, _deprecated_at, retired_at, revoked_at = _validated_lifecycle_row(row)
+        retirement_command_count = int(row["retirement_command_count"])
+        if retirement_command_count not in {0, 1}:
+            raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
+        return ReleaseDeletionFacts(
+            knowledge_space_id=str(row["knowledge_space_id"]),
+            knowledge_base_id=str(row["knowledge_base_id"]),
+            knowledge_base_release_id=str(row["knowledge_base_release_id"]),
+            state=state,
+            managed_retirement=(state == "retired" and retirement_command_count == 1),
+            active_reference_count=int(row["active_reference_count"]),
+            deregistered_reference_count=int(row["deregistered_reference_count"]),
+            retired_at=retired_at,
+            revoked_at=revoked_at,
+            assessed_at=cast(datetime, row["assessed_at"]),
+        )
+
     def lifecycle_audit(
         self, knowledge_base_release_id: str
     ) -> tuple[
@@ -722,6 +741,67 @@ class PostgresReleaseLifecycleRepository:
             except ValueError:
                 raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable") from None
         return tuple(events)
+
+
+def _validated_lifecycle_row(
+    row: dict[str, Any],
+) -> tuple[
+    Literal["queryable", "deprecated", "retired", "revoked"],
+    datetime | None,
+    datetime | None,
+    datetime | None,
+]:
+    state = row["state"]
+    if state not in {"queryable", "deprecated", "retired", "revoked"}:
+        raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
+    deprecated_at = cast(datetime | None, row["deprecated_at"])
+    retired_at = cast(datetime | None, row["retired_at"])
+    revoked_at = cast(datetime | None, row["revoked_at"])
+    reason_code = row["revocation_reason_code"]
+    valid = (
+        (
+            state == "queryable"
+            and deprecated_at is None
+            and retired_at is None
+            and revoked_at is None
+            and reason_code is None
+        )
+        or (
+            state == "deprecated"
+            and deprecated_at is not None
+            and retired_at is None
+            and revoked_at is None
+            and reason_code is None
+        )
+        or (
+            state == "retired"
+            and revoked_at is None
+            and reason_code is None
+            and (
+                (deprecated_at is None and retired_at is None)
+                or (
+                    deprecated_at is not None
+                    and retired_at is not None
+                    and retired_at >= deprecated_at
+                )
+            )
+        )
+        or (
+            state == "revoked"
+            and retired_at is None
+            and revoked_at is not None
+            and reason_code in {"security_incident", "severe_data_integrity_failure"}
+            and (deprecated_at is None or revoked_at >= deprecated_at)
+        )
+    )
+    if not valid:
+        raise ReleaseLifecycleError("release_lifecycle_integrity_unavailable")
+    return (
+        cast(Literal["queryable", "deprecated", "retired", "revoked"], state),
+        deprecated_at,
+        retired_at,
+        revoked_at,
+    )
 
 
 def _reference_state(value: object) -> ReleaseReferenceState:

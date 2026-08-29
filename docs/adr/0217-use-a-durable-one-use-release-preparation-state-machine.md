@@ -27,6 +27,20 @@ resource and renders its stable blockers; it does not infer transitions or
 orchestrate hidden retries.
 
 [LIMIT | HIGH] This refines ADR-0205 and reuses the existing KSS lease/fencing
-approach, but the current direct synchronous Release application does not implement
-this public state machine. Local design and tests are not production readiness or a
-formal Release GO.
+approach. TDD-02A through 02G implement the local durable state machine and trusted
+application-only execution/publication/cancellation/expiry core; TDD-04C exposes only
+Draft save/exact read and Preparation start/status through the ProofAgent same-origin
+BFF. TDD-04D composes the existing execution core behind an optional one-shot
+`run_once()` runtime handle, without enabling it in the API runtime by default.
+TDD-04E exposes the existing publication CAS through a KSS management command and a
+ProofAgent same-origin BFF. Both reject request bodies and return the consumed current
+state; ProofAgent requires the existing edit permission, while KSS requires trusted
+operator authentication. Uncertainty is recovered through the exact Preparation GET
+rather than a new idempotency receipt. TDD-04F exposes the existing cooperative
+cancellation transaction through no-body KSS and ProofAgent `:cancel` commands. Both
+require an `Idempotency-Key`; ProofAgent requires the existing edit permission, and
+KSS binds replay to the trusted operator, exact Preparation identity and action.
+There is still no continuous Preparation process role, scheduler, expiry BFF,
+Dashboard operation
+or system-wide removal of the direct synchronous Release bypass.
+Local design and tests are not production readiness or a formal Release GO.

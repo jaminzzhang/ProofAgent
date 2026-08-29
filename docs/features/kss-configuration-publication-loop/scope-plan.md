@@ -30,7 +30,7 @@
 | --- | --- |
 | 准入结论 | `READY_FOR_TDD` |
 | 需求分析输入 | 用户要求检查并规划 KSS 数据、配置及 ProofAgent 使用的完整流程；已确认终点包括正式生产发布和原子激活，并保持分权 |
-| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消，但无 publish/expiry/cancel HTTP/BFF、常驻 Worker 或自动过期调度，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference Ledger、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
+| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消；TDD-04E/04F 已公开 controlled publish/cancel KSS/BFF，但仍无 expiry HTTP/BFF、常驻 Worker 或自动过期调度，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference/lifecycle command 闭环、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
 
 ## 4. 需求分析与范围边界
 
@@ -146,6 +146,22 @@
 
 [KNOWN | HIGH] TDD-03E application-only 紧急撤销核心已完成。Migration `0018` 增加 `revoked` lifecycle state、受控 reason、数据库 `revoked_at` 和共享有序 revocation receipt/audit；固定 confirmation 与 KSS 事务内锁定/统计的 active Reference 数进入成功结果和审计，Reference current/history 不变。Registration/revocation、deregistration/revocation 和 retirement/revocation 竞态均收敛；同键八路并发只有一个 receipt/audit，审计故障整体回滚；`0017 → 0018` 升级重放通过。Revoked Release 从 Catalog query、完整性扫描和既有 Query authorization 中移除。三项隔离真实依赖下受影响回归 415 passed、0 skipped；全仓主套件 2396 passed、24 个既有声明 skip、2 deselected，显式 hybrid integration 另有 2 passed。没有 lifecycle HTTP/BFF、角色接线、affected-reference 明细/通知、ProofAgent runtime/rollback 接线、物理删除、部署或 Production GO；详见报告第 23 节。
 
+[FRAME | HIGH] 2026-08-29 用户要求提交既有切片并进入下一切片。本片 TDD-03F 只增加可信 application-only `assess_deletion_eligibility(exact Release)` 只读评估：调用方不能提交 Reference 数、artifact retention 结论、生命周期时间、删除原因、operator 或 idempotency key。只有通过普通命令进入且保留完整 `retired_at` 的 `retired` Release、零 active Reference，以及服务端注入的 artifact-retention authority 明确返回 clear 时才返回 `eligible=true`。Deregistered Reference 只作为历史计数，不阻断；`queryable/deprecated` 返回普通生命周期阻断；`revoked` 无论引用或 artifact 状态如何都返回 emergency incident-retention 阻断。缺少或未明确放行的 artifact authority 必须失败关闭。本片不写状态、receipt 或 audit，因此没有 command idempotency；未来物理删除命令不得信任旧评估，必须在执行事务中重验并单独持久化审计。暂不实现物理删除、incident clearance、artifact 删除 adapter、HTTP/BFF/Dashboard、部署、生产配置或生产 SQL。
+
+[FRAME | HIGH] 2026-08-29 用户确认继续下一切片，进入 TDD-04A 只读管理 tracer。本片新增 KSS `GET /v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility` 和同源 ProofAgent BFF `GET /api/config/knowledge-service/spaces/{knowledge_space_id}/bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility`。公开行为只读取 exact Release 生命周期、active/deregistered Reference 汇总和 TDD-03F 删除资格；KSS 需要 `knowledge_source.view`，BFF 需要同名全局 named permission。BFF 返回独立的 secret-free `knowledge-service-release-deletion-eligibility.v1` 投影，不返回 KSS operator token、Secret Handle、endpoint、外部资源 ID、artifact authority/assessment ID 或 raw problem。生产组合只接 PostgreSQL 生命周期事实；在没有生产 artifact-retention authority 时，ordinary retired Release 必须返回 `artifact_retention_unverified`，不得推断可删除。本片同时扩展既有 Release 列表投影以读取 `deprecated/revoked`，但不增加 lifecycle command、Reference 明细、通知、Dashboard 命令或页面、物理删除、角色管理页面、SQL/migration、部署、生产配置或 Git 操作。
+
+[FRAME | HIGH] 2026-08-29 用户确认继续 TDD-04B 核心管理 tracer。本片在既有 KSS Profile/同步权威之上增加 ProofAgent guarded management client 与同源 BFF：Profile 创建、current/exact revision 读取、revision CAS 编辑、校验、发布，以及 exact Published Profile synchronization 的提交和状态读取。读取检查 `knowledge_source.view`，变更检查 `knowledge_source.edit`；所有变更精确转发 `Idempotency-Key`，同步首次创建保留 `202`，相同命令重放保留 `200`。请求只允许结构化 HTTPS 配置和 versioned Secret Handle 引用；浏览器响应移除 endpoint、Secret Handle、egress/trust 引用、KSS token 与 raw problem/detail/trace，非法请求统一返回不回显输入的安全 `422`。本片不增加 Dashboard 页面、真实 Vault/egress/TLS reader、生产进程切换、终端操作者到 KSS audit 的委托身份链、Base Draft/Preparation BFF、lifecycle/Reference command、SQL/migration、部署、生产配置或 Git 操作。
+
+[KNOWN | HIGH] TDD-04B 本地实现已完成。ProofAgent BFF → guarded client → KSS management HTTP → PostgreSQL 的纵向合同证明 Profile `draft → validated → published`、同步首次 `202`/重放 `200` 和 queued 状态读取保持 exact identity，且浏览器投影不泄漏连接配置。KSS 加 ProofAgent 影响集为 440 passed；完整真实依赖后端为 2429 passed、24 个既有声明 skip、2 deselected，显式 Hybrid integration 另有 2 passed。OpenAPI 与 migration bytes/head 未变化。该证据只支持 `LOCAL_VERIFIED`，不支持部署或 Production GO；详见报告第 26 节。
+
+[FRAME | HIGH] 2026-08-29 用户要求继续下一切片，进入 TDD-04C Base Draft → Preparation 管理 tracer。本片复用既有 KSS Draft/Preparation 权威，只增加 ProofAgent guarded management client 与同源 BFF：保存 Base Draft、按 exact revision 读取 Draft、按 exact Draft revision 启动 Preparation、读取 exact Preparation 当前状态。路径持有 Space/Base identity，浏览器 body 只提交 `expected_revision + members` 或 `draft_revision`；client 注入并核对 KSS scope。读取检查 `knowledge_source.view`，变更检查 `knowledge_source.edit`，写命令精确转发 `Idempotency-Key`；KSS start 首次与重放都保持 `202` 和原始 queued admission receipt。公开投影只含 Draft/Version/Preparation exact identity、digest、成员、状态与安全终态字段，不返回 KSS token、Worker identity、fencing token、lease deadline、artifact reference 或 raw failure detail。本片不增加 Worker/调度、publish/cancel/expiry command、Preparation audit、Dashboard 页面、SQL/migration、生产进程、部署、生产配置或 Git 操作。
+
+[KNOWN | HIGH] TDD-04C 本地实现已完成。真实纵向合同证明 ProofAgent BFF → guarded client → KSS HTTP → PostgreSQL 可保存并读取 exact Draft revision、幂等启动并读取 queued Preparation，且不会产生 Release。37 个 focused BFF/client 合同、115 个受影响合同、2445 个全仓后端合同及 2 个显式 Hybrid integrations 通过；保留 24 个既有声明 skip 和 2 个默认排除。Mypy 454 个产品源、Ruff lint/format、根/KSS lock、domain/diff、TypeScript、Dashboard 225、Chat 35 与全部前端 build 通过。没有修改 KSS OpenAPI、migration 或依赖；该证据只支持 `LOCAL_VERIFIED`，不支持部署或 Production GO；详见报告第 27 节。
+
+[FRAME | HIGH] 2026-08-29 用户要求做好验证、聚焦目标并继续下一切片，进入 TDD-04D one-shot Preparation execution responsibility。本片只在 KSS application/runtime composition 增加一个可选 `BasePreparationExecutionConfiguration` 和 `run_once()` handle：服务端配置独立 Worker identity、lease duration 与 candidate TTL；一次调用最多领取并处理一个 queued 或可接管 running Preparation，复用既有 frozen-plan builder、数据库租约、monotonic fence 和 `ready/failed` 原子提交。API runtime 默认不启用 execution；重建 execution runtime 可继续处理同一 durable queue。本片不增加 CLI、常驻循环、process role、batch、自动重试、publish/cancel/expiry BFF、Dashboard、SQL/migration、OpenAPI、部署、生产配置或 Git 操作。
+
+[KNOWN | HIGH] TDD-04D 本地实现已完成。真实 BFF → KSS → PostgreSQL tracer 先由默认 API runtime 保存 queued Preparation，再由重建的 execution runtime 执行一次并得到 ready；浏览器投影仍无 Worker/artifact 字段，Release catalog 仍为空。one-shot 容量和非法 TTL 合同通过；Preparation 核心、真实 PostgreSQL lease/fence/recovery 与 runtime composition 聚焦回归为 160 passed，完整 KSS/ProofAgent KSS 影响集为 460 passed。全仓后端为 2449 passed、24 个既有声明 skip、2 deselected，2 个显式 Hybrid integrations 另行通过。Mypy 454 个产品源、全量 Ruff、受影响格式、domain/diff、根/KSS lock、TypeScript、Dashboard 225、Chat 35 和全部前端 build 通过。没有修改 OpenAPI、migration、依赖或 process role；该证据只支持 `LOCAL_VERIFIED`，不支持部署或 Production GO；详见报告第 28 节。
+
 [FRAME | HIGH] 2026-08-28 用户确认 TDD-02G 精确契约。本片只增加可信 application-only `cancel(preparation_id, operator_id, idempotency_key)`：仅 queued/running 可原子进入 cancelled，使用数据库时间，状态、幂等收据和成功审计同事务提交；running 取消清除 owner/deadline 并保留 fence，使旧 Worker 后续提交稳定失败。ready/failed/expired/consumed/cancelled 不可取消；无自由文本原因、artifact 删除、重试、quarantine、HTTP/BFF、部署、生产 SQL 或 Git 操作。
 
 [KNOWN | HIGH] TDD-02G 本地核心已完成。新增 `0013_preparation_cancellations.sql` 和 secret-free `CancelledReleasePreparation` 读取 schema；八路同 key 并发返回同一终态/一条审计，queued claim 与取消竞争线性化，在途 Builder 的旧 claim 不能提交，审计失败时状态与收据整体回滚，`0012 → 0013` active-running 升级和 migration 重放通过。Preparation/PG/distribution 回归为 170 passed；完整真实依赖受影响回归为 357 passed、0 skipped。取消命令仍未接 HTTP，异常 ready quarantine 仍是独立后续权威；详见报告第 18 节。
@@ -202,10 +218,29 @@
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | Connection Profile 与 Published Profile Revision | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | KSS、Vault 与部署策略分权 | 已更新 | 用户已确认 |
 | `docs/adr/0213-manage-source-connection-profiles-in-kss-with-external-secret-and-egress-authority.md` | ADR | KSS 管理非敏感 Profile revision，外部权威保留 secret 与 egress 策略 | 已新增 | accepted design，未实现 |
-| `docs/adr/0214-resolve-versioned-knowledge-base-drafts-at-release-preparation-start.md` | ADR | Base Draft selection policy 在 Preparation 启动时冻结为 exact Knowledge Base Version | 已新增 | accepted design；Draft/Version/Preparation 核心已实现，完整管理闭环未实现 |
+| `docs/adr/0214-resolve-versioned-knowledge-base-drafts-at-release-preparation-start.md` | ADR | Base Draft selection policy 在 Preparation 启动时冻结为 exact Knowledge Base Version | 已新增 | accepted design；Draft/Version/Preparation 核心及 TDD-04C Draft save/exact read、Preparation start/status BFF 已实现，执行/发布闭环未实现 |
 | `docs/adr/0215-separate-release-deprecation-retirement-and-emergency-revocation.md` | ADR | 正常 deprecated/retired 与紧急 revoked 分离 | 已新增 | accepted design；TDD-03B 至 03E 已实现 application-only deprecate、可信 Reference 注销准入、ordinary retire 与 emergency revoke 核心，产品接线待实现 |
-| `docs/adr/0216-register-executable-client-release-references-in-kss.md` | ADR | KSS Reference Ledger 是普通退役的本地权威 | 已新增 | accepted design；TDD-03A 至 03E 已实现 registration、可信 deregistration admission、零 active Reference retirement gate 及 revocation 竞态收敛，ProofAgent verifier/background reconciler 待实现 |
-| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；包含 application-only cancelled 的核心状态/事务及 one-shot 主动过期已实现，自动调度与产品接线待实现 |
+| `docs/adr/0216-register-executable-client-release-references-in-kss.md` | ADR | KSS Reference Ledger 是普通退役的本地权威 | 已新增 | accepted design；TDD-03A 至 03F 已实现 registration、可信 deregistration admission、零 active Reference retirement/deletion-eligibility gates 及 revocation 竞态收敛，ProofAgent verifier/background reconciler 待实现 |
+| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF 与 TDD-04F controlled cancel BFF 已实现；常驻执行进程和 expiry 产品接线待实现 |
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | 三类可叠加 Hybrid Knowledge Configuration Role Bundle | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | 首期不做复杂 RBAC 或强制四眼，复用全局 named permission 映射 | 已更新 | 用户已确认 |
-| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G 与 TDD-03A 至 03E 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04F 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+
+[KNOWN | HIGH] TDD-04E 已在既有 Scope 内完成 controlled Preparation publication BFF：
+KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :publish`；BFF 要求
+`knowledge_source.edit`，KSS 要求可信 operator authentication，成功
+返回 consumed current-state projection 与同一 Preparation `Location`。它复用既有 one-use
+PostgreSQL CAS，不新增 Idempotency-Key；响应不确定或重复调用时以 GET exact Preparation
+恢复权威状态。权限、路径漂移、到期、重复消费、wire drift、secret-free projection 和真实
+PostgreSQL 纵向合同已有本地证据。Dashboard、cancel/expiry BFF、常驻进程、Agent formal
+publication、部署和生产配置均未纳入本片。
+
+[KNOWN | HIGH] TDD-04F 已在同一既有 Scope 内完成 controlled Preparation cancellation
+BFF：KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :cancel`，并要求
+`Idempotency-Key`；BFF 额外要求 `knowledge_source.edit`，KSS 使用可信 operator identity
+作为幂等作用域。成功返回 cancelled current-state projection 与同一 Preparation
+`Location`。exact replay 复用原结果且只有一条成功审计；key 改绑、终态新命令、路径
+Scope 漂移、body 和上游 identity/state/Location 漂移均失败关闭。该命令复用既有
+PostgreSQL database-time cancellation/fencing 事务，没有新增 migration、取消状态权威或
+浏览器 operator 输入。Dashboard、expiry BFF、常驻进程、artifact cleanup、ready
+quarantine、Agent formal publication、部署和生产配置均未纳入本片。

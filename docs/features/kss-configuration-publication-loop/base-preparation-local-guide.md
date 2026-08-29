@@ -2,19 +2,19 @@
 
 ## 适用范围
 
-[KNOWN | HIGH] 本说明对应 TDD-02B 至 02F：在独立本地 KSS 测试组合中保存 Base Draft、冻结 `queued` Preparation，通过服务端 Interface 领取、构建和提交 `ready/failed` 结果，以一次性核心 CAS 将未到期 ready candidate 发布为 exact Release，并可显式回收一个到期 ready candidate。它不是生产启用步骤，尚未接入 ProofAgent BFF 或 Dashboard。
+[KNOWN | HIGH] 本说明对应 TDD-02B 至 02G 与 TDD-04C 至 04F：在独立本地 KSS 测试组合中保存 Base Draft、冻结 `queued` Preparation，通过服务端 Interface 领取、构建和提交 `ready/failed` 结果，以一次性核心 CAS 将未到期 ready candidate 发布为 exact Release，并可显式取消 queued/running 或回收一个到期 ready candidate。ProofAgent 已提供 Draft save/exact read、Preparation start/status、controlled publication 和 controlled cancellation 的同源、secret-free BFF；KSS 已提供可选 one-shot execution runtime。它们都不是生产启用步骤，尚未提供 Dashboard 页面、常驻 Preparation 进程或 expiry BFF。
 
-当前提供显式调用的构建执行器、publication application Interface 和 one-shot 主动过期原语，没有常驻 Worker 循环、自动过期调度或 publish/expiry HTTP 路由。`202` 表示准入资源已保存；`running` 只表示已领取；`ready` 表示已生成不可查询的候选；`failed` 只返回稳定错误码；`expired` 与 `consumed` 是 durable 终态。只有成功 consumed 对应的 exact Release 可进入 KSS Query；Preparation 本身不能作为 Agent Release binding。发布 Release 不会修改 Agent Draft 或激活 Agent。
+当前提供显式调用的构建执行器、controlled publication/cancellation HTTP/BFF 和 one-shot 主动过期原语，没有常驻 Worker 循环、自动过期调度或 expiry HTTP 路由。`202` 表示准入资源已保存；`running` 只表示已领取；`ready` 表示已生成不可查询的候选；`failed` 只返回稳定错误码；`cancelled`、`expired` 与 `consumed` 是 durable 终态。只有成功 consumed 对应的 exact Release 可进入 KSS Query；Preparation 本身不能作为 Agent Release binding。发布或取消 Preparation 不会修改 Agent Draft 或激活 Agent。
 
 ## 前置条件与责任
 
 1. 仅在独立测试 PostgreSQL 上应用 KSS migration runner，包含 `0009_base_preparations`、`0010_preparation_leases`、`0011_preparation_results` 和 `0012_preparation_publications`。`0012` 增加 `expired/consumed`、exact Release 外键和 publication lifecycle audit；不要把本说明用于生产 SQL 执行。
 2. 使用已有管理接口创建 Space、Source 和 Base。Base 与成员 Sources 必须位于同一 Space。
 3. 通过摄取或同步生成可用的 Source Versions。Draft 可以先保存；开始 Preparation 时每个成员都必须能解析到 ready Version。受管同步步骤见 [Connection Profile 本地说明](connection-profile-local-guide.md)。
-4. 在服务端调用 `compose_runtime`，除既有必需依赖外，显式提供 `base_preparation_id_factory` 和 `authenticate_operator`。未提供 factory 时不注册新路由；缺少认证时拒绝启用。不要将测试内存仓储用作生产 fallback。
-5. 现有管理 HTTP 由可信认证结果提供全局 named permissions：读取需要 `knowledge_source.view`，保存或启动需要 `knowledge_source.edit`。身份可以组合这些权限，不新增 Space 级 ACL 或本地授权表。TDD-02E 的 publication 尚未暴露为 HTTP 命令，不能据此推导浏览器或角色已获得发布权限。
+4. 在 API 服务端调用 `compose_runtime`，除既有必需依赖外，显式提供 `base_preparation_id_factory` 和 `authenticate_operator`。未提供 factory 时不注册新路由；缺少认证时拒绝启用。需要执行候选时，另行显式提供 `base_preparation_execution`；默认 API runtime 不执行 Preparation。不要将测试内存仓储用作生产 fallback。
+5. ProofAgent 同源管理 HTTP 由可信身份映射提供全局 named permissions：读取需要 `knowledge_source.view`，保存、启动、发布或取消需要 `knowledge_source.edit`。身份可以组合这些权限，不新增 Space 级 ACL 或本地授权表。KSS 管理 HTTP 继续要求可信 operator authentication，并在 publication/cancellation 前核对 exact Scope；终端用户不能绕过 BFF 自报权限。TDD-04E/04F 只把既有 one-use publication CAS 和协作取消事务暴露为受控命令；它们不授予 Agent 发布、激活或其他角色权限。
 
-`base_preparation_id_factory` 是 Python 组合参数，不是现有 CLI 或环境变量开关。`bootstrap/processes.py` 尚未启用此组合。浏览器不得直接持有 KSS operator credential，也不能通过请求体声明角色或操作者。
+`base_preparation_id_factory` 和 `base_preparation_execution` 是 Python 组合参数，不是现有 CLI 或环境变量开关。`bootstrap/processes.py` 尚未启用 execution 组合。浏览器不得直接持有 KSS operator credential，也不能通过请求体声明角色或操作者。
 
 ## 调用顺序
 
@@ -24,7 +24,7 @@
 /v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}
 ```
 
-所有调用需要服务端认证。两个写操作还需要 `Idempotency-Key`；不同业务命令使用不同 key，重放原命令保留原 key 和完整原请求。说明中不展示凭据值。
+所有调用需要服务端认证。保存 Draft、启动 Preparation 和取消 Preparation 还需要 `Idempotency-Key`；不同业务命令使用不同 key，重放原命令保留原 key 和完整原请求。publication 不使用幂等键。说明中不展示凭据值。
 
 ### 1. 保存 Draft
 
@@ -77,11 +77,83 @@ KSS 在短事务内锁定当前 Draft，通过一条 catalog 查询读取所有�
 
 ### 4. 读取资源和审计
 
-调用返回的 `Location` 读取当前 Preparation。该路径的 Space/Base 必须与资源一致。应用和仓储重建后仍可读取，不需要重新启动命令。GET 可返回 `queued/running/ready/failed/expired/consumed`；重放原始 POST 仍返回最初的 `queued` 回执，两者用途不同。
+调用返回的 `Location` 读取当前 Preparation。该路径的 Space/Base 必须与资源一致。应用和仓储重建后仍可读取，不需要重新启动命令。GET 可返回 `queued/running/ready/failed/cancelled/expired/consumed`；重放原始 start POST 仍返回最初的 `queued` 回执，两者用途不同。
 
 调用 `GET {前缀}/preparation-audit` 查看成功操作及安全拒绝事件；该读取要求对应 Draft 已存在且 Scope 一致。审计只记录安全身份、受限操作/资源标识、稳定错误码和时间，不返回请求 body、headers、key、原文或 secret。
 
-当前没有 `:publish`、expiry HTTP 操作或自动调度。没有显式调用 Worker Interface 时，资源保持 `queued`。`running` 仅表示已被领取，租约过期也保持 `running`，不能据此判断 Worker 健康或构建进度。GET 不推进到期状态；没有 publication 尝试或显式 `expire_next()` 调用时，已过 `expires_at` 的资源仍可能暂时显示 ready。
+当前没有 expiry HTTP 操作或自动调度。没有显式调用 Worker Interface 时，资源保持 `queued`。`running` 仅表示已被领取，租约过期也保持 `running`，不能据此判断 Worker 健康或构建进度。GET 不推进到期状态；没有 publication 尝试或显式 `expire_next()` 调用时，已过 `expires_at` 的资源仍可能暂时显示 ready。
+
+## ProofAgent 同源管理入口
+
+[KNOWN | HIGH] TDD-04C 为浏览器提供以下同源路径；它们由 ProofAgent 检查权限，再由 guarded management client 使用服务端 KSS credential 调用上述 KSS API。浏览器不得改为直连 KSS。
+
+```text
+PUT  /api/config/knowledge-service/spaces/{space}/bases/{base}/draft
+GET  /api/config/knowledge-service/spaces/{space}/bases/{base}/draft?revision={n}
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations
+GET  /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:cancel
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:publish
+```
+
+- Draft PUT body 只包含 `expected_revision` 和 `members`；Preparation POST body 只包含 `draft_revision`。Space/Base 由路径持有，ProofAgent client 在调用 KSS 时注入并重验，不接受 body 重复声明 Scope。
+- Draft PUT、Preparation start POST 和 cancellation POST 需要 `knowledge_source.edit` 与 `Idempotency-Key`；publication POST 需要 `knowledge_source.edit`，但不接受 body 或 `Idempotency-Key`；两个 GET 需要 `knowledge_source.view`。cancellation 也不接受 body。Draft GET 必须提交 exact `revision`，不提供 mutable latest 读取。
+- Preparation 首次启动与相同命令重放都返回 `202`，因为 KSS 的 immutable queued receipt 不区分 HTTP create/replay status。调用方通过同源 `Location` 读取 current state，不得根据 POST 重放结果推断 Worker 当前状态。
+- BFF 只投影 Draft/Version/Preparation exact identity、digest、成员、状态、安全终态字段和同源 self link。Worker ID、fencing token、lease deadline、artifact reference、KSS credential 和 raw failure detail 不进入浏览器。
+- start/status BFF 不会在请求内运行 Worker 或推进到期；publication/cancellation BFF 只调用既有短事务，也不会执行构建或激活 Agent。只有另行配置的可信 execution runtime 可以把 queued 推进到 running/ready/failed；没有 execution 或 publication 时，资源应保持可见但不可查询。
+
+### 5. 受控发布与不确定结果恢复
+
+只有 current state 为未过期 `ready` 时调用：
+
+```text
+POST {前缀}/release-preparations/{preparation_id}:publish
+```
+
+请求不带 body，也不带 `Idempotency-Key`。成功返回 `200`、`state="consumed"`，`Location`
+指向同一个 Preparation GET 资源；随后 exact Release catalog 中应出现一个
+`knowledge_base_release_id` 相同的 queryable Release。路径 Space/Base 与 Preparation 不一致时，
+KSS 在消费前拒绝，不能借错误路径发布其他 Scope 的资源。
+
+超时、连接中断或重复调用后，不要生成新的“发布重试 key”，也不要改用旧直接 Release
+入口。读取返回的 exact Preparation GET：`consumed` 表示事务已成功，`ready` 表示尚未消费，
+`expired` 表示数据库时间已使候选失效；其他状态均不可发布。重复发布 consumed、queued、
+failed、cancelled 或 expired 资源返回稳定失败，且不会产生第二个 Release。若业务需要重建，
+使用新的 start `Idempotency-Key` 创建新的 Preparation identity。
+
+## 可选的 one-shot execution runtime
+
+TDD-04D 把既有 Worker、candidate builder 和 TTL 隐藏在一个 runtime handle 后。以下代码
+只表示本地组合形态；参数值不是生产推荐配置：
+
+```python
+from datetime import timedelta
+from knowledge_source_service.bootstrap.runtime import (
+    BasePreparationExecutionConfiguration,
+    compose_runtime,
+)
+
+runtime = compose_runtime(
+    # 其余 durable PostgreSQL、artifact、catalog/projection 参数由调用方提供。
+    base_preparation_execution=BasePreparationExecutionConfiguration(
+        worker_id="base-preparation-worker-local-1",
+        lease_duration=timedelta(seconds=30),
+        candidate_ttl=timedelta(hours=1),
+    ),
+)
+result = runtime.base_preparation_executor.run_once()
+```
+
+- 未提供 `base_preparation_execution` 时，`base_preparation_executor` 为 `None`。API runtime
+  不会因为注册管理路由而开始处理队列。
+- `run_once()` 一次最多处理一个 queued 或可接管 running resource，并返回 ready、failed
+  或 `None`。`None` 不证明队列为空；短事务锁竞争也可能导致当前轮次没有领取任务。
+- runtime 可以在进程对象重建后继续读取同一 PostgreSQL authority。测试中的重建不等于
+  数据库故障恢复、S3 进程重启或生产切换演练。
+- 非正 candidate TTL 在 executor 构造阶段拒绝，尚未领取任务。Worker identity 和 lease
+  继续使用既有受限格式与一小时上限。
+- 本 Interface 没有 CLI、常驻循环、batch、自动重试、健康信号或部署接线。调用方不能
+  通过循环测试推断生产运行责任已经建立。
 
 ## 仅服务端的构建与结果提交
 
@@ -155,9 +227,18 @@ expired = application.expire_next(
 
 expired 仍保留 candidate 绑定用于完整性审计。本调用不删除 immutable artifact 或 projection generation，也不证明孤立对象已完成物理回收。
 
-## 仅服务端的协作取消
+## 受控协作取消
 
-TDD-02G 增加 application Interface，不增加网络入口：
+TDD-02G 增加 application Interface；TDD-04F 在不改变该事务权威的前提下增加 KSS 与 ProofAgent 同源网络入口：
+
+```text
+POST {前缀}/release-preparations/{preparation_id}:cancel
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:cancel
+```
+
+两个入口都不接受 body，并要求 `Idempotency-Key`。ProofAgent BFF 还要求
+`knowledge_source.edit`；KSS 使用可信 operator identity 作为幂等作用域。成功返回 `200`、
+`state="cancelled"` 和同一 Preparation GET `Location`。服务端核心等价于：
 
 ```python
 cancelled = application.cancel(
@@ -171,7 +252,7 @@ cancelled = application.cancel(
 - running 取消会清除当前 lease owner 和 deadline，但保留已经使用的 fencing token。在途 Builder 不会被进程级强杀；它可以结束外部计算，但旧 claim 的 renew、ready 或 failed 提交都会返回 `base_preparation_stale_claim`。
 - 相同 operator、Idempotency-Key 和 Preparation identity 返回原 cancelled 结果且不重复审计。相同 key 改绑另一个请求返回 `base_preparation_idempotency_conflict`；以新 key 再次取消同一终态返回 `base_preparation_not_cancellable`。
 - ready、failed、expired、consumed 和 cancelled 都不可取消。失败重试必须用新 Idempotency-Key 启动新的 Preparation identity；取消不会自动重试、发布 Release、删除 artifact 或隔离异常 ready。
-- 管理 GET 可以读取 secret-free cancelled 资源，但当前没有 `POST :cancel`、BFF、Dashboard、CLI 或部署接线。调用方不能根据本地状态伪造 cancelled，也不能在浏览器传 operator identity。
+- 管理 GET 与 BFF 可以读取 secret-free cancelled 资源；当前仍没有 Dashboard command、CLI、自动取消调度或部署接线。调用方不能根据本地状态伪造 cancelled，也不能在浏览器传 operator identity。
 - `0013_preparation_cancellations.sql` 是本地候选 migration；本轮未执行生产 migration。正式启用前仍需单独批准备份、迁移、回滚和运行角色。
 
 取消终止的是 Preparation 的提交权，不等于立即终止外部 I/O 或完成孤立对象回收。物理清理与 ready quarantine 均属于后续独立设计。

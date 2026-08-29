@@ -1,5 +1,7 @@
 """Trusted Worker lease operations; no builds, artifact publication or process loop."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -28,6 +30,29 @@ from knowledge_source_service.ports.base_preparations import (
 
 class ReleasePreparationBuilder(Protocol):
     def build(self, base_version: KnowledgeBaseVersion) -> PreparedKnowledgeBaseRelease: ...
+
+
+class BasePreparationExecutor:
+    """Execute at most one Preparation with server-owned build policy."""
+
+    def __init__(
+        self,
+        *,
+        worker: BasePreparationWorker,
+        builder: ReleasePreparationBuilder,
+        candidate_ttl: timedelta,
+    ) -> None:
+        if not isinstance(candidate_ttl, timedelta) or candidate_ttl <= timedelta(0):
+            raise BasePreparationError("base_preparation_invalid_candidate_ttl")
+        self._worker = worker
+        self._builder = builder
+        self._candidate_ttl = candidate_ttl
+
+    def run_once(self) -> ReadyReleasePreparation | FailedReleasePreparation | None:
+        return self._worker.run_next(
+            builder=self._builder,
+            candidate_ttl=self._candidate_ttl,
+        )
 
 
 class BasePreparationWorker:
