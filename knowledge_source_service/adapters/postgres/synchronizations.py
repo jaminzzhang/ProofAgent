@@ -9,10 +9,13 @@ import psycopg
 from psycopg import errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from pydantic import TypeAdapter
 
 from knowledge_source_service.contracts.synchronizations import (
-    CreateKnowledgeSourceSynchronizationRequest,
     KnowledgeSourceSynchronization,
+    ProfileSourceSynchronization,
+    SourceSynchronizationRequest,
+    SourceSynchronizationResource,
 )
 from knowledge_source_service.domain.synchronizations import (
     KnowledgeSourceSynchronizationClaim,
@@ -20,6 +23,10 @@ from knowledge_source_service.domain.synchronizations import (
     KnowledgeSourceSynchronizationRecord,
     StaleKnowledgeSourceSynchronizationClaim,
 )
+
+
+_REQUEST: TypeAdapter[SourceSynchronizationRequest] = TypeAdapter(SourceSynchronizationRequest)
+_RESOURCE: TypeAdapter[SourceSynchronizationResource] = TypeAdapter(SourceSynchronizationResource)
 
 
 class PostgresKnowledgeSourceSynchronizationRepository:
@@ -40,16 +47,24 @@ class PostgresKnowledgeSourceSynchronizationRepository:
 
     def add(self, record: KnowledgeSourceSynchronizationRecord) -> None:
         synchronization = record.synchronization
+        profile = (
+            synchronization.connection_profile
+            if isinstance(synchronization, ProfileSourceSynchronization)
+            else None
+        )
         parameters = {
-            "synchronization_id": (
-                synchronization.knowledge_source_synchronization_id
-            ),
+            "synchronization_id": (synchronization.knowledge_source_synchronization_id),
             "operator_id": record.operator_id,
             "idempotency_key": record.idempotency_key,
             "request_fingerprint": record.request_fingerprint,
             "knowledge_space_id": synchronization.knowledge_space_id,
             "knowledge_source_id": synchronization.knowledge_source_id,
-            "connection_id": synchronization.connection_id,
+            "connection_id": synchronization.connection_id
+            if isinstance(synchronization, KnowledgeSourceSynchronization)
+            else None,
+            "profile_id": None if profile is None else profile.connection_profile_id,
+            "profile_revision": None if profile is None else profile.revision,
+            "profile_digest": None if profile is None else profile.configuration_digest,
             "state": synchronization.state,
             "request_json": Jsonb(record.request.model_dump(mode="json")),
             "resource_json": Jsonb(synchronization.model_dump(mode="json")),
@@ -68,6 +83,9 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                             knowledge_space_id,
                             knowledge_source_id,
                             connection_id,
+                            connection_profile_id,
+                            connection_profile_revision,
+                            connection_profile_digest,
                             state,
                             request_json,
                             resource_json,
@@ -80,6 +98,9 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                             %(knowledge_space_id)s,
                             %(knowledge_source_id)s,
                             %(connection_id)s,
+                            %(profile_id)s,
+                            %(profile_revision)s,
+                            %(profile_digest)s,
                             %(state)s,
                             %(request_json)s,
                             %(resource_json)s,
@@ -212,8 +233,7 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                 {
                     "expires_at": now + lease_duration,
                     "synchronization_id": (
-                        claim.record.synchronization.
-                        knowledge_source_synchronization_id
+                        claim.record.synchronization.knowledge_source_synchronization_id
                     ),
                     "worker_id": claim.worker_id,
                     "fencing_token": claim.fencing_token,
@@ -231,7 +251,7 @@ class PostgresKnowledgeSourceSynchronizationRepository:
         now: datetime,
     ) -> None:
         _validate_immutable_claim(claim, record)
-        synchronization = KnowledgeSourceSynchronization.model_validate(
+        synchronization = _RESOURCE.validate_python(
             record.synchronization.model_dump(mode="python")
         )
         terminal = synchronization.state in {"succeeded", "failed"}
@@ -257,16 +277,10 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                     """,
                     {
                         "state": synchronization.state,
-                        "resource_json": Jsonb(
-                            synchronization.model_dump(mode="json")
-                        ),
-                        "version_id": (
-                            synchronization.materialized_knowledge_source_version_id
-                        ),
+                        "resource_json": Jsonb(synchronization.model_dump(mode="json")),
+                        "version_id": (synchronization.materialized_knowledge_source_version_id),
                         "terminal": terminal,
-                        "synchronization_id": (
-                            synchronization.knowledge_source_synchronization_id
-                        ),
+                        "synchronization_id": (synchronization.knowledge_source_synchronization_id),
                         "worker_id": claim.worker_id,
                         "fencing_token": claim.fencing_token,
                         "now": now,
@@ -291,15 +305,11 @@ class PostgresKnowledgeSourceSynchronizationRepository:
                                 f"{synchronization.state}"
                             ),
                             synchronization.knowledge_source_synchronization_id,
-                            (
-                                "knowledge_source_synchronization."
-                                f"{synchronization.state}"
-                            ),
+                            (f"knowledge_source_synchronization.{synchronization.state}"),
                             Jsonb(
                                 {
                                     "knowledge_source_synchronization_id": (
-                                        synchronization.
-                                        knowledge_source_synchronization_id
+                                        synchronization.knowledge_source_synchronization_id
                                     ),
                                     "state": synchronization.state,
                                 }
@@ -318,12 +328,8 @@ class PostgresKnowledgeSourceSynchronizationRepository:
 
     @staticmethod
     def _record_from_row(row: dict[str, Any]) -> KnowledgeSourceSynchronizationRecord:
-        request = CreateKnowledgeSourceSynchronizationRequest.model_validate(
-            row["request_json"]
-        )
-        synchronization = KnowledgeSourceSynchronization.model_validate(
-            row["resource_json"]
-        )
+        request = _REQUEST.validate_python(row["request_json"])
+        synchronization = _RESOURCE.validate_python(row["resource_json"])
         return KnowledgeSourceSynchronizationRecord(
             synchronization=synchronization,
             request=request,
@@ -342,12 +348,26 @@ def _validate_immutable_claim(
     if (
         record.synchronization.knowledge_source_synchronization_id
         != claimed.synchronization.knowledge_source_synchronization_id
-        or record.synchronization.knowledge_space_id
-        != claimed.synchronization.knowledge_space_id
-        or record.synchronization.knowledge_source_id
-        != claimed.synchronization.knowledge_source_id
-        or record.synchronization.connection_id
-        != claimed.synchronization.connection_id
+        or record.synchronization.knowledge_space_id != claimed.synchronization.knowledge_space_id
+        or record.synchronization.knowledge_source_id != claimed.synchronization.knowledge_source_id
+        or record.synchronization.model_dump(
+            exclude={
+                "state",
+                "started_at",
+                "completed_at",
+                "materialized_knowledge_source_version_id",
+                "problem",
+            }
+        )
+        != claimed.synchronization.model_dump(
+            exclude={
+                "state",
+                "started_at",
+                "completed_at",
+                "materialized_knowledge_source_version_id",
+                "problem",
+            }
+        )
         or record.request != claimed.request
         or record.operator_id != claimed.operator_id
         or record.idempotency_key != claimed.idempotency_key

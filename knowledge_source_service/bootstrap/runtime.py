@@ -20,6 +20,20 @@ from knowledge_source_service.adapters.postgres.knowledge_queries import (
 from knowledge_source_service.adapters.postgres.synchronizations import (
     PostgresKnowledgeSourceSynchronizationRepository,
 )
+from knowledge_source_service.adapters.postgres.connection_profiles import (
+    PostgresConnectionProfileRepository,
+)
+from knowledge_source_service.application.connection_profiles import ConnectionProfileApplication
+from knowledge_source_service.adapters.postgres.base_preparations import (
+    PostgresBasePreparationRepository,
+)
+from knowledge_source_service.application.base_preparations import (
+    KnowledgeBasePreparationApplication,
+)
+from knowledge_source_service.ports.connection_profiles import (
+    ConnectionProfileDeploymentPolicy,
+    ConnectionProfileSnapshotReaders,
+)
 from knowledge_source_service.application.agentic_retrieval import (
     BoundedAgenticKnowledgeRetrievalEngine,
     UnavailableAgenticRetrievalController,
@@ -88,17 +102,39 @@ def compose_runtime(
     ocr_extractor: DocumentOcrExtractor | None = None,
     snapshot_connections: KnowledgeSnapshotConnectionRegistry | None = None,
     synchronization_id_factory: Callable[[], str] | None = None,
+    managed_connection_profiles: bool = False,
+    connection_profile_policy: ConnectionProfileDeploymentPolicy | None = None,
+    connection_profile_id_factory: Callable[[], str] | None = None,
+    profile_snapshot_readers: ConnectionProfileSnapshotReaders | None = None,
+    base_preparation_id_factory: Callable[[], str] | None = None,
 ) -> KnowledgeServiceRuntime:
     """Compose all online authority ports from durable PostgreSQL/S3 dependencies."""
 
     if not release_identity.strip():
         raise ValueError("release_identity must not be blank")
+    if base_preparation_id_factory is not None and authenticate_operator is None:
+        raise ValueError("preparation management requires operator authentication")
     if (projection is None) != (encoder is None):
         raise ValueError("projection and encoder must be configured together")
-    if (snapshot_connections is None) != (synchronization_id_factory is None):
+    if managed_connection_profiles:
+        if snapshot_connections is not None:
+            raise ValueError("managed profiles cannot share static connection authority")
+        if connection_profile_id_factory is None or synchronization_id_factory is None:
+            raise ValueError(
+                "managed profiles require profile and synchronization identity factories"
+            )
+    elif any(
+        value is not None
+        for value in (
+            connection_profile_policy,
+            connection_profile_id_factory,
+            profile_snapshot_readers,
+        )
+    ):
+        raise ValueError("profile dependencies require explicit managed profile mode")
+    elif (snapshot_connections is None) != (synchronization_id_factory is None):
         raise ValueError(
-            "snapshot connections and synchronization identity factory "
-            "must be configured together"
+            "snapshot connections and synchronization identity factory must be configured together"
         )
     query_repository = PostgresKnowledgeQueryRepository.from_dsn(
         postgres_dsn,
@@ -143,19 +179,39 @@ def compose_runtime(
     )
     synchronization_application: KnowledgeSourceSynchronizationApplication | None = None
     synchronization_executor: KnowledgeSourceSynchronizationExecutor | None = None
-    if snapshot_connections is not None and synchronization_id_factory is not None:
-        synchronization_repository = (
-            PostgresKnowledgeSourceSynchronizationRepository.from_dsn(postgres_dsn)
+    profiles = (
+        ConnectionProfileApplication(
+            repository=PostgresConnectionProfileRepository.from_dsn(postgres_dsn),
+            policy=connection_profile_policy,
+            clock=clock,
+            id_factory=connection_profile_id_factory,
+        )
+        if managed_connection_profiles and connection_profile_id_factory is not None
+        else None
+    )
+    if synchronization_id_factory is not None and (
+        snapshot_connections is not None or profiles is not None
+    ):
+        synchronization_repository = PostgresKnowledgeSourceSynchronizationRepository.from_dsn(
+            postgres_dsn
         )
         synchronization_application = KnowledgeSourceSynchronizationApplication(
             repository=synchronization_repository,
             clock=clock,
             id_factory=synchronization_id_factory,
-            admit_connection=snapshot_connections.contains,
+            admit_connection=None
+            if snapshot_connections is None
+            else snapshot_connections.contains,
+            connection_profiles=profiles,
         )
+    if synchronization_id_factory is not None and (
+        snapshot_connections is not None or profile_snapshot_readers is not None
+    ):
         synchronization_executor = KnowledgeSourceSynchronizationExecutor(
             repository=synchronization_repository,
             connections=snapshot_connections,
+            connection_profiles=profiles,
+            profile_snapshot_readers=profile_snapshot_readers,
             artifacts=artifacts,
             catalog=catalog,
             pipeline_revision=dataset_pipeline_revision,
@@ -168,9 +224,7 @@ def compose_runtime(
         )
     http_application = create_application(
         query_application=query_application,
-        authenticate_client=bearer_client_authenticator(
-            access_control.authenticate_bearer_token
-        ),
+        authenticate_client=bearer_client_authenticator(access_control.authenticate_bearer_token),
         trace_id_factory=trace_id_factory,
         release_identity=release_identity,
         readiness_probe=dependency_readiness,
@@ -188,6 +242,16 @@ def compose_runtime(
             encoder=encoder,
             ocr_extractor=ocr_extractor,
             synchronization_application=synchronization_application,
+            connection_profiles=profiles,
+            base_preparations=(
+                KnowledgeBasePreparationApplication(
+                    repository=PostgresBasePreparationRepository.from_dsn(postgres_dsn),
+                    clock=clock,
+                    id_factory=base_preparation_id_factory,
+                )
+                if base_preparation_id_factory is not None
+                else None
+            ),
         )
         http_application.include_router(management.router)
         http_application.exception_handlers.update(management.exception_handlers)

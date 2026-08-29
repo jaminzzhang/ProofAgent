@@ -21,9 +21,7 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
         self._fences: dict[str, int] = {}
 
     def add(self, record: KnowledgeSourceSynchronizationRecord) -> None:
-        synchronization_id = (
-            record.synchronization.knowledge_source_synchronization_id
-        )
+        synchronization_id = record.synchronization.knowledge_source_synchronization_id
         idempotency_identity = (record.operator_id, record.idempotency_key)
         if synchronization_id in self._records or idempotency_identity in self._idempotency:
             raise KnowledgeSourceSynchronizationPersistenceConflict(
@@ -75,9 +73,7 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
         if not candidates:
             return None
         record = candidates[0]
-        synchronization_id = (
-            record.synchronization.knowledge_source_synchronization_id
-        )
+        synchronization_id = record.synchronization.knowledge_source_synchronization_id
         fencing_token = self._fences.get(synchronization_id, 0) + 1
         claim = KnowledgeSourceSynchronizationClaim(
             record=record,
@@ -98,9 +94,7 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
     ) -> None:
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
-        synchronization_id = (
-            claim.record.synchronization.knowledge_source_synchronization_id
-        )
+        synchronization_id = claim.record.synchronization.knowledge_source_synchronization_id
         current = self._claims.get(synchronization_id)
         record = self._records.get(synchronization_id)
         if (
@@ -124,9 +118,7 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
         *,
         now: datetime,
     ) -> None:
-        synchronization_id = (
-            claim.record.synchronization.knowledge_source_synchronization_id
-        )
+        synchronization_id = claim.record.synchronization.knowledge_source_synchronization_id
         current = self._claims.get(synchronization_id)
         persisted = self._records.get(synchronization_id)
         if (
@@ -139,6 +131,24 @@ class InMemoryKnowledgeSourceSynchronizationRepository:
             raise StaleKnowledgeSourceSynchronizationClaim
         if (
             record.request != persisted.request
+            or record.synchronization.model_dump(
+                exclude={
+                    "state",
+                    "started_at",
+                    "completed_at",
+                    "materialized_knowledge_source_version_id",
+                    "problem",
+                }
+            )
+            != persisted.synchronization.model_dump(
+                exclude={
+                    "state",
+                    "started_at",
+                    "completed_at",
+                    "materialized_knowledge_source_version_id",
+                    "problem",
+                }
+            )
             or record.operator_id != persisted.operator_id
             or record.idempotency_key != persisted.idempotency_key
             or record.request_fingerprint != persisted.request_fingerprint

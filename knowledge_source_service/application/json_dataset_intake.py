@@ -23,6 +23,7 @@ from knowledge_source_service.domain.knowledge_catalog import (
 from knowledge_source_service.domain.publications import PublishedDatasetSourceVersion
 from knowledge_source_service.ports.artifacts import ImmutableArtifactStore
 from knowledge_source_service.ports.knowledge_catalog import KnowledgeCatalogWriter
+from knowledge_source_service.contracts.connection_profiles import PinnedConnectionProfile
 
 
 _AUTHORITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -97,9 +98,7 @@ class JsonDatasetIntakeApplication:
             raise ValueError("JSON dataset must contain at least one record")
         if len(raw_records) > self._max_records:
             raise ValueError("JSON dataset exceeds the admitted record limit")
-        records_fields = tuple(
-            _fields_from_record(record, field_types) for record in raw_records
-        )
+        records_fields = tuple(_fields_from_record(record, field_types) for record in raw_records)
         materialization_lineage = dict(command.materialization_lineage)
         if any(not key.strip() for key in materialization_lineage):
             raise ValueError("JSON materialization lineage keys must not be blank")
@@ -109,26 +108,24 @@ class JsonDatasetIntakeApplication:
             raise ValueError("JSON materialization lineage is not canonical JSON") from error
 
         original_digest = f"sha256:{sha256(command.content).hexdigest()}"
-        format_name = (
-            "json" if command.media_type == "application/json" else "jsonl"
-        )
+        format_name = "json" if command.media_type == "application/json" else "jsonl"
         schema_revision_id = content_identifier(
             "dataset-schema",
             sha256_json({"fields": field_types}),
         )
-        processing_lineage_digest = sha256_json(
-            {
-                "schema": "dataset-processing-lineage.v1",
-                "pipeline_revision": self._pipeline_revision,
-                "format": format_name,
-                "record_path": command.record_path,
-                "schema_revision_id": schema_revision_id,
-                **(
-                    {"materialization": materialization_lineage}
-                    if materialization_lineage
-                    else {}
-                ),
-            }
+        processing_lineage = {
+            "schema": "dataset-processing-lineage.v1",
+            "pipeline_revision": self._pipeline_revision,
+            "format": format_name,
+            "record_path": command.record_path,
+            "schema_revision_id": schema_revision_id,
+            **({"materialization": materialization_lineage} if materialization_lineage else {}),
+        }
+        processing_lineage_digest = sha256_json(processing_lineage)
+        connection_profile = (
+            PinnedConnectionProfile.model_validate(materialization_lineage["connection_profile"])
+            if "connection_profile" in materialization_lineage
+            else None
         )
         version_digest = sha256_json(
             {
@@ -157,6 +154,7 @@ class JsonDatasetIntakeApplication:
             schema_revision_id=schema_revision_id,
             field_order=tuple(field for field, _ in field_types),
             records=records,
+            connection_profile=connection_profile,
         )
         key_root = (
             f"spaces/{command.knowledge_space_id}/sources/{command.knowledge_source_id}/"
@@ -165,22 +163,27 @@ class JsonDatasetIntakeApplication:
         extension = "json" if format_name == "json" else "jsonl"
         original = self._put_and_verify(
             object_key=(
-                f"{key_root}/originals/{original_digest.removeprefix('sha256:')}."
-                f"{extension}"
+                f"{key_root}/originals/{original_digest.removeprefix('sha256:')}.{extension}"
             ),
             content=command.content,
             media_type=command.media_type,
         )
         canonical_content = _canonical_json_bytes(
             {
-                "schema_version": "structured-dataset-revision.v1",
+                "schema_version": "structured-dataset-revision.v1"
+                if connection_profile is None
+                else "structured-dataset-revision.v2",
+                **(
+                    {"processing_lineage": processing_lineage}
+                    if connection_profile is not None
+                    else {}
+                ),
                 "knowledge_source_version_id": source_version_id,
                 "dataset_revision_id": dataset_revision_id,
                 "schema_revision_id": schema_revision_id,
                 "processing_lineage_digest": processing_lineage_digest,
                 "fields": [
-                    {"field": field, "value_type": value_type}
-                    for field, value_type in field_types
+                    {"field": field, "value_type": value_type} for field, value_type in field_types
                 ],
                 "records": [
                     {
@@ -201,9 +204,7 @@ class JsonDatasetIntakeApplication:
         )
         canonical_digest = f"sha256:{sha256(canonical_content).hexdigest()}"
         canonical = self._put_and_verify(
-            object_key=(
-                f"{key_root}/canonical/{canonical_digest.removeprefix('sha256:')}.json"
-            ),
+            object_key=(f"{key_root}/canonical/{canonical_digest.removeprefix('sha256:')}.json"),
             content=canonical_content,
             media_type="application/vnd.knowledge.structured-dataset+json",
         )
@@ -263,11 +264,7 @@ def _records(
     if media_type == "application/x-ndjson":
         if record_path:
             raise ValueError("JSONL intake does not accept record_path")
-        values = [
-            _strict_json(line)
-            for line in text.splitlines()
-            if line.strip()
-        ]
+        values = [_strict_json(line) for line in text.splitlines() if line.strip()]
         if any(type(value) is not dict for value in values):
             raise ValueError("each JSONL line must be an object")
         return tuple(cast(dict[str, Any], value) for value in values)
@@ -357,8 +354,7 @@ def _record_from_fields(
     dataset_revision_id: str,
 ) -> StructuredRecord:
     record_payload = [
-        {"field": item.field, "value_type": item.value_type, "value": item.value}
-        for item in fields
+        {"field": item.field, "value_type": item.value_type, "value": item.value} for item in fields
     ]
     content_hash = sha256_json(record_payload)
     record_id = content_identifier(

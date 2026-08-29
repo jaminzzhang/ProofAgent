@@ -14,7 +14,10 @@ from knowledge_source_service.domain.knowledge_catalog import (
     KnowledgeSourceVersion,
     RetrievalProjectionBinding,
 )
-from knowledge_source_service.domain.publications import PublishedKnowledgeBaseRelease
+from knowledge_source_service.domain.publications import (
+    PreparedKnowledgeBaseRelease,
+    PublishedKnowledgeBaseRelease,
+)
 from knowledge_source_service.ports.artifacts import ImmutableArtifactStore
 from knowledge_source_service.ports.knowledge_catalog import KnowledgeCatalog
 from knowledge_source_service.ports.search_projection import (
@@ -52,6 +55,19 @@ class KnowledgeReleaseApplication:
         self,
         command: PublishKnowledgeReleaseCommand,
     ) -> PublishedKnowledgeBaseRelease:
+        prepared = self.prepare(command)
+        publication = PublishedKnowledgeBaseRelease(
+            release=prepared.release,
+            release_manifest_artifact=prepared.release_manifest_artifact,
+        )
+        self._catalog.put_release(publication)
+        return publication
+
+    def prepare(
+        self,
+        command: PublishKnowledgeReleaseCommand,
+    ) -> PreparedKnowledgeBaseRelease:
+        """Build one exact immutable candidate without granting query authority."""
         if not command.knowledge_source_version_ids:
             raise ValueError("a Knowledge Base Release requires at least one Source Version")
         if len(set(command.knowledge_source_version_ids)) != len(
@@ -62,9 +78,7 @@ class KnowledgeReleaseApplication:
         for source_version_id in command.knowledge_source_version_ids:
             version = self._catalog.get_source_version(source_version_id)
             if version is None:
-                raise ValueError(
-                    "a Knowledge Base Release references an unknown Source Version"
-                )
+                raise ValueError("a Knowledge Base Release references an unknown Source Version")
             if version.knowledge_space_id != command.knowledge_space_id:
                 raise ValueError(
                     "a Knowledge Base Release cannot contain cross-Space Source Versions"
@@ -129,12 +143,10 @@ class KnowledgeReleaseApplication:
             or self._artifacts.get_exact(manifest_reference) != manifest_content
         ):
             raise ValueError("Knowledge Base Release manifest failed exact verification")
-        publication = PublishedKnowledgeBaseRelease(
+        return PreparedKnowledgeBaseRelease(
             release=release,
             release_manifest_artifact=manifest_reference,
         )
-        self._catalog.put_release(publication)
-        return publication
 
     def _build_projection(
         self,
@@ -164,9 +176,7 @@ class KnowledgeReleaseApplication:
                 ],
             }
         )
-        index_identity = (
-            f"kss-index-{projection_digest.removeprefix('sha256:')[:32]}"
-        )
+        index_identity = f"kss-index-{projection_digest.removeprefix('sha256:')[:32]}"
         projection_documents: list[ProjectionEvidenceUnit] = []
         for document in documents:
             for unit in document.evidence_units:
@@ -175,9 +185,7 @@ class KnowledgeReleaseApplication:
                     ProjectionEvidenceUnit(
                         evidence_unit_id=unit.evidence_unit_id,
                         knowledge_source_id=document.knowledge_source_id,
-                        knowledge_source_version_id=(
-                            document.knowledge_source_version_id
-                        ),
+                        knowledge_source_version_id=(document.knowledge_source_version_id),
                         text=unit.text,
                         content_hash=unit.content_hash,
                         dense_vector=encoded.dense_vector,

@@ -184,15 +184,15 @@ contract、Query Executor 或结果合同。
 
 ### 4.3 Release Composer
 
-[INFERRED | HIGH] 建议增加小型 `KnowledgeBaseSpec`/Release Composer：
+[DECISION | HIGH] KSS 使用版本化 `KnowledgeBaseDraft`/Release Composer：
 
-1. 管理员在 Base Draft 中选择 Source。
-2. 每个 Source 指定版本选择策略：exact version 或发布时选择 latest ready。
-3. 发布动作解析并冻结 exact Source Version ID。
+1. 管理员在 Base Draft 中选择 Source，每次 Preparation 提交 exact Draft revision。
+2. 每个 Source 指定版本选择策略：exact version 或 `latest_ready_at_preparation`。
+3. Preparation 启动事务在一致性视图中解析并冻结 exact Source Version ID，创建 immutable Knowledge Base Version。
 4. Composer 校验同一 Space、无重复成员、全部 ready、授权与必要投影完整。
-5. 一次事务发布 immutable Release；Query 仍只看到 Release ID。
+5. 异步 Preparation 完成后，经一次短事务发布 immutable Release；Query 仍只看到 exact Release ID。
 
-「latest ready」只允许在发布动作中解析，绝不能在 Query 执行时解析。
+`latest_ready_at_preparation` 只允许在 Preparation 启动时解析，绝不能在 Query 执行时解析。新 Source Version 只产生管理面的升级提示，不自动创建 Release、更新 Agent Draft 或激活 Agent。该目标模型已由 ADR-0214 接受；当前直接 Release API 在切换完成前仍是实现事实。
 
 ### 4.4 Query Pipeline
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
 from knowledge_source_service.contracts.base import NonBlankText, StrictContract
 from knowledge_source_service.contracts.knowledge_query import KnowledgeServiceProblem
+from knowledge_source_service.contracts.connection_profiles import (
+    ConnectionProfileReference,
+    PinnedConnectionProfile,
+)
 
 
 StructuredValueType = Literal[
@@ -27,12 +31,11 @@ KnowledgeSourceSynchronizationState = Literal[
 ]
 
 
-class CreateKnowledgeSourceSynchronizationRequest(StrictContract):
-    """Request one pre-query snapshot from an operator-configured connection."""
+class SourceSnapshotRequest(StrictContract):
+    """Common bounded materialization parameters, without connection authority."""
 
     knowledge_space_id: NonBlankText
     knowledge_source_id: NonBlankText
-    connection_id: NonBlankText
     display_filename: NonBlankText
     record_path: tuple[NonBlankText, ...] = Field(default=(), max_length=8)
     field_types: dict[NonBlankText, StructuredValueType] = Field(
@@ -41,20 +44,33 @@ class CreateKnowledgeSourceSynchronizationRequest(StrictContract):
     )
 
 
+class CreateKnowledgeSourceSynchronizationRequest(SourceSnapshotRequest):
+    """Explicit pre-cutover static registry request; never a managed fallback."""
+
+    connection_id: NonBlankText
+
+
+class CreateProfileSourceSynchronizationRequest(SourceSnapshotRequest):
+    """Resolve only an exact published Profile revision, at admission and execution."""
+
+    connection_profile: ConnectionProfileReference
+
+
+SourceSynchronizationRequest = (
+    CreateKnowledgeSourceSynchronizationRequest | CreateProfileSourceSynchronizationRequest
+)
+
+
 class KnowledgeSourceSynchronizationLinks(StrictContract):
     self: NonBlankText
 
 
-class KnowledgeSourceSynchronization(StrictContract):
+class SynchronizationStateResource(StrictContract):
     """Pollable state of one immutable external snapshot materialization."""
 
-    schema_version: Literal["knowledge-source-synchronization.v1"] = (
-        "knowledge-source-synchronization.v1"
-    )
     knowledge_source_synchronization_id: NonBlankText
     knowledge_space_id: NonBlankText
     knowledge_source_id: NonBlankText
-    connection_id: NonBlankText
     state: KnowledgeSourceSynchronizationState
     submitted_at: AwareDatetime
     started_at: AwareDatetime | None = None
@@ -97,3 +113,23 @@ class KnowledgeSourceSynchronization(StrictContract):
         ):
             raise ValueError("failed synchronization requires one safe problem")
         return self
+
+
+class KnowledgeSourceSynchronization(SynchronizationStateResource):
+    schema_version: Literal["knowledge-source-synchronization.v1"] = (
+        "knowledge-source-synchronization.v1"
+    )
+    connection_id: NonBlankText
+
+
+class ProfileSourceSynchronization(SynchronizationStateResource):
+    schema_version: Literal["knowledge-source-synchronization.v2"] = (
+        "knowledge-source-synchronization.v2"
+    )
+    connection_profile: PinnedConnectionProfile
+
+
+SourceSynchronizationResource = Annotated[
+    KnowledgeSourceSynchronization | ProfileSourceSynchronization,
+    Field(discriminator="schema_version"),
+]

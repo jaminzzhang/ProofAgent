@@ -19,6 +19,21 @@ _MIGRATIONS = (
         "0005_release_projection_attestation.sql",
     ),
     ("0006_source_synchronizations", "0006_source_synchronizations.sql"),
+    ("0007_connection_profiles", "0007_connection_profiles.sql"),
+    ("0008_profile_synchronizations", "0008_profile_synchronizations.sql"),
+    ("0009_base_preparations", "0009_base_preparations.sql"),
+    ("0010_preparation_leases", "0010_preparation_leases.sql"),
+    ("0011_preparation_results", "0011_preparation_results.sql"),
+    ("0012_preparation_publications", "0012_preparation_publications.sql"),
+    ("0013_preparation_cancellations", "0013_preparation_cancellations.sql"),
+    ("0014_release_references", "0014_release_references.sql"),
+    ("0015_release_deprecation", "0015_release_deprecation.sql"),
+    ("0016_release_retirement", "0016_release_retirement.sql"),
+    (
+        "0017_release_reference_deregistration",
+        "0017_release_reference_deregistration.sql",
+    ),
+    ("0018_release_revocation", "0018_release_revocation.sql"),
 )
 _MIGRATION_LOCK_ID = 4_934_575_833_127_731_121
 

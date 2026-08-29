@@ -125,9 +125,115 @@ release approval.
 
 ## Feature index
 
+[KNOWN | HIGH] On 2026-08-26, KSS Connection Profile TDD-01B adds PostgreSQL
+revision/receipt/audit authority, authenticated management commands, and an
+explicit managed synchronization composition. Jobs pin an exact published
+Profile revision/digest, and immutable Source Version artifacts retain verified
+lineage. Production process roles still select the static registry. Real upstream
+policy/Secret/egress/TLS adapters, cutover and ProofAgent UI wiring remain pending;
+local PG/S3/search tests are not production approval.
+
+[KNOWN | HIGH] TDD-02A through TDD-02G adds management-only Base Draft and preparation admission:
+Draft revision CAS, exact/latest-ready selection frozen under a Base lock and one
+catalog statement snapshot, immutable Base Version plans, durable queued resources
+and atomic receipt/success audit. PostgreSQL migration `0009`, protected management
+HTTP and safe rejection audit are implemented behind explicit runtime DI. The
+latest slices add `0010/0011` and a trusted Worker interface with database-clock
+leases, monotonic fences, takeover, exact candidate construction and atomic
+`ready/failed` result events. Migration `0012` adds application-only
+`ready → expired/consumed`: exact Release header/members, terminal state and
+publication lifecycle audit commit in one PostgreSQL transaction using database
+time. Management GET reads all implemented states; POST replay preserves the
+original queued receipt. Existing exact Release reuse is locked through the
+consumed commit; later legitimate retirement does not corrupt consumed history or
+the original receipt. TDD-02F adds application-only `expire_next()`: database-time,
+deterministically ordered `FOR UPDATE SKIP LOCKED` selection atomically expires one
+due ready candidate with its existing lifecycle audit. The affected regression
+passed 339 tests with zero skips against isolated PostgreSQL/MinIO/OpenSearch. TDD-02G
+adds migration `0013` and application-only idempotent queued/running cancellation:
+database time, the terminal resource and command receipt/success audit commit in one
+transaction; cancelling running work clears its active lease and fences any in-flight
+Worker result. Management GET reads secret-free cancelled state while no cancel HTTP
+command exists. The affected regression passed 357 tests with zero skips. There is
+no publish/expiry/cancel HTTP/BFF, automatic expiry scheduler, quarantine or production
+Worker loop, and candidate PostgreSQL fixtures still use a memory artifact adapter.
+Existing direct Release publication remains a compatible bypass, so Preparation is
+not yet the system-wide unique authority.
+
+[KNOWN | HIGH] TDD-03A adds migration `0014` and a trusted application-only
+Knowledge Base Release Reference registration module. An authenticated client may
+register one immutable `published_agent_version` as `execution_or_rollback` against
+an exact queryable Space/Base/Release. PostgreSQL locks the Release row and commits
+the active reference, permanent client-scoped idempotency receipt and success audit
+using database time in one transaction. Same-key concurrency converges, while a
+missing, retired or scope-mismatched Release and an attempted external-resource
+rebind fail closed. The affected KSS plus ProofAgent KSS/BFF regression passed 375
+tests with zero skips against isolated PostgreSQL/MinIO/OpenSearch. There is no
+Reference HTTP/BFF, deregistration/reconciler, Release deprecation/retirement/
+revocation implementation or ProofAgent reference-first activation, so the Ledger
+is not yet ordinary-retirement or product-publication authority.
+
+[KNOWN | HIGH] TDD-03B adds migration `0015` and a trusted application-only
+Knowledge Base Release deprecation command. Only an exact `queryable` Release may
+become `deprecated`; the state, operator-scoped idempotency receipt and success
+audit use database time and commit in one PostgreSQL transaction. Reference
+registration and deprecation lock the same Release row. Existing references,
+Catalog reads, integrity scans and established Query grants remain usable, while
+new references and new Query grants are rejected. The affected KSS plus ProofAgent
+KSS/BFF regression passed 388 tests with zero skips. There is no deprecation
+HTTP/BFF, ordinary retirement, emergency revocation, deregistration/reconciler or
+ProofAgent activation integration, so the feature remains partial local evidence.
+
+[KNOWN | HIGH] TDD-03C adds migration `0016` and a trusted application-only
+ordinary retirement command. Only an exact `deprecated` Release with zero active
+KSS Reference Ledger rows may become `retired`, and only after database time reaches
+the immutable server-injected retention policy boundary. Policy ID, deprecation
+time, eligibility time, retirement time, operator-scoped receipt and success audit
+commit atomically under the Release row lock. Retired Releases are absent from
+Catalog query, integrity work and established Query authorization. The affected KSS
+plus ProofAgent KSS/BFF regression passed 399 tests with zero skips against isolated
+PostgreSQL/MinIO/OpenSearch. There is no deregistration/reconciler, emergency
+revocation, lifecycle HTTP/BFF, ProofAgent activation ordering, production retention
+configuration, deployment or Production GO, so referenced Releases remain
+conservatively non-retirable.
+
+[KNOWN | HIGH] TDD-03D adds migration `0017` and a trusted application-only
+Reference deregistration admission. The request contains only exact Reference
+identity. Only the owning authenticated client may proceed, and a server-injected
+verifier must prove that the immutable external resource is permanently ineligible
+for execution and rollback. External verification occurs outside the PostgreSQL
+transaction; KSS then rechecks the permanent client-scoped receipt, locks the exact
+active Reference, revalidates trace-safe verifier/verification identities and
+atomically records `deregistered` with database time and ordered success audit.
+Historical registration receipts remain immutable. Same-key concurrency converges,
+different-key duplication fails, and deregistration/retirement races remain
+conservative. The affected real-dependency regression passed 395 tests with zero
+skips; the full backend passed 2384 tests with 24 existing declared skips plus 2
+explicit hybrid integrations. There is no ProofAgent verifier/proof issuance,
+background reconciler, Reference/lifecycle HTTP/BFF, emergency revocation,
+production configuration, deployment or Production GO.
+
+[KNOWN | HIGH] TDD-03E adds migration `0018` and trusted application-only
+Emergency Knowledge Base Release Revocation. Only exact `queryable` or
+`deprecated` Releases may move to `revoked`, only for `security_incident` or
+`severe_data_integrity_failure`, and only with exact
+`fail_closed_without_fallback` confirmation plus a delivery-authorized operator
+identity. KSS locks and counts active References, then atomically records the
+state, reason, confirmation, database time, affected count, permanent receipt and
+success audit without changing Reference facts. Revoked Releases are absent from
+Catalog query/integrity work and established Query authorization. Registration,
+deregistration and ordinary-retirement races converge under Release/Reference
+locks; `retired` and `revoked` cannot overwrite each other. The real-dependency
+affected regression passed 415 tests with zero skips; the full backend passed 2396
+tests with 24 existing declared skips plus 2 explicit hybrid integrations. This
+does not add lifecycle HTTP/BFF authorization, affected-reference details or
+notifications, ProofAgent runtime/rollback integration, physical deletion,
+deployment, production migration or Production GO.
+
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
+| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03E Reference registration/trusted deregistration and deprecation/ordinary-retirement/emergency-revocation cores; no Reference/lifecycle command HTTP/BFF, ProofAgent verifier/background reconciler, affected-reference detail/notification, ProofAgent reference-first publication/runtime revocation integration or production cutover) | ADR-0211 through ADR-0217 |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 | `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |

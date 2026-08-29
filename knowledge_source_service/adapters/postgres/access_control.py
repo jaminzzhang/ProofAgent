@@ -206,7 +206,7 @@ class PostgresKnowledgeAccessControl:
                   AND client_grant.knowledge_base_release_id = %s
                   AND client_grant.active
                   AND client.active
-                  AND release.state = 'queryable'
+                  AND release.state IN ('queryable', 'deprecated')
                   AND %s = ANY(client_grant.allowed_strategies)
                   AND client_grant.max_rounds >= %s
                   AND client_grant.max_model_calls >= %s

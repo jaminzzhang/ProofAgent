@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 import json
+import re
 import secrets
 from typing import Annotated, Literal, cast
 
-from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, Query, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import Field
 
 from knowledge_source_service.adapters.postgres.knowledge_catalog import (
@@ -42,10 +45,36 @@ from knowledge_source_service.application.synchronizations import (
     KnowledgeSourceSynchronizationApplication,
     KnowledgeSourceSynchronizationIdempotencyConflict,
 )
+from knowledge_source_service.application.connection_profiles import ConnectionProfileApplication
+from knowledge_source_service.application.base_preparations import (
+    KnowledgeBasePreparationApplication,
+)
+from knowledge_source_service.contracts.base_preparations import (
+    BaseIdentifier,
+    BasePreparationAuditCollection,
+    BasePreparationRejectionEntry,
+    KnowledgeBaseDraft,
+    QueuedReleasePreparation,
+    ReleasePreparationResource,
+    SaveKnowledgeBaseDraftRequest,
+    StartReleasePreparationRequest,
+)
+from knowledge_source_service.domain.base_preparations import BasePreparationError
+from knowledge_source_service.contracts.connection_profiles import (
+    ConnectionProfileAuditCollection,
+    ConnectionProfileAuditEntry,
+    ConnectionProfileDraft,
+    ConnectionProfileRevisionCommand,
+    ConnectionProfileRejectionEntry,
+    ConnectionProfileView,
+    ProfileIdentifier,
+    ReviseConnectionProfileRequest,
+)
+from knowledge_source_service.domain.connection_profiles import ConnectionProfileError
 from knowledge_source_service.contracts.base import NonBlankText, StrictContract
 from knowledge_source_service.contracts.synchronizations import (
-    CreateKnowledgeSourceSynchronizationRequest,
-    KnowledgeSourceSynchronization,
+    SourceSynchronizationRequest,
+    SourceSynchronizationResource,
 )
 from knowledge_source_service.contracts.results import Sha256Digest
 from knowledge_source_service.domain.knowledge_catalog import StructuredValueType
@@ -64,6 +93,7 @@ from knowledge_source_service.ports.search_projection import HybridSearchProject
 @dataclass(frozen=True)
 class KnowledgeOperator:
     operator_id: str
+    permissions: frozenset[str] = frozenset()
 
 
 AuthenticateKnowledgeOperator = Callable[[Request], KnowledgeOperator]
@@ -73,10 +103,15 @@ class InvalidKnowledgeOperatorCredential(PermissionError):
     """The request has no valid operator Bearer credential."""
 
 
+class KnowledgeOperatorPermissionDenied(PermissionError):
+    """An authenticated identity lacks the command's global named permission."""
+
+
 def bearer_operator_authenticator(
     *,
     operator_id: str,
     expected_token: str,
+    permissions: frozenset[str] = frozenset({"knowledge_source.view", "knowledge_source.edit"}),
 ) -> AuthenticateKnowledgeOperator:
     """Create a constant-time operator authenticator from secret configuration."""
 
@@ -94,7 +129,7 @@ def bearer_operator_authenticator(
             or not secrets.compare_digest(token, expected_token)
         ):
             raise InvalidKnowledgeOperatorCredential
-        return KnowledgeOperator(operator_id=operator_id)
+        return KnowledgeOperator(operator_id=operator_id, permissions=permissions)
 
     return authenticate
 
@@ -210,7 +245,7 @@ class KnowledgeBaseReleaseSummaryResource(StrictContract):
     knowledge_base_version_id: NonBlankText
     knowledge_base_release_id: NonBlankText
     source_version_count: int = Field(ge=1, le=10_000)
-    state: Literal["queryable", "retired"]
+    state: Literal["queryable", "deprecated", "retired", "revoked"]
 
 
 class KnowledgeBaseReleaseCollectionResource(StrictContract):
@@ -234,8 +269,21 @@ def create_management_application(
     encoder: ProjectionTextEncoder | None = None,
     ocr_extractor: DocumentOcrExtractor | None = None,
     synchronization_application: KnowledgeSourceSynchronizationApplication | None = None,
+    connection_profiles: ConnectionProfileApplication | None = None,
+    base_preparations: KnowledgeBasePreparationApplication | None = None,
 ) -> FastAPI:
     """Build a storage-opaque management surface over durable service authority."""
+
+    def require_management_permission(
+        request: Request,
+        operator: KnowledgeOperator = Depends(authenticate_operator),
+    ) -> None:
+        # Only authenticated, server-configured grants count. No role/header/body
+        # can introduce permissions and no profile operation grants Agent release.
+        required = "knowledge_source.view" if request.method == "GET" else "knowledge_source.edit"
+        request.state.knowledge_operator = operator
+        if required not in operator.permissions:
+            raise KnowledgeOperatorPermissionDenied
 
     application = FastAPI(
         title="Knowledge Source Service Management API",
@@ -243,6 +291,7 @@ def create_management_application(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        dependencies=[Depends(require_management_permission)],
     )
     document_intake = DocumentIntakeApplication(
         artifacts=artifacts,
@@ -286,11 +335,382 @@ def create_management_application(
         encoder=encoder,
     )
 
+    def audit_profile_rejection(request: Request, code: str) -> JSONResponse | None:
+        operations = {
+            "create_profile": "create",
+            "get_profile": "get",
+            "revise_profile": "revise",
+            "validate_profile": "validate",
+            "publish_profile": "publish",
+            "profile_audit": "audit",
+        }
+        operation = operations.get(getattr(request.scope.get("route"), "name", ""))
+        if connection_profiles is None or operation is None:
+            return None
+        identity = getattr(request.state, "knowledge_operator", None)
+        profile_id = request.path_params.get("profile_id")
+        if (
+            not isinstance(profile_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", profile_id) is None
+        ):
+            profile_id = None
+        event = ConnectionProfileRejectionEntry.model_validate(
+            {
+                "operator_id": None if identity is None else identity.operator_id,
+                "connection_profile_id": profile_id,
+                "operation": operation,
+                "code": code,
+                "recorded_at": datetime.now(UTC),
+            }
+        )
+        try:
+            connection_profiles.record_rejection(event)
+        except ConnectionProfileError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "code": "connection_profile_audit_unavailable",
+                    "status": 503,
+                    "detail": "The rejected operation could not be audited.",
+                },
+                media_type="application/problem+json",
+            )
+        return None
+
+    def audit_rejection(request: Request, code: str) -> JSONResponse | None:
+        failure = audit_profile_rejection(request, code)
+        if failure is not None:
+            return failure
+        operations = {
+            "save_base_draft": "save_draft",
+            "get_base_draft": "get_draft",
+            "start_release_preparation": "start",
+            "get_release_preparation": "get_preparation",
+            "base_preparation_audit": "audit",
+        }
+        operation = operations.get(getattr(request.scope.get("route"), "name", ""))
+        if base_preparations is None or operation is None:
+            return None
+
+        def safe_id(parameter: str) -> str | None:
+            value = request.path_params.get(parameter)
+            return (
+                value
+                if isinstance(value, str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value)
+                else None
+            )
+
+        identity = getattr(request.state, "knowledge_operator", None)
+        operator_id = None if identity is None else identity.operator_id
+        if (
+            not isinstance(operator_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}", operator_id) is None
+        ):
+            operator_id = None
+        event = BasePreparationRejectionEntry.model_validate(
+            {
+                "operator_id": operator_id,
+                "knowledge_space_id": safe_id("knowledge_space_id"),
+                "knowledge_base_id": safe_id("knowledge_base_id"),
+                "release_preparation_id": safe_id("preparation_id"),
+                "operation": operation,
+                "code": code,
+                "recorded_at": datetime.now(UTC),
+            }
+        )
+        try:
+            base_preparations.record_rejection(event)
+        except BasePreparationError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "code": "base_preparation_audit_unavailable",
+                    "status": 503,
+                    "detail": "The rejected operation could not be audited.",
+                },
+                media_type="application/problem+json",
+            )
+        return None
+
+    @application.exception_handler(ConnectionProfileError)
+    def handle_connection_profile_error(
+        _request: Request, error: ConnectionProfileError
+    ) -> JSONResponse:
+        failure = audit_rejection(_request, error.code)
+        if failure is not None:
+            return failure
+        code = error.code
+        error_status = (
+            503
+            if code.endswith("_unavailable")
+            else 404
+            if code == "connection_profile_not_found"
+            else 422
+            if code.startswith("connection_profile_invalid_")
+            else 409
+        )
+        return JSONResponse(
+            status_code=error_status,
+            content={
+                "type": "urn:knowledge-source-service:problem:connection-profile",
+                "title": "Connection Profile operation failed",
+                "status": error_status,
+                "code": code,
+                "detail": "The exact Profile operation could not be completed.",
+            },
+            media_type="application/problem+json",
+        )
+
+    if connection_profiles is not None:
+        profiles = connection_profiles
+
+        @application.post(
+            "/v1/connection-profiles", response_model=ConnectionProfileView, status_code=201
+        )
+        def create_profile(
+            body: ConnectionProfileDraft,
+            response: Response,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> ConnectionProfileView:
+            view = profiles.create(
+                body, operator_id=operator.operator_id, idempotency_key=idempotency_key
+            )
+            response.headers["Location"] = f"/v1/connection-profiles/{view.connection_profile_id}"
+            return view
+
+        @application.get(
+            "/v1/connection-profiles/{profile_id}", response_model=ConnectionProfileView
+        )
+        def get_profile(
+            profile_id: ProfileIdentifier,
+            revision: int | None = Query(default=None, ge=1),
+            _operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> ConnectionProfileView:
+            view = profiles.get(profile_id, revision=revision)
+            if view is None:
+                raise ConnectionProfileError("connection_profile_not_found")
+            return view
+
+        @application.put(
+            "/v1/connection-profiles/{profile_id}", response_model=ConnectionProfileView
+        )
+        def revise_profile(
+            profile_id: ProfileIdentifier,
+            body: ReviseConnectionProfileRequest,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> ConnectionProfileView:
+            return profiles.revise(
+                profile_id,
+                body.draft,
+                expected_revision=body.expected_revision,
+                operator_id=operator.operator_id,
+                idempotency_key=idempotency_key,
+            )
+
+        @application.post(
+            "/v1/connection-profiles/{profile_id}:validate", response_model=ConnectionProfileView
+        )
+        def validate_profile(
+            profile_id: ProfileIdentifier,
+            body: ConnectionProfileRevisionCommand,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> ConnectionProfileView:
+            return profiles.validate(
+                profile_id,
+                expected_revision=body.expected_revision,
+                operator_id=operator.operator_id,
+                idempotency_key=idempotency_key,
+            )
+
+        @application.post(
+            "/v1/connection-profiles/{profile_id}:publish", response_model=ConnectionProfileView
+        )
+        def publish_profile(
+            profile_id: ProfileIdentifier,
+            body: ConnectionProfileRevisionCommand,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> ConnectionProfileView:
+            return profiles.publish(
+                profile_id,
+                expected_revision=body.expected_revision,
+                operator_id=operator.operator_id,
+                idempotency_key=idempotency_key,
+            )
+
+        @application.get(
+            "/v1/connection-profiles/{profile_id}/audit",
+            response_model=ConnectionProfileAuditCollection,
+        )
+        def profile_audit(
+            profile_id: ProfileIdentifier,
+            _operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> ConnectionProfileAuditCollection:
+            if profiles.get(profile_id) is None:
+                raise ConnectionProfileError("connection_profile_not_found")
+            return ConnectionProfileAuditCollection(
+                events=tuple(
+                    ConnectionProfileAuditEntry.model_validate(asdict(event))
+                    for event in profiles.audit(profile_id)
+                ),
+                rejections=profiles.rejections(profile_id),
+            )
+
+    @application.exception_handler(BasePreparationError)
+    def handle_base_preparation_error(
+        _request: Request, error: BasePreparationError
+    ) -> JSONResponse:
+        failure = audit_rejection(_request, error.code)
+        if failure is not None:
+            return failure
+        code = error.code
+        error_status = (
+            503
+            if code.endswith("_unavailable")
+            else 404
+            if code.endswith("_not_found")
+            else 422
+            if "_invalid_" in code
+            else 409
+        )
+        return JSONResponse(
+            status_code=error_status,
+            content={
+                "type": "urn:knowledge-source-service:problem:base-preparation",
+                "title": "Base preparation operation failed",
+                "status": error_status,
+                "code": code,
+                "detail": "The exact Base preparation operation could not be completed.",
+            },
+            media_type="application/problem+json",
+        )
+
+    if base_preparations is not None:
+        preparations = base_preparations
+        base_path = "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}"
+
+        def require_base_scope(
+            space_id: str, base_id: str, actual_space_id: str, actual_base_id: str
+        ) -> None:
+            if (space_id, base_id) != (actual_space_id, actual_base_id):
+                raise BasePreparationError("base_scope_mismatch")
+
+        @application.put(f"{base_path}/draft", response_model=KnowledgeBaseDraft)
+        def save_base_draft(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            body: SaveKnowledgeBaseDraftRequest,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> KnowledgeBaseDraft:
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                body.knowledge_space_id,
+                body.knowledge_base_id,
+            )
+            return preparations.save_draft(
+                body, operator_id=operator.operator_id, idempotency_key=idempotency_key
+            )
+
+        @application.get(f"{base_path}/draft", response_model=KnowledgeBaseDraft)
+        def get_base_draft(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            revision: int | None = Query(default=None, ge=1),
+        ) -> KnowledgeBaseDraft:
+            draft = preparations.get_draft(knowledge_base_id, revision=revision)
+            if draft is None:
+                raise BasePreparationError("base_draft_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                draft.knowledge_space_id,
+                draft.knowledge_base_id,
+            )
+            return draft
+
+        @application.post(
+            f"{base_path}/release-preparations",
+            response_model=QueuedReleasePreparation,
+            status_code=202,
+        )
+        def start_release_preparation(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            body: StartReleasePreparationRequest,
+            response: Response,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+            idempotency_key: str = Depends(require_idempotency_key),
+        ) -> QueuedReleasePreparation:
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                body.knowledge_space_id,
+                body.knowledge_base_id,
+            )
+            preparation = preparations.start(
+                body, operator_id=operator.operator_id, idempotency_key=idempotency_key
+            )
+            response.headers["Location"] = (
+                f"/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}"
+                f"/release-preparations/{preparation.release_preparation_id}"
+            )
+            return preparation
+
+        @application.get(
+            f"{base_path}/release-preparations/{{preparation_id}}",
+            response_model=ReleasePreparationResource,
+        )
+        def get_release_preparation(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            preparation_id: BaseIdentifier,
+        ) -> ReleasePreparationResource:
+            preparation = preparations.get_preparation(preparation_id)
+            if preparation is None:
+                raise BasePreparationError("base_preparation_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                preparation.knowledge_space_id,
+                preparation.knowledge_base_id,
+            )
+            return preparation
+
+        @application.get(
+            f"{base_path}/preparation-audit", response_model=BasePreparationAuditCollection
+        )
+        def base_preparation_audit(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+        ) -> BasePreparationAuditCollection:
+            draft = preparations.get_draft(knowledge_base_id)
+            if draft is None:
+                raise BasePreparationError("base_draft_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                draft.knowledge_space_id,
+                draft.knowledge_base_id,
+            )
+            return BasePreparationAuditCollection(
+                events=preparations.audit(knowledge_base_id),
+                rejections=preparations.rejections(knowledge_base_id),
+            )
+
     @application.exception_handler(InvalidKnowledgeOperatorCredential)
     def handle_invalid_operator_credential(
         _request: Request,
         _error: InvalidKnowledgeOperatorCredential,
     ) -> JSONResponse:
+        failure = audit_rejection(_request, "invalid_operator_credential")
+        if failure is not None:
+            return failure
         response = JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={
@@ -304,6 +724,25 @@ def create_management_application(
         )
         response.headers["WWW-Authenticate"] = "Bearer"
         return response
+
+    @application.exception_handler(KnowledgeOperatorPermissionDenied)
+    def handle_permission_denied(
+        _request: Request, _error: KnowledgeOperatorPermissionDenied
+    ) -> JSONResponse:
+        failure = audit_rejection(_request, "knowledge_operator_permission_denied")
+        if failure is not None:
+            return failure
+        return JSONResponse(
+            status_code=403,
+            content={
+                "type": "urn:knowledge-source-service:problem:operator-permission-denied",
+                "title": "Knowledge operator permission denied",
+                "status": 403,
+                "code": "knowledge_operator_permission_denied",
+                "detail": "The authenticated operator lacks the required permission.",
+            },
+            media_type="application/problem+json",
+        )
 
     @application.exception_handler(KnowledgeCatalogConflict)
     def handle_catalog_conflict(
@@ -363,6 +802,9 @@ def create_management_application(
         _request: Request,
         _error: InvalidIdempotencyKey,
     ) -> JSONResponse:
+        failure = audit_rejection(_request, "invalid_idempotency_key")
+        if failure is not None:
+            return failure
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
@@ -392,11 +834,15 @@ def create_management_application(
             media_type="application/problem+json",
         )
 
+    @application.exception_handler(RequestValidationError)
     @application.exception_handler(ValueError)
     def handle_invalid_management_request(
         _request: Request,
-        _error: ValueError,
+        _error: Exception,
     ) -> JSONResponse:
+        failure = audit_rejection(_request, "invalid_management_request")
+        if failure is not None:
+            return failure
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -519,15 +965,15 @@ def create_management_application(
 
         @application.post(
             "/v1/knowledge-source-synchronizations",
-            response_model=KnowledgeSourceSynchronization,
+            response_model=SourceSynchronizationResource,
             status_code=status.HTTP_202_ACCEPTED,
         )
         def create_source_synchronization(
-            body: CreateKnowledgeSourceSynchronizationRequest,
+            body: SourceSynchronizationRequest,
             response: Response,
             idempotency_key: str = Depends(require_idempotency_key),
             operator: KnowledgeOperator = Depends(authenticate_operator),
-        ) -> KnowledgeSourceSynchronization:
+        ) -> SourceSynchronizationResource:
             outcome = synchronization_application.create(
                 body,
                 operator_id=operator.operator_id,
@@ -542,12 +988,12 @@ def create_management_application(
 
         @application.get(
             ("/v1/knowledge-source-synchronizations/{knowledge_source_synchronization_id}"),
-            response_model=KnowledgeSourceSynchronization,
+            response_model=SourceSynchronizationResource,
         )
         def get_source_synchronization(
             knowledge_source_synchronization_id: str,
             operator: KnowledgeOperator = Depends(authenticate_operator),
-        ) -> KnowledgeSourceSynchronization | JSONResponse:
+        ) -> SourceSynchronizationResource | JSONResponse:
             synchronization = synchronization_application.get(
                 knowledge_source_synchronization_id,
                 operator_id=operator.operator_id,

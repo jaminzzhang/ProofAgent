@@ -56,6 +56,38 @@ def _query(
     return result.model_dump(mode="json")["evidence_groups"][0]["candidate_evidence"]
 
 
+def test_preparing_an_exact_release_does_not_make_it_queryable() -> None:
+    artifacts = InMemoryImmutableArtifactStore()
+    catalog = InMemoryKnowledgeCatalog()
+    source = DocumentIntakeApplication(
+        artifacts=artifacts,
+        catalog=catalog,
+        pipeline_revision="document-pipeline-v1",
+        max_content_bytes=1024,
+    ).create_source_version(
+        DocumentIntakeCommand(
+            knowledge_space_id="space-insurance",
+            knowledge_source_id="source-policy",
+            display_filename="synthetic.md",
+            media_type="text/markdown",
+            content=b"Synthetic private rule.",
+        )
+    )
+    releases = KnowledgeReleaseApplication(artifacts=artifacts, catalog=catalog)
+
+    prepared = releases.prepare(
+        PublishKnowledgeReleaseCommand(
+            knowledge_space_id="space-insurance",
+            knowledge_base_id="base-insurance",
+            knowledge_source_version_ids=(source.version.knowledge_source_version_id,),
+        )
+    )
+
+    assert prepared.release.knowledge_base_version_id.startswith("base-version-")
+    assert artifacts.get_exact(prepared.release_manifest_artifact)
+    assert catalog.get_release(prepared.release.knowledge_base_release_id) is None
+
+
 def test_markdown_and_text_intake_publish_exact_replayable_releases() -> None:
     artifacts = InMemoryImmutableArtifactStore()
     catalog = InMemoryKnowledgeCatalog()
@@ -188,9 +220,7 @@ def test_html_intake_removes_active_content_and_preserves_dom_citation() -> None
         PublishKnowledgeReleaseCommand(
             knowledge_space_id="space-insurance",
             knowledge_base_id="base-insurance",
-            knowledge_source_version_ids=(
-                published.version.knowledge_source_version_id,
-            ),
+            knowledge_source_version_ids=(published.version.knowledge_source_version_id,),
         )
     )
 

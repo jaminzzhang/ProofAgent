@@ -20,6 +20,16 @@ from knowledge_source_service.adapters.memory.knowledge_queries import (
 from knowledge_source_service.adapters.memory.synchronizations import (
     InMemoryKnowledgeSourceSynchronizationRepository,
 )
+from knowledge_source_service.adapters.memory.connection_profiles import (
+    InMemoryConnectionProfileRepository,
+)
+from knowledge_source_service.application.connection_profiles import ConnectionProfileApplication
+from knowledge_source_service.adapters.memory.base_preparations import (
+    InMemoryBasePreparationRepository,
+)
+from knowledge_source_service.application.base_preparations import (
+    KnowledgeBasePreparationApplication,
+)
 from knowledge_source_service.application.knowledge_queries import (
     KnowledgeQueryApplication,
     KnowledgeServiceClient,
@@ -59,9 +69,7 @@ def build_openapi_contract_bytes() -> bytes:
     )
     application = create_application(
         query_application=query_application,
-        authenticate_client=lambda _request: KnowledgeServiceClient(
-            client_id="openapi-client"
-        ),
+        authenticate_client=lambda _request: KnowledgeServiceClient(client_id="openapi-client"),
         trace_id_factory=lambda: "openapi-trace",
         release_identity="openapi-contract-v1",
         readiness_probe=lambda: {
@@ -85,6 +93,17 @@ def build_openapi_contract_bytes() -> bytes:
         max_upload_bytes=1,
         max_dataset_records=1,
         synchronization_application=synchronizations,
+        connection_profiles=ConnectionProfileApplication(
+            repository=InMemoryConnectionProfileRepository(),
+            policy=None,
+            clock=lambda: _CONTRACT_TIME,
+            id_factory=lambda: "openapi-profile",
+        ),
+        base_preparations=KnowledgeBasePreparationApplication(
+            repository=InMemoryBasePreparationRepository(),
+            clock=lambda: _CONTRACT_TIME,
+            id_factory=lambda: "openapi-preparation",
+        ),
     )
     application.include_router(management.router)
     application.exception_handlers.update(management.exception_handlers)

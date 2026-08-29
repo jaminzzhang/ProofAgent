@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from knowledge_source_service.contracts.synchronizations import (
-    CreateKnowledgeSourceSynchronizationRequest,
-    KnowledgeSourceSynchronization,
+    SourceSynchronizationRequest,
+    SourceSynchronizationResource,
 )
 
 
 @dataclass(frozen=True)
 class KnowledgeSourceSynchronizationRecord:
-    synchronization: KnowledgeSourceSynchronization
-    request: CreateKnowledgeSourceSynchronizationRequest
+    synchronization: SourceSynchronizationResource
+    request: SourceSynchronizationRequest
     operator_id: str
     idempotency_key: str
     request_fingerprint: str

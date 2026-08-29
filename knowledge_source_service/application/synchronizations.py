@@ -9,10 +9,15 @@ from hashlib import sha256
 import json
 
 from knowledge_source_service.contracts.synchronizations import (
-    CreateKnowledgeSourceSynchronizationRequest,
+    CreateProfileSourceSynchronizationRequest,
     KnowledgeSourceSynchronization,
     KnowledgeSourceSynchronizationLinks,
+    ProfileSourceSynchronization,
+    SourceSynchronizationRequest,
+    SourceSynchronizationResource,
 )
+from knowledge_source_service.contracts.connection_profiles import PinnedConnectionProfile
+from knowledge_source_service.application.connection_profiles import ConnectionProfileApplication
 from knowledge_source_service.domain.synchronizations import (
     KnowledgeSourceSynchronizationPersistenceConflict,
     KnowledgeSourceSynchronizationRecord,
@@ -32,7 +37,7 @@ class KnowledgeSnapshotConnectionUnavailable(ValueError):
 
 @dataclass(frozen=True)
 class KnowledgeSourceSynchronizationCreation:
-    synchronization: KnowledgeSourceSynchronization
+    synchronization: SourceSynchronizationResource
     created: bool
 
 
@@ -43,16 +48,20 @@ class KnowledgeSourceSynchronizationApplication:
         repository: KnowledgeSourceSynchronizationRepository,
         clock: Callable[[], datetime],
         id_factory: Callable[[], str],
-        admit_connection: Callable[[str], bool],
+        admit_connection: Callable[[str], bool] | None = None,
+        connection_profiles: ConnectionProfileApplication | None = None,
     ) -> None:
+        if (admit_connection is None) == (connection_profiles is None):
+            raise ValueError("choose exactly one synchronization connection authority")
         self._repository = repository
         self._clock = clock
         self._id_factory = id_factory
         self._admit_connection = admit_connection
+        self._connection_profiles = connection_profiles
 
     def create(
         self,
-        request: CreateKnowledgeSourceSynchronizationRequest,
+        request: SourceSynchronizationRequest,
         *,
         operator_id: str,
         idempotency_key: str,
@@ -71,23 +80,45 @@ class KnowledgeSourceSynchronizationApplication:
                 synchronization=existing.synchronization,
                 created=False,
             )
-        if not self._admit_connection(request.connection_id):
+        pinned: PinnedConnectionProfile | None = None
+        if isinstance(request, CreateProfileSourceSynchronizationRequest):
+            if self._connection_profiles is None:
+                raise KnowledgeSnapshotConnectionUnavailable
+            reference = request.connection_profile
+            profile_record = self._connection_profiles.resolve_for_synchronization(
+                reference.connection_profile_id,
+                revision=reference.revision,
+                knowledge_space_id=request.knowledge_space_id,
+                knowledge_source_id=request.knowledge_source_id,
+            )
+            pinned = PinnedConnectionProfile(
+                **reference.model_dump(),
+                configuration_digest=profile_record.view.configuration_digest,
+            )
+        elif self._admit_connection is None or not self._admit_connection(request.connection_id):
             raise KnowledgeSnapshotConnectionUnavailable
         synchronization_id = self._id_factory()
-        synchronization = KnowledgeSourceSynchronization(
+        resource = dict(
             knowledge_source_synchronization_id=synchronization_id,
             knowledge_space_id=request.knowledge_space_id,
             knowledge_source_id=request.knowledge_source_id,
-            connection_id=request.connection_id,
             state="queued",
             submitted_at=self._clock(),
             links=KnowledgeSourceSynchronizationLinks(
-                self=(
-                    "/v1/knowledge-source-synchronizations/"
-                    f"{synchronization_id}"
-                )
+                self=(f"/v1/knowledge-source-synchronizations/{synchronization_id}")
             ),
         )
+        synchronization: SourceSynchronizationResource
+        if pinned is not None:
+            synchronization = ProfileSourceSynchronization.model_validate(
+                {**resource, "connection_profile": pinned}
+            )
+        else:
+            if isinstance(request, CreateProfileSourceSynchronizationRequest):
+                raise KnowledgeSnapshotConnectionUnavailable
+            synchronization = KnowledgeSourceSynchronization.model_validate(
+                {**resource, "connection_id": request.connection_id}
+            )
         record = KnowledgeSourceSynchronizationRecord(
             synchronization=synchronization,
             request=request,
@@ -120,7 +151,7 @@ class KnowledgeSourceSynchronizationApplication:
         synchronization_id: str,
         *,
         operator_id: str,
-    ) -> KnowledgeSourceSynchronization | None:
+    ) -> SourceSynchronizationResource | None:
         record = self._repository.get(synchronization_id)
         if record is None or record.operator_id != operator_id:
             return None
@@ -128,7 +159,7 @@ class KnowledgeSourceSynchronizationApplication:
 
 
 def _request_fingerprint(
-    request: CreateKnowledgeSourceSynchronizationRequest,
+    request: SourceSynchronizationRequest,
 ) -> str:
     canonical_json = json.dumps(
         request.model_dump(mode="json"),
@@ -136,7 +167,5 @@ def _request_fingerprint(
         separators=(",", ":"),
         sort_keys=True,
     )
-    digest = sha256(
-        f"knowledge-source-synchronization.v1\0{canonical_json}".encode()
-    ).hexdigest()
+    digest = sha256(f"knowledge-source-synchronization.v1\0{canonical_json}".encode()).hexdigest()
     return f"sha256:{digest}"

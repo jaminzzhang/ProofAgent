@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from knowledge_source_service.contracts.connection_profiles import PinnedConnectionProfile
 
 
 StructuredValueType = Literal[
@@ -157,6 +158,7 @@ class DatasetSourceVersion:
     schema_revision_id: str
     field_order: tuple[str, ...]
     records: tuple[StructuredRecord, ...]
+    connection_profile: PinnedConnectionProfile | None = None
 
     @property
     def record_ids(self) -> tuple[str, ...]:
@@ -182,7 +184,7 @@ class KnowledgeBaseReleaseSummary:
     knowledge_base_version_id: str
     knowledge_base_release_id: str
     source_version_count: int
-    state: Literal["queryable", "retired"]
+    state: Literal["queryable", "deprecated", "retired", "revoked"]
 
 
 @dataclass(frozen=True)

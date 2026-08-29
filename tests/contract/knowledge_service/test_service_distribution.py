@@ -50,20 +50,15 @@ def test_knowledge_source_service_is_an_independent_python_distribution() -> Non
     assert configuration["project"]["requires-python"] == ">=3.12"
     dependencies = set(configuration["project"]["dependencies"])
     assert {"fastapi>=0.111.0", "pydantic>=2.7.0"} <= dependencies
-    assert configuration["tool"]["hatch"]["build"]["targets"]["wheel"][
-        "force-include"
-    ] == {"../../knowledge_source_service": "knowledge_source_service"}
-    assert all(
-        "proof-agent" not in dependency.lower()
-        for dependency in dependencies
-    )
+    assert configuration["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"] == {
+        "../../knowledge_source_service": "knowledge_source_service"
+    }
+    assert all("proof-agent" not in dependency.lower() for dependency in dependencies)
 
 
 def test_service_image_requires_immutable_build_images_and_a_frozen_lock() -> None:
     dockerfile = (SERVICE_PROJECT / "Dockerfile").read_text(encoding="utf-8")
-    dockerignore = (SERVICE_PROJECT / "Dockerfile.dockerignore").read_text(
-        encoding="utf-8"
-    )
+    dockerignore = (SERVICE_PROJECT / "Dockerfile.dockerignore").read_text(encoding="utf-8")
 
     assert "ARG UV_IMAGE" in dockerfile
     assert "ARG RUNTIME_IMAGE" in dockerfile
@@ -78,10 +73,7 @@ def test_service_image_requires_immutable_build_images_and_a_frozen_lock() -> No
     assert "COPY knowledge_source_service /src/knowledge_source_service" in dockerfile
     assert "UV_PROJECT_ENVIRONMENT=/opt/knowledge-source-service/venv" in dockerfile
     assert "uv sync --frozen --no-dev --no-editable" in dockerfile
-    assert (
-        "/opt/knowledge-source-service/venv /opt/knowledge-source-service/venv"
-        in dockerfile
-    )
+    assert "/opt/knowledge-source-service/venv /opt/knowledge-source-service/venv" in dockerfile
     assert dockerignore.splitlines() == [
         "**",
         "!services/",
@@ -113,9 +105,48 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "/v1/knowledge-queries",
         "/v1/knowledge-spaces",
         "/v1/knowledge-source-synchronizations",
+        "/v1/connection-profiles",
+        "/v1/connection-profiles/{profile_id}:publish",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/draft",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/preparation-audit",
     } <= set(payload["paths"])
+    schemas = payload["components"]["schemas"]
+    assert {
+        "QueuedReleasePreparation",
+        "RunningReleasePreparation",
+        "CancelledReleasePreparation",
+        "ReadyReleasePreparation",
+        "ExpiredReleasePreparation",
+        "ConsumedReleasePreparation",
+        "FailedReleasePreparation",
+    } <= set(schemas)
+    assert "PreparationClaim" not in schemas
+    for schema_name in (
+        "RunningReleasePreparation",
+        "CancelledReleasePreparation",
+        "ReadyReleasePreparation",
+        "ExpiredReleasePreparation",
+        "ConsumedReleasePreparation",
+        "FailedReleasePreparation",
+    ):
+        assert not {
+            "candidate_json",
+            "release_manifest_artifact",
+            "lease_worker_id",
+            "lease_fencing_token",
+            "lease_expires_at",
+            "published_release_id",
+        } & set(schemas[schema_name]["properties"])
+    assert schemas["KnowledgeBaseReleaseSummaryResource"]["properties"]["state"]["enum"] == [
+        "queryable",
+        "deprecated",
+        "retired",
+        "revoked",
+    ]
     assert hashlib.sha256(contract).hexdigest() == (
-        "5101269935f2aecaf985f673641a593db58c3afe98f5d6bf38acb33a995b2a7a"
+        "d5ac3702b27a3c829fa6d5cf4d84e632162f9b12aeb934afba09f11edb7ee51c"
     )
 
 
@@ -149,9 +180,9 @@ def test_migration_contract_is_canonical_and_binds_every_packaged_revision() -> 
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    assert payload["head_revision"] == "0006_source_synchronizations"
+    assert payload["head_revision"] == "0018_release_revocation"
     assert [item["revision"] for item in payload["migrations"]] == [
-        f"000{number}_{name}"
+        f"{number:04d}_{name}"
         for number, name in (
             (1, "knowledge_queries"),
             (2, "knowledge_catalog"),
@@ -159,10 +190,22 @@ def test_migration_contract_is_canonical_and_binds_every_packaged_revision() -> 
             (4, "query_result_artifacts"),
             (5, "release_projection_attestation"),
             (6, "source_synchronizations"),
+            (7, "connection_profiles"),
+            (8, "profile_synchronizations"),
+            (9, "base_preparations"),
+            (10, "preparation_leases"),
+            (11, "preparation_results"),
+            (12, "preparation_publications"),
+            (13, "preparation_cancellations"),
+            (14, "release_references"),
+            (15, "release_deprecation"),
+            (16, "release_retirement"),
+            (17, "release_reference_deregistration"),
+            (18, "release_revocation"),
         )
     ]
     assert hashlib.sha256(contract).hexdigest() == (
-        "707106a66e820852debf617f93ec3086f1e47241e07e9896afb749288bdc8101"
+        "7a382fd03b767c56b13bf8f8260b6a808ddec91ff0fb41ff014f6b6a64669fef"
     )
 
 
@@ -268,9 +311,7 @@ def test_runtime_configuration_rejects_ambiguous_or_weak_secret_files(
 
     secret.chmod(0o644)
     with pytest.raises(ValueError, match="permissions"):
-        ApiRuntimeConfiguration.from_environment(
-            {**common, "KSS_POSTGRES_DSN_FILE": str(secret)}
-        )
+        ApiRuntimeConfiguration.from_environment({**common, "KSS_POSTGRES_DSN_FILE": str(secret)})
 
     secret.chmod(0o600)
     with pytest.raises(ValueError, match="both"):
@@ -322,9 +363,7 @@ def test_api_role_dispatches_the_validated_runtime_instead_of_only_checking_conf
 
     assert exit_status == 0
     assert observed[0][0] == "api"
-    assert observed[0][1].object_store_uri == (
-        "s3://knowledge-service-test/service-prefix"
-    )
+    assert observed[0][1].object_store_uri == ("s3://knowledge-service-test/service-prefix")
     assert observed[0][2] is environment
 
 
@@ -391,10 +430,13 @@ def test_api_process_wires_release_pinned_hybrid_projection(
 
 
 def test_non_api_roles_do_not_resolve_the_operator_secret_file() -> None:
-    assert processes._operator_authenticator(  # noqa: SLF001 - role boundary contract
-        "query-executor",
-        {"KSS_OPERATOR_BEARER_TOKEN_FILE": "/run/secrets/not-mounted-for-query"},
-    ) is None
+    assert (
+        processes._operator_authenticator(  # noqa: SLF001 - role boundary contract
+            "query-executor",
+            {"KSS_OPERATOR_BEARER_TOKEN_FILE": "/run/secrets/not-mounted-for-query"},
+        )
+        is None
+    )
 
 
 def test_explicit_deterministic_encoder_accepts_an_overridden_dimension() -> None:
@@ -445,14 +487,9 @@ def test_sync_scheduler_runs_bounded_result_expiration_batch(
 def test_ocr_runtime_configuration_fails_closed_with_precise_missing_keys() -> None:
     with pytest.raises(
         ValueError,
-        match=(
-            "KSS OCR configuration is incomplete: "
-            "KSS_OCR_BEARER_TOKEN, KSS_OCR_MODEL_REVISION"
-        ),
+        match=("KSS OCR configuration is incomplete: KSS_OCR_BEARER_TOKEN, KSS_OCR_MODEL_REVISION"),
     ):
-        processes._ocr_extractor(
-            {"KSS_OCR_ENDPOINT": "https://ocr.invalid/v1/extract"}
-        )
+        processes._ocr_extractor({"KSS_OCR_ENDPOINT": "https://ocr.invalid/v1/extract"})
 
 
 def test_knowledge_worker_role_runs_bounded_release_integrity_work(

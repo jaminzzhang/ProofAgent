@@ -34,3 +34,11 @@ class PublishedDatasetSourceVersion:
 class PublishedKnowledgeBaseRelease:
     release: KnowledgeBaseReleaseSnapshot
     release_manifest_artifact: ExactArtifactReference
+
+
+@dataclass(frozen=True)
+class PreparedKnowledgeBaseRelease:
+    """Exact immutable candidate that is not catalog-visible authority."""
+
+    release: KnowledgeBaseReleaseSnapshot
+    release_manifest_artifact: ExactArtifactReference

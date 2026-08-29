@@ -220,6 +220,14 @@ _Avoid_: Source Draft, mutable connector state, ingestion attempt, latest-only S
 A Knowledge Source Service-owned query aggregate that composes one or more independently governed Knowledge Sources without erasing their individual lifecycle, version, or provenance.
 _Avoid_: Knowledge Source, Agent Knowledge Binding Set, mutable Source list, retrieval index
 
+**Knowledge Base Draft**:
+The KSS-owned, revisioned management resource for composing a Knowledge Base from Source members. Each member selects either one exact Source Version or `latest_ready_at_preparation`; the Draft is non-queryable and every preparation command names one exact Draft revision.
+_Avoid_: Knowledge Base Release, runtime Source list, mutable query target, implicit latest lookup
+
+**Knowledge Base Source Version Selection Policy**:
+The authoring-time member rule `exact` or `latest_ready_at_preparation`. KSS resolves the latter exactly once, under a consistent view when Release Preparation starts; it is never evaluated by query execution or Agent runtime.
+_Avoid_: Runtime latest, automatic Release upgrade, mutable Source pointer, best-effort fallback
+
 **Knowledge Base Version**:
 An immutable Knowledge Base composition boundary that pins the intended Knowledge Source Versions, Structured Knowledge Dataset Revisions where applicable, and retrieval-compatibility configuration. It becomes queryable only through a successfully published Knowledge Base Release that binds validated physical projections and runtime identities.
 _Avoid_: Query target by itself, Knowledge Source Publication, mutable Knowledge Base, runtime latest lookup, Agent policy
@@ -228,9 +236,91 @@ _Avoid_: Query target by itself, Knowledge Source Publication, mutable Knowledge
 The immutable service publication record that makes one exact Knowledge Base Version queryable and binds its Knowledge Source Versions, Evidence Unit manifests, retrieval-index generations, retrieval profile, and validation result. Candidate Evidence identifies the exact Release that served it.
 _Avoid_: Agent Release, mutable active pointer, Knowledge Source Version, deployment release
 
+**Deprecated Knowledge Base Release**:
+A still-queryable Release that is blocked from new Agent Draft bindings and new formal Agent publication. Existing Published Agent Versions remain pinned and may continue running or be selected for rollback until ordinary retirement becomes eligible.
+_Avoid_: Retired Release, automatic Agent upgrade, query failure, Recommended Release pointer
+
+**Retired Knowledge Base Release**:
+A non-queryable Release reached through an explicit ordinary-lifecycle command only after authoritative reference checks report no executable client reference and retention requirements are satisfied. Retirement does not delete artifacts; it only makes separately authorized deletion eligible.
+_Avoid_: Deprecated Release, emergency containment, automatic cleanup, physical deletion
+
+**Emergency Knowledge Base Release Revocation**:
+The explicitly authorized and audited safety action that immediately makes one Release non-queryable despite existing references because of a security incident or severe data-integrity failure. Affected pinned queries and Agent runs fail closed without fallback.
+_Avoid_: Routine retirement, availability workaround, silent replacement, best-effort query
+
+**Knowledge Base Release Reference Registration**:
+The idempotent KSS command by which one authenticated Agent or other client records that an immutable external resource uses one exact Release and may execute or be selected for rollback. Registration must succeed before that external resource becomes executable.
+_Avoid_: Query log, active-pointer-only reference, caller-reported count, mutable latest binding
+
+**Knowledge Base Release Reference Ledger**:
+The KSS-owned durable set of registered executable and rollback-eligible client references used as the local authority for ordinary Release retirement. Missing or uncertain client reconciliation leaves a conservative reference in place; emergency revocation remains a separate safety command.
+_Avoid_: ProofAgent-only callback, distributed transaction, expiring heartbeat lease, best-effort reference cache
+
+**Knowledge Base Release Reference Deregistration**:
+The idempotent KSS transition from an active Reference to a retained deregistered lifecycle fact. Only the owning authenticated client may request it, and only a server-injected verifier may establish that the immutable external resource is permanently ineligible for both execution and rollback. Unavailable, uncertain, stale, mismatched, or caller-authored claims leave the Reference active.
+_Avoid_: TTL expiry, caller-reported inactive flag, deleting audit history, compensation after failed publication, emergency Release revocation
+
+[KNOWN | HIGH] TDD-03A through 03E implement application-only registration,
+trusted deregistration admission, deprecation, ordinary retirement and emergency
+revocation cores. Migrations `0014` through `0017` provide durable References and
+the ordinary lifecycle; `0018` adds `queryable/deprecated → revoked` for only
+`security_incident` or `severe_data_integrity_failure`, with exact
+`fail_closed_without_fallback` confirmation, authorized operator identity,
+database time and a KSS-computed affected-active-reference count in one atomic
+state/receipt/audit commit. Existing Reference current/history facts remain intact.
+Deprecated Releases preserve existing query and authorization while rejecting new
+adoption; retired and revoked Releases are absent from Catalog query, integrity
+work and established Query authorization. There is still no lifecycle network
+Interface, ProofAgent verifier, background reconciliation, affected-reference
+detail/notification, ProofAgent runtime/rollback integration, deletion eligibility,
+production retention configuration or production migration, so this local core is
+not production lifecycle authority.
+
 **Prepared Knowledge Base Release**:
 The non-queryable publication candidate produced after asynchronous construction and validation binds one exact Knowledge Base Version to complete Source Versions, Evidence Unit Manifests, Structured Dataset Revisions, index generations, retrieval profile, projection attestations, and smoke results. It is immutable, expires if not published, and cannot be used as a partial runtime fallback.
 _Avoid_: Queryable Release, visible partial index, reusable stale validation, long database transaction
+
+**Knowledge Base Release Preparation**:
+The durable public KSS resource that asynchronously turns one exact Base Draft revision into a fully validated Prepared Knowledge Base Release. Creation is idempotent, Worker execution is leased and fenced, and every terminal or ready result remains addressable for audit and Dashboard polling.
+_Avoid_: Synchronous Release endpoint, frontend workflow state, in-memory job, long database transaction
+
+**Knowledge Base Release Preparation State**:
+The lifecycle `queued`, `running`, `ready`, `failed`, `cancelled`, `expired`, or `consumed`. Only unexpired `ready` may be atomically published once; `consumed` points to the created exact Release, while retry after any unsuccessful terminal state creates a new Preparation identity.
+_Avoid_: Mutable retry-in-place, reusable prepared candidate, hidden Worker status, queryable partial Release
+
+[KNOWN | HIGH] TDD-02A through TDD-02G implements Draft revision CAS and durable preparation
+admission through `KnowledgeBasePreparationApplication`, PostgreSQL migration
+`0009` and protected management HTTP. It freezes exact Source Version IDs and a
+Base Version, atomically stores a `queued` resource with receipt/success audit,
+and records safe HTTP rejections. A Base row lock plus one catalog statement
+snapshot protects resolution; no artifact reads or builds run in that transaction.
+Migration `0010` and the trusted `BasePreparationWorker` add claim/renew/takeover
+with database-clock leases, monotonic fencing tokens and atomic coordination audit.
+Migration `0011` and `KnowledgeReleaseCandidateBuilder` add exact candidate
+construction plus fenced `ready/failed` submission. GET exposes the public state
+without claim or artifact capability fields, while POST replay retains the original
+queued admission. Lease expiry permits a new attempt on the same frozen plan, not a
+terminal expired Preparation. Migration `0012` and the trusted application publication
+Interface add database-time `ready → expired/consumed`: exact Release header and
+ordered members, terminal Preparation and lifecycle audit commit in one PostgreSQL
+transaction. An existing Release is reusable only when it is complete, queryable and
+exactly equal, and its lifecycle row remains locked through consumed commit. Later
+legitimate retirement preserves the consumed Preparation and original queued receipt.
+TDD-02F adds trusted application-only `expire_next()`: it selects one due ready
+resource by database time and deterministic order, skips locked rows, revalidates
+the frozen candidate and atomically commits expired plus the existing lifecycle
+audit. Management GET still does not mutate expiry. Publication and expiry have no
+HTTP/BFF routes. Migration `0013` and trusted application-only `cancel()` add an
+operator-scoped idempotent queued/running → cancelled transaction using database
+time. State and receipt/success audit commit atomically; running cancellation clears
+the active lease while preserving the fence, so an in-flight Worker result becomes
+stale. Ready and terminal Preparations are not cancellable, retry creates a new
+Preparation identity, and management GET exposes only the terminal resource rather
+than lease or command capability fields. No automatic reaper, cancel HTTP command,
+quarantine or Preparation Worker loop is enabled in production process roles. The existing direct Release path has not
+been replaced, so this is not yet the unique system-wide publication authority.
+Feature TDD report sections 12 through 18 record the core, real-PostgreSQL/HTTP,
+lease, result, publication, one-shot expiry and cooperative cancellation evidence.
 
 **Atomic Knowledge Base Release Publication**:
 The short transactional compare-and-swap that verifies one still-valid Prepared Knowledge Base Release and creates the immutable queryable Knowledge Base Release all at once. Any missing, stale, or mismatched component blocks publication; no query can mix old and new Source Versions, manifests, profiles, or index generations.
@@ -455,6 +545,26 @@ _Avoid_: Proof Agent Run Executor, Knowledge Worker, answer Agent, unbounded bac
 **Materialized Knowledge Source Revision**:
 An immutable service-owned revision created by admitting uploaded content or a bounded snapshot from an external database or API. It preserves exact origin, upstream revision or synchronization watermark when available, ingestion identity, content digest, and lineage, and is the only external-data form eligible for a V1 Knowledge Base Version.
 _Avoid_: Live federated result, mutable external table, runtime API response, latest-only import
+
+**Knowledge Source Connection Profile**:
+A KSS-owned, versioned management resource that describes one non-secret external snapshot connection, including connector kind, bounded source parameters, Source association, and references to deployment-approved secret and egress authorities.
+_Avoid_: ProofAgent-owned connection, inline credential, environment-only connection descriptor, live query federation
+
+**Published Knowledge Source Connection Profile Revision**:
+An immutable exact profile revision eligible for synchronization after KSS validation and deployment-policy admission. Profile changes create a new revision and never alter prior Source Versions, KSS Releases, Draft Agents, or Published Agent Versions.
+_Avoid_: Latest-at-worker-start, mutable live connection, secret value, implicit environment snapshot
+
+[KNOWN | HIGH] TDD-01B implements this lifecycle in PostgreSQL and protected
+management HTTP. Explicit managed synchronization v2 pins the Profile ID,
+revision and configuration digest; the Worker revalidates that tuple and records
+it in immutable dataset v2 processing lineage. Static synchronization v1 remains
+an explicit pre-cutover contract, not a fallback. The current production process
+entry points have not switched to managed Profiles; real upstream policy and
+Secret/egress/TLS validation remain outside the local evidence.
+
+**Hybrid Knowledge Configuration Role Bundle**:
+The first-slice, deployment-mapped bundle of global named permissions for one of three operator roles: Knowledge Operator manages KSS Connection Profiles, Source intake and synchronization, Base Drafts, and KSS Release preparation/publication; Agent Editor edits and validates ProofAgent Drafts including exact KSS Release bindings; Release Operator formally publishes, activates, and rolls back Agent Versions. An identity may hold multiple bundles and receives their permission union.
+_Avoid_: Per-resource ACL, negative grant, mandatory four-eyes workflow, frontend-only role, local user directory, generic admin bypass
 
 **Knowledge Source Synchronization**:
 The manual or scheduled intake that reads a bounded external-data change set and commits a new Materialized Knowledge Source Revision without mutating any prior Revision or published Knowledge Base Version.

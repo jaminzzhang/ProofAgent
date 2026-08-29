@@ -46,6 +46,7 @@ from knowledge_source_service.domain.publications import (
     PublishedDocumentSourceVersion,
     PublishedKnowledgeBaseRelease,
 )
+from knowledge_source_service.contracts.connection_profiles import PinnedConnectionProfile
 from knowledge_source_service.ports.artifacts import ImmutableArtifactStore
 
 
@@ -58,6 +59,153 @@ class KnowledgeCatalogConflict(RuntimeError):
 
 class KnowledgeCatalogIntegrityError(RuntimeError):
     """PostgreSQL visibility and exact artifact authority disagree."""
+
+
+def put_exact_release(
+    connection: psycopg.Connection[dict[str, Any]],
+    publication: PublishedKnowledgeBaseRelease,
+) -> None:
+    """Persist one exact Release using the caller's transaction and no external I/O."""
+
+    release = publication.release
+    projection = release.retrieval_projection
+    parameters = {
+        "knowledge_base_release_id": release.knowledge_base_release_id,
+        "knowledge_space_id": release.knowledge_space_id,
+        "knowledge_base_id": release.knowledge_base_id,
+        "knowledge_base_version_id": release.knowledge_base_version_id,
+        "release_manifest_digest": release.release_manifest_digest,
+        "release_manifest_artifact_json": Jsonb(asdict(publication.release_manifest_artifact)),
+        "index_identity": projection.index_identity if projection else None,
+        "index_mapping_digest": projection.mapping_digest if projection else None,
+        "index_corpus_digest": projection.corpus_digest if projection else None,
+        "index_document_count": projection.document_count if projection else None,
+        "dense_encoder_revision": projection.dense_revision if projection else None,
+        "sparse_encoder_revision": projection.sparse_revision if projection else None,
+        "dense_dimension": projection.dense_dimension if projection else None,
+    }
+    persisted = connection.execute(
+        """
+        INSERT INTO knowledge_base_releases (
+            knowledge_base_release_id,
+            knowledge_space_id,
+            knowledge_base_id,
+            knowledge_base_version_id,
+            release_manifest_digest,
+            release_manifest_artifact_json,
+            index_identity,
+            index_mapping_digest,
+            index_corpus_digest,
+            index_document_count,
+            dense_encoder_revision,
+            sparse_encoder_revision,
+            dense_dimension
+        ) VALUES (
+            %(knowledge_base_release_id)s,
+            %(knowledge_space_id)s,
+            %(knowledge_base_id)s,
+            %(knowledge_base_version_id)s,
+            %(release_manifest_digest)s,
+            %(release_manifest_artifact_json)s,
+            %(index_identity)s,
+            %(index_mapping_digest)s,
+            %(index_corpus_digest)s,
+            %(index_document_count)s,
+            %(dense_encoder_revision)s,
+            %(sparse_encoder_revision)s,
+            %(dense_dimension)s
+        )
+        ON CONFLICT (knowledge_base_release_id) DO NOTHING
+        RETURNING knowledge_base_release_id
+        """,
+        parameters,
+    ).fetchone()
+    if persisted is None:
+        if not _exact_release_matches(
+            connection,
+            publication,
+            require_queryable=True,
+            lock=True,
+        ):
+            raise KnowledgeCatalogConflict("Knowledge Base Release identity is immutable")
+        return
+
+    for ordinal, source_version_id in enumerate(release.knowledge_source_version_ids):
+        connection.execute(
+            """
+            INSERT INTO knowledge_base_release_members (
+                knowledge_base_release_id,
+                knowledge_space_id,
+                ordinal,
+                knowledge_source_version_id
+            ) VALUES (%s, %s, %s, %s)
+            """,
+            (
+                release.knowledge_base_release_id,
+                release.knowledge_space_id,
+                ordinal,
+                source_version_id,
+            ),
+        )
+    if not exact_release_matches(connection, publication):
+        raise KnowledgeCatalogConflict("Knowledge Base Release membership is immutable")
+
+
+def exact_release_matches(
+    connection: psycopg.Connection[dict[str, Any]],
+    publication: PublishedKnowledgeBaseRelease,
+) -> bool:
+    """Match immutable Release content that is currently queryable."""
+
+    return _exact_release_matches(
+        connection,
+        publication,
+        require_queryable=True,
+        lock=False,
+    )
+
+
+def exact_release_history_matches(
+    connection: psycopg.Connection[dict[str, Any]],
+    publication: PublishedKnowledgeBaseRelease,
+) -> bool:
+    """Match immutable publication history independently of current lifecycle state."""
+
+    return _exact_release_matches(
+        connection,
+        publication,
+        require_queryable=False,
+        lock=False,
+    )
+
+
+def _exact_release_matches(
+    connection: psycopg.Connection[dict[str, Any]],
+    publication: PublishedKnowledgeBaseRelease,
+    *,
+    require_queryable: bool,
+    lock: bool,
+) -> bool:
+    release = publication.release
+    lock_clause = " FOR UPDATE" if lock else ""
+    existing = connection.execute(
+        "SELECT * FROM knowledge_base_releases WHERE knowledge_base_release_id = %s" + lock_clause,
+        (release.knowledge_base_release_id,),
+    ).fetchone()
+    return bool(
+        existing is not None
+        and _release_row_matches(
+            existing,
+            publication,
+            require_queryable=require_queryable,
+        )
+        and _release_members(
+            connection,
+            release.knowledge_base_release_id,
+            lock=lock,
+        )
+        == release.knowledge_source_version_ids
+    )
 
 
 class PostgresKnowledgeCatalog:
@@ -223,7 +371,10 @@ class PostgresKnowledgeCatalog:
                 knowledge_base_version_id=str(row["knowledge_base_version_id"]),
                 knowledge_base_release_id=str(row["knowledge_base_release_id"]),
                 source_version_count=int(row["source_version_count"]),
-                state=cast(Literal["queryable", "retired"], row["state"]),
+                state=cast(
+                    Literal["queryable", "deprecated", "retired", "revoked"],
+                    row["state"],
+                ),
             )
             for row in rows
         )
@@ -374,106 +525,11 @@ class PostgresKnowledgeCatalog:
             ) from error
 
     def put_release(self, publication: PublishedKnowledgeBaseRelease) -> None:
-        release = publication.release
         _verify_release_manifest(publication, self._artifacts)
-        projection = release.retrieval_projection
-        parameters = {
-            "knowledge_base_release_id": release.knowledge_base_release_id,
-            "knowledge_space_id": release.knowledge_space_id,
-            "knowledge_base_id": release.knowledge_base_id,
-            "knowledge_base_version_id": release.knowledge_base_version_id,
-            "release_manifest_digest": release.release_manifest_digest,
-            "release_manifest_artifact_json": Jsonb(asdict(publication.release_manifest_artifact)),
-            "index_identity": projection.index_identity if projection else None,
-            "index_mapping_digest": projection.mapping_digest if projection else None,
-            "index_corpus_digest": projection.corpus_digest if projection else None,
-            "index_document_count": projection.document_count if projection else None,
-            "dense_encoder_revision": projection.dense_revision if projection else None,
-            "sparse_encoder_revision": projection.sparse_revision if projection else None,
-            "dense_dimension": projection.dense_dimension if projection else None,
-        }
         try:
             with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
                 with connection.transaction():
-                    persisted = connection.execute(
-                        """
-                        INSERT INTO knowledge_base_releases (
-                            knowledge_base_release_id,
-                            knowledge_space_id,
-                            knowledge_base_id,
-                            knowledge_base_version_id,
-                            release_manifest_digest,
-                            release_manifest_artifact_json,
-                            index_identity,
-                            index_mapping_digest,
-                            index_corpus_digest,
-                            index_document_count,
-                            dense_encoder_revision,
-                            sparse_encoder_revision,
-                            dense_dimension
-                        ) VALUES (
-                            %(knowledge_base_release_id)s,
-                            %(knowledge_space_id)s,
-                            %(knowledge_base_id)s,
-                            %(knowledge_base_version_id)s,
-                            %(release_manifest_digest)s,
-                            %(release_manifest_artifact_json)s,
-                            %(index_identity)s,
-                            %(index_mapping_digest)s,
-                            %(index_corpus_digest)s,
-                            %(index_document_count)s,
-                            %(dense_encoder_revision)s,
-                            %(sparse_encoder_revision)s,
-                            %(dense_dimension)s
-                        )
-                        ON CONFLICT (knowledge_base_release_id) DO NOTHING
-                        RETURNING knowledge_base_release_id
-                        """,
-                        parameters,
-                    ).fetchone()
-                    if persisted is None:
-                        existing = connection.execute(
-                            """
-                            SELECT * FROM knowledge_base_releases
-                            WHERE knowledge_base_release_id = %s
-                            """,
-                            (release.knowledge_base_release_id,),
-                        ).fetchone()
-                        if existing is None or not _release_row_matches(
-                            existing,
-                            publication,
-                        ):
-                            raise KnowledgeCatalogConflict(
-                                "Knowledge Base Release identity is immutable"
-                            )
-                    for ordinal, source_version_id in enumerate(
-                        release.knowledge_source_version_ids
-                    ):
-                        connection.execute(
-                            """
-                            INSERT INTO knowledge_base_release_members (
-                                knowledge_base_release_id,
-                                knowledge_space_id,
-                                ordinal,
-                                knowledge_source_version_id
-                            ) VALUES (%s, %s, %s, %s)
-                            ON CONFLICT (knowledge_base_release_id, ordinal) DO NOTHING
-                            """,
-                            (
-                                release.knowledge_base_release_id,
-                                release.knowledge_space_id,
-                                ordinal,
-                                source_version_id,
-                            ),
-                        )
-                    members = _release_members(
-                        connection,
-                        release.knowledge_base_release_id,
-                    )
-                    if members != release.knowledge_source_version_ids:
-                        raise KnowledgeCatalogConflict(
-                            "Knowledge Base Release membership is immutable"
-                        )
+                    put_exact_release(connection, publication)
         except errors.ForeignKeyViolation as error:
             raise KnowledgeCatalogConflict(
                 "Knowledge Base Release requires same-Space Base and Source Versions"
@@ -539,7 +595,8 @@ class PostgresKnowledgeCatalog:
             row = connection.execute(
                 """
                 SELECT * FROM knowledge_base_releases
-                WHERE knowledge_base_release_id = %s AND state = 'queryable'
+                WHERE knowledge_base_release_id = %s
+                  AND state IN ('queryable', 'deprecated')
                 """,
                 (knowledge_base_release_id,),
             ).fetchone()
@@ -575,7 +632,7 @@ class PostgresKnowledgeCatalog:
                     """
                     SELECT knowledge_base_release_id
                     FROM knowledge_base_releases
-                    WHERE state = 'queryable'
+                    WHERE state IN ('queryable', 'deprecated')
                     ORDER BY knowledge_base_release_id
                     LIMIT %s
                     """,
@@ -586,7 +643,7 @@ class PostgresKnowledgeCatalog:
                     """
                     SELECT knowledge_base_release_id
                     FROM knowledge_base_releases
-                    WHERE state = 'queryable'
+                    WHERE state IN ('queryable', 'deprecated')
                       AND knowledge_base_release_id > %s
                     ORDER BY knowledge_base_release_id
                     LIMIT %s
@@ -992,6 +1049,7 @@ def _load_dataset_publication(
     original = artifacts.get_exact(publication.original_artifact)
     canonical = _json_object(artifacts.get_exact(publication.canonical_artifact))
     manifest = _json_object(artifacts.get_exact(publication.evidence_manifest_artifact))
+    managed = canonical.get("schema_version") == "structured-dataset-revision.v2"
     _require_exact_keys(
         canonical,
         {
@@ -1002,13 +1060,15 @@ def _load_dataset_publication(
             "processing_lineage_digest",
             "fields",
             "records",
-        },
+        }
+        | ({"processing_lineage"} if managed else set()),
         "canonical dataset",
     )
     fields_value = canonical["fields"]
     records_value = canonical["records"]
     if (
-        canonical["schema_version"] != "structured-dataset-revision.v1"
+        canonical["schema_version"]
+        not in {"structured-dataset-revision.v1", "structured-dataset-revision.v2"}
         or canonical["knowledge_source_version_id"] != proposed.knowledge_source_version_id
         or canonical["processing_lineage_digest"] != publication.processing_lineage_digest
         or type(fields_value) is not list
@@ -1018,6 +1078,44 @@ def _load_dataset_publication(
         or not original
     ):
         raise KnowledgeCatalogIntegrityError("canonical dataset identity is invalid")
+    connection_profile = None
+    if managed:
+        lineage = _object(canonical["processing_lineage"], "dataset processing lineage")
+        _require_exact_keys(
+            lineage,
+            {
+                "schema",
+                "pipeline_revision",
+                "format",
+                "record_path",
+                "schema_revision_id",
+                "materialization",
+            },
+            "dataset processing lineage",
+        )
+        if (
+            sha256_json(lineage) != publication.processing_lineage_digest
+            or lineage["schema"] != "dataset-processing-lineage.v1"
+            or lineage["schema_revision_id"] != canonical["schema_revision_id"]
+            or lineage["format"] not in {"json", "jsonl"}
+        ):
+            raise KnowledgeCatalogIntegrityError("dataset processing lineage is invalid")
+        materialization = _object(lineage["materialization"], "dataset materialization")
+        _require_exact_keys(
+            materialization,
+            {"kind", "source_identity_digest", "observed_at", "connection_profile"}
+            | ({"upstream_revision"} if "upstream_revision" in materialization else set())
+            | ({"last_modified"} if "last_modified" in materialization else set()),
+            "dataset materialization",
+        )
+        if materialization["kind"] != "http_json_snapshot":
+            raise KnowledgeCatalogIntegrityError("dataset materialization kind is invalid")
+        try:
+            connection_profile = PinnedConnectionProfile.model_validate(
+                materialization["connection_profile"]
+            )
+        except ValueError:
+            raise KnowledgeCatalogIntegrityError("dataset Profile lineage is invalid") from None
     declared_fields: list[tuple[str, StructuredValueType]] = []
     supported_types = {
         "string",
@@ -1152,6 +1250,7 @@ def _load_dataset_publication(
         schema_revision_id=schema_revision_id,
         field_order=tuple(field for field, _ in declared_fields),
         records=tuple(records),
+        connection_profile=connection_profile,
     )
 
 
@@ -1306,6 +1405,8 @@ def _dataset_source_row_matches(
 def _release_row_matches(
     row: dict[str, Any],
     publication: PublishedKnowledgeBaseRelease,
+    *,
+    require_queryable: bool,
 ) -> bool:
     release = publication.release
     return bool(
@@ -1314,7 +1415,7 @@ def _release_row_matches(
         and row["knowledge_base_version_id"] == release.knowledge_base_version_id
         and row["release_manifest_digest"] == release.release_manifest_digest
         and row["release_manifest_artifact_json"] == asdict(publication.release_manifest_artifact)
-        and row["state"] == "queryable"
+        and (not require_queryable or row["state"] == "queryable")
         and _projection_binding_from_row(row) == release.retrieval_projection
     )
 
@@ -1390,14 +1491,18 @@ def _projection_manifest_payload(
 def _release_members(
     connection: psycopg.Connection[dict[str, Any]],
     release_id: str,
+    *,
+    lock: bool = False,
 ) -> tuple[str, ...]:
+    lock_clause = " FOR UPDATE" if lock else ""
     rows = connection.execute(
         """
         SELECT knowledge_source_version_id
         FROM knowledge_base_release_members
         WHERE knowledge_base_release_id = %s
         ORDER BY ordinal
-        """,
+        """
+        + lock_clause,
         (release_id,),
     ).fetchall()
     return tuple(str(row["knowledge_source_version_id"]) for row in rows)

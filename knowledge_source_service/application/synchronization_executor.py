@@ -12,9 +12,12 @@ from knowledge_source_service.application.json_dataset_intake import (
     JsonDatasetIntakeApplication,
     JsonDatasetIntakeCommand,
 )
+from knowledge_source_service.application.connection_profiles import ConnectionProfileApplication
+from knowledge_source_service.ports.connection_profiles import ConnectionProfileSnapshotReaders
 from knowledge_source_service.contracts.knowledge_query import KnowledgeServiceProblem
 from knowledge_source_service.contracts.synchronizations import (
-    KnowledgeSourceSynchronization,
+    ProfileSourceSynchronization,
+    SourceSynchronizationResource,
 )
 from knowledge_source_service.domain.knowledge_catalog import StructuredValueType
 from knowledge_source_service.domain.publications import PublishedDatasetSourceVersion
@@ -41,7 +44,9 @@ class KnowledgeSourceSynchronizationExecutor:
         self,
         *,
         repository: KnowledgeSourceSynchronizationRepository,
-        connections: KnowledgeSnapshotConnectionRegistry,
+        connections: KnowledgeSnapshotConnectionRegistry | None = None,
+        connection_profiles: ConnectionProfileApplication | None = None,
+        profile_snapshot_readers: ConnectionProfileSnapshotReaders | None = None,
         artifacts: ImmutableArtifactStore,
         catalog: KnowledgeCatalogWriter,
         pipeline_revision: str,
@@ -54,8 +59,14 @@ class KnowledgeSourceSynchronizationExecutor:
     ) -> None:
         if not worker_id.strip() or lease_duration <= timedelta(0):
             raise ValueError("synchronization worker lease configuration is invalid")
+        if (connections is None) == (connection_profiles is None):
+            raise ValueError("choose exactly one synchronization connection authority")
+        if (connection_profiles is None) != (profile_snapshot_readers is None):
+            raise ValueError("managed synchronization requires a worker snapshot reader boundary")
         self._repository = repository
         self._connections = connections
+        self._connection_profiles = connection_profiles
+        self._profile_snapshot_readers = profile_snapshot_readers
         self._intake = JsonDatasetIntakeApplication(
             artifacts=artifacts,
             catalog=catalog,
@@ -103,9 +114,7 @@ class KnowledgeSourceSynchronizationExecutor:
             record_path: tuple[str, ...]
             if connection_kind == "postgresql":
                 if request.record_path:
-                    raise ValueError(
-                        "PostgreSQL synchronization has a fixed records path"
-                    )
+                    raise ValueError("PostgreSQL synchronization has a fixed records path")
                 record_path = ("records",)
             else:
                 record_path = request.record_path
@@ -124,6 +133,7 @@ class KnowledgeSourceSynchronizationExecutor:
                     materialization_lineage=_lineage(
                         snapshot=snapshot,
                         connection_kind=connection_kind,
+                        synchronization=claim.record.synchronization,
                     ),
                 )
             )
@@ -169,18 +179,40 @@ class KnowledgeSourceSynchronizationExecutor:
         self,
         claim: KnowledgeSourceSynchronizationClaim,
     ) -> tuple[JsonSnapshot, str]:
-        connection = self._connections.resolve(
-            claim.record.synchronization.connection_id
-        )
-        if connection.connection_id != claim.record.synchronization.connection_id:
-            raise ValueError("snapshot registry returned another connection")
+        synchronization = claim.record.synchronization
+        connection_kind: str
+        profile_size_limit: int | None = None
+        if isinstance(synchronization, ProfileSourceSynchronization):
+            if self._connection_profiles is None or self._profile_snapshot_readers is None:
+                raise ValueError("managed snapshot execution is unavailable")
+            pinned = synchronization.connection_profile
+            profile = self._connection_profiles.resolve_for_synchronization(
+                pinned.connection_profile_id,
+                revision=pinned.revision,
+                knowledge_space_id=synchronization.knowledge_space_id,
+                knowledge_source_id=synchronization.knowledge_source_id,
+            )
+            if profile.view.configuration_digest != pinned.configuration_digest:
+                raise ValueError("pinned snapshot configuration digest changed")
+            reader = self._profile_snapshot_readers.open(profile.configuration)
+            connection_kind = profile.configuration.kind
+            profile_size_limit = profile.configuration.max_response_bytes
+        else:
+            if self._connections is None:
+                raise ValueError("static snapshot execution is disabled")
+            connection = self._connections.resolve(synchronization.connection_id)
+            if connection.connection_id != synchronization.connection_id:
+                raise ValueError("snapshot registry returned another connection")
+            reader, connection_kind = connection.reader, connection.connection_kind
         try:
-            snapshot = connection.reader.read()
+            snapshot = reader.read()
         finally:
-            close = getattr(connection.reader, "close", None)
+            close = getattr(reader, "close", None)
             if close is not None:
                 close()
-        return snapshot, connection.connection_kind
+        if profile_size_limit is not None and len(snapshot.content) > profile_size_limit:
+            raise ValueError("snapshot exceeds the pinned Profile response bound")
+        return snapshot, connection_kind
 
     def _save(
         self,
@@ -245,25 +277,22 @@ class _SynchronizationLeaseHeartbeat:
 
 
 def _transition(
-    synchronization: KnowledgeSourceSynchronization,
+    synchronization: SourceSynchronizationResource,
     **changes: object,
-) -> KnowledgeSourceSynchronization:
+) -> SourceSynchronizationResource:
     payload = synchronization.model_dump(mode="python")
     payload.update(changes)
-    return KnowledgeSourceSynchronization.model_validate(payload)
+    return type(synchronization).model_validate(payload)
 
 
 def _lineage(
     *,
     snapshot: JsonSnapshot,
     connection_kind: str,
+    synchronization: SourceSynchronizationResource,
 ) -> dict[str, object]:
     lineage: dict[str, object] = {
-        "kind": (
-            "http_json_snapshot"
-            if connection_kind == "http_json"
-            else "postgresql_snapshot"
-        ),
+        "kind": ("http_json_snapshot" if connection_kind == "http_json" else "postgresql_snapshot"),
         "source_identity_digest": snapshot.source_identity_digest,
         "observed_at": snapshot.observed_at.isoformat(),
     }
@@ -271,15 +300,14 @@ def _lineage(
         lineage["upstream_revision"] = snapshot.etag
     if snapshot.last_modified is not None:
         lineage["last_modified"] = snapshot.last_modified
+    if isinstance(synchronization, ProfileSourceSynchronization):
+        lineage["connection_profile"] = synchronization.connection_profile.model_dump(mode="json")
     return lineage
 
 
 def _failure_problem(trace_id: str) -> KnowledgeServiceProblem:
     return KnowledgeServiceProblem(
-        type=(
-            "urn:knowledge-source-service:problem:"
-            "knowledge-source-synchronization-failed"
-        ),
+        type=("urn:knowledge-source-service:problem:knowledge-source-synchronization-failed"),
         title="Knowledge Source synchronization failed",
         status=422,
         code="knowledge_source_synchronization_failed",

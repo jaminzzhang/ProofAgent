@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-08-19
+Updated: 2026-08-29
 
 ## Current decision
 
@@ -14,6 +14,315 @@ approved scorer revision, exact grant and versioned secret, real dependency read
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-08-29 KSS emergency Release revocation (TDD-03E)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseLifecycleApplication.revoke()` accepts one
+  exact Release tuple, a bounded `security_incident` or
+  `severe_data_integrity_failure` reason, exact
+  `fail_closed_without_fallback` confirmation, trusted operator identity and an
+  operator-scoped idempotency key. Only `queryable` or `deprecated` may become
+  `revoked`; ordinary `retired` and existing `revoked` are terminal.
+- [KNOWN | HIGH] Migration `0018` stores database `revoked_at`, bounded reason and
+  a permanent revocation command/audit row on the shared lifecycle sequence. The
+  transaction locks the Release and active Reference rows, computes the affected
+  active count itself, and commits state/result/receipt/audit atomically. Existing
+  active or deregistered Reference facts are preserved. Revoked Releases fail
+  Catalog query, integrity enumeration, existing Query Grant authorization and new
+  Reference registration without fallback.
+- [COMPUTED | HIGH] Memory/PostgreSQL/Catalog/Access/distribution focused contracts
+  passed 69 tests. The final real-dependency affected set passed 415 tests with zero
+  skips against isolated PostgreSQL/MinIO/OpenSearch. The full backend passed 2396
+  tests with 24 existing declared skips and 2 deselected; the 2 explicitly selected
+  PostgreSQL/S3 integrations passed. Mypy passed 454 product sources; Ruff,
+  affected formatting, domain-context, diff and root/KSS lock checks passed.
+  Dashboard 225 tests, Chat 35 tests, TypeScript and all three production builds
+  passed. OpenAPI and migration fingerprints are recorded in the feature report.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no lifecycle
+  HTTP/BFF authorization, affected-reference detail projection or notification,
+  ProofAgent runtime/rollback fail-closed integration, physical deletion,
+  production migration, deployment or Production GO. The application-only
+  operator identity is a trusted delivery seam, not evidence that production role
+  wiring exists.
+
+## 2026-08-28 KSS Release Reference deregistration admission (TDD-03D)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseReferenceApplication.deregister()` now
+  accepts only an exact Reference ID plus trusted authenticated client identity and
+  client-scoped idempotency key. Only the Reference owner may proceed. A
+  server-injected `ReleaseReferenceDeregistrationVerifier` must prove permanent
+  loss of both execution and rollback eligibility; callers cannot report this fact,
+  time, counts or TTL themselves.
+- [KNOWN | HIGH] Migration `0017` adds durable `active → deregistered` current
+  state, trace-safe verifier/verification identities and database `deregistered_at`.
+  Registration and deregistration share one client-scoped command ledger and audit
+  order. Historical registration receipts remain immutable. External verification
+  runs outside the database transaction; the transaction rechecks replay, locks the
+  exact Reference, validates owner/proof identity, and commits state, receipt and
+  success audit atomically.
+- [KNOWN | HIGH] Focused memory/PostgreSQL/Access/distribution contracts passed 58
+  tests. KSS plus ProofAgent KSS/BFF affected regression passed 395 tests with zero
+  skips against isolated PostgreSQL/MinIO/OpenSearch. Full backend passed 2384 main
+  tests with 24 existing declared skips and 2 deselected; 2 explicitly selected
+  hybrid integrations also passed. Mypy passed 454 product source files and Ruff
+  passed. OpenAPI remained unchanged; migration head is
+  `0017_release_reference_deregistration`.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. The injected verifier is a
+  seam, not a ProofAgent implementation. There is no ProofAgent proof issuance,
+  background reconciler, Reference/lifecycle HTTP/BFF/Dashboard command, emergency
+  revocation, physical deletion, production configuration, deployment, production
+  migration or Production GO.
+
+## 2026-08-28 KSS ordinary Release retirement admission (TDD-03C)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseLifecycleApplication.retire()` now performs
+  the application-only `deprecated → retired` transition for an exact
+  Space/Base/Release. A trusted immutable `ReleaseRetentionPolicy` is injected by
+  server composition; callers cannot report reference counts, time or eligibility.
+- [KNOWN | HIGH] Migration `0016` preserves deprecation history and adds database
+  `retired_at` plus a permanent retirement receipt/success audit. Retirement holds
+  the Release row lock, rejects active KSS references and pre-boundary database
+  time, and commits state, policy identity, eligibility time, retirement time and
+  audit atomically. Retired Releases are non-queryable in Catalog, integrity work
+  and established Query authorization.
+- [KNOWN | HIGH] Focused retirement contracts passed 48 tests. KSS plus ProofAgent
+  KSS/BFF affected regression passed 399 tests with zero skips. Full backend passed
+  2374 main tests plus 2 explicit hybrid tests; Mypy passed 454 product source files,
+  and Ruff, targeted format, domain-context, diff and both lock checks passed.
+  OpenAPI remained unchanged; migration head is `0016_release_retirement`.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no
+  deregistration/reconciler, emergency revocation, physical deletion, lifecycle
+  HTTP/BFF/Dashboard command, ProofAgent reference-first activation, production
+  retention configuration, deployment, production migration or Production GO.
+
+## 2026-08-28 KSS Release deprecation core (TDD-03B)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseLifecycleApplication.deprecate()` now
+  performs the one-way application-only `queryable → deprecated` transition for
+  an exact Space/Base/Release. It uses a trusted operator identity and
+  operator-scoped idempotency key; exact replay returns the original result.
+- [KNOWN | HIGH] Migration `0015` adds the `deprecated` state, database-owned
+  `deprecated_at`, and a permanent lifecycle command receipt/success audit.
+  Registration and deprecation use the same Release row lock. Existing active
+  references, Catalog reads, integrity scans and established Query grants remain
+  valid; new Reference registration and new Query grants fail closed.
+- [KNOWN | HIGH] Tests cover memory contracts, database time and rebuild, eight-way
+  replay convergence, registration/deprecation competition, non-deprecatable
+  states, audit rollback and `0014 → 0015` migration replay. KSS plus ProofAgent
+  KSS/BFF affected regression passed 388 tests with zero skips. Full backend
+  regression passed 2363 main tests plus 2 explicit hybrid tests; Mypy passed 454
+  source files, Ruff and frontend typecheck/tests/build passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no lifecycle
+  HTTP/BFF/Dashboard command, ordinary retirement, emergency revocation,
+  deregistration/reconciler, ProofAgent reference-first activation, deployment,
+  production migration or Production GO.
+
+## 2026-08-28 KSS exact Release Reference registration (TDD-03A)
+
+- [KNOWN | HIGH] `KnowledgeBaseReleaseReferenceApplication.register()` now
+  records a trusted authenticated client's immutable `published_agent_version`
+  reference to one exact queryable Space/Base/Release. The V1 purpose is
+  `execution_or_rollback`; registration itself does not activate the external
+  Agent Version.
+- [KNOWN | HIGH] Migration `0014` stores the active reference and permanent
+  client-scoped command receipt/success audit. PostgreSQL locks the Release row,
+  obtains database time and commits all three facts in one transaction. Exact
+  same-key replay returns the original reference; a different fingerprint,
+  missing/retired/scope-mismatched Release or immutable-resource rebind fails
+  closed.
+- [KNOWN | HIGH] Tests cover in-memory contracts, database rebuild, eight-way
+  same-key concurrency, retired rejection, audit failure rollback and `0013 →
+  0014` upgrade/replay. The full KSS plus ProofAgent KSS/BFF affected suite passed
+  375 tests with zero skips. The post-slice backend regression passed 2356 main
+  tests plus 2 explicitly selected hybrid integration tests; Mypy passed 454
+  source files, and Ruff, domain-context, diff and both lock checks passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no reference
+  HTTP/BFF, deregistration/reconciler, Release deprecation/retirement/revocation,
+  ProofAgent reference-first publication/activation, deployment, production
+  migration or Production GO.
+
+## 2026-08-28 KSS cooperative Preparation cancellation (TDD-02G)
+
+- [KNOWN | HIGH] `KnowledgeBasePreparationApplication.cancel()` now accepts one
+  exact Preparation identity, trusted operator identity and operator-scoped
+  idempotency key. Migration `0013` adds durable `cancelled_at`, extends the
+  Preparation state constraint and records cancellation through the existing
+  command receipt/success-audit authority.
+- [KNOWN | HIGH] Only queued/running resources may become cancelled. PostgreSQL
+  locks the resource, uses database time and commits terminal state plus receipt
+  atomically. Running cancellation clears lease owner/deadline while retaining the
+  fence; an in-flight Builder may finish external work but its stale claim cannot
+  submit ready or failed. No partial artifact becomes Release authority.
+- [KNOWN | HIGH] Tests cover exact replay, fingerprint conflict, terminal-state
+  rejection, invalid input, eight concurrent cancellations, queued claim/cancel
+  competition, in-flight build fencing, audit failure rollback, secret-free GET
+  with absent HTTP cancel command, and `0012 → 0013` active-running upgrade.
+  Preparation/PostgreSQL/distribution passed 170 tests; the full affected KSS and
+  ProofAgent KSS/BFF suite passed 357 tests with zero skips against isolated
+  PostgreSQL/MinIO/OpenSearch. The post-slice repository regression passed 2346
+  main backend tests plus 2 explicitly selected hybrid integration tests, 225
+  Dashboard tests and 35 Chat tests. Mypy passed 448 source files; Ruff, locks,
+  typecheck and all frontend builds passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. There is no cancellation
+  HTTP/BFF/CLI, deployment wiring, production migration, automatic Worker/reaper,
+  artifact cleanup or Production GO. Ready candidate corruption is not cancellable;
+  quarantine requires a separately approved authority and recovery contract.
+
+## 2026-08-28 KSS one-shot active Preparation expiry (TDD-02F)
+
+- [KNOWN | HIGH] `KnowledgeBasePreparationApplication.expire_next()` now expires
+  at most one due ready candidate per trusted server-side call. PostgreSQL uses
+  database time, deterministic expiry/identity ordering and
+  `FOR UPDATE SKIP LOCKED LIMIT 1`; state and the existing publication lifecycle audit commit in one
+  transaction. Management GET remains read-only.
+- [KNOWN | HIGH] The new contracts cover an unexpired no-op, the exact in-memory
+  expiry boundary, invalid actor input, eight concurrent callers, a locked earliest
+  row, audit-write rollback, corrupted candidate failure and a race with publish.
+  Active and publish-triggered expiry share one adapter-internal terminal transition.
+  No path creates a Release.
+- [KNOWN | HIGH] Preparation memory/PostgreSQL tests passed 133 checks. The full
+  affected KSS and ProofAgent KSS/BFF suite passed 339 tests with zero skips against
+  isolated PostgreSQL/MinIO/OpenSearch. KSS mypy passed over 91 source files; Ruff
+  and formatting checks passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. `expire_next()` is a one-shot
+  application Interface, not an automatic reaper or health probe. `None` may mean
+  no due item or temporary lock contention. There is no scheduler/process wiring,
+  HTTP/BFF, object cleanup, production migration or Production GO. TDD-02G later
+  added application-only queued/running cancellation, but not a network command.
+
+## 2026-08-28 KSS one-use core Release publication (TDD-02E)
+
+- [KNOWN | HIGH] `KnowledgeBasePreparationApplication.publish()` now consumes one
+  unexpired ready candidate. Migration `0012` adds durable `expired/consumed`, an
+  exact same-Space Release foreign key and one lifecycle event per Preparation.
+  PostgreSQL time decides the exact expiry boundary; expired state and audit commit
+  before the application returns `base_preparation_expired`.
+- [KNOWN | HIGH] Successful publication writes the exact Release header, ordered
+  members, consumed Preparation and audit in one caller-owned transaction. Eight
+  concurrent callers produce one success; transaction-failure and pre-commit
+  visibility tests prove no partial catalog/state visibility. An existing Release
+  is reused only when queryable and fully equal, with its lifecycle row locked
+  through consumed commit; retired, partial or conflicting rows fail closed without
+  repair or revival. Later legitimate retirement preserves consumed history and the
+  original queued receipt.
+- [KNOWN | HIGH] Preparation core/PostgreSQL/distribution tests passed 145 checks.
+  The full affected KSS and ProofAgent KSS/BFF suite passed 332 tests with zero
+  skips against isolated PostgreSQL/MinIO/OpenSearch. KSS mypy passed over 91
+  source files; Ruff passed. Exact OpenAPI and migration fingerprints are recorded
+  in feature TDD report section 16.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. Publication is a trusted
+  application Interface only: no `:publish` HTTP route, BFF/Dashboard, role wiring,
+  active expiry reaper, cancellation, production process or migration was added.
+  Existing direct Release publication remains compatible, so the one-use path is
+  not yet the unique system-wide authority and is not Production GO.
+
+## 2026-08-27 KSS fenced candidate result (TDD-02D)
+
+- [KNOWN | HIGH] User separately approved local SQL, build interface, repository
+  and management-state work. `KnowledgeReleaseApplication.prepare()` and
+  `KnowledgeReleaseCandidateBuilder` build an exact immutable candidate without
+  writing it to the Release catalog. Existing direct `publish()` behavior remains
+  compatible and separate.
+- [KNOWN | HIGH] Migration `0011` adds durable `ready/failed` result state,
+  candidate data and terminal-time constraints without rewriting `0009/0010`.
+  Final submission holds one short row transaction and checks the current owner,
+  database-clock lease, fencing token and complete frozen admission. A stale Worker
+  cannot overwrite the newer attempt; a commit failure rolls back result and audit.
+- [KNOWN | HIGH] Management GET exposes safe `ready/failed` resources without
+  candidate JSON, artifact references or lease capabilities. Build exceptions become
+  stable failure codes without raw details; POST replay still returns the original
+  `queued` receipt. Twelve new behavior contracts were added. The full affected suite
+  passed 316 tests with zero skips against isolated PG/MinIO/OpenSearch; mypy passed
+  over 91 source files and Ruff passed.
+- [FRAME | HIGH] This remains `PARTIAL_VERIFICATION`. No constant Worker loop,
+  production composition, `ready → expired`, one-use publication, `consumed`
+  transition, orphan-artifact collection, ProofAgent BFF/Dashboard wiring or
+  production migration was implemented. See feature TDD report section 15.
+
+## 2026-08-27 KSS preparation Worker lease coordination (TDD-02C)
+
+- [KNOWN | HIGH] User separately approved local migration, repository and state
+  contract work. Migration `0010` adds lease owner/fence/deadline and atomic
+  coordination audit without rewriting `0009`. Worker claim/renew uses PostgreSQL
+  time and row locks; expired work can be taken over, stale claims cannot renew,
+  and the same Worker ID cannot reuse an older fence.
+- [KNOWN | HIGH] Management GET exposes queued/running without private claim
+  fields. Original POST receipts remain queued after state changes; exact admission
+  identity and integrity checks remain enforced. No new role, Worker HTTP route,
+  CLI, process loop or production configuration was added.
+- [KNOWN | HIGH] New coverage is 17 PG/HTTP and 9 core/input contracts. The full
+  affected suite passed 304 tests, zero skips, in 22.79 seconds against isolated
+  PG/MinIO/OpenSearch with fail-if-missing. Focused preparation/distribution tests
+  passed 118; KSS mypy (90 files), Ruff, format and lock checks passed. Upgrade from
+  queued `0009` data is tested, but not production migration or recovery.
+- [FRAME | HIGH] Build execution and final-result/artifact fencing remain pending,
+  as do cancellation, ready/failed, candidate expiry and one-use publication. A
+  successful lease check is not permission to publish later outside its transaction.
+  Existing direct Release behavior is unchanged. Feature remains
+  `PARTIAL_VERIFICATION`; see the feature TDD report section 14.
+
+## 2026-08-26 KSS durable preparation admission and management API (TDD-02B)
+
+- [KNOWN | HIGH] User separately approved local SQL/repository/API work. Migration
+  `0009` persists Draft history, exact Base Versions, queued Preparations and
+  operator-scoped receipts/success audit atomically. Base row locks protect Draft
+  CAS; one catalog statement freezes all selected Sources. Stored Drafts, plans
+  and receipts are checked for integrity on reads.
+- [KNOWN | HIGH] Protected management routes save/read Drafts, start/read queued
+  Preparations and expose safe audit. Server-side `knowledge_source.view/edit`
+  gates and durable rejection audit do not introduce per-Space ACL or local roles.
+  Explicit runtime DI requires an operator authenticator and identity factory;
+  production process composition remains unchanged.
+- [KNOWN | HIGH] The affected KSS and ProofAgent boundary suite passed 278 tests,
+  zero skips, in 20.17 seconds with real isolated PostgreSQL/MinIO/OpenSearch and
+  fail-if-missing enabled. This includes 22 new PG/HTTP tests and the existing 51
+  core contracts. KSS Ruff, mypy (89 files), 11-file format check and lock check
+  passed. New preparation fixtures use memory artifacts; no new Worker is tested.
+- [FRAME | HIGH] Preparation execution, lease/fencing, cancellation/expiry,
+  ready/consumed and one-use publication remain pending. The existing direct
+  Release path is not replaced; no production SQL, deployment or Git commit was
+  performed. Feature remains `PARTIAL_VERIFICATION`. See section 13 of
+  `docs/features/kss-configuration-publication-loop/tdd-report.md` and
+  `base-preparation-local-guide.md` in the same directory.
+
+## 2026-08-26 KSS Base Draft and preparation admission core (TDD-02A)
+
+- [KNOWN | HIGH] `KnowledgeBasePreparationApplication` adds revisioned Drafts,
+  strict exact/latest-ready member selection, an immutable exact Base Version plan,
+  and a non-queryable `queued` Preparation. Draft CAS, catalog resolution, resource,
+  idempotency receipt and success audit share a serializable test transaction.
+- [KNOWN | HIGH] Core verification passed 51 tests. The affected KSS/ProofAgent
+  boundary suite passed 212 tests with 44 skips because this turn did not configure
+  isolated PG/S3/search dependencies. KSS Ruff and mypy over 88 files passed.
+  These results do not replace the separate TDD-01B real-dependency evidence below.
+- [KNOWN | HIGH] This is an application interface with test-only in-memory
+  storage, not durable async execution. No HTTP or runtime composition enables it.
+  PostgreSQL, authorization/rejection audit, Worker fencing, readiness/expiry and
+  one-use publication remain pending. No SQL, deployment or dependency changed.
+  Feature status remains `PARTIAL_VERIFICATION`; see section 12 of
+  `docs/features/kss-configuration-publication-loop/tdd-report.md`.
+
+## 2026-08-26 KSS Connection Profile persistence and wiring (TDD-01A/01B)
+
+- [KNOWN | HIGH] `ConnectionProfileApplication` now provides an HTTP snapshot
+  Profile lifecycle, exact revision resolution, immutable historical publication,
+  safe management views, and operator-scoped idempotency with atomic state/audit
+  records in PostgreSQL. Source/Space foreign keys, concurrent command replay,
+  state-version CAS and protected rejection audit are covered locally.
+- [KNOWN | HIGH] Management HTTP enforces server-authenticated global
+  `knowledge_source.view/edit` permissions. Explicit managed composition accepts
+  only v2 exact-profile jobs; Worker revalidates the pinned revision/digest and
+  persists verified Profile lineage in immutable Source Version artifacts.
+- [COMPUTED | HIGH] Final KSS plus ProofAgent KSS/BFF boundary verification passed
+  205 tests (175 KSS contracts and 30 ProofAgent boundary tests) with real isolated
+  PostgreSQL, MinIO and OpenSearch and no skips. KSS/ProofAgent mypy, KSS Ruff,
+  domain-context, diff and lock checks passed. Evidence is in the feature report.
+- [KNOWN | HIGH] Production process composition still selects the static registry.
+  Real policy/Secret/egress/TLS adapters, process cutover and ProofAgent BFF/UI role
+  bundles remain pending. SQL migrations were applied only to random isolated
+  test schemas; no deployment or production configuration changed. This is `PARTIAL_VERIFICATION`,
+  not completion of TDD-01 or Production GO. See
+  `docs/features/kss-configuration-publication-loop/tdd-report.md`.
 
 ## 2026-08-18 KSS authority cutover
 
