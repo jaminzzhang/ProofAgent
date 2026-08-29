@@ -257,6 +257,23 @@ cancelled = application.cancel(
 
 取消终止的是 Preparation 的提交权，不等于立即终止外部 I/O 或完成孤立对象回收。物理清理与 ready quarantine 均属于后续独立设计。
 
+## 读取安全审计页
+
+TDD-04G 为 ProofAgent 增加同源只读入口：
+
+```text
+GET /api/config/knowledge-service/spaces/{space}/bases/{base}/preparation-audit
+    ?offset=0&limit=50
+```
+
+- 调用需要 `knowledge_source.view`。`offset` 默认为 0、最大为 20,000；`limit` 默认为 50、范围为 1 至 100。
+- KSS 仍是审计事实权威。ProofAgent 只严格校验既有 KSS wire 与 exact Space/Base，并投影为时间有序、secret-free 的 success/rejection 页。
+- `actor.identity_kind="kss_service_operator"` 表示 KSS 实际记录的可信服务操作者。它不是浏览器或终端操作者；当前没有把终端身份委托给 KSS，界面不得作此推断。
+- 响应不返回 KSS credential、Worker identity、lease、fencing token、artifact reference 或 raw rejection detail。任何额外私有字段、非法 actor 或 Scope 漂移都会失败关闭。
+- 当前 Base audit 包含 Draft 保存、Preparation 启动/取消成功及管理拒绝；不合并 Worker audit 或 publication audit。offset 分页基于每次读取的当前快照，并非跨页稳定 cursor；若数据在两次请求间变化，调用方应重新从第一页读取。
+
+该入口只增加观察能力，不创建新的审计账本、不改变 Preparation 状态，也不授予 Release publication 或 Agent activation 权限。
+
 ## 幂等与失败处理
 
 | 结果或错误码 | 含义 | 恢复方式 |

@@ -18,6 +18,7 @@ from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceConnectionProfileProjection,
     KnowledgeServiceIdentifier,
     KnowledgeServiceManagementWorkspace,
+    KnowledgeServicePreparationAuditPage,
     KnowledgeServiceReadinessProjection,
     KnowledgeServiceReleaseDeletionEligibilityProjection,
     KnowledgeServiceReleasePreparationProjection,
@@ -307,6 +308,49 @@ class _ReleasePreparationResource(StrictFrozenModel):
         if self.state == "consumed" and (self.consumed_at is None or self.expired_at is not None):
             raise ValueError("consumed Preparation fields are inconsistent")
         return self
+
+
+class _PreparationAuditSuccessResource(StrictFrozenModel):
+    action: Literal["save_draft", "start", "cancel"]
+    operator_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$",
+    )
+    knowledge_space_id: KnowledgeServiceIdentifier
+    knowledge_base_id: KnowledgeServiceIdentifier
+    draft_revision: int = Field(strict=True, ge=1)
+    draft_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    release_preparation_id: KnowledgeServiceIdentifier | None = None
+    knowledge_base_version_id: KnowledgeServiceIdentifier | None = None
+    recorded_at: AwareDatetime
+
+
+class _PreparationAuditRejectionResource(StrictFrozenModel):
+    operator_id: str | None = Field(
+        default=None,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$",
+    )
+    knowledge_space_id: KnowledgeServiceIdentifier | None = None
+    knowledge_base_id: KnowledgeServiceIdentifier | None = None
+    release_preparation_id: KnowledgeServiceIdentifier | None = None
+    operation: Literal[
+        "save_draft",
+        "get_draft",
+        "start",
+        "get_preparation",
+        "cancel",
+        "publish",
+        "audit",
+    ]
+    code: KnowledgeServiceIdentifier
+    recorded_at: AwareDatetime
+
+
+class _PreparationAuditCollectionResource(StrictFrozenModel):
+    events: tuple[_PreparationAuditSuccessResource, ...] = Field(max_length=10_000)
+    rejections: tuple[_PreparationAuditRejectionResource, ...] = Field(max_length=10_000)
 
 
 _RELEASE_PREPARATION_PROJECTION: TypeAdapter[KnowledgeServiceReleasePreparationProjection] = (
@@ -917,6 +961,105 @@ class KnowledgeSourceServiceManagementClient:
             release_preparation_id=preparation.value,
         )
         return self._release_preparation_projection(resource)
+
+    def preparation_audit(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        offset: int,
+        limit: int,
+    ) -> KnowledgeServicePreparationAuditPage:
+        identity = KnowledgeServiceBaseProjection(
+            knowledge_space_id=knowledge_space_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        if type(offset) is not int or not 0 <= offset <= 20_000:
+            raise _contract_error("Preparation audit offset is invalid")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise _contract_error("Preparation audit limit is invalid")
+        resource = self._parse(
+            self._request(
+                "GET",
+                (
+                    f"/v1/knowledge-spaces/{identity.knowledge_space_id}/"
+                    f"knowledge-bases/{identity.knowledge_base_id}/preparation-audit"
+                ),
+            ),
+            _PreparationAuditCollectionResource,
+        )
+        entries: list[dict[str, object]] = []
+        for event in resource.events:
+            if (
+                event.knowledge_space_id != identity.knowledge_space_id
+                or event.knowledge_base_id != identity.knowledge_base_id
+            ):
+                raise _contract_error("Preparation audit event changed exact scope")
+            entries.append(
+                {
+                    "kind": "success",
+                    "action": event.action,
+                    "actor": {
+                        "identity_kind": "kss_service_operator",
+                        "operator_id": event.operator_id,
+                    },
+                    "draft_revision": event.draft_revision,
+                    "draft_digest": event.draft_digest,
+                    "release_preparation_id": event.release_preparation_id,
+                    "knowledge_base_version_id": event.knowledge_base_version_id,
+                    "recorded_at": event.recorded_at,
+                }
+            )
+        for rejection in resource.rejections:
+            if rejection.knowledge_space_id not in {
+                None,
+                identity.knowledge_space_id,
+            } or rejection.knowledge_base_id not in {None, identity.knowledge_base_id}:
+                raise _contract_error("Preparation audit rejection changed exact scope")
+            entries.append(
+                {
+                    "kind": "rejection",
+                    "operation": rejection.operation,
+                    "code": rejection.code,
+                    "actor": None
+                    if rejection.operator_id is None
+                    else {
+                        "identity_kind": "kss_service_operator",
+                        "operator_id": rejection.operator_id,
+                    },
+                    "release_preparation_id": rejection.release_preparation_id,
+                    "recorded_at": rejection.recorded_at,
+                }
+            )
+        entries.sort(
+            key=lambda entry: (
+                entry["recorded_at"],
+                entry["kind"],
+                entry.get("action", entry.get("operation", "")),
+                entry.get("release_preparation_id") or "",
+            )
+        )
+        page_entries = entries[offset : offset + limit]
+        total = len(entries)
+        try:
+            return KnowledgeServicePreparationAuditPage.model_validate(
+                {
+                    "knowledge_space_id": identity.knowledge_space_id,
+                    "knowledge_base_id": identity.knowledge_base_id,
+                    "entries": page_entries,
+                    "page": {
+                        "offset": offset,
+                        "limit": limit,
+                        "total": total,
+                        "returned": len(page_entries),
+                        "has_more": offset + len(page_entries) < total,
+                    },
+                }
+            )
+        except ValidationError as error:
+            raise _contract_error(
+                "Knowledge service Preparation audit projection is invalid"
+            ) from error
 
     def publish_release_preparation(
         self,

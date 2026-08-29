@@ -1925,3 +1925,76 @@ error；改用仓库实际依赖的 `postgresql+psycopg://` 后完整复跑为�
   先冻结安全投影、view permission、分页/上限和 ProofAgent service-operator 与终端 operator
   的身份边界；暂不同时引入 Dashboard、连续 execution process、expiry scheduler、artifact
   cleanup、Agent formal publication 或生产切换。
+
+## 31. TDD-04G：有界 Preparation audit 只读 BFF
+
+### 31.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只复用 KSS 既有 Base Preparation audit collection，并新增 ProofAgent
+同源只读入口：
+
+```text
+GET /api/config/knowledge-service/spaces/{space}/bases/{base}/preparation-audit
+    ?offset=0&limit=50
+```
+
+KSS 继续拥有审计事实；guarded management client 负责严格 wire/Scope 校验、secret-free
+投影和有界分页；BFF 只负责 `knowledge_source.view` 权限与委托。公开 schema 为
+`knowledge-service-preparation-audit.v1`，offset 范围 0 至 20,000，limit 范围 1 至 100。
+success 与 rejection 按数据库记录时间合并排序；识别出的 actor 明确标记为
+`kss_service_operator`。该身份是 KSS 观察到的可信服务操作者，不是浏览器或终端操作者，
+本片不构造尚不存在的委托身份链。
+
+本片不修改 KSS persistence、SQL、migration、OpenAPI 或审计写入；不新增 Dashboard、
+continuous process、expiry command/scheduler、artifact cleanup、formal Agent publication、
+部署或生产配置。当前 offset 页基于每次 KSS 当前读取，不承诺跨请求稳定 cursor；当前 Base
+audit 也不合并 Worker audit 或独立 publication audit。
+
+### 31.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| BFF tracer | exact audit path 返回 `404` | 新增 view-protected GET、固定默认值和 offset/limit 上限；focused `1 passed` |
+| guarded client tracer | concrete client 没有 `preparation_audit`，触发 `AttributeError` | 读取 exact KSS path，严格解析 success/rejection、校验 Scope、排序并投影完整有界页；focused `1 passed` |
+| 负向合同 | 非法输入或上游漂移没有公开合同 | limit/offset、缺少 view permission、事件 Scope 漂移、rejection Scope 漂移、非法 operator、Worker 私有字段和 raw detail 全部失败关闭 |
+
+真实纵向合同沿 BFF → guarded client → KSS HTTP → PostgreSQL 保存 Draft、启动并发布一项
+Preparation，再启动并取消另一项；两个 audit 页只返回四条既有 Base management success
+事实。所有 actor 均为 `proof-agent-management` KSS 服务操作者，浏览器身份不在投影中。
+publish success 属于独立 publication audit，不被错误拼接到当前 Base audit；响应不含
+credential、Worker、lease、fence、artifact 或 raw detail。
+
+### 31.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-preparation-audit-bff-tdd04g`，端口为 PostgreSQL
+`55476`、MinIO `59054`、OpenSearch `19244`。数据库 fixture 使用随机 schema，S3/Hybrid
+使用隔离测试配置。没有读取 `.env`、生产配置、生产凭据、生产数据或生产日志。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| BFF/client focused files | 59 passed | 包含权限、边界、secret-free 与 wire/Scope drift |
+| 真实依赖 affected set | 145 passed | 包含真实 PostgreSQL BFF vertical；依赖 fail-if-missing |
+| 全仓后端 | 2479 passed、24 个既有声明 skip、2 deselected | 退出码 0；默认排除的 Hybrid integrations 另行执行 |
+| 显式 Hybrid integration | 2 passed、2503 deselected | 隔离 PostgreSQL/S3 互操作；不是生产流程证明 |
+| Mypy / Ruff / format | 454 个产品源无类型错误；全量 Ruff 与本片格式通过 | 无新增 ignore 或降低检查 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build | 本片无页面；Chat 保留既有 600.22 kB warning |
+| domain / diff / locks | domain-context、`git diff --check`；根 117、KSS 34 packages | 无 dependency、migration 或 KSS OpenAPI 变化 |
+
+Compose 首次 `up --wait` 因 one-shot `minio-init` 成功退出而返回非零；`compose ps -a`
+确认 PostgreSQL、MinIO、OpenSearch 均 healthy 且初始化任务 exit 0。真实纵向首次在 sandbox
+内因受限 uv cache 权限失败，使用同一命令和隔离依赖在获批环境复跑通过；这些是执行环境
+问题，不是产品断言失败。没有修改产品逻辑、删除测试或降低 fail-if-missing。全仓保留一个
+既有 Authlib deprecation warning。最终使用 `down -v --remove-orphans` 删除精确命名的隔离
+项目，并以 `compose ps -a` 空结果确认无残留；没有操作其他 Compose 项目或
+production-local。
+
+### 31.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-04G 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前 TDD-04G 工作树未形成新 commit、merge、部署或 Production
+  GO。
+- [KNOWN | HIGH] 本片保持三层单一责任：KSS 持有事实，guarded client 校验和投影，BFF
+  授权和委托。它不新增审计事实或状态权威，也不改变 Agent activation 权威。
+- [FRAME | HIGH] 若继续下一片，优先单独冻结 controlled expiry HTTP/BFF；不要同时引入
+  scheduler、Dashboard、Worker 常驻进程、artifact cleanup、正式 Agent publication 或生产
+  切换。

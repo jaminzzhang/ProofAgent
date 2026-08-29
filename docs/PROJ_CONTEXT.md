@@ -334,10 +334,25 @@ default exclusions, plus 2 explicit Hybrid integrations. There is no expiry BFF,
 Dashboard command, continuous process role, artifact cleanup, ready quarantine,
 deployment, production configuration or Production GO.
 
+[KNOWN | HIGH] TDD-04G exposes the existing KSS Base Preparation audit collection
+through the ProofAgent guarded client and a same-origin read-only BFF. The route
+requires `knowledge_source.view`, validates exact Space/Base and a strict upstream
+wire shape, then returns a chronological secret-free page bounded to offset 20,000
+and limit 100. Identified actors are explicitly tagged `kss_service_operator`: they
+are the trusted service identities observed by KSS, not browser or terminal operators.
+Upstream drift, private Worker/fence/lease fields and raw rejection detail fail closed.
+A real BFF → KSS → PostgreSQL vertical returned save/start/cancel facts over two pages
+without leaking the browser identity or service credential. The full backend passed
+2479 tests with 24 existing declared skips and 2 default exclusions, plus 2 explicit
+Hybrid integrations. This current-snapshot offset view does not provide a stable
+cross-page cursor or merge Worker/publication audit, and adds no Dashboard, identity
+delegation, expiry command, continuous process role, deployment, production
+configuration or Production GO.
+
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
-| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A lifecycle/reference-summary read BFF; TDD-04B Profile → Synchronization management BFF; TDD-04C Base Draft save/exact read → Preparation start/status BFF; TDD-04D optional one-shot Preparation execution runtime; TDD-04E controlled Preparation publication BFF; TDD-04F controlled Preparation cancellation BFF; no Dashboard Profile/Base Preparation page, continuous Preparation process role, expiry or Reference/lifecycle command BFF, terminal-operator KSS audit delegation, ProofAgent verifier/background reconciler, production Vault/egress/TLS or artifact-retention adapter/physical deletion, affected-reference detail/notification, ProofAgent reference-first publication/runtime revocation integration or production cutover) | ADR-0211 through ADR-0217 |
+| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A lifecycle/reference-summary read BFF; TDD-04B Profile → Synchronization management BFF; TDD-04C Base Draft save/exact read → Preparation start/status BFF; TDD-04D optional one-shot Preparation execution runtime; TDD-04E controlled Preparation publication BFF; TDD-04F controlled Preparation cancellation BFF; TDD-04G bounded Preparation audit read BFF; no Dashboard Profile/Base Preparation page, continuous Preparation process role, expiry or Reference/lifecycle command BFF, terminal-operator KSS audit delegation, ProofAgent verifier/background reconciler, production Vault/egress/TLS or artifact-retention adapter/physical deletion, affected-reference detail/notification, ProofAgent reference-first publication/runtime revocation integration or production cutover) | ADR-0211 through ADR-0217 |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 | `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |

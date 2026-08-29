@@ -474,6 +474,9 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
         headers={"Idempotency-Key": "runtime-preparation-cancel-1"},
     )
     cancelled_current = browser.get(cancellation_target.headers["location"])
+    audit_path = f"{draft_path.removesuffix('/draft')}/preparation-audit"
+    audit_page_one = browser.get(audit_path, params={"offset": 0, "limit": 2})
+    audit_page_two = browser.get(audit_path, params={"offset": 2, "limit": 2})
 
     assert saved.status_code == 200
     assert saved.json() == historical.json()
@@ -506,6 +509,32 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
     assert cancelled.headers["location"] == cancellation_target.headers["location"]
     assert cancelled.json() == cancelled_replay.json() == cancelled_current.json()
     assert cancelled.json()["state"] == "cancelled"
+    assert audit_page_one.status_code == 200
+    assert audit_page_two.status_code == 200
+    assert audit_page_one.json()["page"] == {
+        "offset": 0,
+        "limit": 2,
+        "total": 4,
+        "returned": 2,
+        "has_more": True,
+    }
+    assert audit_page_two.json()["page"] == {
+        "offset": 2,
+        "limit": 2,
+        "total": 4,
+        "returned": 2,
+        "has_more": False,
+    }
+    audit_entries = audit_page_one.json()["entries"] + audit_page_two.json()["entries"]
+    assert sorted(entry["action"] for entry in audit_entries) == [
+        "cancel",
+        "save_draft",
+        "start",
+        "start",
+    ]
+    assert {entry["actor"]["identity_kind"] for entry in audit_entries} == {"kss_service_operator"}
+    assert {entry["actor"]["operator_id"] for entry in audit_entries} == {"proof-agent-management"}
+    assert "operator-browser" not in audit_page_one.text + audit_page_two.text
     releases = catalog.list_releases(
         knowledge_space_id=space_id,
         knowledge_base_id=base_id,
@@ -524,6 +553,8 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
         cancelled,
         cancelled_replay,
         cancelled_current,
+        audit_page_one,
+        audit_page_two,
     ):
         assert "operator-runtime-secret" not in response.text
         assert "worker_id" not in response.text

@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-08-29
+Updated: 2026-08-30
 
 ## Current decision
 
@@ -14,6 +14,29 @@ approved scorer revision, exact grant and versioned secret, real dependency read
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-08-30 bounded Release Preparation audit BFF (TDD-04G)
+
+- [KNOWN | HIGH] ProofAgent now exposes a read-only same-origin
+  `GET .../preparation-audit` route protected by `knowledge_source.view`. The guarded
+  client validates the existing KSS audit wire contract and exact Space/Base, then
+  returns a chronological secret-free projection with offset bounded to 20,000 and
+  page size bounded to 100.
+- [KNOWN | HIGH] Every identified actor is labelled `kss_service_operator`. This is
+  the trusted service identity observed by KSS, not the browser or terminal operator;
+  no delegated identity chain is fabricated. Worker, lease, fence, credential and raw
+  rejection fields fail closed. The current Base audit contains management
+  save/start/cancel successes and rejections; it does not merge Worker or publication
+  audit, and offset pages are current-read snapshots rather than a stable cursor.
+- [COMPUTED | HIGH] Focused unit files passed 59 tests and the real-dependency affected
+  set passed 145 tests. The full backend passed 2479 tests with 24 existing declared
+  skips and 2 deselected; 2 explicit Hybrid integrations passed separately. Mypy over
+  454 product files, full Ruff, TypeScript, Dashboard 225, Chat 35, all frontend builds,
+  lock checks, domain validation and `git diff --check` passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04G, while the feature remains
+  `PARTIAL_VERIFICATION`. No KSS storage/OpenAPI change, Dashboard, terminal identity
+  delegation, expiry command, continuous process, artifact cleanup, Agent formal
+  publication, deployment, production configuration or Production GO was added.
 
 ## 2026-08-29 controlled Release Preparation cancellation BFF (TDD-04F)
 

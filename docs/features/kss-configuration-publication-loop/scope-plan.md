@@ -1,6 +1,6 @@
 # KSS Configuration And Agent Publication Loop Scope、准入与 TDD 计划
 
-本文件记录 2026-08-25 至 2026-08-28 的设计评审和已确认编码范围。设计准入为 `READY_FOR_TDD`；执行证据见 `tdd-report.md`，不代表生产批准。
+本文件记录 2026-08-25 至 2026-08-30 的设计评审和已确认编码范围。设计准入为 `READY_FOR_TDD`；执行证据见 `tdd-report.md`，不代表生产批准。
 
 ## 1. 建议结论
 
@@ -30,7 +30,7 @@
 | --- | --- |
 | 准入结论 | `READY_FOR_TDD` |
 | 需求分析输入 | 用户要求检查并规划 KSS 数据、配置及 ProofAgent 使用的完整流程；已确认终点包括正式生产发布和原子激活，并保持分权 |
-| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消；TDD-04E/04F 已公开 controlled publish/cancel KSS/BFF，但仍无 expiry HTTP/BFF、常驻 Worker 或自动过期调度，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference/lifecycle command 闭环、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
+| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消；TDD-04E/04F 已公开 controlled publish/cancel KSS/BFF，TDD-04G 已公开有界、secret-free audit read BFF，但仍无 expiry HTTP/BFF、常驻 Worker、自动过期调度或终端操作者委托身份，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference/lifecycle command 闭环、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
 
 ## 4. 需求分析与范围边界
 
@@ -221,10 +221,10 @@
 | `docs/adr/0214-resolve-versioned-knowledge-base-drafts-at-release-preparation-start.md` | ADR | Base Draft selection policy 在 Preparation 启动时冻结为 exact Knowledge Base Version | 已新增 | accepted design；Draft/Version/Preparation 核心及 TDD-04C Draft save/exact read、Preparation start/status BFF 已实现，执行/发布闭环未实现 |
 | `docs/adr/0215-separate-release-deprecation-retirement-and-emergency-revocation.md` | ADR | 正常 deprecated/retired 与紧急 revoked 分离 | 已新增 | accepted design；TDD-03B 至 03E 已实现 application-only deprecate、可信 Reference 注销准入、ordinary retire 与 emergency revoke 核心，产品接线待实现 |
 | `docs/adr/0216-register-executable-client-release-references-in-kss.md` | ADR | KSS Reference Ledger 是普通退役的本地权威 | 已新增 | accepted design；TDD-03A 至 03F 已实现 registration、可信 deregistration admission、零 active Reference retirement/deletion-eligibility gates 及 revocation 竞态收敛，ProofAgent verifier/background reconciler 待实现 |
-| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF 与 TDD-04F controlled cancel BFF 已实现；常驻执行进程和 expiry 产品接线待实现 |
+| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF、TDD-04F controlled cancel BFF 与 TDD-04G bounded audit read BFF 已实现；常驻执行进程和 expiry 产品接线待实现 |
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | 三类可叠加 Hybrid Knowledge Configuration Role Bundle | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | 首期不做复杂 RBAC 或强制四眼，复用全局 named permission 映射 | 已更新 | 用户已确认 |
-| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04F 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04G 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
 
 [KNOWN | HIGH] TDD-04E 已在既有 Scope 内完成 controlled Preparation publication BFF：
 KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :publish`；BFF 要求
@@ -244,3 +244,13 @@ Scope 漂移、body 和上游 identity/state/Location 漂移均失败关闭。�
 PostgreSQL database-time cancellation/fencing 事务，没有新增 migration、取消状态权威或
 浏览器 operator 输入。Dashboard、expiry BFF、常驻进程、artifact cleanup、ready
 quarantine、Agent formal publication、部署和生产配置均未纳入本片。
+
+[KNOWN | HIGH] TDD-04G 已在同一既有 Scope 内完成只读 Preparation audit 同源 BFF：
+ProofAgent 新增 `GET .../preparation-audit`，只接受 `knowledge_source.view`，并通过 guarded
+client 读取 KSS 既有 audit collection。client 严格校验 wire schema 与 exact Space/Base，
+将 success/rejection 合并为时间有序、secret-free 投影，使用 `offset=0..20000`、
+`limit=1..100` 的有界页，并把可识别 actor 明确标记为 `kss_service_operator`。该 actor 是
+KSS 收到的可信服务身份，不是浏览器或终端操作者；本片不伪造委托链。当前分页基于单次
+KSS 当前快照，不是稳定 cursor；当前 Base audit 也不合并 Worker 或 publication audit。
+本片没有新增 KSS SQL、migration、OpenAPI、写命令、Dashboard、连续进程、expiry、artifact
+cleanup、Agent formal publication、部署或生产配置。

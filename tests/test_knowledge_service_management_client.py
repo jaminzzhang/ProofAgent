@@ -343,6 +343,171 @@ def test_management_client_starts_and_reads_exact_release_preparation() -> None:
     assert http.calls[0]["headers"]["Idempotency-Key"] == "preparation-attempt-1"
 
 
+def test_management_client_reads_and_pages_secret_safe_preparation_audit() -> None:
+    payload = {
+        "events": [
+            {
+                "action": "save_draft",
+                "operator_id": "proof-agent-management",
+                "knowledge_space_id": "space-1",
+                "knowledge_base_id": "base-1",
+                "draft_revision": 1,
+                "draft_digest": f"sha256:{'d' * 64}",
+                "release_preparation_id": None,
+                "knowledge_base_version_id": None,
+                "recorded_at": "2026-08-29T05:00:00Z",
+            },
+            {
+                "action": "start",
+                "operator_id": "proof-agent-management",
+                "knowledge_space_id": "space-1",
+                "knowledge_base_id": "base-1",
+                "draft_revision": 1,
+                "draft_digest": f"sha256:{'d' * 64}",
+                "release_preparation_id": "preparation-1",
+                "knowledge_base_version_id": "base-version-1",
+                "recorded_at": "2026-08-29T05:01:00Z",
+            },
+        ],
+        "rejections": [
+            {
+                "operator_id": None,
+                "knowledge_space_id": "space-1",
+                "knowledge_base_id": "base-1",
+                "release_preparation_id": "preparation-1",
+                "operation": "publish",
+                "code": "invalid_operator_credential",
+                "recorded_at": "2026-08-29T05:02:00Z",
+            }
+        ],
+    }
+
+    class AuditHttpClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def request(self, method: str, url: str, **kwargs: Any) -> GuardedHttpResponse:
+            self.calls.append({"method": method, "url": url, **kwargs})
+            return _response(payload)
+
+    http = AuditHttpClient()
+    client = KnowledgeSourceServiceManagementClient(
+        endpoint="https://knowledge.internal:8444",
+        http_client=http,
+        authorization_header_factory=lambda: "Bearer operator-service-token",
+    )
+
+    result = client.preparation_audit(
+        knowledge_space_id="space-1",
+        knowledge_base_id="base-1",
+        offset=1,
+        limit=2,
+    )
+
+    assert result.model_dump(mode="json") == {
+        "schema_version": "knowledge-service-preparation-audit.v1",
+        "knowledge_space_id": "space-1",
+        "knowledge_base_id": "base-1",
+        "entries": [
+            {
+                "kind": "success",
+                "action": "start",
+                "actor": {
+                    "identity_kind": "kss_service_operator",
+                    "operator_id": "proof-agent-management",
+                },
+                "draft_revision": 1,
+                "draft_digest": f"sha256:{'d' * 64}",
+                "release_preparation_id": "preparation-1",
+                "knowledge_base_version_id": "base-version-1",
+                "recorded_at": "2026-08-29T05:01:00Z",
+            },
+            {
+                "kind": "rejection",
+                "operation": "publish",
+                "code": "invalid_operator_credential",
+                "actor": None,
+                "release_preparation_id": "preparation-1",
+                "recorded_at": "2026-08-29T05:02:00Z",
+            },
+        ],
+        "page": {
+            "offset": 1,
+            "limit": 2,
+            "total": 3,
+            "returned": 2,
+            "has_more": False,
+        },
+    }
+    assert [(call["method"], call["url"]) for call in http.calls] == [
+        (
+            "GET",
+            "https://knowledge.internal:8444/v1/knowledge-spaces/space-1/"
+            "knowledge-bases/base-1/preparation-audit",
+        )
+    ]
+    assert "operator-service-token" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("collection", "changed_fields"),
+    [
+        ("events", {"knowledge_space_id": "space-other"}),
+        ("events", {"worker_id": "synthetic-private-worker"}),
+        ("events", {"operator_id": "forged\noperator"}),
+        ("rejections", {"knowledge_base_id": "base-other"}),
+        ("rejections", {"raw_detail": "synthetic-private-rejection-detail"}),
+    ],
+)
+def test_management_client_fails_closed_on_invalid_preparation_audit_contract(
+    collection: str,
+    changed_fields: dict[str, object],
+) -> None:
+    event: dict[str, object] = {
+        "action": "start",
+        "operator_id": "proof-agent-management",
+        "knowledge_space_id": "space-1",
+        "knowledge_base_id": "base-1",
+        "draft_revision": 1,
+        "draft_digest": f"sha256:{'d' * 64}",
+        "release_preparation_id": "preparation-1",
+        "knowledge_base_version_id": "base-version-1",
+        "recorded_at": "2026-08-29T05:01:00Z",
+    }
+    rejection: dict[str, object] = {
+        "operator_id": "proof-agent-management",
+        "knowledge_space_id": "space-1",
+        "knowledge_base_id": "base-1",
+        "release_preparation_id": "preparation-1",
+        "operation": "publish",
+        "code": "base_preparation_not_ready",
+        "recorded_at": "2026-08-29T05:02:00Z",
+    }
+    target = event if collection == "events" else rejection
+    target.update(changed_fields)
+
+    class InvalidAuditHttpClient:
+        def request(self, _method: str, _url: str, **_kwargs: Any) -> GuardedHttpResponse:
+            return _response({"events": [event], "rejections": [rejection]})
+
+    client = KnowledgeSourceServiceManagementClient(
+        endpoint="https://knowledge.internal:8444",
+        http_client=InvalidAuditHttpClient(),
+        authorization_header_factory=lambda: "Bearer operator-service-token",
+    )
+
+    with pytest.raises(ProofAgentError, match="PA_KNOWLEDGE_002") as error:
+        client.preparation_audit(
+            knowledge_space_id="space-1",
+            knowledge_base_id="base-1",
+            offset=0,
+            limit=50,
+        )
+
+    assert "synthetic-private-worker" not in str(error.value)
+    assert "synthetic-private-rejection-detail" not in str(error.value)
+
+
 def test_management_client_publishes_exact_ready_release_preparation() -> None:
     resource_path = (
         "/v1/knowledge-spaces/space-1/knowledge-bases/base-1/release-preparations/preparation-1"

@@ -37,6 +37,13 @@ KnowledgeServiceBoundedText = Annotated[
     str,
     StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=512),
 ]
+KnowledgeServiceOperatorIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$",
+    ),
+]
 KnowledgeServiceStructuredValueType = Literal[
     "string",
     "integer",
@@ -445,6 +452,98 @@ KnowledgeServiceReleasePreparationProjection = Annotated[
 ]
 
 
+class KnowledgeServicePreparationAuditActorProjection(StrictFrozenModel):
+    identity_kind: Literal["kss_service_operator"]
+    operator_id: KnowledgeServiceOperatorIdentifier
+
+
+class KnowledgeServicePreparationAuditSuccessProjection(StrictFrozenModel):
+    kind: Literal["success"]
+    action: Literal["save_draft", "start", "cancel"]
+    actor: KnowledgeServicePreparationAuditActorProjection
+    draft_revision: int = Field(strict=True, ge=1)
+    draft_digest: KnowledgeServiceSha256Digest
+    release_preparation_id: KnowledgeServiceIdentifier | None = None
+    knowledge_base_version_id: KnowledgeServiceIdentifier | None = None
+    recorded_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def require_action_specific_identity(self) -> Self:
+        has_preparation_identity = (
+            self.release_preparation_id is not None and self.knowledge_base_version_id is not None
+        )
+        if self.action == "save_draft" and (
+            self.release_preparation_id is not None or self.knowledge_base_version_id is not None
+        ):
+            raise ValueError("Draft audit cannot expose Preparation identity")
+        if self.action != "save_draft" and not has_preparation_identity:
+            raise ValueError("Preparation audit requires exact Preparation identity")
+        return self
+
+
+class KnowledgeServicePreparationAuditRejectionProjection(StrictFrozenModel):
+    kind: Literal["rejection"]
+    operation: Literal[
+        "save_draft",
+        "get_draft",
+        "start",
+        "get_preparation",
+        "cancel",
+        "publish",
+        "audit",
+    ]
+    code: KnowledgeServiceIdentifier
+    actor: KnowledgeServicePreparationAuditActorProjection | None = None
+    release_preparation_id: KnowledgeServiceIdentifier | None = None
+    recorded_at: AwareDatetime
+
+
+KnowledgeServicePreparationAuditEntryProjection = Annotated[
+    KnowledgeServicePreparationAuditSuccessProjection
+    | KnowledgeServicePreparationAuditRejectionProjection,
+    Field(discriminator="kind"),
+]
+
+
+class KnowledgeServicePreparationAuditPageInfo(StrictFrozenModel):
+    offset: int = Field(strict=True, ge=0, le=20_000)
+    limit: int = Field(strict=True, ge=1, le=100)
+    total: int = Field(strict=True, ge=0, le=20_000)
+    returned: int = Field(strict=True, ge=0, le=100)
+    has_more: bool
+
+    @model_validator(mode="after")
+    def require_consistent_page(self) -> Self:
+        if self.returned > self.limit:
+            raise ValueError("Preparation audit page exceeds its limit")
+        expected_returned = min(self.limit, max(self.total - self.offset, 0))
+        if self.returned != expected_returned:
+            raise ValueError("Preparation audit page is incomplete")
+        if self.has_more != (self.offset + self.returned < self.total):
+            raise ValueError("Preparation audit continuation state is inconsistent")
+        return self
+
+
+class KnowledgeServicePreparationAuditPage(StrictFrozenModel):
+    schema_version: Literal["knowledge-service-preparation-audit.v1"] = (
+        "knowledge-service-preparation-audit.v1"
+    )
+    knowledge_space_id: KnowledgeServiceIdentifier
+    knowledge_base_id: KnowledgeServiceIdentifier
+    entries: tuple[KnowledgeServicePreparationAuditEntryProjection, ...] = Field(max_length=100)
+    page: KnowledgeServicePreparationAuditPageInfo
+
+    @model_validator(mode="after")
+    def require_ordered_bounded_entries(self) -> Self:
+        if self.page.returned != len(self.entries):
+            raise ValueError("Preparation audit page count is inconsistent")
+        if tuple(entry.recorded_at for entry in self.entries) != tuple(
+            sorted(entry.recorded_at for entry in self.entries)
+        ):
+            raise ValueError("Preparation audit entries are not chronological")
+        return self
+
+
 class KnowledgeServiceSourceVersionProjection(StrictFrozenModel):
     knowledge_space_id: KnowledgeServiceIdentifier
     knowledge_source_id: KnowledgeServiceIdentifier
@@ -530,6 +629,7 @@ __all__ = [
     "KnowledgeServiceIdentifier",
     "KnowledgeServiceManagementSummary",
     "KnowledgeServiceManagementWorkspace",
+    "KnowledgeServicePreparationAuditPage",
     "KnowledgeServiceReadinessProjection",
     "KnowledgeServiceReleaseDeletionEligibilityProjection",
     "KnowledgeServiceReleaseProjection",

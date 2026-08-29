@@ -30,6 +30,7 @@ class RecordingKnowledgeServiceManagementClient:
     def __init__(self) -> None:
         self.created: list[tuple[str, ...]] = []
         self.base_commands: list[tuple[str, object, str]] = []
+        self.preparation_audit_requests: list[tuple[str, str, int, int]] = []
         self.preparation_commands: list[tuple[str, object, str]] = []
         self.profile_commands: list[tuple[str, object, str]] = []
         self.release_assessments_requested: list[tuple[str, str, str]] = []
@@ -221,6 +222,45 @@ class RecordingKnowledgeServiceManagementClient:
             )
         )
         return self._preparation(state="cancelled")
+
+    def preparation_audit(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        offset: int,
+        limit: int,
+    ) -> dict[str, object]:
+        self.preparation_audit_requests.append(
+            (knowledge_space_id, knowledge_base_id, offset, limit)
+        )
+        return {
+            "schema_version": "knowledge-service-preparation-audit.v1",
+            "knowledge_space_id": knowledge_space_id,
+            "knowledge_base_id": knowledge_base_id,
+            "entries": [
+                {
+                    "kind": "success",
+                    "action": "start",
+                    "actor": {
+                        "identity_kind": "kss_service_operator",
+                        "operator_id": "proof-agent-management",
+                    },
+                    "draft_revision": 1,
+                    "draft_digest": f"sha256:{'d' * 64}",
+                    "release_preparation_id": "preparation-insurance-1",
+                    "knowledge_base_version_id": "base-version-insurance-1",
+                    "recorded_at": "2026-08-29T05:01:00Z",
+                }
+            ],
+            "page": {
+                "offset": offset,
+                "limit": limit,
+                "total": 2,
+                "returned": 1,
+                "has_more": False,
+            },
+        }
 
     @staticmethod
     def _preparation(
@@ -836,6 +876,82 @@ def test_dashboard_bff_starts_and_reads_exact_release_preparation() -> None:
         assert "fencing_token" not in response.text
         assert "lease_expires_at" not in response.text
         assert "token" not in response.text.casefold()
+
+
+def test_dashboard_bff_reads_bounded_preparation_audit_as_service_operator_facts() -> None:
+    management = RecordingKnowledgeServiceManagementClient()
+    client = _client(
+        management,
+        permissions=frozenset({Permission.KNOWLEDGE_SOURCE_VIEW}),
+    )
+    path = (
+        "/api/config/knowledge-service/spaces/space-insurance/"
+        "bases/base-insurance/preparation-audit"
+    )
+
+    response = client.get(path, params={"offset": 1, "limit": 2})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "knowledge-service-preparation-audit.v1",
+        "knowledge_space_id": "space-insurance",
+        "knowledge_base_id": "base-insurance",
+        "entries": [
+            {
+                "kind": "success",
+                "action": "start",
+                "actor": {
+                    "identity_kind": "kss_service_operator",
+                    "operator_id": "proof-agent-management",
+                },
+                "draft_revision": 1,
+                "draft_digest": f"sha256:{'d' * 64}",
+                "release_preparation_id": "preparation-insurance-1",
+                "knowledge_base_version_id": "base-version-insurance-1",
+                "recorded_at": "2026-08-29T05:01:00Z",
+            }
+        ],
+        "page": {
+            "offset": 1,
+            "limit": 2,
+            "total": 2,
+            "returned": 1,
+            "has_more": False,
+        },
+    }
+    assert management.preparation_audit_requests == [("space-insurance", "base-insurance", 1, 2)]
+    assert "operator-browser" not in response.text
+    assert "worker_id" not in response.text
+    assert "fencing_token" not in response.text
+    assert "lease_expires_at" not in response.text
+    assert "token" not in response.text.casefold()
+
+
+def test_dashboard_bff_rejects_unbounded_or_unauthorized_preparation_audit_reads() -> None:
+    management = RecordingKnowledgeServiceManagementClient()
+    viewer = _client(
+        management,
+        permissions=frozenset({Permission.KNOWLEDGE_SOURCE_VIEW}),
+    )
+    editor = _client(
+        management,
+        permissions=frozenset({Permission.KNOWLEDGE_SOURCE_EDIT}),
+    )
+    path = (
+        "/api/config/knowledge-service/spaces/space-insurance/"
+        "bases/base-insurance/preparation-audit"
+    )
+
+    invalid_limit = viewer.get(path, params={"limit": 101})
+    invalid_offset = viewer.get(path, params={"offset": -1})
+    denied = editor.get(path)
+
+    assert invalid_limit.status_code == 422
+    assert invalid_limit.json() == {"detail": "invalid_knowledge_service_management_request"}
+    assert invalid_offset.status_code == 422
+    assert invalid_offset.json() == {"detail": "invalid_knowledge_service_management_request"}
+    assert denied.status_code == 403
+    assert management.preparation_audit_requests == []
 
 
 def test_dashboard_bff_publishes_one_ready_release_preparation() -> None:

@@ -20,6 +20,7 @@ from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceConnectionProfileRevisionCommand,
     KnowledgeServiceIdentifier,
     KnowledgeServiceManagementWorkspace,
+    KnowledgeServicePreparationAuditPage,
     KnowledgeServiceReleaseDeletionEligibilityProjection,
     KnowledgeServiceReleasePreparationProjection,
     KnowledgeServiceReviseConnectionProfileRequest,
@@ -167,6 +168,15 @@ class KnowledgeServiceManagementClient(Protocol):
         idempotency_key: str,
     ) -> KnowledgeServiceReleasePreparationProjection: ...
 
+    def preparation_audit(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        offset: int,
+        limit: int,
+    ) -> KnowledgeServicePreparationAuditPage: ...
+
 
 class _StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -235,6 +245,29 @@ def get_workspace(
 ) -> KnowledgeServiceManagementWorkspace:
     require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
     return _invoke(_management_client(request).workspace)
+
+
+@router.get(
+    "/spaces/{knowledge_space_id}/bases/{knowledge_base_id}/preparation-audit",
+    response_model=KnowledgeServicePreparationAuditPage,
+)
+def get_preparation_audit(
+    knowledge_space_id: KnowledgeServiceIdentifier,
+    knowledge_base_id: KnowledgeServiceIdentifier,
+    request: Request,
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+    offset: Annotated[int, Query(ge=0, le=20_000)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> KnowledgeServicePreparationAuditPage:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_VIEW)
+    return _invoke(
+        lambda: _management_client(request).preparation_audit(
+            knowledge_space_id=knowledge_space_id,
+            knowledge_base_id=knowledge_base_id,
+            offset=offset,
+            limit=limit,
+        )
+    )
 
 
 @router.get(
