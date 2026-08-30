@@ -168,6 +168,14 @@ class KnowledgeServiceManagementClient(Protocol):
         idempotency_key: str,
     ) -> KnowledgeServiceReleasePreparationProjection: ...
 
+    def expire_release_preparation(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        release_preparation_id: str,
+    ) -> KnowledgeServiceReleasePreparationProjection: ...
+
     def preparation_audit(
         self,
         *,
@@ -645,6 +653,38 @@ async def publish_release_preparation(
         )
     preparation = _invoke(
         lambda: _management_client(request).publish_release_preparation(
+            knowledge_space_id=knowledge_space_id,
+            knowledge_base_id=knowledge_base_id,
+            release_preparation_id=release_preparation_id,
+        )
+    )
+    response.headers["Location"] = preparation.links.self
+    return preparation
+
+
+@router.post(
+    (
+        "/spaces/{knowledge_space_id}/bases/{knowledge_base_id}/"
+        "release-preparations/{release_preparation_id}:expire"
+    ),
+    response_model=KnowledgeServiceReleasePreparationProjection,
+)
+async def expire_release_preparation(
+    knowledge_space_id: KnowledgeServiceIdentifier,
+    knowledge_base_id: KnowledgeServiceIdentifier,
+    release_preparation_id: KnowledgeServiceIdentifier,
+    request: Request,
+    response: Response,
+    identity: Annotated[OperatorIdentityContext, Depends(get_operator_identity)],
+) -> KnowledgeServiceReleasePreparationProjection:
+    require_operator_permission(identity, Permission.KNOWLEDGE_SOURCE_EDIT)
+    if await request.body():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid_knowledge_service_management_request",
+        )
+    preparation = _invoke(
+        lambda: _management_client(request).expire_release_preparation(
             knowledge_space_id=knowledge_space_id,
             knowledge_base_id=knowledge_base_id,
             release_preparation_id=release_preparation_id,

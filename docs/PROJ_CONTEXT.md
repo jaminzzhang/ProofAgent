@@ -349,10 +349,36 @@ cross-page cursor or merge Worker/publication audit, and adds no Dashboard, iden
 delegation, expiry command, continuous process role, deployment, production
 configuration or Production GO.
 
+[KNOWN | HIGH] TDD-04H exposes exact-resource Preparation expiry through KSS
+management HTTP, the ProofAgent guarded client and a same-origin BFF. The no-body
+command requires `knowledge_source.edit`, validates exact path Scope before mutation,
+and uses PostgreSQL time plus an exact row lock to atomically move one due ready
+Preparation to expired with one publication audit and no Release. Replaying an
+already expired identity returns the same durable terminal state without a second
+receipt or duplicate audit; not-due, non-ready, body input and upstream
+identity/state/Location drift fail closed. The network contract deliberately does
+not expose global `expire_next()`, so an uncertain retry cannot select another
+candidate. A real BFF → KSS → PostgreSQL vertical and eight-call concurrency contract
+passed. The full backend passed 2493 tests with 24 existing declared skips and 2
+default exclusions, plus 2 explicit Hybrid integrations. There is no scheduler,
+continuous process role, Dashboard operation, artifact cleanup, Agent formal
+publication, deployment, production configuration or Production GO.
+
+[KNOWN | HIGH] TDD-05A adds a read-only Formal Production Agent Candidate assembler
+rooted in one named Agent, exact Draft ID and exact Draft revision. It reuses the
+server-authoritative publication projector against a ready, versioned live KSS catalog
+and combines only the Draft-owned exact Release with a strict deployment-owned Profile.
+The Profile rejects Release identity and requires a versioned Knowledge credential;
+the candidate retains exact Draft/KSS/catalog facts plus Knowledge Release and formal
+digests. Stale/missing Draft, catalog failure, lifecycle/parent-tuple drift and invalid
+Profile fail closed. The existing formal publisher is not cut over, and no Reference,
+Phase F, smoke, Published Version, activation, Delivery, deployment or Production GO is
+part of this slice.
+
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
-| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A lifecycle/reference-summary read BFF; TDD-04B Profile → Synchronization management BFF; TDD-04C Base Draft save/exact read → Preparation start/status BFF; TDD-04D optional one-shot Preparation execution runtime; TDD-04E controlled Preparation publication BFF; TDD-04F controlled Preparation cancellation BFF; TDD-04G bounded Preparation audit read BFF; no Dashboard Profile/Base Preparation page, continuous Preparation process role, expiry or Reference/lifecycle command BFF, terminal-operator KSS audit delegation, ProofAgent verifier/background reconciler, production Vault/egress/TLS or artifact-retention adapter/physical deletion, affected-reference detail/notification, ProofAgent reference-first publication/runtime revocation integration or production cutover) | ADR-0211 through ADR-0217 |
+| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A lifecycle/reference-summary read BFF; TDD-04B Profile → Synchronization management BFF; TDD-04C Base Draft save/exact read → Preparation start/status BFF; TDD-04D optional one-shot Preparation execution runtime; TDD-04E controlled Preparation publication BFF; TDD-04F controlled Preparation cancellation BFF; TDD-04G bounded Preparation audit read BFF; TDD-04H exact-resource Preparation expiry BFF; TDD-05A exact Draft/KSS/Profile formal-candidate assembler; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or Reference/lifecycle command BFF, terminal-operator KSS audit delegation, ProofAgent verifier/background reconciler, production Vault/egress/TLS or artifact-retention adapter/physical deletion, affected-reference detail/notification, formal publisher candidate consumption/reference-first publication/runtime revocation integration or production cutover) | ADR-0211 through ADR-0217 |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 | `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |

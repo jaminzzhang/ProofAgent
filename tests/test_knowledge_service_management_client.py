@@ -653,6 +653,150 @@ def test_management_client_cancels_exact_queued_release_preparation_idempotently
     assert http.calls[0]["headers"]["Idempotency-Key"] == "cancel-preparation-1"
 
 
+def test_management_client_expires_exact_due_release_preparation() -> None:
+    resource_path = (
+        "/v1/knowledge-spaces/space-1/knowledge-bases/base-1/release-preparations/preparation-1"
+    )
+    expired = {
+        "schema_version": "knowledge-release-preparation.v1",
+        "release_preparation_id": "preparation-1",
+        "knowledge_space_id": "space-1",
+        "knowledge_base_id": "base-1",
+        "draft_revision": 1,
+        "draft_digest": f"sha256:{'d' * 64}",
+        "base_version": {
+            "knowledge_space_id": "space-1",
+            "knowledge_base_id": "base-1",
+            "knowledge_base_version_id": "base-version-1",
+            "members": [
+                {
+                    "knowledge_source_id": "source-1",
+                    "knowledge_source_version_id": "source-version-1",
+                }
+            ],
+            "plan_digest": f"sha256:{'e' * 64}",
+        },
+        "submitted_at": "2026-08-29T05:01:00Z",
+        "state": "expired",
+        "knowledge_base_release_id": "release-1",
+        "release_manifest_digest": f"sha256:{'f' * 64}",
+        "completed_at": "2026-08-29T05:02:00Z",
+        "expires_at": "2026-08-29T06:02:00Z",
+        "expired_at": "2026-08-29T06:02:00Z",
+    }
+
+    class ExpiryHttpClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def request(self, method: str, url: str, **kwargs: Any) -> GuardedHttpResponse:
+            self.calls.append({"method": method, "url": url, **kwargs})
+            return GuardedHttpResponse(
+                status_code=200,
+                headers={"Content-Type": "application/json", "Location": resource_path},
+                body=json.dumps(expired).encode(),
+            )
+
+    http = ExpiryHttpClient()
+    client = KnowledgeSourceServiceManagementClient(
+        endpoint="https://knowledge.internal:8444",
+        http_client=http,
+        authorization_header_factory=lambda: "Bearer operator-service-token",
+    )
+
+    result = client.expire_release_preparation(
+        knowledge_space_id="space-1",
+        knowledge_base_id="base-1",
+        release_preparation_id="preparation-1",
+    )
+
+    assert result.state == "expired"
+    assert result.expired_at.isoformat() == "2026-08-29T06:02:00+00:00"
+    assert result.links.self == (
+        "/api/config/knowledge-service/spaces/space-1/bases/base-1/"
+        "release-preparations/preparation-1"
+    )
+    assert [(call["method"], call["url"]) for call in http.calls] == [
+        (
+            "POST",
+            "https://knowledge.internal:8444/v1/knowledge-spaces/space-1/"
+            "knowledge-bases/base-1/release-preparations/preparation-1:expire",
+        )
+    ]
+    assert http.calls[0]["body"] is None
+    assert "Idempotency-Key" not in http.calls[0]["headers"]
+
+
+@pytest.mark.parametrize(
+    ("changed_fields", "location"),
+    [
+        ({"release_preparation_id": "preparation-other"}, None),
+        ({"state": "ready", "expired_at": None}, None),
+        ({"worker_id": "synthetic-private-expiry-worker"}, None),
+        ({}, "https://foreign.example.test/preparation-1"),
+    ],
+)
+def test_management_client_fails_closed_on_invalid_expiry_result(
+    changed_fields: dict[str, object],
+    location: str | None,
+) -> None:
+    resource_path = (
+        "/v1/knowledge-spaces/space-1/knowledge-bases/base-1/release-preparations/preparation-1"
+    )
+    payload: dict[str, object] = {
+        "schema_version": "knowledge-release-preparation.v1",
+        "release_preparation_id": "preparation-1",
+        "knowledge_space_id": "space-1",
+        "knowledge_base_id": "base-1",
+        "draft_revision": 1,
+        "draft_digest": f"sha256:{'d' * 64}",
+        "base_version": {
+            "knowledge_space_id": "space-1",
+            "knowledge_base_id": "base-1",
+            "knowledge_base_version_id": "base-version-1",
+            "members": [
+                {
+                    "knowledge_source_id": "source-1",
+                    "knowledge_source_version_id": "source-version-1",
+                }
+            ],
+            "plan_digest": f"sha256:{'e' * 64}",
+        },
+        "submitted_at": "2026-08-29T05:01:00Z",
+        "state": "expired",
+        "knowledge_base_release_id": "release-1",
+        "release_manifest_digest": f"sha256:{'f' * 64}",
+        "completed_at": "2026-08-29T05:02:00Z",
+        "expires_at": "2026-08-29T06:02:00Z",
+        "expired_at": "2026-08-29T06:02:00Z",
+        **changed_fields,
+    }
+
+    class InvalidExpiryHttpClient:
+        def request(self, _method: str, _url: str, **_kwargs: Any) -> GuardedHttpResponse:
+            return GuardedHttpResponse(
+                status_code=200,
+                headers={"Location": location or resource_path},
+                body=json.dumps(payload).encode(),
+            )
+
+    client = KnowledgeSourceServiceManagementClient(
+        endpoint="https://knowledge.internal:8444",
+        http_client=InvalidExpiryHttpClient(),
+        authorization_header_factory=lambda: "Bearer operator-service-token",
+    )
+
+    with pytest.raises(ProofAgentError, match="PA_KNOWLEDGE_002") as error:
+        client.expire_release_preparation(
+            knowledge_space_id="space-1",
+            knowledge_base_id="base-1",
+            release_preparation_id="preparation-1",
+        )
+
+    assert "synthetic-private-expiry-worker" not in str(error.value)
+    assert "foreign.example.test" not in str(error.value)
+
+
 @pytest.mark.parametrize(
     ("changed_fields", "location"),
     [

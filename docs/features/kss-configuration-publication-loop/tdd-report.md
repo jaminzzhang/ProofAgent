@@ -1998,3 +1998,150 @@ production-local。
 - [FRAME | HIGH] 若继续下一片，优先单独冻结 controlled expiry HTTP/BFF；不要同时引入
   scheduler、Dashboard、Worker 常驻进程、artifact cleanup、正式 Agent publication 或生产
   切换。
+
+## 32. TDD-04H：精确 Release Preparation 过期 BFF
+
+### 32.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只把既有 `ready → expired` 事务公开为 exact-resource 命令：
+
+```text
+POST /v1/knowledge-spaces/{space}/knowledge-bases/{base}/release-preparations/{id}:expire
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{id}:expire
+```
+
+两个命令都不接受 request body 或 `Idempotency-Key`。ProofAgent BFF 要求
+`knowledge_source.edit`；KSS 使用可信 operator authentication，并在 mutation 前读取 exact
+Preparation、校验路径 Scope。成功返回 `200`、`state="expired"` 和同一 Preparation GET
+`Location`。状态事务由 KSS PostgreSQL adapter 持有：锁定 exact row、使用数据库时间判断
+`now >= expires_at`，验证 frozen candidate 后原子写入 expired 与一条 publication audit，
+不创建 Release。
+
+已经 expired 的 exact identity 自然重放同一 durable terminal state，不新增第二份 receipt
+或重复 audit；不确定响应通过 exact GET 或相同 exact 命令恢复。网络合同故意不公开全局
+`expire_next()`：该 application-only one-shot 会选择当前“下一个”到期候选，若暴露到网络，
+一次响应不确定后的重试可能过期另一资源，不能作为 exact command 的重放语义。
+
+本片保持三层：KSS 持有状态与审计权威，ProofAgent guarded client 严格验证 KSS wire、
+identity/state/Location 并生成 secret-free 投影，BFF 只做 named permission 与同源委托。
+没有新增 SQL、migration、依赖、scheduler、continuous process、Dashboard、artifact cleanup、
+Agent formal publication、部署或生产配置。
+
+### 32.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| application tracer | `KnowledgeBasePreparationApplication` 没有 `expire()`，触发 `AttributeError` | 精确校验 identity/operator，并委托 transaction `expire_ready()`；due/replay `1 passed` |
+| PostgreSQL tracer | transaction 缺少 exact expiry 方法，返回 `base_preparation_unavailable` | exact row lock、database time、candidate integrity 与既有原子终态原语；`1 passed` |
+| KSS HTTP tracer | `:expire` 返回 `405 Method Not Allowed` | no-body、edit-protected、Scope-first mutation 与 same-resource `Location`；`1 passed` |
+| guarded client tracer | concrete client 没有 expiry Interface，触发 `AttributeError` | exact POST、无 body/key，严格验证 expired identity/state/Location；`1 passed` |
+| ProofAgent BFF tracer | exact same-origin path 返回 `405 Method Not Allowed` | `knowledge_source.edit`、no-body、安全投影；`1 passed` |
+| public contract | canonical OpenAPI 保留旧 fingerprint | 新增 no-requestBody/expired-response 断言，指纹更新为 `cdb847191bc5f3658d4592f420852b1b990c5b7ca550b3138b07e69699b99ca2` |
+
+负向合同覆盖 not-due、queued/non-ready、非法 operator/identity、缺少 edit permission、body、
+路径 Space/Base 漂移、上游 identity/state/额外私有字段/foreign Location 漂移。八路并发 exact
+调用全部返回同一 Preparation identity，只产生一个 expired 和一条 publication audit；already
+expired replay 保留首次 transition operator，不用重试 operator 重写历史。真实纵向合同沿
+BFF → guarded client → KSS HTTP → PostgreSQL 创建第三个 queued Preparation，经 one-shot
+executor 进入 ready，再由测试 fixture 只把 exact candidate 的数据库 expiry 推到边界，最后
+由 BFF expire/replay/GET 恢复同一终态。原已发布 Release 数量不变，浏览器投影不含 Worker、
+lease、fence、artifact、credential 或 token。
+
+### 32.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-preparation-expiry-bff-tdd04h`，端口为 PostgreSQL
+`55477`、MinIO `59055`、OpenSearch `19245`。数据库 fixture 使用随机 schema，S3/Hybrid
+使用隔离测试配置。没有读取 `.env`、生产配置、生产凭据、生产数据或生产日志。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 本片 focused RED/GREEN 与负向合同 | 29 passed、231 deselected | application/KSS/client/BFF/OpenAPI exact tracer |
+| 六个直接受影响文件 | 260 passed | 隔离 PostgreSQL/MinIO/OpenSearch，包含真实 BFF vertical 与并发 |
+| 全仓后端 | 2493 passed、24 个既有声明 skip、2 deselected | 退出码 0；默认排除的 Hybrid integrations 另行执行 |
+| 显式 Hybrid integration | 2 passed、2517 deselected | 隔离 PostgreSQL/S3 互操作；不是生产流程证明 |
+| Mypy / Ruff / format | 454 个产品源无类型错误；全量 Ruff；本片文件格式通过 | 无新增 ignore 或降低检查 |
+| 前端 | TypeScript；Dashboard 225、Chat 35；UI/Dashboard/Chat build | 本片无页面；Chat 保留既有 600.22 kB warning |
+| domain / diff / locks | domain-context、`git diff --check`；根 117、KSS 34 packages | 无 dependency 或 migration 变化；OpenAPI 变化已精确绑定 |
+
+全仓和显式 Hybrid 均连接精确命名的隔离依赖并核对最终退出码。全仓保留一个既有 Authlib
+deprecation warning；前端 Chat build 保留既有 chunk-size warning。没有修改产品逻辑、删除
+测试或降低 fail-if-missing 来换取通过。最终使用 `down -v --remove-orphans` 删除精确命名的
+隔离项目，并由 `compose ps -a` 空结果确认无残留；没有操作其他 Compose 项目或
+production-local。
+
+### 32.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-04H 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前 TDD-04H 工作树未形成独立 commit、merge、部署或 Production
+  GO。
+- [KNOWN | HIGH] 本片只关闭“操作员对一个已知 due-ready Preparation 做精确过期”的网络
+  缺口，不建立自动回收责任，也不把 expired/artifact 状态解释为物理清理完成。
+- [FRAME | HIGH] 若继续保持核心优先和简单分层，下一片应在 continuous execution/expiry
+  process role 与 Formal Production Agent Candidate tracer 中单选其一重新冻结。前者先定义
+  有界 `run_once` 驱动、健康与停止责任；后者开始跨越 KSS Release 到 exact Agent Draft 的
+  正式发布权威，范围更大。不要与 Dashboard、artifact cleanup、Reference/lifecycle command
+  或生产切换合并。
+
+## 33. TDD-05A：精确 Formal Production Agent Candidate 只读装配
+
+### 33.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只建立正式候选的 application-only tracer。调用方必须提交 named Agent、
+exact Draft ID 和 exact Draft revision；Control 从 Agent Configuration Store 读取当前 exact
+Draft，使用既有 `ProductionAgentPublicationConfigurationProjector` 对 live KSS catalog 和 live
+Shared Model Connection facts 做完整重验，再把 Draft-owned exact KSS Release 与
+deployment-owned Production KSS Binding Profile 组合为 immutable Formal Production Agent
+Candidate。
+
+Profile 只包含 binding identity、versioned Knowledge credential handle、Admission Scorer
+identity/revision 和 `failure_mode="required"`，strict contract 拒绝任何额外 Release identity。
+候选保留 exact Agent/Draft/revision、display/purpose、Contract Bundle、Draft KSS tuple、live
+catalog revision、resolved KSS binding、既有 Contract+binding digest，以及额外绑定 Draft
+identity/revision 的 formal candidate digest。读取流程不提交 Unit of Work，也不产生 audit、
+Reference、Release Record、Published Version 或 Active pointer 变化。
+
+本片没有修改既有 `ProductionAgentPublicationService` 的 manifest/environment Release 输入，
+没有新增 HTTP、CLI、Dashboard、Release Operator 权限、production composition、配置、SQL、
+migration、依赖或部署。正式 publisher cutover、KSS Reference-first ordering、Phase F、online
+smoke 和 activation CAS 仍是后续切片。
+
+### 33.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| public contract tracer | `ProductionKssBindingProfile` 无法从公共 contracts 导入，测试 collection 失败 | 新增 strict Profile 与 immutable Formal Candidate contracts |
+| exact Draft tracer | 仓库没有 formal candidate assembler | exact named Draft/revision 从 Configuration UoW 读取；stale/missing 在读取 KSS 前拒绝 |
+| live revalidation | formal candidate 无 live catalog 重验路径 | 复用既有 projector；catalog failure、无 revision、非 ready、deprecated 或 parent tuple 漂移失败关闭 |
+| authority split | deployment profile 可能夹带环境 Release | strict extra-forbid；resolved Release 只读取 Draft candidate，Profile 仅补 credential/scorer/binding facts |
+| trace binding | 既有 Knowledge Release digest 不区分内容相同的 Draft revision | 保留既有 digest 供当前 Phase F 语义，并新增绑定 exact Draft root 与 catalog observation 的 formal digest |
+
+负向合同还覆盖 unversioned credential、错误 Secret purpose 和上游异常 detail 不泄漏。相同
+Contract/Release/Profile 在 Draft revision 11 与 12 下产生相同 Knowledge Release digest、不同
+formal candidate digest，明确区分“可执行内容绑定”和“正式提交根”两个用途。
+
+### 33.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 本片 focused RED/GREEN 与负向合同 | 10 passed | pure Control/contracts；无外部依赖 |
+| 直接受影响 publication/Workspace/contracts | 115 passed | 既有 publisher 行为未改 |
+| 全仓后端 | 2264 passed、263 dependency-conditioned skips、2 deselected | 退出码 0；本片不需要 PostgreSQL、KSS HTTP、S3 或 OpenSearch |
+| Mypy / Ruff / format | 455 个产品源无类型错误；全量 Ruff；本片 Python 文件格式通过 | 无新增 ignore 或降低检查 |
+
+首次沙箱内全量运行有 8 个既有 localhost-binding 测试因 `PermissionError` 失败；对应 4 个
+文件在允许绑定 `127.0.0.1` 后 45 passed，随后同一环境的最终全量运行取得上述单次退出码 0。
+该限制和重跑不涉及外部网络、生产依赖或生产数据。此前 TDD-04H 的隔离 PostgreSQL/KSS/S3/
+OpenSearch 证据仍属于 04H，不冒充为本片的新依赖证据。
+
+### 33.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05A 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前工作树同时包含尚未提交的 TDD-04H 与 TDD-05A；没有 commit、
+  merge、部署或 Production GO。
+- [KNOWN | HIGH] 本片只关闭“从 exact Draft revision 形成可追溯正式候选”的缺口；现有正式
+  publisher 仍可走独立 manifest/environment Release 路径，因此系统级唯一发布入口尚未成立。
+- [FRAME | HIGH] 下一片建议为 TDD-05B candidate-bound Phase F preparation：只让新的正式
+  发布准备路径消费 `FormalProductionAgentCandidate` 与 exact evidence，并证明 Phase F record
+  绑定 `formal_candidate_sha256`，输出未持久化、未激活的 provisional version。不要在同片加入
+  Reference registration、online smoke、activation、Delivery/Dashboard 或生产切换；Reference-first
+  ordering 和原子激活留给后续切片。

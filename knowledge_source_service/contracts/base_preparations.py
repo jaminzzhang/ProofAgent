@@ -185,6 +185,7 @@ class BasePreparationRejectionEntry(BasePreparationContract):
         "start",
         "get_preparation",
         "cancel",
+        "expire",
         "publish",
         "audit",
     ]

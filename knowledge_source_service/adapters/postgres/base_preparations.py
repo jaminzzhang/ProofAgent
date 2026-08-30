@@ -655,6 +655,25 @@ class _Transaction:
             return None
         return self._expire_ready(resource, operator_id, expired_at=now)
 
+    def expire_ready(self, preparation_id: str, operator_id: str) -> ExpiredReleasePreparation:
+        row = self._connection.execute(
+            "SELECT * FROM knowledge_release_preparations WHERE release_preparation_id = %s FOR UPDATE",
+            (preparation_id,),
+        ).fetchone()
+        if row is None:
+            raise BasePreparationError("base_preparation_not_found")
+        resource = self.get_preparation(preparation_id)
+        if isinstance(resource, ExpiredReleasePreparation):
+            return resource
+        if not isinstance(resource, ReadyReleasePreparation):
+            raise BasePreparationError("base_preparation_not_ready")
+        self._candidate(row, resource)
+        return self._expire_ready(
+            resource,
+            operator_id,
+            expired_at=self._database_time(),
+        )
+
     def _expire_ready(
         self,
         resource: ReadyReleasePreparation,

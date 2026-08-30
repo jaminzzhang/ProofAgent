@@ -40,7 +40,14 @@ rather than a new idempotency receipt. TDD-04F exposes the existing cooperative
 cancellation transaction through no-body KSS and ProofAgent `:cancel` commands. Both
 require an `Idempotency-Key`; ProofAgent requires the existing edit permission, and
 KSS binds replay to the trusted operator, exact Preparation identity and action.
-There is still no continuous Preparation process role, scheduler, expiry BFF,
-Dashboard operation
-or system-wide removal of the direct synchronous Release bypass.
+TDD-04G exposes the existing bounded Base Preparation audit collection through a
+secret-free ProofAgent read BFF. TDD-04H exposes exact-resource expiry through
+no-body KSS and ProofAgent `:expire` commands. Expiry requires the existing edit
+permission at ProofAgent, validates Scope before mutation, uses KSS database time,
+and naturally replays the same durable `expired` terminal state without a second
+receipt or duplicate publication audit. The network contract deliberately does not
+expose global `expire_next()`, because retrying such a command could select a
+different candidate. There is still no continuous Preparation process role,
+scheduler, Dashboard operation or system-wide removal of the direct synchronous
+Release bypass.
 Local design and tests are not production readiness or a formal Release GO.

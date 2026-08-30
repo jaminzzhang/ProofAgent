@@ -319,7 +319,13 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
 ) -> None:
     apply_knowledge_service_migrations(kss_postgres_dsn)
     artifacts = InMemoryImmutableArtifactStore()
-    preparation_ids = iter(("preparation-runtime-bff-1", "preparation-runtime-bff-cancel-1"))
+    preparation_ids = iter(
+        (
+            "preparation-runtime-bff-1",
+            "preparation-runtime-bff-cancel-1",
+            "preparation-runtime-bff-expire-1",
+        )
+    )
     runtime = compose_runtime(
         postgres_dsn=kss_postgres_dsn,
         artifacts=artifacts,
@@ -474,9 +480,32 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
         headers={"Idempotency-Key": "runtime-preparation-cancel-1"},
     )
     cancelled_current = browser.get(cancellation_target.headers["location"])
+    expiry_target = browser.post(
+        preparations_path,
+        headers={"Idempotency-Key": "runtime-preparation-expiry-target-1"},
+        json={"draft_revision": 1},
+    )
+    expiry_ready = execution_runtime.base_preparation_executor.run_once()
+    assert expiry_ready is not None and expiry_ready.state == "ready"
+    with psycopg.connect(kss_postgres_dsn) as connection:
+        connection.execute(
+            """UPDATE knowledge_release_preparations
+               SET candidate_expires_at = terminal_at + interval '1 microsecond',
+                   resource_json = jsonb_set(
+                       resource_json,
+                       '{expires_at}',
+                       to_jsonb(terminal_at + interval '1 microsecond')
+                   )
+               WHERE release_preparation_id = %s""",
+            (expiry_ready.release_preparation_id,),
+        )
+    expired = browser.post(f"{expiry_target.headers['location']}:expire")
+    expired_replay = browser.post(f"{expiry_target.headers['location']}:expire")
+    expired_current = browser.get(expiry_target.headers["location"])
     audit_path = f"{draft_path.removesuffix('/draft')}/preparation-audit"
     audit_page_one = browser.get(audit_path, params={"offset": 0, "limit": 2})
     audit_page_two = browser.get(audit_path, params={"offset": 2, "limit": 2})
+    audit_page_three = browser.get(audit_path, params={"offset": 4, "limit": 2})
 
     assert saved.status_code == 200
     assert saved.json() == historical.json()
@@ -509,26 +538,45 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
     assert cancelled.headers["location"] == cancellation_target.headers["location"]
     assert cancelled.json() == cancelled_replay.json() == cancelled_current.json()
     assert cancelled.json()["state"] == "cancelled"
+    assert expiry_target.status_code == 202
+    assert expiry_target.json()["state"] == "queued"
+    assert expired.status_code == 200
+    assert expired.headers["location"] == expiry_target.headers["location"]
+    assert expired.json() == expired_replay.json() == expired_current.json()
+    assert expired.json()["state"] == "expired"
     assert audit_page_one.status_code == 200
     assert audit_page_two.status_code == 200
+    assert audit_page_three.status_code == 200
     assert audit_page_one.json()["page"] == {
         "offset": 0,
         "limit": 2,
-        "total": 4,
+        "total": 5,
         "returned": 2,
         "has_more": True,
     }
     assert audit_page_two.json()["page"] == {
         "offset": 2,
         "limit": 2,
-        "total": 4,
+        "total": 5,
         "returned": 2,
+        "has_more": True,
+    }
+    assert audit_page_three.json()["page"] == {
+        "offset": 4,
+        "limit": 2,
+        "total": 5,
+        "returned": 1,
         "has_more": False,
     }
-    audit_entries = audit_page_one.json()["entries"] + audit_page_two.json()["entries"]
+    audit_entries = (
+        audit_page_one.json()["entries"]
+        + audit_page_two.json()["entries"]
+        + audit_page_three.json()["entries"]
+    )
     assert sorted(entry["action"] for entry in audit_entries) == [
         "cancel",
         "save_draft",
+        "start",
         "start",
         "start",
     ]
@@ -553,8 +601,13 @@ def test_proof_agent_bff_manages_base_preparation_through_real_kss_postgres(
         cancelled,
         cancelled_replay,
         cancelled_current,
+        expiry_target,
+        expired,
+        expired_replay,
+        expired_current,
         audit_page_one,
         audit_page_two,
+        audit_page_three,
     ):
         assert "operator-runtime-secret" not in response.text
         assert "worker_id" not in response.text

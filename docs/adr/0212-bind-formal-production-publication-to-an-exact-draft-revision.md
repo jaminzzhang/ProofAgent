@@ -22,3 +22,13 @@ operator reviews is the configuration the formal publisher evaluates and freezes
 the deployment profile is incompatible, or Phase F or online smoke fails, publication
 fails closed without changing the Active Agent Version. This accepted design does
 not claim that the current publisher implementation already consumes Draft state.
+
+[KNOWN | HIGH] TDD-05A implements the first read-only boundary of this decision. A
+Control-owned assembler loads one named Draft and exact revision from the Agent
+Configuration Store, reuses the server-authoritative publication projector to
+revalidate the live versioned KSS catalog, and combines the Draft-owned Release with
+a strict deployment-owned binding profile. It returns an immutable candidate with
+separate Knowledge Release and formal-candidate digests and performs no write. The
+existing formal publisher still accepts an independent manifest and environment-built
+Release binding; KSS Reference registration, Phase F, smoke, publication and
+activation cutover remain subsequent work.

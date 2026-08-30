@@ -12,7 +12,7 @@
 2. 使用已有管理接口创建 Space、Source 和 Base。Base 与成员 Sources 必须位于同一 Space。
 3. 通过摄取或同步生成可用的 Source Versions。Draft 可以先保存；开始 Preparation 时每个成员都必须能解析到 ready Version。受管同步步骤见 [Connection Profile 本地说明](connection-profile-local-guide.md)。
 4. 在 API 服务端调用 `compose_runtime`，除既有必需依赖外，显式提供 `base_preparation_id_factory` 和 `authenticate_operator`。未提供 factory 时不注册新路由；缺少认证时拒绝启用。需要执行候选时，另行显式提供 `base_preparation_execution`；默认 API runtime 不执行 Preparation。不要将测试内存仓储用作生产 fallback。
-5. ProofAgent 同源管理 HTTP 由可信身份映射提供全局 named permissions：读取需要 `knowledge_source.view`，保存、启动、发布或取消需要 `knowledge_source.edit`。身份可以组合这些权限，不新增 Space 级 ACL 或本地授权表。KSS 管理 HTTP 继续要求可信 operator authentication，并在 publication/cancellation 前核对 exact Scope；终端用户不能绕过 BFF 自报权限。TDD-04E/04F 只把既有 one-use publication CAS 和协作取消事务暴露为受控命令；它们不授予 Agent 发布、激活或其他角色权限。
+5. ProofAgent 同源管理 HTTP 由可信身份映射提供全局 named permissions：读取需要 `knowledge_source.view`，保存、启动、发布、取消或精确过期需要 `knowledge_source.edit`。身份可以组合这些权限，不新增 Space 级 ACL 或本地授权表。KSS 管理 HTTP 继续要求可信 operator authentication，并在 publication/cancellation/expiry 前核对 exact Scope；终端用户不能绕过 BFF 自报权限。TDD-04E/04F/04H 只把既有 one-use publication CAS、协作取消和 exact-resource expiry 事务暴露为受控命令；它们不授予 Agent 发布、激活或其他角色权限。
 
 `base_preparation_id_factory` 和 `base_preparation_execution` 是 Python 组合参数，不是现有 CLI 或环境变量开关。`bootstrap/processes.py` 尚未启用 execution 组合。浏览器不得直接持有 KSS operator credential，也不能通过请求体声明角色或操作者。
 
@@ -81,7 +81,7 @@ KSS 在短事务内锁定当前 Draft，通过一条 catalog 查询读取所有�
 
 调用 `GET {前缀}/preparation-audit` 查看成功操作及安全拒绝事件；该读取要求对应 Draft 已存在且 Scope 一致。审计只记录安全身份、受限操作/资源标识、稳定错误码和时间，不返回请求 body、headers、key、原文或 secret。
 
-当前没有 expiry HTTP 操作或自动调度。没有显式调用 Worker Interface 时，资源保持 `queued`。`running` 仅表示已被领取，租约过期也保持 `running`，不能据此判断 Worker 健康或构建进度。GET 不推进到期状态；没有 publication 尝试或显式 `expire_next()` 调用时，已过 `expires_at` 的资源仍可能暂时显示 ready。
+当前已有 exact-resource expiry HTTP 操作，但没有自动调度。没有显式调用 Worker Interface 时，资源保持 `queued`。`running` 仅表示已被领取，租约过期也保持 `running`，不能据此判断 Worker 健康或构建进度。GET 不推进到期状态；没有 publication 尝试、精确过期命令或显式 `expire_next()` 调用时，已过 `expires_at` 的资源仍可能暂时显示 ready。
 
 ## ProofAgent 同源管理入口
 
@@ -93,14 +93,38 @@ GET  /api/config/knowledge-service/spaces/{space}/bases/{base}/draft?revision={n
 POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations
 GET  /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}
 POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:cancel
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:expire
 POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:publish
 ```
 
 - Draft PUT body 只包含 `expected_revision` 和 `members`；Preparation POST body 只包含 `draft_revision`。Space/Base 由路径持有，ProofAgent client 在调用 KSS 时注入并重验，不接受 body 重复声明 Scope。
-- Draft PUT、Preparation start POST 和 cancellation POST 需要 `knowledge_source.edit` 与 `Idempotency-Key`；publication POST 需要 `knowledge_source.edit`，但不接受 body 或 `Idempotency-Key`；两个 GET 需要 `knowledge_source.view`。cancellation 也不接受 body。Draft GET 必须提交 exact `revision`，不提供 mutable latest 读取。
+- Draft PUT、Preparation start POST 和 cancellation POST 需要 `knowledge_source.edit` 与 `Idempotency-Key`；publication 与 exact expiry POST 需要 `knowledge_source.edit`，但不接受 body 或 `Idempotency-Key`；两个 GET 需要 `knowledge_source.view`。cancellation 也不接受 body。Draft GET 必须提交 exact `revision`，不提供 mutable latest 读取。
 - Preparation 首次启动与相同命令重放都返回 `202`，因为 KSS 的 immutable queued receipt 不区分 HTTP create/replay status。调用方通过同源 `Location` 读取 current state，不得根据 POST 重放结果推断 Worker 当前状态。
 - BFF 只投影 Draft/Version/Preparation exact identity、digest、成员、状态、安全终态字段和同源 self link。Worker ID、fencing token、lease deadline、artifact reference、KSS credential 和 raw failure detail 不进入浏览器。
 - start/status BFF 不会在请求内运行 Worker 或推进到期；publication/cancellation BFF 只调用既有短事务，也不会执行构建或激活 Agent。只有另行配置的可信 execution runtime 可以把 queued 推进到 running/ready/failed；没有 execution 或 publication 时，资源应保持可见但不可查询。
+
+### 6. 精确过期与不确定结果恢复
+
+只有 current state 为已到期 `ready` 时调用：
+
+```text
+POST {前缀}/release-preparations/{preparation_id}:expire
+POST /api/config/knowledge-service/spaces/{space}/bases/{base}/release-preparations/{preparation_id}:expire
+```
+
+两个请求都不带 body 或 `Idempotency-Key`。成功返回 `200`、`state="expired"`，`Location`
+指向同一个 Preparation GET。KSS 使用 PostgreSQL 时间判断 `now >= expires_at`，并在同一事务
+内提交 expired 与一条 publication lifecycle audit；不会创建 queryable Release。
+
+- 未到期返回 `409 base_preparation_not_expired`；queued/running/failed/cancelled/consumed
+  返回 `409 base_preparation_not_ready`。所有失败都不得推进状态或创建 Release。
+- 重复调用已经 expired 的 exact identity 返回原 durable terminal state，不写第二条审计。
+  因此网络超时后应 GET exact Preparation，或重放同一个 exact `:expire`；不要创建业务重试
+  key，也不要改用服务端全局 `expire_next()`。
+- `expire_next()` 仍只属于可信服务端 one-shot 运行责任。网络入口故意只接受 exact identity，
+  避免一个不确定响应后的重试过期另一个候选。
+- expired 保留候选绑定用于完整性审计，但不会删除 immutable artifact 或 projection。自动
+  调度、常驻进程、健康信号和 artifact cleanup 仍是独立后续责任。
 
 ### 5. 受控发布与不确定结果恢复
 
@@ -292,6 +316,7 @@ GET /api/config/knowledge-service/spaces/{space}/bases/{base}/preparation-audit
 | `failed / base_preparation_invalid_candidate` | 构建结果与 frozen plan、manifest digest 或 content identity 不一致 | 停止使用该构建器结果；修复构建器后以新 Preparation identity 重试 |
 | `base_preparation_not_ready` | publish 目标不存在于 ready，包含 queued/running/failed/expired/consumed 或重复消费 | GET exact Preparation；不要把非 ready 状态改回 ready，失败重试创建新 identity |
 | `base_preparation_expired` | publication CAS 发现数据库时间已到期，并已持久化 expired | GET 确认终态；以新 key 启动新 Preparation，不复用 candidate |
+| `base_preparation_not_expired` | exact expiry 目标仍未到 `expires_at` | 保持 ready；到期后重放同一 exact 命令，或等待受控调度责任 |
 | `base_preparation_not_cancellable` | 目标不是 queued/running，或已经进入 ready/terminal 状态 | GET exact Preparation；不要回退状态，若需重试则启动新 identity |
 | `base_preparation_stale_claim` | running 已取消、lease 已过期/接管或 claim 身份不匹配 | Worker 停止提交；不得修改 fence 或把孤立 artifact 变成 Release |
 | `base_preparation_release_conflict` | 相同 Release ID 已存在但不是完整、queryable、exact-equal 记录 | 停止发布并调查 catalog 完整性/生命周期；不会自动修复或复活 |
@@ -301,7 +326,7 @@ Draft/Preparation、成功回执与成功审计原子提交。未受理的失败
 ## 保留与验证边界
 
 - Draft 历史、Base Version、Preparation、receipt 和 audit 当前没有自动 TTL、删除或清理入口。备份恢复、保留期限和审计分页仍待后续实现，不能把回滚二进制当作数据恢复。
-- KSS 仍是这些资源的权威。ProofAgent 后续只通过受保护 BFF 管理，并使用已发布的 exact KSS Release；当前不能在 Dashboard 配置使用新 Preparation。
+- KSS 仍是这些资源的权威。ProofAgent 通过受保护 BFF 管理，并使用已发布的 exact KSS Release；当前仍不能在 Dashboard 配置使用新 Preparation。
 - 本地完整受影响回归为 339 passed、0 skipped，覆盖真实 PostgreSQL/MinIO/OpenSearch。Preparation 的 PostgreSQL 构建 fixture 仍使用内存 artifact store；TDD-02E 证明同一 PostgreSQL 内 Release catalog 与 Preparation 的原子可见性，TDD-02F 证明显式 one-shot 主动过期的选择、并发、完整性失败关闭和回滚合同。两者都不证明常驻 Worker、自动过期调度、孤立 artifact 回收、系统级唯一发布入口、Phase F 或生产恢复已通过。
 
 实现与验证详情见 [TDD 报告](tdd-report.md)第 13 至 17 节。`0012` 的 `expired/consumed` 资源和新列不兼容旧二进制；生产迁移和回滚需要独立授权与验证。

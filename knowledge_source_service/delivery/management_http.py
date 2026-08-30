@@ -58,6 +58,7 @@ from knowledge_source_service.contracts.base_preparations import (
     BasePreparationRejectionEntry,
     CancelledReleasePreparation,
     ConsumedReleasePreparation,
+    ExpiredReleasePreparation,
     KnowledgeBaseDraft,
     QueuedReleasePreparation,
     ReleasePreparationResource,
@@ -398,6 +399,7 @@ def create_management_application(
             "start_release_preparation": "start",
             "get_release_preparation": "get_preparation",
             "cancel_release_preparation": "cancel",
+            "expire_release_preparation": "expire",
             "publish_release_preparation": "publish",
             "base_preparation_audit": "audit",
         }
@@ -736,6 +738,46 @@ def create_management_application(
                 f"release-preparations/{preparation_id}"
             )
             return cancelled
+
+        @application.post(
+            f"{base_path}/release-preparations/{{preparation_id}}:expire",
+            response_model=ExpiredReleasePreparation,
+        )
+        async def expire_release_preparation(
+            knowledge_space_id: BaseIdentifier,
+            knowledge_base_id: BaseIdentifier,
+            preparation_id: BaseIdentifier,
+            request: Request,
+            response: Response,
+            operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> ExpiredReleasePreparation:
+            if await request.body():
+                raise ValueError("expiry request body is not accepted")
+            current = preparations.get_preparation(preparation_id)
+            if current is None:
+                raise BasePreparationError("base_preparation_not_found")
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                current.knowledge_space_id,
+                current.knowledge_base_id,
+            )
+            expired = preparations.expire(
+                preparation_id,
+                operator_id=operator.operator_id,
+            )
+            require_base_scope(
+                knowledge_space_id,
+                knowledge_base_id,
+                expired.knowledge_space_id,
+                expired.knowledge_base_id,
+            )
+            response.headers["Location"] = (
+                f"/v1/knowledge-spaces/{knowledge_space_id}/"
+                f"knowledge-bases/{knowledge_base_id}/"
+                f"release-preparations/{preparation_id}"
+            )
+            return expired
 
         @application.post(
             f"{base_path}/release-preparations/{{preparation_id}}:publish",

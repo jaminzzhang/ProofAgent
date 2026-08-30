@@ -30,7 +30,7 @@
 | --- | --- |
 | 准入结论 | `READY_FOR_TDD` |
 | 需求分析输入 | 用户要求检查并规划 KSS 数据、配置及 ProofAgent 使用的完整流程；已确认终点包括正式生产发布和原子激活，并保持分权 |
-| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消；TDD-04E/04F 已公开 controlled publish/cancel KSS/BFF，TDD-04G 已公开有界、secret-free audit read BFF，但仍无 expiry HTTP/BFF、常驻 Worker、自动过期调度或终端操作者委托身份，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference/lifecycle command 闭环、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
+| 执行证据缺口 | Connection Profile 已有本地 PostgreSQL/HTTP/同步 Worker 证据；TDD-02A 至 02G 已有 Preparation 持久化准入、租约协调、候选构建、fenced `ready/failed` 结果、`ready → expired/consumed` 核心单事务发布、显式 one-shot 主动过期和 queued/running 协作取消；TDD-04E/04F/04H 已公开 controlled publish/cancel/exact-expire KSS/BFF，TDD-04G 已公开有界、secret-free audit read BFF，但仍无常驻 Worker、自动过期调度或终端操作者委托身份，既有直接 Release 发布路径也尚未收敛。异常 ready quarantine、真实策略/Secret/egress/TLS、生产进程切换、Reference/lifecycle command 闭环、正式 publisher cutover、三角色端到端与 Phase F 尚未完成；正式验收人员仍需在发布前指派 |
 
 ## 4. 需求分析与范围边界
 
@@ -221,10 +221,10 @@
 | `docs/adr/0214-resolve-versioned-knowledge-base-drafts-at-release-preparation-start.md` | ADR | Base Draft selection policy 在 Preparation 启动时冻结为 exact Knowledge Base Version | 已新增 | accepted design；Draft/Version/Preparation 核心及 TDD-04C Draft save/exact read、Preparation start/status BFF 已实现，执行/发布闭环未实现 |
 | `docs/adr/0215-separate-release-deprecation-retirement-and-emergency-revocation.md` | ADR | 正常 deprecated/retired 与紧急 revoked 分离 | 已新增 | accepted design；TDD-03B 至 03E 已实现 application-only deprecate、可信 Reference 注销准入、ordinary retire 与 emergency revoke 核心，产品接线待实现 |
 | `docs/adr/0216-register-executable-client-release-references-in-kss.md` | ADR | KSS Reference Ledger 是普通退役的本地权威 | 已新增 | accepted design；TDD-03A 至 03F 已实现 registration、可信 deregistration admission、零 active Reference retirement/deletion-eligibility gates 及 revocation 竞态收敛，ProofAgent verifier/background reconciler 待实现 |
-| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF、TDD-04F controlled cancel BFF 与 TDD-04G bounded audit read BFF 已实现；常驻执行进程和 expiry 产品接线待实现 |
+| `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF、TDD-04F controlled cancel BFF、TDD-04G bounded audit read BFF 与 TDD-04H exact-resource expiry BFF 已实现；常驻执行进程和自动过期调度待实现 |
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | 三类可叠加 Hybrid Knowledge Configuration Role Bundle | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | 首期不做复杂 RBAC 或强制四眼，复用全局 named permission 映射 | 已更新 | 用户已确认 |
-| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04G 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04H 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
 
 [KNOWN | HIGH] TDD-04E 已在既有 Scope 内完成 controlled Preparation publication BFF：
 KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :publish`；BFF 要求
@@ -254,3 +254,36 @@ KSS 收到的可信服务身份，不是浏览器或终端操作者；本片不�
 KSS 当前快照，不是稳定 cursor；当前 Base audit 也不合并 Worker 或 publication audit。
 本片没有新增 KSS SQL、migration、OpenAPI、写命令、Dashboard、连续进程、expiry、artifact
 cleanup、Agent formal publication、部署或生产配置。
+
+[KNOWN | HIGH] TDD-04H 已在同一既有 Scope 内完成 exact-resource Preparation expiry
+BFF：KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :expire`，并要求既有
+`knowledge_source.edit`。KSS 在变更前读取 exact Preparation 并核对路径 Scope，随后使用
+数据库时间、行锁和既有 publication audit 原语，把一个已到期 ready 原子推进为 expired；
+不会创建 Release。重复请求直接返回同一 durable expired 终态，不新增 Idempotency-Key、
+第二份回执或重复审计；不确定响应由 exact GET 或相同 exact 命令恢复。网络合同不公开
+`expire_next()`，避免重试时选中另一资源。not-due、非 ready、body、权限、Scope 和上游
+identity/state/Location 漂移均失败关闭。本片没有新增 SQL、migration、依赖、scheduler、
+continuous process、Dashboard、artifact cleanup、Agent formal publication、部署或生产配置。
+
+[FRAME | HIGH] 2026-08-30 用户确认进入 TDD-05A Formal Production Agent Candidate
+tracer。本片只新增一个无副作用的 Control 装配入口：以调用方提交的 named Agent、exact
+Draft ID 和 exact Draft revision 为候选根，从 Agent Configuration Store 读取该 Draft，使用
+既有 publication-configuration projector 对 live KSS catalog 做完整重验，再把 Draft 内 exact
+Space/Base/Base Version/Release 与 deployment-owned Production KSS Binding Profile 组合为一个
+不可变、可摘要的 Formal Production Agent Candidate。Binding Profile 只持有 binding identity、
+versioned Knowledge credential handle、Admission Scorer identity/revision 和 required failure mode，
+不得携带或替换 Release identity。Draft 缺失、revision 漂移、catalog 不可用、Release 不再
+queryable、authoring blocker 或非 versioned Knowledge credential 均失败关闭。本片不修改既有
+publisher 输入，不注册 KSS Reference，不生成 Phase F Release Record，不执行 online smoke、
+Published Version 写入、Active pointer CAS、HTTP/CLI/Dashboard、production composition、环境配置、
+SQL、migration、部署或 Git 操作；后续切片才把该候选接入正式 publisher 并逐步移除独立
+manifest/environment Release 候选路径。
+
+[KNOWN | HIGH] TDD-05A 已按上述边界完成。新增 strict Production KSS Binding Profile、
+immutable Formal Production Agent Candidate 和 Control-owned assembler。候选绑定 exact
+Agent/Draft/revision、Contract Bundle、Draft KSS tuple、live catalog revision、resolved binding、
+既有 Knowledge Release candidate digest 与包含 Draft revision 的 formal candidate digest；相同
+Contract/Release/Profile 在不同 Draft revision 下保持前者稳定、后者变化。stale/missing Draft、
+catalog failure/unversioned snapshot、deprecated 或 parent tuple 漂移、Profile 夹带 Release、
+非 versioned Knowledge credential 均失败关闭。现有 publisher、production composition、Reference、
+Phase F、smoke、Published Version 与 Active pointer 未改动。

@@ -341,6 +341,7 @@ class _PreparationAuditRejectionResource(StrictFrozenModel):
         "start",
         "get_preparation",
         "cancel",
+        "expire",
         "publish",
         "audit",
     ]
@@ -1116,6 +1117,32 @@ class KnowledgeSourceServiceManagementClient:
             raise _contract_error("Release Preparation cancellation did not cancel the resource")
         if _header(response.headers, "location") != resource_path:
             raise _contract_error("Release Preparation cancellation changed its exact Location")
+        return self._release_preparation_projection(resource)
+
+    def expire_release_preparation(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        release_preparation_id: str,
+    ) -> KnowledgeServiceReleasePreparationProjection:
+        identity = KnowledgeServiceBaseProjection(
+            knowledge_space_id=knowledge_space_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        preparation = _PreparationIdentity(value=release_preparation_id)
+        resource_path = f"{self._release_preparations_path(identity)}/{preparation.value}"
+        response = self._request("POST", f"{resource_path}:expire")
+        resource = self._parse(response, _ReleasePreparationResource)
+        self._require_preparation_identity(
+            resource,
+            identity,
+            release_preparation_id=preparation.value,
+        )
+        if resource.state != "expired":
+            raise _contract_error("Release Preparation expiry did not expire the resource")
+        if _header(response.headers, "location") != resource_path:
+            raise _contract_error("Release Preparation expiry changed its exact Location")
         return self._release_preparation_projection(resource)
 
     @staticmethod

@@ -576,6 +576,72 @@ def test_expire_next_actively_expires_one_due_ready_candidate_once() -> None:
     assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
 
 
+def test_expire_exact_due_ready_candidate_replays_one_terminal_transition() -> None:
+    now = NOW
+    app, repository, request = environment(lease_clock=lambda: now)
+    app.save_draft(request, operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+
+    class Builder:
+        def build(self, base_version):  # type: ignore[no-untyped-def]
+            return publishable_candidate(base_version)
+
+    ready = BasePreparationWorker(
+        repository=repository, worker_id="worker-1", lease_duration=timedelta(seconds=30)
+    ).run_next(builder=Builder(), candidate_ttl=timedelta(hours=1))
+    assert ready is not None and ready.state == "ready"
+    now = ready.expires_at
+
+    expired = app.expire(
+        ready.release_preparation_id,
+        operator_id="operator-expiry",
+    )
+    replay = app.expire(
+        ready.release_preparation_id,
+        operator_id="operator-expiry-retry",
+    )
+
+    assert expired.state == "expired"
+    assert expired.release_preparation_id == ready.release_preparation_id
+    assert expired.expired_at == ready.expires_at
+    assert replay == expired
+    assert app.get_preparation(queued.release_preparation_id) == expired
+    assert repository.get_release(ready.knowledge_base_release_id) is None
+    assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
+    assert [event.operator_id for event in app.publication_audit("base-claims")] == [
+        "operator-expiry"
+    ]
+
+
+def test_expire_exact_rejects_not_due_or_non_ready_without_side_effect() -> None:
+    app, repository, request = environment(lease_clock=lambda: NOW)
+    app.save_draft(request, operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+
+    with pytest.raises(BasePreparationError, match="^base_preparation_not_ready$"):
+        app.expire(queued.release_preparation_id, operator_id="operator-expiry")
+
+    class Builder:
+        def build(self, base_version):  # type: ignore[no-untyped-def]
+            return publishable_candidate(base_version)
+
+    ready = BasePreparationWorker(
+        repository=repository, worker_id="worker-1", lease_duration=timedelta(seconds=30)
+    ).run_next(builder=Builder(), candidate_ttl=timedelta(hours=1))
+    assert ready is not None and ready.state == "ready"
+
+    with pytest.raises(BasePreparationError, match="^base_preparation_not_expired$"):
+        app.expire(ready.release_preparation_id, operator_id="operator-expiry")
+    with pytest.raises(BasePreparationError, match="^base_preparation_invalid_operator$"):
+        app.expire(ready.release_preparation_id, operator_id="forged\noperator")
+    with pytest.raises(BasePreparationError, match="^base_preparation_invalid_identity$"):
+        app.expire("../forged", operator_id="operator-expiry")
+
+    assert app.get_preparation(queued.release_preparation_id) == ready
+    assert app.publication_audit("base-claims") == ()
+    assert repository.get_release(ready.knowledge_base_release_id) is None
+
+
 def test_publication_rejects_missing_queued_or_invalid_identity_without_side_effect() -> None:
     app, repository, request = environment(lease_clock=lambda: NOW)
     app.save_draft(request, operator_id="operator-1", idempotency_key="save")

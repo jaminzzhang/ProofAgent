@@ -489,6 +489,7 @@ class KnowledgeServicePreparationAuditRejectionProjection(StrictFrozenModel):
         "start",
         "get_preparation",
         "cancel",
+        "expire",
         "publish",
         "audit",
     ]

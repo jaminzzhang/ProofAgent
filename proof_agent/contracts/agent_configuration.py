@@ -12,7 +12,7 @@ from proof_agent.contracts._base import (
     StrictFrozenModel,
     freeze_value,
 )
-from proof_agent.contracts.secrets import ProductionSecretHandle
+from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
 from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
 from proof_agent.contracts.knowledge_service_management import KnowledgeServiceIdentifier
@@ -179,6 +179,60 @@ class DraftKnowledgeReleaseBindingCandidate(StrictFrozenModel):
     knowledge_base_id: KnowledgeServiceIdentifier
     knowledge_base_version_id: KnowledgeServiceIdentifier
     knowledge_base_release_id: KnowledgeServiceIdentifier
+
+
+class ProductionKssBindingProfile(StrictFrozenModel):
+    """Deployment-owned KSS binding facts without Release selection authority."""
+
+    binding_id: str = Field(strict=True, min_length=1, max_length=128)
+    client_credential_ref: ProductionSecretHandle
+    admission_scorer_id: str = Field(strict=True, min_length=1, max_length=128)
+    admission_scorer_revision: str = Field(strict=True, min_length=1, max_length=128)
+    failure_mode: Literal["required"] = "required"
+
+    @model_validator(mode="after")
+    def require_versioned_knowledge_credential(self) -> "ProductionKssBindingProfile":
+        credential = self.client_credential_ref
+        if credential.purpose is not SecretPurpose.KNOWLEDGE_CREDENTIAL:
+            raise ValueError("Production KSS profile requires a Knowledge credential")
+        if credential.version_id is None or not credential.version_id.strip():
+            raise ValueError("Production KSS profile requires a versioned credential")
+        return self
+
+
+class FormalProductionAgentCandidate(StrictFrozenModel):
+    """Exact, traceable and still-unpublished production Agent candidate."""
+
+    schema_version: Literal["formal-production-agent-candidate.v1"] = (
+        "formal-production-agent-candidate.v1"
+    )
+    agent_id: str = Field(strict=True, min_length=1, max_length=128)
+    draft_id: str = Field(strict=True, min_length=1, max_length=128)
+    draft_revision: int = Field(strict=True, ge=1)
+    display_name: str = Field(strict=True, min_length=1, max_length=200)
+    purpose: str = Field(strict=True, max_length=4_000)
+    contract_bundle: ContractBundle
+    knowledge_release_candidate: DraftKnowledgeReleaseBindingCandidate
+    knowledge_service_catalog_revision: str = Field(
+        strict=True,
+        min_length=1,
+        max_length=512,
+    )
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet
+    knowledge_release_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    formal_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def require_exact_draft_release_binding(self) -> "FormalProductionAgentCandidate":
+        bindings = self.resolved_knowledge_bindings.bindings
+        if len(bindings) != 1:
+            raise ValueError("Formal production candidate requires exactly one KSS binding")
+        if (
+            bindings[0].knowledge_base_release_id
+            != self.knowledge_release_candidate.knowledge_base_release_id
+        ):
+            raise ValueError("Formal production candidate KSS Release identity must match")
+        return self
 
 
 class DraftAgent(FrozenModel):

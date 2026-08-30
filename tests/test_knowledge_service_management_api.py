@@ -9,6 +9,7 @@ from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceCancelledReleasePreparationProjection,
     KnowledgeServiceConnectionProfileProjection,
     KnowledgeServiceConsumedReleasePreparationProjection,
+    KnowledgeServiceExpiredReleasePreparationProjection,
     KnowledgeServiceManagementWorkspace,
     KnowledgeServiceReadinessProjection,
     KnowledgeServiceReadyReleasePreparationProjection,
@@ -223,6 +224,22 @@ class RecordingKnowledgeServiceManagementClient:
         )
         return self._preparation(state="cancelled")
 
+    def expire_release_preparation(
+        self,
+        *,
+        knowledge_space_id: str,
+        knowledge_base_id: str,
+        release_preparation_id: str,
+    ) -> KnowledgeServiceExpiredReleasePreparationProjection:
+        self.preparation_commands.append(
+            (
+                "expire",
+                (knowledge_space_id, knowledge_base_id, release_preparation_id),
+                "",
+            )
+        )
+        return self._preparation(state="expired")
+
     def preparation_audit(
         self,
         *,
@@ -270,6 +287,7 @@ class RecordingKnowledgeServiceManagementClient:
         KnowledgeServiceQueuedReleasePreparationProjection
         | KnowledgeServiceCancelledReleasePreparationProjection
         | KnowledgeServiceReadyReleasePreparationProjection
+        | KnowledgeServiceExpiredReleasePreparationProjection
         | KnowledgeServiceConsumedReleasePreparationProjection
     ):
         resource: dict[str, object] = {
@@ -319,6 +337,16 @@ class RecordingKnowledgeServiceManagementClient:
                     "consumed_at": "2026-08-29T05:03:00Z",
                 }
             )
+        if state == "expired":
+            resource.update(
+                {
+                    "knowledge_base_release_id": "release-insurance-1",
+                    "release_manifest_digest": f"sha256:{'f' * 64}",
+                    "completed_at": "2026-08-29T05:02:00Z",
+                    "expires_at": "2026-08-29T06:02:00Z",
+                    "expired_at": "2026-08-29T06:02:00Z",
+                }
+            )
         if state == "cancelled":
             resource["cancelled_at"] = "2026-08-29T05:02:30Z"
         if state == "queued":
@@ -327,6 +355,8 @@ class RecordingKnowledgeServiceManagementClient:
             return KnowledgeServiceCancelledReleasePreparationProjection.model_validate(resource)
         if state == "consumed":
             return KnowledgeServiceConsumedReleasePreparationProjection.model_validate(resource)
+        if state == "expired":
+            return KnowledgeServiceExpiredReleasePreparationProjection.model_validate(resource)
         return KnowledgeServiceReadyReleasePreparationProjection.model_validate(resource)
 
     def create_connection_profile(
@@ -1020,6 +1050,37 @@ def test_dashboard_bff_cancels_one_queued_release_preparation_idempotently() -> 
     assert "token" not in cancelled.text.casefold()
 
 
+def test_dashboard_bff_expires_one_exact_due_release_preparation() -> None:
+    management = RecordingKnowledgeServiceManagementClient()
+    client = _client(
+        management,
+        permissions=frozenset({Permission.KNOWLEDGE_SOURCE_EDIT}),
+    )
+    resource_path = (
+        "/api/config/knowledge-service/spaces/space-insurance/"
+        "bases/base-insurance/release-preparations/preparation-insurance-1"
+    )
+
+    expired = client.post(f"{resource_path}:expire")
+
+    assert expired.status_code == 200
+    assert expired.headers["location"] == resource_path
+    assert expired.json()["state"] == "expired"
+    assert expired.json()["expired_at"] == "2026-08-29T06:02:00Z"
+    assert expired.json()["links"] == {"self": resource_path}
+    assert management.preparation_commands == [
+        (
+            "expire",
+            ("space-insurance", "base-insurance", "preparation-insurance-1"),
+            "",
+        )
+    ]
+    assert "worker_id" not in expired.text
+    assert "fencing_token" not in expired.text
+    assert "lease_expires_at" not in expired.text
+    assert "token" not in expired.text.casefold()
+
+
 def test_dashboard_bff_rejects_invalid_cancellation_without_invoking_kss() -> None:
     management = RecordingKnowledgeServiceManagementClient()
     client = _client(
@@ -1043,6 +1104,28 @@ def test_dashboard_bff_rejects_invalid_cancellation_without_invoking_kss() -> No
     assert rejected_body.status_code == 422
     assert rejected_body.json() == {"detail": "invalid_knowledge_service_management_request"}
     assert "synthetic-private-cancellation-token" not in rejected_body.text
+    assert management.preparation_commands == []
+
+
+def test_dashboard_bff_rejects_expiry_body_without_invoking_kss_or_echoing_input() -> None:
+    management = RecordingKnowledgeServiceManagementClient()
+    client = _client(
+        management,
+        permissions=frozenset({Permission.KNOWLEDGE_SOURCE_EDIT}),
+    )
+    path = (
+        "/api/config/knowledge-service/spaces/space-insurance/"
+        "bases/base-insurance/release-preparations/preparation-insurance-1:expire"
+    )
+
+    rejected = client.post(
+        path,
+        json={"token": "synthetic-private-expiry-token"},
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {"detail": "invalid_knowledge_service_management_request"}
+    assert "synthetic-private-expiry-token" not in rejected.text
     assert management.preparation_commands == []
 
 
@@ -1101,6 +1184,7 @@ def test_dashboard_bff_enforces_base_draft_and_preparation_permissions() -> None
         json={"draft_revision": 1},
     )
     denied_preparation_publish = viewer.post(f"{preparations_path}/preparation-insurance-1:publish")
+    denied_preparation_expiry = viewer.post(f"{preparations_path}/preparation-insurance-1:expire")
     denied_preparation_cancel = viewer.post(
         f"{preparations_path}/preparation-insurance-1:cancel",
         headers={"Idempotency-Key": "denied-preparation-cancel"},
@@ -1111,6 +1195,7 @@ def test_dashboard_bff_enforces_base_draft_and_preparation_permissions() -> None
     assert denied_draft_write.status_code == 403
     assert denied_preparation_write.status_code == 403
     assert denied_preparation_publish.status_code == 403
+    assert denied_preparation_expiry.status_code == 403
     assert denied_preparation_cancel.status_code == 403
     assert denied_draft_read.status_code == 403
     assert denied_preparation_read.status_code == 403

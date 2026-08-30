@@ -15,6 +15,57 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-08-30 exact Formal Production Agent Candidate assembler (TDD-05A)
+
+- [KNOWN | HIGH] ProofAgent now has a read-only Control assembler rooted in one named
+  Agent, exact Draft ID and exact Draft revision. It reads the Agent Configuration
+  Store, reuses the existing publication-configuration projector against a ready,
+  versioned live KSS catalog, and derives the executable Release only from the
+  Draft-owned exact Space/Base/Base Version/Release tuple.
+- [KNOWN | HIGH] The deployment-owned Profile is a strict immutable contract containing
+  binding identity, a versioned Knowledge credential handle, Admission Scorer identity
+  and revision, and required failure mode. It cannot carry an environment-selected
+  Release. The resulting immutable candidate records the catalog revision and separates
+  the existing Contract+binding digest from a formal digest that also binds Draft
+  identity and revision.
+- [COMPUTED | HIGH] The focused slice passed 10 tests; directly affected publication,
+  Workspace and contract tests passed 115. The full backend passed 2264 tests with 263
+  dependency-conditioned skips and 2 deselected; Mypy passed over 455 product source
+  files and full Ruff passed. No external dependency, frontend, lock, schema, migration
+  or OpenAPI change was required.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05A, while the feature remains
+  `PARTIAL_VERIFICATION`. The current publisher still accepts an independent manifest
+  and environment-built Release binding. No Release Operator delivery entry, KSS
+  Reference registration, Phase F, online smoke, Published Version write, activation,
+  deployment, production configuration or Production GO was added.
+
+## 2026-08-30 exact-resource Release Preparation expiry BFF (TDD-04H)
+
+- [KNOWN | HIGH] KSS and ProofAgent now expose a no-body `POST :expire` command for
+  one exact due ready Preparation. The BFF requires `knowledge_source.edit`; the
+  guarded client verifies exact identity, expired state and same-resource `Location`;
+  KSS checks path Scope before using PostgreSQL time and an exact row lock for the
+  existing ready → expired transition.
+- [KNOWN | HIGH] Exact replay returns the same durable expired state without an
+  Idempotency-Key, second receipt or duplicate publication audit. Not-due, non-ready,
+  body input, permission/Scope failure and upstream identity/state/private-field/
+  Location drift fail closed. Eight concurrent exact calls converge on one terminal
+  transition and one audit, and no queryable Release is created. The network contract
+  intentionally does not expose global `expire_next()`, preventing an uncertain retry
+  from selecting another candidate.
+- [COMPUTED | HIGH] Six directly affected files passed 260 tests against isolated
+  PostgreSQL, MinIO and OpenSearch. The full backend passed 2493 tests with 24 existing
+  declared skips and 2 deselected; 2 explicit Hybrid integrations passed separately.
+  Mypy over 454 product files, full Ruff, TypeScript, Dashboard 225, Chat 35, all
+  frontend builds, domain/lock checks and `git diff --check` passed. Canonical KSS
+  OpenAPI is bound to
+  `cdb847191bc5f3658d4592f420852b1b990c5b7ca550b3138b07e69699b99ca2`;
+  migration head and dependency locks are unchanged.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-04H, while the feature remains
+  `PARTIAL_VERIFICATION`. No scheduler, continuous process role, Dashboard operation,
+  artifact cleanup, Agent formal publication, deployment, production configuration
+  or Production GO was added.
+
 ## 2026-08-30 bounded Release Preparation audit BFF (TDD-04G)
 
 - [KNOWN | HIGH] ProofAgent now exposes a read-only same-origin

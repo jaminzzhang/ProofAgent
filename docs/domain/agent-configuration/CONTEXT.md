@@ -104,9 +104,19 @@ _Avoid_: Resolved Knowledge Source Service Binding, manifest knowledge binding, 
 Deployment-owned configuration that supplies the binding identity, versioned KSS client credential reference, ProofAgent Admission Scorer identity and revision, and required failure mode. Phase F combines it with an exact Draft KSS Release Binding Candidate only after live revalidation.
 _Avoid_: Draft secret, Dashboard-editable credential, Agent Contract field, KSS catalog authority
 
+[KNOWN | HIGH] TDD-05A adds this as a strict, immutable server-side contract. It
+rejects undeclared Release identity, non-Knowledge credentials and unversioned secret
+handles. It is not Dashboard configuration and does not make a Draft executable.
+
 **Formal Production Agent Candidate**:
 The exact input to formal production Agent publication, rooted in one named Draft Agent revision and completed by a deployment-owned Production KSS Binding Profile plus candidate-bound release evidence before activation.
 _Avoid_: Independent manifest candidate, mutable latest Draft, Dashboard-ready state, environment-selected Release
+
+[KNOWN | HIGH] TDD-05A adds a read-only Control assembler and immutable candidate
+contract containing the exact Agent/Draft/revision, reviewable Contract Bundle,
+Draft-owned KSS tuple, live catalog revision, resolved binding and two distinct
+digests. This object is not yet accepted by the existing publisher and carries no
+Reference, Phase F, smoke, Published Version or activation result.
 
 **Agent Knowledge Release Catalog Projection**:
 A trace-safe, read-only Agent Configuration Workspace projection of KSS readiness and exact Release identities used to author or review a Draft KSS Release Binding Candidate.

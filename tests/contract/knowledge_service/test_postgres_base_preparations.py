@@ -904,6 +904,105 @@ def test_management_api_publishes_one_ready_preparation_and_exposes_recovery_loc
     assert [event.action for event in app.publication_audit("base-claims")] == ["consumed"]
 
 
+def test_management_api_expires_one_exact_due_preparation_and_replays_terminal_state(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    expire_test_candidate(database.dsn, ready.release_preparation_id)
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(database) as client:
+        expired = client.post(
+            f"{resource_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        replay = client.post(
+            f"{resource_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert expired.status_code == 200
+        assert expired.headers["Location"] == resource_path
+        assert expired.json()["state"] == "expired"
+        assert replay.status_code == 200
+        assert replay.json() == expired.json()
+        assert client.get(resource_path, headers=headers()).json() == expired.json()
+    assert database.catalog.get_release(ready.knowledge_base_release_id) is None
+    assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
+
+
+def test_management_expiry_rejects_not_due_body_and_scope_before_transition(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+    wrong_scope_path = resource_path.replace("space-claims", "space-other")
+
+    with management_client(database) as client:
+        not_due = client.post(
+            f"{resource_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        rejected_body = client.post(
+            f"{resource_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={"token": "synthetic-private-expiry-token"},
+        )
+        wrong_scope = client.post(
+            f"{wrong_scope_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert not_due.status_code == 409
+        assert not_due.json()["code"] == "base_preparation_not_expired"
+        assert rejected_body.status_code == 422
+        assert rejected_body.json()["code"] == "invalid_management_request"
+        assert "synthetic-private-expiry-token" not in rejected_body.text
+        assert wrong_scope.status_code == 409
+        assert wrong_scope.json()["code"] == "base_scope_mismatch"
+        assert client.get(resource_path, headers=headers()).json()["state"] == "ready"
+        audit = client.get(f"{BASE_PATH}/preparation-audit", headers=headers()).json()
+
+    expiry_rejections = [
+        rejection for rejection in audit["rejections"] if rejection["operation"] == "expire"
+    ]
+    assert [rejection["code"] for rejection in expiry_rejections] == [
+        "base_preparation_not_expired",
+        "invalid_management_request",
+        "base_scope_mismatch",
+    ]
+    current = app.get_preparation(queued.release_preparation_id)
+    assert current is not None and current.state == "ready"
+    assert current.release_preparation_id == ready.release_preparation_id
+    assert app.publication_audit("base-claims") == ()
+
+
 def test_management_publication_rejects_a_request_body_without_exposing_it(
     preparation_database: PreparationDatabase,
 ) -> None:
@@ -985,6 +1084,45 @@ def test_management_publication_requires_edit_permission_before_consuming(
         == ()
     )
     assert app.rejections("base-claims")[-1].operation == "publish"
+    assert app.rejections("base-claims")[-1].code == "knowledge_operator_permission_denied"
+
+
+def test_management_expiry_requires_edit_permission_before_transition(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts,
+                catalog=database.catalog,
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    expire_test_candidate(database.dsn, ready.release_preparation_id)
+    resource_path = f"{BASE_PATH}/release-preparations/{queued.release_preparation_id}"
+
+    with management_client(
+        database,
+        permissions=frozenset({"knowledge_source.view"}),
+        operator_id="operator-viewer",
+    ) as viewer:
+        denied = viewer.post(
+            f"{resource_path}:expire",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        assert denied.status_code == 403
+    current = app.get_preparation(queued.release_preparation_id)
+    assert current is not None and current.state == "ready"
+    assert current.release_preparation_id == ready.release_preparation_id
+    assert app.publication_audit("base-claims") == ()
+    assert app.rejections("base-claims")[-1].operation == "expire"
     assert app.rejections("base-claims")[-1].code == "knowledge_operator_permission_denied"
 
 
@@ -1278,6 +1416,81 @@ def test_expire_next_uses_database_time_and_commits_one_due_candidate(
     assert database.catalog.get_release(ready.knowledge_base_release_id) is None
     assert app.expire_next(operator_id="system:preparation-expiry") is None
     assert app.start(start_request(), operator_id="operator-1", idempotency_key="start") == queued
+    assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
+
+
+def test_database_exact_expiry_uses_database_time_and_replays_one_audit(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts, catalog=database.catalog
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    expire_test_candidate(database.dsn, ready.release_preparation_id)
+
+    expired = app.expire(
+        ready.release_preparation_id,
+        operator_id="operator-expiry",
+    )
+    replay = application(database.dsn).expire(
+        ready.release_preparation_id,
+        operator_id="operator-expiry-retry",
+    )
+
+    assert expired.state == "expired"
+    assert expired.expired_at >= expired.expires_at
+    assert replay == expired
+    assert application(database.dsn).get_preparation(queued.release_preparation_id) == expired
+    assert database.catalog.get_release(ready.knowledge_base_release_id) is None
+    assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
+    assert [event.operator_id for event in app.publication_audit("base-claims")] == [
+        "operator-expiry"
+    ]
+
+
+def test_concurrent_exact_expiry_replays_one_terminal_transition_and_audit(
+    preparation_database: PreparationDatabase,
+) -> None:
+    database = preparation_database
+    app = application(database.dsn)
+    app.save_draft(draft_request(database), operator_id="operator-1", idempotency_key="save")
+    queued = app.start(start_request(), operator_id="operator-1", idempotency_key="start")
+    ready = worker(database.dsn).run_next(
+        builder=KnowledgeReleaseCandidateBuilder(
+            releases=KnowledgeReleaseApplication(
+                artifacts=database.artifacts, catalog=database.catalog
+            )
+        ),
+        candidate_ttl=timedelta(hours=1),
+    )
+    assert ready is not None and ready.state == "ready"
+    expire_test_candidate(database.dsn, ready.release_preparation_id)
+    barrier = Barrier(8)
+
+    def expire(index: int) -> str:
+        barrier.wait(timeout=5)
+        result = application(database.dsn).expire(
+            ready.release_preparation_id,
+            operator_id=f"operator-expiry-{index}",
+        )
+        return result.release_preparation_id
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = tuple(pool.map(expire, range(8)))
+
+    assert results == (ready.release_preparation_id,) * 8
+    expired = application(database.dsn).get_preparation(queued.release_preparation_id)
+    assert expired is not None and expired.state == "expired"
+    assert database.catalog.get_release(ready.knowledge_base_release_id) is None
     assert [event.action for event in app.publication_audit("base-claims")] == ["expired"]
 
 

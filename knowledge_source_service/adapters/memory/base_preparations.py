@@ -323,6 +323,20 @@ class _Transaction:
         validate_publishable_candidate(preparation_admission(resource), candidate)
         return self._expire_ready(resource, operator_id, expired_at=now)
 
+    def expire_ready(self, preparation_id: str, operator_id: str) -> ExpiredReleasePreparation:
+        resource = self._state.preparations.get(preparation_id)
+        if resource is None:
+            raise BasePreparationError("base_preparation_not_found")
+        if isinstance(resource, ExpiredReleasePreparation):
+            return resource
+        if not isinstance(resource, ReadyReleasePreparation):
+            raise BasePreparationError("base_preparation_not_ready")
+        candidate = self._state.candidates.get(preparation_id)
+        if candidate is None:
+            raise BasePreparationError("base_preparation_integrity_unavailable")
+        validate_publishable_candidate(preparation_admission(resource), candidate)
+        return self._expire_ready(resource, operator_id, expired_at=self._clock())
+
     def _expire_ready(
         self,
         resource: ReadyReleasePreparation,

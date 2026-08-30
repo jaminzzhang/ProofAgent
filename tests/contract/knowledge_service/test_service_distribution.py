@@ -111,6 +111,7 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:cancel",
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:expire",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:publish",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/preparation-audit",
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/releases/{knowledge_base_release_id}/deletion-eligibility",
@@ -177,8 +178,15 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
     assert cancellation_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CancelledReleasePreparation"
     }
+    expiry_operation = payload["paths"][
+        "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:expire"
+    ]["post"]
+    assert "requestBody" not in expiry_operation
+    assert expiry_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ExpiredReleasePreparation"
+    }
     assert hashlib.sha256(contract).hexdigest() == (
-        "ce34e8b4fbcd16c90201890cb8e466980132aedbbfc0dce35dedec155749ce3a"
+        "cdb847191bc5f3658d4592f420852b1b990c5b7ca550b3138b07e69699b99ca2"
     )
 
 

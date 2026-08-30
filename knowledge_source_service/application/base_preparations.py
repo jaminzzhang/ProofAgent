@@ -210,6 +210,17 @@ class KnowledgeBasePreparationApplication:
         with self._transaction() as transaction:
             return transaction.expire_next(operator_id)
 
+    def expire(
+        self,
+        preparation_id: str,
+        *,
+        operator_id: str,
+    ) -> ExpiredReleasePreparation:
+        _require_identifier(preparation_id)
+        _require_operator(operator_id)
+        with self._transaction() as transaction:
+            return transaction.expire_ready(preparation_id, operator_id)
+
     def audit(self, base_id: str) -> tuple[BasePreparationAuditEntry, ...]:
         with self._transaction() as transaction:
             return transaction.audit(base_id)
