@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-08-31
+Updated: 2026-09-01
 
 ## Current decision
 
@@ -14,6 +14,285 @@ approved scorer revision, exact grant and versioned secret, real dependency read
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-09-01 fixed-synthetic production-local Admission Scorer verification (TDD-06A)
+
+- [KNOWN | HIGH] ADR-0231 adds one zero-argument production-local verifier. It binds the
+  deployment-owned Admission Scorer through the normal production runtime and scores one
+  fixed synthetic Candidate. Callers cannot provide a Draft, Release, question, Candidate,
+  Model Connection, credential or budget.
+- [KNOWN | HIGH] Success proves the current compatibility Scorer ID/revision, versioned
+  Secret Handle, Vault resolution, guarded egress and strict exact-candidate response
+  contract work together. Output omits the synthetic input, Candidate identity/content,
+  score, credential, endpoint and raw response.
+- [COMPUTED | HIGH] RED produced 5 expected missing-entry failures. The final focused set
+  passed 10 tests, the affected set passed 59, and the complete backend passed 2484 with
+  272 conditioned skips, 2 deselected and one existing Authlib warning.
+- [KNOWN | HIGH] Rebuilt production-local image
+  `e2bb61b0c78a7e648ccd4d662a4094660327094f49c49ca804f7fb6b79011088` passed the baseline.
+  The fixed synthetic live verifier returned one score for one Candidate. KSS Query count
+  remains 22 and Formal Command count remains 0; `/readyz` remains the expected 503 only
+  because `published_agent=not_ready`.
+- [FRAME | HIGH] TDD-06A is `LOCAL_VERIFIED`; the Feature remains
+  `PARTIAL_VERIFICATION`. It did not call KSS or DeepSeek and cannot establish Draft@14
+  root cause, positive external cited-answer evidence, Phase F, publication approval,
+  release Gate or Production GO.
+
+## 2026-08-31 bounded Evidence Admission reason diagnostics (TDD-05Z)
+
+- [KNOWN | HIGH] ADR-0230 keeps the external probe Admission stage code and adds six
+  content-free reasons for scorer unavailable, invalid score, empty Candidate set,
+  missing score, threshold not met and policy denial. Unknown facts remain unclassified.
+- [KNOWN | HIGH] The scorer port now carries one typed `PA_KNOWLEDGE_001` reason. A
+  completed Run may derive a reason only from existing trace-safe Evidence Evaluation
+  metadata; exception text is never parsed.
+- [KNOWN | HIGH] Evidence returned with managed scores below `min_score` now records
+  `knowledge_candidate_threshold_not_met` instead of the incorrect
+  `zero_knowledge_candidates` metadata.
+- [KNOWN | HIGH] The strict failure envelope advances to
+  `production-local-formal-candidate-external-smoke-failure.v2`; success remains v1.
+  Only Admission failures may include an allowlisted `reason_code`.
+- [COMPUTED | HIGH] RED reproduced four missing behaviors. The final core set passed 11
+  tests, the affected set passed 146, and the complete backend passed 2474 with 272
+  conditioned skips, 2 deselected and one existing Authlib warning.
+- [FRAME | HIGH] TDD-05Z is `LOCAL_VERIFIED`; the Feature remains
+  `PARTIAL_VERIFICATION`. No KSS, scorer or model call ran, so this slice does not
+  retroactively classify TDD-05Y, authorize a retry, or provide publication/Production
+  GO evidence.
+
+## 2026-08-31 validation ArtifactStore cutover and explicit external gate (TDD-05Y)
+
+- [KNOWN | HIGH] ADR-0229 removes the validation-only legacy artifact protocol. Agent
+  validation now writes RUN_TRACE/GOVERNANCE_RECEIPT through the current
+  `ArtifactStore`, verifies exact owner/kind/digest/length plus head/open read-back, and
+  returns the existing public exact reference with a store-produced credential-free URI.
+- [COMPUTED | HIGH] The related set passed 115 tests; the full backend passed 2467 with
+  272 conditioned skips and 2 deselected. Mypy passed 372 product sources, Ruff passed,
+  and focused formatting passed. The rebuilt image
+  `1847e70c79bbaf57b36ce93a4a1eaba3267ad37cf4346aa462ec0b3ef4e1be2d`
+  passed production-local baseline.
+- [KNOWN | HIGH] Real MinIO verified a trace/receipt pair through immutable write, exact
+  head/open, canonical URI including the `runs/` prefix, and exact deletion. Draft@14
+  read-only preflight also passed with unchanged Candidate/Release digests and
+  `publication_authorized=false`.
+- [KNOWN | HIGH] After explicit approval of exact Draft@14, managed connection
+  `model_deepseek` revision 1 and the bounded side effects, the existing host entry ran
+  exactly once. It returned
+  `formal_candidate_external_smoke_evidence_admission_failed` and stopped without retry.
+- [KNOWN | HIGH] The call replayed existing succeeded Query
+  `knowledge-query-f25bebcd4a9946578c46280a68387e32`, whose available result retains 3
+  candidates and its prior digest. Query count therefore stayed 22 rather than creating
+  a 23rd row. Command/Version/Active/Reference/Artifact remain 0 and Grant remains 5.
+- [KNOWN | HIGH] The production-local baseline passed again after the governed failure;
+  readiness remains the expected HTTP 503 only because `published_agent=not_ready`.
+- [FRAME | HIGH] The ArtifactStore cutover is `LOCAL_VERIFIED`; the Feature remains
+  `PARTIAL_VERIFICATION`. The bounded Evidence Admission failure is not positive external
+  cited-answer evidence, and no formal publication, release Gate or Production GO
+  follows from this slice. The one-use authorization is consumed and cannot be retried
+  automatically.
+
+## 2026-08-31 secret-free external probe stage diagnostics (TDD-05X)
+
+- [KNOWN | HIGH] ADR-0228 adds five stable failure codes to the existing exact Formal
+  Candidate probe: KSS, Evidence Admission, configured model, citation validation and
+  artifact retention. Unknown or ambiguous failures keep the generic
+  `formal_candidate_external_smoke_failed` code.
+- [KNOWN | HIGH] Classification uses only existing structured subsystem codes,
+  accepted/citation facts and trace-safe final-answer validation events. It does not
+  parse exception messages, provider responses, questions, answers or Evidence content.
+  The CLI still returns only its bounded failure schema and one stable code.
+- [KNOWN | HIGH] The implementation is enabled only for the external probe invocation
+  of the shared governed runtime. Formal online smoke and production candidate
+  validation retain their existing behavior; no alternate executor, retry, API,
+  Dashboard surface, Grant mutation or publication side effect was added.
+- [COMPUTED | HIGH] External-probe behavior passed 18 tests; the complete two focused
+  files passed 95 and the reference-derived affected set passed 118 with one existing
+  warning. The complete backend passed 2467 tests with 272 dependency-conditioned skips
+  and 2 deselected after the 8 loopback-socket tests were rerun outside the restricted
+  sandbox. Full Ruff, focused format, Mypy over 372 source files and diff checks passed.
+- [FRAME | HIGH] TDD-05X is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No real KSS or model probe ran in this slice, so the prior
+  Draft@14 generic failure cannot be classified retroactively. Positive external cited
+  answer evidence remains `BLOCKED`. A new probe still requires fresh explicit
+  authorization for the exact Candidate and allowed Query/artifact side effects.
+
+## 2026-08-31 exact Draft Contract path normalization (TDD-05W)
+
+- [KNOWN | HIGH] ADR-0227 adds one bounded production-local exact Draft CAS. It accepts
+  only Agent/Draft/expected revision and fixes the two target paths in checked-in code;
+  callers cannot supply YAML or path values.
+- [KNOWN | HIGH] The command accepts only the exact legacy pair and changes only the
+  scalar values for `audit.trace_path` and `audit.receipt_path`. Missing, duplicate,
+  mixed, unexpected or already-normalized paths fail before Workspace persistence.
+- [COMPUTED | HIGH] Focused behavior passed 15 tests; the affected set passed 123. The
+  complete backend passed 2456 tests with 272 dependency-conditioned skips and 2
+  deselected. Full repository Ruff and Mypy (374 source files), focused format, uv lock,
+  domain-context, Shell syntax and diff checks passed.
+- [KNOWN | HIGH] After one transient Docker Hub token EOF before product build, the
+  retried production-local build succeeded with image
+  `bf5fb14877db747a4ff9e3a0e0df1d1f36461903ce6e91240c6e68d3d0356998`.
+  Baseline verification passed at schema `0024_formal_candidate_checkpoint`.
+- [KNOWN | HIGH] The exact CAS advanced Draft 13 to 14 and contract-update audit count
+  7 to 8. It returned `./trace.jsonl` and `./governance_receipt.md`. Replay against
+  revision 14 failed with `draft_contract_paths_already_normalized`; revision 15 was not
+  created.
+- [KNOWN | HIGH] Draft@14 read-only preflight succeeded. Its Formal Candidate digest is
+  `1e5aee4b24b184333a1d4f4d0a7798716cf8cfe426da4046605c06d3aea063bd` and its
+  Knowledge Release candidate digest is
+  `085038769d44ded6f031de42a8eaf3fa4a723d390eb45db9da2b5914bea89299`.
+  `publication_authorized` remains false.
+- [KNOWN | HIGH] After explicit authorization, the exact Draft@14 external-dependency
+  probe ran once and returned bounded error `formal_candidate_external_smoke_failed`.
+  The new KSS Query `knowledge-query-f25bebcd4a9946578c46280a68387e32` succeeded on
+  `release-a4b70851cb914862000e15c3` with 3 candidates and a retained result digest.
+  Query count advanced 21 to 22. No retry was attempted.
+- [KNOWN | HIGH] The Draft selects active Model Connection `model_deepseek` revision 1
+  (`deepseek` / `deepseek-v4-flash`; host `api.deepseek.com`). The bounded failure does
+  not distinguish Evidence Admission, external model response/transport, citation
+  validation or pre-retention execution failure. ProofAgent validation artifacts remain
+  0, so no immutable trace/receipt evidence exists.
+- [FRAME | HIGH] TDD-05W remains `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. Command, Version, Active and Reference remain 0; Grant remains
+  5. Positive external cited-answer evidence is `BLOCKED`, not Production GO. TDD-05X
+  now provides secret-free stage classification, but it did not rerun or retroactively
+  classify this probe. Any retry still needs separate authorization.
+
+## 2026-08-31 exact Formal Candidate external dependency probe (TDD-05V)
+
+- [KNOWN | HIGH] ADR-0226 adds one explicit production-local probe outside formal
+  publication. It accepts only exact Agent/Draft/revision, assembles the Candidate through
+  production composition, uses a checked-in non-sensitive question and cannot select a
+  Release, model, credential, Profile or budget.
+- [KNOWN | HIGH] A materializable Candidate runs through the governed KSS-only
+  `RunPurpose.VALIDATION` path, Evidence Admission and configured external model. Success
+  requires `ANSWERED_WITH_CITATIONS`, at least one accepted nonblank citation and exact
+  immutable trace/receipt read-back. Output excludes question, answer, Candidate/Evidence
+  content, credentials, raw prompts and upstream detail.
+- [COMPUTED | HIGH] Focused and affected behavior passed 156 tests. The complete backend
+  passed 2441 tests with 272 dependency-conditioned skips and 2 deselected. Ruff, focused
+  format, Mypy over 372 source files, lock, domain-context and Shell checks passed.
+- [KNOWN | HIGH] Rebuilt production-local image
+  `be61c35f3bfe3ddb439f30ffbd96f048c0816129fec315890dabe930d60bda63`
+  passed its baseline at schema `0024_formal_candidate_checkpoint`; readiness remains the
+  expected HTTP 503 only because `published_agent=not_ready`.
+- [KNOWN | HIGH] The live exact Draft@13 probe stopped before KSS Query with
+  `formal_candidate_contract_bundle_not_materializable`. Its immutable Contract Bundle
+  contains package-escaping audit paths, so the secure materializer rejected it. Counts
+  remained Command 0, Version 0, Active 0, Reference 0, Grant 5 and Query 21.
+- [FRAME | HIGH] The TDD-05V implementation and fail-closed boundary are
+  `LOCAL_VERIFIED`; the current Draft@13 external-dependency probe is `BLOCKED`, and the
+  feature remains `PARTIAL_VERIFICATION`. No external KSS/model positive evidence,
+  formal online-smoke qualification, publication approval or Production GO exists.
+
+## 2026-08-31 actor-owned formal command status read (TDD-05U)
+
+- [KNOWN | HIGH] ADR-0225 keeps exact POST replay as the only formal-command recovery
+  mutation. The new exact-resource GET returns one existing public receipt and never
+  acquires, renews or takes over the command lease.
+- [KNOWN | HIGH] The read requires `agent.publish` and the exact creating actor subject.
+  Missing command, another actor, or mismatched Agent/Draft path all return
+  `formal_publication_command_not_found`. The response excludes actor, idempotency key,
+  execution claim, Candidate checkpoint and raw request facts.
+- [COMPUTED | HIGH] Focused application/API behavior passed 3 tests; the combined formal
+  application and API files passed 131. PostgreSQL repository/migration contracts passed
+  38 against a disposable PostgreSQL 17.5 instance, and the affected security,
+  Persistence, Delivery and production-composition set passed 201.
+- [COMPUTED | HIGH] The complete backend passed 2433 tests with 272
+  dependency-conditioned skips and 2 deselected. Ruff and Mypy over 372 product source
+  files passed.
+- [KNOWN | HIGH] The rebuilt production-local image
+  `030ce1a17c01768206759250bfb8b9db98133ff43ec2399e55d6f23e6cd33fb1`
+  reached schema head `0024_formal_candidate_checkpoint` and passed the baseline.
+  Formal Command, checkpoint, Published Version and Active Version counts remain zero.
+- [FRAME | HIGH] TDD-05U is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No formal publication POST or production-local command-status
+  GET was invoked. Cross-operator audit/listing, background recovery, real external
+  KSS/model evidence and Production GO remain separate work.
+
+## 2026-08-31 durable Formal Candidate checkpoint (TDD-05T)
+
+- [KNOWN | HIGH] ADR-0224 makes the first durable Formal Candidate identity part of
+  each `in_progress` formal publication command. After read-only assembly and before
+  Phase F, the current fenced execution atomically stores the formal-candidate digest,
+  Knowledge Release candidate digest and PostgreSQL checkpoint time.
+- [KNOWN | HIGH] An expired-command takeover still reassembles the Candidate from the
+  exact Draft revision, live KSS catalog and deployment Profile. Both digests must match
+  the checkpoint. Drift ends the original command with
+  `formal_publication_candidate_checkpoint_conflict` before Phase F, Reference, Grant,
+  smoke or publication; the checkpoint cannot be rebound.
+- [KNOWN | HIGH] Migration `0024_formal_candidate_checkpoint` is expand-only. Exact
+  checkpoint replay preserves the original timestamp; concurrent different candidates
+  converge on one immutable checkpoint. Terminal commands and stale fencing tokens
+  cannot create or change it.
+- [COMPUTED | HIGH] Formal command behavior passed 76 tests. PostgreSQL repository,
+  migration and production migration contracts passed 37; the affected set passed 196.
+  The full backend passed 2430 with 271 dependency-conditioned skips and 2 deselected.
+  Ruff and Mypy over 372 product source files passed.
+- [KNOWN | HIGH] The rebuilt production-local image
+  `9ea9b8a726e5c38c6b535d00c26f5078ba6515493fa2a961813fb3340c971493`
+  reached schema head `0024_formal_candidate_checkpoint` and passed the baseline.
+  Formal Command, checkpoint, Published Version and Active Version counts remain zero.
+- [FRAME | HIGH] TDD-05T is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No formal endpoint was invoked. A background recovery process,
+  real external KSS/model evidence, Query Grant lifecycle, operator-command audit and
+  Production GO remain separate work.
+
+## 2026-08-31 formal publication fenced recovery (TDD-05S)
+
+- [KNOWN | HIGH] ADR-0223 gives each durable `in_progress` formal publication command
+  one database-time lease, execution owner and monotonic fencing token. Exact replay
+  before expiry returns the same in-progress receipt without external work; exact replay
+  after expiry may atomically acquire one new claim. A stale owner cannot commit success
+  or failure after takeover.
+- [KNOWN | HIGH] Phase F Record, provisional Version, validation Run and downstream
+  Reference identities are now derived from the durable command identity, and Phase F
+  uses the original command receipt time. A recovered execution therefore repeats the
+  same external identity rather than creating a second logical publication attempt.
+- [KNOWN | HIGH] Migration `0023_formal_publish_claim` is expand-only. Deployment owns
+  `PROOF_AGENT_FORMAL_PUBLICATION_COMMAND_LEASE_SECONDS`; parsing accepts 1–3600 seconds,
+  defaults to 900, and the checked-in production-local stack explicitly uses 900.
+- [COMPUTED | HIGH] The formal command behavior file passed 74 tests. A disposable
+  PostgreSQL 17.5 run passed 11 repository and migration tests; the affected set passed
+  178. The full backend passed 2428 with 269 dependency-conditioned skips and 2
+  deselected. Mypy covered 371 product source files. The rebuilt production-local stack
+  reached schema head `0023_formal_publish_claim`, passed its baseline verifier, and kept
+  Formal Command, Published Version and Active Version counts at zero.
+- [FRAME | HIGH] TDD-05S is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No formal endpoint was invoked and no Production GO exists.
+  Candidate checkpointing was the next separate slice and is completed by TDD-05T
+  above. A background recovery process, real external KSS/model evidence, Query Grant
+  lifecycle and operator-command audit remain separate slices.
+
+## 2026-08-31 production-local versioned runtime Grant cutover (TDD-05R)
+
+- [KNOWN | HIGH] ADR-0222 moves active checked-in production-local Query authority to
+  `proof-agent-production-local-v2`. ProofAgent runtime, the KSS immutable policy and
+  runtime bootstrap use the same identity, while a distinct Secret Handle, Vault path
+  and generated local credential isolate it from retained historical clients.
+- [KNOWN | HIGH] Existing clients, Secret material and Grants were not compared,
+  rewritten, revoked or deleted. The active ProofAgent locator no longer includes the
+  old runtime Handle. KSS bootstrap still registers only a credential digest, and the
+  existing operator-authenticated endpoint remains the sole Grant-creation authority.
+- [KNOWN | HIGH] The final production-local image registered the v2 client and created
+  Grant `query-grant-decb201089f91b5fb90dc392` for exact Release
+  `release-a4b70851cb914862000e15c3`. A replay returned the same Grant ID; two separate
+  Query IDs each returned 3 candidates within the `single_pass` budget.
+- [KNOWN | HIGH] Read-only database checks found exactly one v2 Grant and two v2
+  Queries. Total Grants advanced 4→5 and Queries 19→21. Formal Command, Agent Version,
+  Active Version and active KSS Reference counts remain 0. Readiness remains the
+  expected HTTP 503 only because `published_agent=not_ready`.
+- [KNOWN | HIGH] The v2 Binding Profile changes the Formal Candidate digest. Draft@13
+  now preflights to `9b76665641d00354876deeb7ed2ff79a90c4a15dbc6eda2e270df4cc7a2dc50e`;
+  `publication_authorized` remains false, and any prior candidate approval is invalid.
+- [COMPUTED | HIGH] RED failed once on the old Handle. Static deployment tests then
+  passed 24 cases; the affected suite passed 74 with 5 conditioned skips, and a
+  disposable PostgreSQL 17.5 run passed all 6 runtime-composition contracts. The full
+  backend passed 2427 with 267 conditioned skips and 2 deselected. Image build/up,
+  Query verifier replay, baseline, preflight, Ruff, format, Mypy over 370 source files,
+  lock, domain-context, Shell, Compose and diff checks passed.
+- [FRAME | HIGH] TDD-05R is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No formal publication, real external model proof, old-client
+  retirement, deployment approval or Production GO occurred.
 
 ## 2026-08-31 production-local exact Draft Memory repair (TDD-05Q)
 

@@ -3292,3 +3292,626 @@ Active Version `0 → 0`、KSS Reference `0 → 0`、Query Grant `4 → 4`、Kno
 - [FRAME | HIGH] 下一片不应直接执行完整发布；旧 Release 的历史 Query Grant
   冲突已知，应先单独设计最小的 Grant conflict 处置/候选更换切片，并继续保留真实
   上游 smoke 与正式发布授权边界。
+
+## 50. TDD-05R：versioned runtime client 与新 Grant
+
+### 50.1 冻结边界
+
+[FRAME | HIGH] 用户明确要求不处理已有历史 Grant 的兼容，并创建新的 Grant。本片不读取旧
+Grant 判断兼容性，不修改同一 client/Release 的不可变事实，也不增加 SQL、revoke 或
+reconciliation。active checked-in production-local runtime authority 切换到
+`proof-agent-production-local-v2`，并使用独立 Secret Handle、Vault path 和新生成的本地凭据。
+
+[FRAME | HIGH] ProofAgent runtime、KSS immutable policy 和 KSS runtime-client bootstrap 必须
+使用同一 v2 identity。bootstrap 仍只注册 credential digest；新的 exact-Release Grant 仍由既有
+operator-authenticated endpoint 创建。旧 client、Secret 和 Grant 保持原状，不宣称已撤销。
+本片不执行 formal publication，不创建 Version/Active/Reference，不改变 readiness，不提供真实
+外部模型或 Product Release Authority 证据。具体决策见 ADR-0222。
+
+### 50.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | checked-in active runtime 必须使用独立 v2 identity、Secret Handle、Vault path 和新生成 token | 聚焦 Compose 契约仍读到 `knowledge/source-service/client`，得到 1 failed；失败位置符合目标 |
+| GREEN | 同步切换 ProofAgent runtime、KSS policy、runtime bootstrap、Vault locator/init 与 prepare secret | 聚焦契约 1 passed；完整 migration/Compose 文件 24 passed；Shell 与 Compose config 通过 |
+| REFACTOR | 在真实 PostgreSQL 合同中先建立同一 Release 的旧 client Grant，再证明 v2 client 可创建独立 Grant | 默认环境 1 passed、5 skipped；一次性 PostgreSQL 17.5 强制运行后 6 passed |
+| LIVE | 最终源码镜像注册 v2 client，针对 Draft@13 exact Release 创建并重放新 Grant，运行两次 bounded Query | 两次 verifier 均退出 0；Grant ID 相同、Query ID 不同、每次 3 个候选 |
+
+### 50.3 production-local 核心验证
+
+[KNOWN | HIGH] 最终 production-local active runtime client 为
+`proof-agent-production-local-v2`。新 Grant
+`query-grant-decb201089f91b5fb90dc392` 绑定 exact Release
+`release-a4b70851cb914862000e15c3`。两次 verifier 精确重放同一 Grant，并分别创建 Query
+`knowledge-query-478829adb403485189c2310057cc6b5c` 和
+`knowledge-query-e25e662b381b4d0889fd5611d9f1499c`；每次返回 3 个 Candidate Evidence，预算使用
+为 1 round、0 model call、3 candidates。
+
+[KNOWN | HIGH] 只读数据库检查确认 v2 client 只有 1 条 active Grant 和 2 条 Query。总 Grant
+`4 → 5`，总 Query `19 → 21`。Formal Command、Agent Version、Active Version 和 active KSS
+Reference 均为 0。production-local baseline 退出 0，readiness 继续只因
+`published_agent=not_ready` 返回预期 HTTP 503。
+
+[KNOWN | HIGH] v2 Secret Handle 属于 deployment Binding Profile，因此 Draft@13 的新 Formal
+Candidate SHA-256 为
+`9b76665641d00354876deeb7ed2ff79a90c4a15dbc6eda2e270df4cc7a2dc50e`，Knowledge Release
+Candidate SHA-256 为
+`21875bc15ac7f5a101f7a6a3b2e2315818b773b4a11cd7b3388692d48bc5f67b`。preflight 仍固定
+`publication_authorized=false`；旧候选摘要或批准不得沿用。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| RED | 1 failed | 当前 Handle 仍是旧值，目标失败成立 |
+| 聚焦 GREEN | 1 passed、1 existing warning | v2 locator/policy/bootstrap/prepare 契约 |
+| migration/Compose | 24 passed、1 existing warning | 部署静态契约与角色依赖 |
+| 受影响组合 | 74 passed、5 dependency-conditioned skips、1 existing warning | migration、roles、安全 composition、verifier、KSS distribution/runtime |
+| 真实 PostgreSQL runtime composition | 6 passed | 一次性 PostgreSQL 17.5；测试后容器已删除 |
+| 完整默认后端 | 2427 passed、267 dependency-conditioned skips、2 deselected、1 existing warning | 没有把本地真实依赖结果冒充 Production GO |
+| 静态与文档 | Ruff、format、Mypy 370 source files、lock、domain-context、Shell、Compose、diff 全部通过 | 无新增 ignore；未读取 `.env` 或输出凭据 |
+| production-local build/up + baseline | 退出 0 | 最终源码镜像；ProofAgent/KSS API 健康；Agent 仍未发布 |
+| exact Grant + Query | 两次退出 0 | 同一 v2 Grant，两次独立 Query，各 3 个候选 |
+| exact Draft@13 preflight | 退出 0 | 新候选摘要；`publication_authorized=false` |
+
+### 50.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05R 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 当前 exact Release 的 v2 Grant 已可由 formal publisher 精确重放，但本片没有
+  运行 Phase F、Reference、formal online smoke、Version 或 Active CAS。
+- [FRAME | HIGH] 下一片应优先处理 formal publication command 的 process-loss
+  recovery/takeover。正式发布前还需真实外部 KSS/model smoke、旧 credential 生命周期、回滚与全部
+  Product Release Authority Gates；不得从本片推断 Production GO。
+
+## 51. TDD-05S：formal publication command 租约接管
+
+### 51.1 冻结边界
+
+[FRAME | HIGH] 本片只恢复 durable `in_progress` formal command。公开入口、strict body、可信
+actor、`(actor subject, Idempotency-Key)` 范围和 request SHA-256 保持不变。内部增加数据库时间
+租约、opaque owner 和 monotonic fencing token。未到期重放不执行外部工作；到期后只有一个重放
+可以接管。旧 fence 不能完成 success 或 failure。
+
+[FRAME | HIGH] command ID 稳定派生 Phase F Record、provisional Version 和 validation Run
+identity，Phase F timestamp 固定为原始 command `started_at`。因此进程退出发生在 Reference 或
+online smoke 之后时，接管仍使用同一 Reference request/idempotency identity。本片不增加后台
+reconciler、heartbeat、cancel、正式发布授权或真实外部模型调用。具体决策见 ADR-0223。
+
+### 51.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 进程退出后，未到期重放保持 `in_progress`；到期重放接管并完成 | 构造函数不接受 `execution_owner`，1 failed；失败位置符合目标 |
+| GREEN-1 | 增加内部 execution claim、1–3600 秒租约和 reservation `acquired` 语义 | 聚焦 tracer 1 passed |
+| RED-2 | 两个进程使用不同随机 ID 生成器时，接管仍必须复用 external identities | 两次 Reference request 分别使用 `version-first` 与 `version-second`，1 failed |
+| GREEN-2 | command ID 派生 Phase F/Version/Run identities | identity tracer 转绿；Reference request 与 smoke identities 相同 |
+| RED-3 | 同一 Phase F Record ID 的 timestamp 和 digest 也必须稳定 | 两个 authority 收到不同 Record，1 failed |
+| GREEN-3 | Phase F timestamp 固定为原始 command `started_at` | 两次 Phase F Record 逐字段相同 |
+| RED-4 | PostgreSQL 必须执行到期接管并 fence 旧 completion | 4 项因 repository 不接受 `lease_duration` 失败 |
+| GREEN-4 | 增加 `0023_formal_publish_claim`、数据库时间 lease、并发 takeover 和 exact-fence completion | repository/migration 10 passed；补 legacy null-claim 合同后纳入受影响回归 |
+| RED-5 | production composition 必须消费 deployment-owned lease 秒数 | 配置 600 秒时服务仍使用默认 900 秒，1 failed |
+| GREEN-5 | production composition 校验并注入租约；production-local 固定 900 秒 | composition/Compose 聚焦 2 passed |
+
+### 51.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| formal command 行为 | 74 passed | process exit、未到期 replay、到期 takeover、稳定 external identity、终态原子性 |
+| 真实 PostgreSQL 17.5 | 11 passed | `0023` migration、并发唯一接管、legacy null-claim takeover、stale fence rejection、UoW rollback |
+| 受影响组合 | 178 passed、1 existing warning | formal chain、PostgreSQL、Delivery、安全 composition、production roles/Compose |
+| 完整默认后端 | 2428 passed、269 dependency-conditioned skips、2 deselected、1 existing warning | 默认未提供外部依赖；不是 Production GO |
+| 静态检查 | Ruff、format、Mypy 371 source files、Shell、Compose、diff 通过 | 无新增 ignore 或依赖 |
+| production-local build/up + baseline | 退出 0；最终复核镜像 `02ed2c22103c74dec0e23ff63c0b1cfdffe93bed2ea015eb5229c2f38009dbde` | schema head=`0023_formal_publish_claim`；API/KSS 健康 |
+| production-local 状态 | formal command=0、Version=0、Active=0 | readiness 继续仅因 `published_agent=not_ready` 返回预期 HTTP 503 |
+
+隔离 PostgreSQL 使用本机已有 `postgres:17.5-alpine` 镜像和端口 `55440`。首次尝试
+`postgres:17.5` 因 Docker credential helper 无进度而中止，未创建容器；随后以 `--pull never`
+启动已有镜像。首次测试 URL 误选未安装的 psycopg2，未进入产品断言；改用
+`postgresql+psycopg` 后完成 RED/GREEN。最终测试容器已停止并删除。
+
+### 51.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05S 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 本片没有调用 formal publication endpoint。production-local 保留数据中没有新增
+  command、Version 或 Active pointer，旧 KSS Grant/Query 事实保持不变。
+- [FRAME | HIGH] 下一片建议只增加 durable candidate checkpoint：首次 preflight 后冻结 exact
+  formal candidate digest，接管必须重验相同摘要后才进入 Phase F。后台恢复进程、真实外部模型、
+  Reference/Grant 生命周期和 Product Release Authority Gates 继续分片处理。
+
+## 52. TDD-05T：durable Formal Candidate checkpoint
+
+### 52.1 冻结边界
+
+[FRAME | HIGH] 当前 fenced claim 在只读 Candidate 装配后、Phase F 前原子写入
+`formal_candidate_sha256`、`knowledge_release_candidate_sha256` 和 PostgreSQL 时间。checkpoint
+属于 command 内部恢复权威，不进入公开 receipt、请求 body 或 Dashboard。
+
+[FRAME | HIGH] 到期接管仍须从 exact Draft revision、live KSS catalog 和 deployment Profile
+重新装配 Candidate。两个摘要与 checkpoint 完全一致时才可进入 Phase F；任一漂移都以
+`formal_publication_candidate_checkpoint_conflict` 结束旧 command，并且不调用本次接管的 Phase F、
+Reference、Grant、smoke 或 publisher。完整决策见 ADR-0224。
+
+[BOUNDARY | HIGH] 本片只存摘要，不存完整 Candidate payload。它不增加后台 recovery process、
+heartbeat、cancel、Reference/Grant 清理、真实外部模型或正式发布授权。
+
+### 52.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 进程退出后 catalog revision 漂移，接管必须在 Phase F 前失败 | 当前实现错误返回 `SUCCEEDED`，1 failed；失败位置准确证明缺少 Candidate identity 冻结 |
+| GREEN-1 | command 先调用只读 preflight，以当前 claim checkpoint 两个摘要，再把同一 Candidate 交给 publisher | 聚焦 tracer 1 passed；formal command 文件 76 passed |
+| RED-2 | PostgreSQL 首次写入、精确重放、摘要不可改绑与 completion 绑定 checkpoint | repository 不存在 `checkpoint_candidate`，1 failed |
+| GREEN-2 | 增加 `0024_formal_candidate_checkpoint`、数据库时间和 claim-bound checkpoint CAS | PostgreSQL tracer 1 passed；repository/migration/production migration 37 passed |
+| REFACTOR | 收窄为 `publish_checkpointed_candidate`，publisher 再校验 command identity 和两个摘要；补并发唯一 checkpoint、stale claim 和 terminal completion 保护 | publisher 摘要漂移 tracer 1 passed，且 Phase F 零调用；应用层与 repository 82 passed；受影响回归 196 passed |
+
+### 52.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| formal command 行为 | 76 passed | checkpoint 时序、publisher 二次校验、接管同摘要、漂移失败、稳定 external identity、终态原子性 |
+| 真实 PostgreSQL 17.5 | repository/migration/production migration 37 passed | `0024`、并发 immutable checkpoint、stale fence、completion exactness |
+| 受影响组合 | 196 passed、1 existing warning | formal chain、Persistence、Delivery、安全 composition、production roles/Compose |
+| 完整默认后端 | 2430 passed、271 dependency-conditioned skips、2 deselected、1 existing warning | 默认未提供外部依赖；不是 Production GO |
+| 静态检查 | Ruff、Mypy 372 source files 通过 | 无新增 ignore 或依赖；最终 format、lock、domain-context、Shell、Compose、diff 在收尾复核 |
+| production-local build/up + baseline | 退出 0；镜像 `9ea9b8a726e5c38c6b535d00c26f5078ba6515493fa2a961813fb3340c971493` | schema head=`0024_formal_candidate_checkpoint`；API/KSS 健康 |
+| production-local 状态 | command=0、in-progress=0、checkpoint=0、Version=0、Active=0 | 未调用 formal endpoint；readiness 仅因 `published_agent=not_ready` 返回预期 HTTP 503 |
+
+隔离 PostgreSQL 使用本机已有 `postgres:17.5-alpine` 镜像和端口 `55441`。测试完成后，容器已
+停止并由 `--rm` 删除。未读取 `.env`、Secret 文件或生产数据。
+
+### 52.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05T 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] Candidate checkpoint 不授权发布。production-local 未新增 command、checkpoint、
+  Version 或 Active pointer。
+- [KNOWN | HIGH] TDD-05U 源码复核确认，exact POST 已是未到期重放和到期接管的唯一
+  recovery mutation，因此不再新增第二个 runner。TDD-05U 只增加 actor-owned exact command
+  status read。真实外部模型、Reference/Grant 生命周期、operator command audit 和
+  Product Release Authority Gates 继续保持独立边界。
+
+## 53. TDD-05U：actor-owned exact formal command status read
+
+### 53.1 收窄恢复边界
+
+[KNOWN | HIGH] 源码复核确认，ADR-0223 的既有 POST 已经是显式恢复入口：
+同一 actor、path、body 和 `Idempotency-Key` 在租约到期后可原子接管。新增第二条
+recovery 写路径会分裂权威；而且 durable command 只保留 request SHA-256，不能脱离
+原请求自动重建。
+
+[FRAME | HIGH] TDD-05U 因此只增加
+`GET /api/config/agents/{agent_id}/drafts/{draft_id}/formal-publications/{command_id}`。
+读取要求 `agent.publish` 和 command 创建者的 exact actor subject。missing、foreign actor、
+Agent/Draft path mismatch 都返回 `formal_publication_command_not_found`。响应只使用既有
+trace-safe receipt，不暴露 actor、Key、claim、checkpoint 或原请求。完整决策见 ADR-0225。
+
+[BOUNDARY | HIGH] GET 不提交 UoW，不续租、接管或改变 command。本片不增加列表、
+cross-operator audit、后台扫描、request body 持久化、Dashboard、真实外部模型或发布批准。
+
+### 53.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 原操作者通过 exact GET 读取 trace-safe receipt | 路由尚不存在，得到 HTTP 404，1 failed |
+| GREEN-1 | 增加 `agent.publish` 保护的 exact-resource GET | 聚焦 API tracer 1 passed |
+| RED-2 | actor、Agent、Draft 或 command mismatch 必须共享 not-found，查询不写状态 | application service 缺少 `get_receipt`，1 failed |
+| GREEN-2 | application 通过 actor-owned Persistence port 读取并重验 path identity | 聚焦 application tracer 1 passed |
+| RED-3 | API 不得把 hidden-resource not-found 映射为依赖失败 | 实际返回 HTTP 503，1 failed |
+| GREEN-3 | 稳定 `formal_publication_command_not_found` 映射为 HTTP 404 | 聚焦 API 安全 tracer 1 passed |
+| REFACTOR | PostgreSQL 使用 exact command UUID + actor subject 只读查询，不加锁或续租 | 一次性 PostgreSQL tracer 1 passed；完整 repository/migration 38 passed |
+
+### 53.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦公开行为 | 3 passed | exact receipt、权限、actor/path 隔离、无内部字段 |
+| formal application + API | 131 passed | 既有 POST replay/takeover 行为保持不变 |
+| 真实 PostgreSQL 17.5 | repository/migration/production migration 38 passed | exact owner read 不改变 lease；schema 无变更 |
+| 受影响组合 | 201 passed、1 existing warning | formal chain、Persistence、Delivery、安全 composition、production roles |
+| 完整默认后端 | 2433 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 默认未提供外部依赖；不是 Production GO |
+| 静态检查 | Ruff、Mypy 372 source files 通过 | 无新增 ignore、依赖或 schema |
+| production-local build/up + baseline | 退出 0；镜像 `030ce1a17c01768206759250bfb8b9db98133ff43ec2399e55d6f23e6cd33fb1` | schema head=`0024_formal_candidate_checkpoint`；API/KSS 健康 |
+| production-local 状态 | command=0、in-progress=0、checkpoint=0、Version=0、Active=0 | 未调用 formal POST 或 status GET；readiness 仅因 `published_agent=not_ready` 返回预期 HTTP 503 |
+
+隔离 PostgreSQL 使用本机已有 `postgres:17.5-alpine` 镜像和端口 `55442`。验证后容器已
+停止并由 `--rm` 删除。未读取 `.env`、Secret 文件或生产数据。
+
+### 53.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05U 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] status GET 不是 recovery mutation 或 publication approval。需要恢复时，仍由原操作者
+  重放 exact POST。
+- [FRAME | HIGH] 下一核心切片应优先收集真实外部 KSS/model online-smoke 证据，
+  且保持在发布授权之外。cross-operator audit/listing、后台 recovery、Grant lifecycle 和
+  Product Release Authority Gates 继续独立处理。
+
+## 54. TDD-05V：exact Formal Candidate external-dependency probe
+
+### 54.1 冻结边界
+
+[FRAME | HIGH] 本片新增一个显式 production-local host 入口，只接受 exact Agent ID、Draft ID
+和正整数 revision。它复用 production composition 的只读 Candidate assembler；Draft 选择 exact
+Release 与 model-role configuration，deployment 注入 Binding Profile、Secret Handle、egress、
+Admission Scorer 和预算。问题是 checked-in 非敏感 fixture，调用者不能选择 Release、model、
+credential、Profile、question 或 budget。完整决策见 ADR-0226。
+
+[BOUNDARY | HIGH] materializable Candidate 使用 governed `RunPurpose.VALIDATION` 经过既有 KSS
+runtime、Evidence Admission 和 external model；成功必须为 `ANSWERED_WITH_CITATIONS`，至少一条
+accepted citation 非空，并将 trace/receipt 写入 immutable artifact store 后 exact read-back。
+输出不含 question、answer、Candidate/Evidence content、credential、raw prompt 或 upstream detail。
+
+[BOUNDARY | HIGH] 本片不伪造 production-local Phase F authorization，也不调用 formal publication
+endpoint。它最多允许一条 KSS Query 和两份 validation artifact，不创建或重放 Command、Phase F、
+Reference、Grant、Version 或 Active pointer。结果不是 formal online-smoke qualification、
+publication approval、release Gate 或 Production GO。
+
+### 54.2 RED → GREEN → 诊断收敛
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | exact Draft identity、固定问题、secret-free success output | verifier 文件不存在，1 failed |
+| GREEN-1 | 增加 exact verifier 和成功结果约束 | 聚焦 1 passed |
+| RED-2 | Candidate runner 必须执行 governed KSS/model path、只接受 cited evidence 并保留 exact artifacts | runner import 不存在，collection failed |
+| GREEN-2 | 增加 Candidate runner、production composition 与 immutable retention | runner 聚焦 1 passed；无 citation 失败关闭 |
+| RED-3 | host 只能接受三个 exact Draft 参数；CLI 不回显上游 detail | main/host 不存在，分别按预期失败 |
+| GREEN-3 | 增加 bounded CLI 与三参数 host 入口 | 聚焦入口与输出测试转绿 |
+| RED-4 | 已知不可 materialize Candidate 必须返回明确且无内容泄露的错误码 | CLI 仅返回 generic failure，1 failed |
+| GREEN-4 | materializer error 保持具体类型穿透，CLI 映射固定 error code | 1 passed；错误正文不进入输出 |
+
+### 54.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦/受影响 | 156 passed、1 existing warning | exact verifier、runner、composition、KSS runtime 与 production API |
+| 完整默认后端 | 2441 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 默认不执行外部模型；不是正向 upstream 证据 |
+| 静态检查 | Ruff、focused format、Mypy 372 source files、lock、domain-context、Shell 通过 | whole-repository format 仍有既有非本片 drift；未批量重排 |
+| production-local build/up + baseline | 退出 0；镜像 `be61c35f3bfe3ddb439f30ffbd96f048c0816129fec315890dabe930d60bda63` | schema `0024`；API/KSS 健康；readiness 仅 `published_agent=not_ready` |
+| exact Draft@13 live probe | 退出 1；`formal_candidate_contract_bundle_not_materializable` | secure materializer 在 KSS Query 前拒绝 package-escaping audit paths |
+| 副作用边界 | Command 0、Version 0、Active 0、Reference 0、Grant 5、Query 21，前后不变 | 未创建 Query 或 artifact；没有改写 Candidate/Draft/Grant |
+
+[KNOWN | HIGH] 受控结构诊断只投影路径字段，确认 Draft@13 的 immutable Contract Bundle 使用
+`../../runs/latest/trace.jsonl` 与 `../../runs/latest/governance_receipt.md`。这些路径逃逸 Candidate
+package；既有 secure materializer 按设计拒绝。`./policy.yaml` 解析为 package 内文件，不是本次
+阻断原因。不得放宽 traversal 校验、运行时偷偷重写 Candidate，或用独立 deployment manifest
+冒充 exact Draft evidence。
+
+### 54.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05V 代码能力与 fail-closed 副作用边界为 `LOCAL_VERIFIED`；当前
+  Draft@13 live external-dependency probe 为 `BLOCKED`，Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 当前没有正向外部 KSS/model 证据，也没有 formal publication approval 或
+  Production GO。
+- [FRAME | HIGH] 下一切片应只处理 exact Draft Contract path normalization：通过既有 Workspace
+  complete-Contract validation、revision CAS 和 audit 创建新 revision，将 audit paths 收敛为
+  package 内相对路径；不得改变其它 Contract 内容，也不得直接写数据库。随后对新 revision 重跑
+  read-only preflight 和本 probe。完整 formal POST、Reference/Grant mutation 与发布 Gate 继续不执行。
+
+## 55. TDD-05W：exact Draft Contract path normalization
+
+### 55.1 冻结边界
+
+[FRAME | HIGH] 本片只修复 TDD-05V 发现的 Draft Contract path blocker。显式
+production-local host 入口只接受 exact Agent ID、Draft ID 和 expected revision。调用者不能传入
+目标路径、YAML、Release、model 或 credential。checked-in 目标固定为 `./trace.jsonl` 和
+`./governance_receipt.md`。完整决策见 ADR-0227。
+
+[FRAME | HIGH] 命令要求 `audit.trace_path` 与 `audit.receipt_path` 唯一、为 scalar 且同时等于
+已知 legacy pair。它只替换两个 scalar byte ranges，并以 parsed document equality 证明其它字段
+未变。真正写入继续复用 Workspace complete-Contract validation、exact revision CAS、原子 Draft
+save 和 configuration audit。missing、duplicate、mixed、unexpected 或 already-normalized 都不写入。
+
+[BOUNDARY | HIGH] 成功最多创建一个新 Draft revision 和一条既有类型的 configuration audit。
+不修改 Policy/Tools/extra files，不创建 Command、Phase F、Reference、Grant、Version 或 Active
+pointer，也不授权发布。本片不执行 formal publication endpoint。
+
+### 55.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | exact CAS 只修改两个 audit paths，并返回 bounded result | command 文件不存在，1 failed |
+| GREEN | 增加 YAML node-range mutation、Workspace CAS、结果重验、bounded CLI 和三参数 host | 聚焦主路径 1 passed；完整聚焦 15 passed |
+| REFACTOR | 收敛 known legacy/target constants；补 revision drift、already-normalized、mixed、unknown、duplicate、workspace rejection/result drift | 聚焦 15 passed；受影响回归 123 passed |
+
+### 55.3 production-local 证据
+
+[KNOWN | HIGH] 第一次 build 在 Docker Hub anonymous-token 获取阶段因 EOF 退出，尚未进入产品
+构建，也未修改 Draft。重试成功生成镜像
+`bf5fb14877db747a4ff9e3a0e0df1d1f36461903ce6e91240c6e68d3d0356998`。baseline 在
+schema `0024_formal_candidate_checkpoint` 退出 0；readiness 仍只因
+`published_agent=not_ready` 返回预期 HTTP 503。
+
+[KNOWN | HIGH] 写入前 Draft revision 为 13，`agent.draft.contract_updated` audit count 为 7。
+exact CAS 退出 0，返回 revision 14、`./trace.jsonl` 与 `./governance_receipt.md`。随后对 revision 14
+重放，命令以 `draft_contract_paths_already_normalized` 退出 1。最终 Draft 保持 revision 14，audit
+count 为 8；没有 revision 15。
+
+[KNOWN | HIGH] Draft@14 read-only preflight 退出 0。Formal Candidate SHA-256 为
+`1e5aee4b24b184333a1d4f4d0a7798716cf8cfe426da4046605c06d3aea063bd`，Knowledge Release
+candidate SHA-256 为
+`085038769d44ded6f031de42a8eaf3fa4a723d390eb45db9da2b5914bea89299`，exact Release 仍为
+`release-a4b70851cb914862000e15c3`，`publication_authorized=false`。
+
+[KNOWN | HIGH] 用户随后明确授权：可把 exact Draft@14 在固定问题下产生的 Candidate Evidence
+发送到 configured model，并允许最多新增一条 KSS Query 和两份 immutable validation artifacts。
+执行前 Command、Version、Active、Reference 与 artifact 均为 0，Grant 为 5，Query 为 21。
+
+[KNOWN | HIGH] probe 只执行一次，并以 bounded
+`formal_candidate_external_smoke_failed` 退出 1。新增 Query
+`knowledge-query-f25bebcd4a9946578c46280a68387e32` 在 exact Release
+`release-a4b70851cb914862000e15c3` 上为 `succeeded`，`result_availability=available`，
+Candidate count 为 3，result digest 已持久化。Query count 变为 22；没有重试。
+
+[KNOWN | HIGH] exact Draft 的 Model Connection ID 为 `model_deepseek`。当前受管记录为 active
+revision 1，provider 为 `deepseek`，model 为 `deepseek-v4-flash`，host 为 `api.deepseek.com`，
+且存在受管 credential record。由于 CLI 按设计隐藏上游 detail，现有证据不能区分 Evidence
+Admission、external model transport/output、citation validation 或 artifact retention 前失败。
+ProofAgent artifact count 仍为 0，因此没有 immutable trace/receipt 可用于正向验收。
+
+[KNOWN | HIGH] 执行后 Command、Version、Active 与 Reference 仍为 0，Grant 仍为 5；没有进入
+Phase F、formal publication 或 activation。授权上限被遵守：新增一条 KSS Query、零份
+ProofAgent validation artifact。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦 | 15 passed | exact mutation、CAS、no-op replay、bounded CLI/host |
+| 受影响 | 123 passed、1 existing warning | Workspace、Memory repair、preflight、external probe、production migration contracts |
+| 完整默认后端 | 2456 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 不包含 configured-model 外发 |
+| 静态检查 | 全仓 Ruff、Mypy 374 sources；focused format、uv lock、domain context、Shell、diff 通过 | 未做无关文件批量格式化 |
+| production-local CAS | Draft 13→14；audit 7→8 | replay 不创建 revision 15 |
+| read-only preflight | 退出 0 | 新 Candidate 摘要；不授权发布 |
+| external-dependency probe | `BLOCKED` | 执行 1 次；KSS Query succeeded/3 candidates，后续 generic failure，artifact 0 |
+
+### 55.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05W 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] Draft Contract path blocker 已通过新 revision 修复，没有放宽 materializer 或在
+  probe 内改写 Candidate。
+- [KNOWN | HIGH] 正向 external KSS/model cited-answer evidence 为 `BLOCKED`。本次一次性授权已消费，
+  不能用同一授权重试；当前也没有 Phase F、formal publication、release Gate 或 Production GO。
+- [FRAME | HIGH] 下一核心切片应先增加 secret-free external-probe stage classification，使失败能够
+  区分 KSS、Evidence Admission、model transport/output、citation validation 与 artifact retention，
+  且继续隐藏 question、answer、Candidate/Evidence content、credential、raw prompt 和 provider detail。
+  完成诊断能力并通过回归后，新的真实探针仍需另行确认一次 Query/artifact 外发预算。
+
+## 56. TDD-05X：secret-free external probe stage diagnostics
+
+### 56.1 冻结边界
+
+[FRAME | HIGH] 本片只修改 TDD-05V 既有 external probe 的失败诊断。稳定错误码区分 KSS、
+Evidence Admission、configured model transport/output、citation validation 和 artifact retention。
+结构化事实不足或含义不明确时继续返回 `formal_candidate_external_smoke_failed`。完整决策见
+ADR-0228。
+
+[BOUNDARY | HIGH] 分类只读取既有结构化 subsystem code、accepted/citation facts 和 trace-safe
+`final_answer_validation_failed`/`model_error` 事件。CLI 不返回 exception message、question、answer、
+Candidate/Evidence content、credential、Secret Handle、raw prompt、provider identity/detail、artifact
+bytes、local path 或 stack trace。
+
+[BOUNDARY | HIGH] 诊断只在 external probe 调用共享 governed runtime 时开启。正式 online smoke 与
+production candidate validation 保持原行为。本片不新增 executor、retry、HTTP/Dashboard surface、
+dependency call、Grant mutation、publication side effect 或 migration；所有验证使用本地可控替身。
+
+### 56.2 测试设计
+
+| Given | When | Then |
+| --- | --- | --- |
+| governed execution 抛出结构化 KSS、Admission 或 model error | exact Candidate runner 执行 probe | 返回对应 stable stage code，异常正文不进入公开结果 |
+| run 返回 accepted/citation 与 trace-safe final-answer facts | runner 检查 cited success | 无 accepted 归 Admission，缺 citation 或 citation binding 归 citation，其他 final-answer validation 归 model |
+| trace/receipt source 或 immutable exact read-back 失败 | runner 保留 validation artifacts | 返回 artifact-retention code，不返回 bytes 或 path |
+| run 失败但 accepted/citation 与 trace facts 无法定位阶段 | runner 执行 fail-closed gate | 保持 generic error，不根据 outcome 或 message 猜测 |
+| CLI 捕获 stage diagnostic | verifier 输出失败 JSON | 只返回既有 schema、`status` 和 stable `error_code` |
+
+[FRAME | HIGH] 测试从公开 runner 和 CLI 进入真实分类路径。Mock 只替代 governed external
+execution 和 artifact store 边界，使用虚构的错误正文、Evidence metadata 与 artifact bytes。测试不
+断言私有 helper、内部调用顺序、provider payload 或真实外部依赖行为。
+
+### 56.3 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | `PA_KNOWLEDGE_002` 必须成为 bounded KSS stage code | runner 只有无 `code` 的 generic validation error，1 failed |
+| GREEN-1 | external probe execution 识别 KSS structured code | KSS tracer 1 passed；其他 runtime caller 未启用分类 |
+| RED-2 | Admission、model、citation、artifact 与 CLI public code 均需稳定分类 | 9 failed、2 passed；缺失边界与原 generic 行为一致 |
+| GREEN-2 | 增加 structured exception、trace-safe run facts、source/immutable artifact 分类和 CLI 映射 | external-probe behavior 18 passed |
+| REFACTOR | 补 source artifact missing 与 ambiguous-stage negative tests；未知失败不猜测根因 | focused files 95 passed；affected set 118 passed |
+
+### 56.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| external-probe behavior | 18 passed | 五类稳定码、generic fallback、无 detail 输出 |
+| 聚焦文件 | 95 passed | formal Candidate runner 与 production-local CLI |
+| 受影响 | 118 passed、1 existing warning | formal chain、production readiness、production roles/composition、external verifier |
+| 完整默认后端 | 2467 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 首轮 8 项仅因 sandbox 禁止 loopback bind 失败；同一命令在允许本机测试端口的环境中通过 |
+| 静态检查 | 全仓 Ruff、Mypy 372 sources、focused format、diff 通过 | 无新增 ignore、依赖、schema 或网络入口 |
+| external dependency | 未执行 | 没有新增 KSS Query、model request 或 validation artifact |
+
+### 56.5 修改文件、状态与下一边界
+
+| 文件 | 变更 |
+| --- | --- |
+| `proof_agent/delivery/production_agent_validation.py` | external-only diagnostic type、structured/trace/artifact classification |
+| `docker/production-local/verify_formal_candidate_external_smoke.py` | bounded CLI stage-code mapping |
+| `tests/test_formal_production_agent_candidate.py` | runner 的五类、source artifact 与 ambiguous fallback 行为测试 |
+| `tests/test_production_local_formal_candidate_external_smoke.py` | CLI stable stage code 测试 |
+| `docs/adr/0228-classify-formal-candidate-external-probe-failures-without-content.md` | 公开错误契约与内容安全边界 |
+| `docs/features/kss-configuration-publication-loop/{scope-plan.md,feature_context.md,tdd-report.md}` | Scope、状态与 TDD 证据 |
+| `docs/{PROJ_CONTEXT.md,development-progress.md,operations-deployment-development-guide.zh-CN.md}` | 项目索引、开发状态与运维错误码说明 |
+
+- [KNOWN | HIGH] TDD-05X 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 这组本地分类测试不能追溯判断 Draft@14 上一次 generic failure。正向 external
+  KSS/model cited-answer evidence 继续为 `BLOCKED`，不是 formal online-smoke qualification、
+  publication approval、release Gate 或 Production GO。
+- [FRAME | HIGH] 下一次真实 probe 必须重新取得 exact Candidate 和 Query/artifact 副作用预算的明确
+  授权。若执行失败，只能依据本片新增的 bounded error code 选择下一项安全检查，不得读取或输出
+  Candidate Evidence、raw prompt、provider detail 或 credential，也不得用同一授权自动重试。
+
+## 57. TDD-05Y：production validation ArtifactStore cutover 与外部探测前置门
+
+### 57.1 冻结边界与新发现
+
+[FRAME | HIGH] 本片原计划对 exact Agent
+`agent_management_insurance_specialist`、Draft
+`c8191d9e-ee0a-5324-8c6d-e0b88622ab61` revision 14 执行一次 fixed-question external
+probe，预算上限为一条新 KSS Query 和两份 immutable validation artifacts；不进入 Phase F、
+formal publication 或 activation。
+
+[KNOWN | HIGH] 在消耗 Query 前的源码检查发现，生产 composition 注入当前
+`S3ArtifactStore`，而 shared validation runtime 仍调用只存在于测试 fake 的旧
+`key/content/media_type + get_exact` 协议。真实执行即使通过 model/citation，也会在 retention
+失败。本片因此先按 ADR-0229 修复同一 production port，不使用外部调用验证已知失败路径。
+
+### 57.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | validation fake 改为当前 `ArtifactStore` port；S3/Filesystem 必须返回 exact URI | 3 failed：旧关键字参数与两个缺失 `exact_uri` |
+| GREEN | runtime 写入 typed request，校验 owner/kind/digest/length，exact head/open 后转换既有 public ref | 3 passed |
+| REFACTOR | formal Candidate/online smoke fakes 统一到同一端口；删除 validation-only key protocol | 相关完整集合 115 passed |
+
+### 57.3 本地与真实依赖验证
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| Artifact/formal Candidate/readiness 相关集合 | 115 passed | 使用本地可控执行替身，不调用 KSS/model |
+| 完整默认后端 | 2467 passed、272 skips、2 deselected、1 existing warning | 首轮 8 项仅因 sandbox 禁止 loopback bind；允许本机端口后同一命令通过 |
+| 静态检查 | Mypy 372 sources、全仓 Ruff、8 个变更 Python 文件 format 通过 | 未批量格式化既有 216 个非本片文件 |
+| production-local 镜像与 baseline | image `1847e70c79bbaf57b36ce93a4a1eaba3267ad37cf4346aa462ec0b3ef4e1be2d`，baseline 通过 | `/readyz` 仍按预期仅因 `published_agent=not_ready` 返回 503 |
+| 真实 MinIO validation pair | trace/receipt write、exact head/open、含 `runs/` 前缀 URI、exact delete 全通过 | 两份非敏感测试对象已删除；不构成 external smoke evidence |
+| Draft@14 read-only preflight | Candidate/Release 摘要与 exact Release 通过，`publication_authorized=false` | 无 KSS/ProofAgent 写入 |
+
+### 57.4 外部授权门与副作用
+
+[KNOWN | HIGH] 用户随后明确同意把 exact Draft@14 fixed-question Candidate Evidence 发送给受管
+连接 `model_deepseek` revision 1（ACTIVE，DeepSeek `deepseek-v4-flash`，
+`https://api.deepseek.com`），允许最多新增一条 KSS Query 和两份 immutable validation
+artifacts，并要求只执行一次、失败不重试、不进入 Phase F、formal publication 或 activation。
+执行前只读重验 Draft、Candidate/Release 摘要、模型目的地、镜像和副作用基线，全部与授权一致。
+
+[KNOWN | HIGH] 既有三参数入口只执行一次，并返回
+`formal_candidate_external_smoke_evidence_admission_failed`。该稳定码只证明执行停在
+ProofAgent Evidence Admission 边界，没有 accepted evidence；不证明 Candidate Evidence 质量根因，
+也不披露 question、Candidate Evidence、answer、provider response、credential 或日志。按授权立即
+停止，没有重试。
+
+[KNOWN | HIGH] Query 总数和 exact Release Query 数量分别保持 22 和 13。本次调用精确重放既有
+`knowledge-query-f25bebcd4a9946578c46280a68387e32`；该 Query 仍为 `succeeded`，
+`result_availability=available`，Candidate count 为 3，result digest 为
+`sha256:c7e91ca01b82e9376e65f4d60491307f99a9f511cfd372cff32c57cf104d29d9`。
+没有创建第 23 条 Query。
+
+[KNOWN | HIGH] 执行后 Formal Command、Published Version、Active、KSS Reference 和 ProofAgent
+Artifact exact version 仍为 0，Grant 仍为 5；`agent_validation` artifact 为 0。没有 Phase F、
+publication 或 activation 副作用。授权预算实际增量为零条 Query、零份 validation artifact。
+受治理失败后的 production-local baseline 再次通过；`/readyz` 仍只因
+`published_agent=not_ready` 按设计返回 HTTP 503。
+
+- [KNOWN | HIGH] ADR-0229 的 validation ArtifactStore cutover 为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] TDD-05Y external probe 为受治理失败结果，不是正向 cited-answer evidence。
+  本次一次性授权已经消费，不得自动重试。
+- [BOUNDARY | HIGH] 当前结果不是 formal online-smoke
+  qualification、publication approval、release Gate 或 Production GO。
+
+## 58. TDD-05Z：secret-free Evidence Admission reason diagnostics
+
+### 58.1 冻结边界
+
+[FRAME | HIGH] 本片只细化 external probe 已有
+`formal_candidate_external_smoke_evidence_admission_failed` 阶段。失败输出继续保留 stage
+`error_code`；只有 typed scorer failure 或 trace-safe Evidence Evaluation metadata 能增加一个
+allowlist `reason_code`。分类不得读取或返回 exception message、分数、阈值、Candidate/Evidence
+标识或内容、question、answer、provider response、credential、raw prompt、artifact bytes/path 或
+stack trace。
+
+[BOUNDARY | HIGH] 本片不改变 Evidence Admission 通过/拒绝逻辑，不增加 rank fallback、重试、
+network call、持久化、HTTP/Dashboard surface、KSS Query、validation artifact、Grant、Phase F、
+formal publication 或 activation。未知结构化事实继续只返回 Admission stage code。
+
+### 58.2 测试设计
+
+| Given | When | Then |
+| --- | --- | --- |
+| Scorer authorization/transport/response contract 不可用 | scorer port 失败 | 保留 `PA_KNOWLEDGE_001`，并附带 `evidence_admission_scorer_unavailable`；不包含下游正文 |
+| Scorer 返回非有限值或超出 0 至 1 | Control Plane 校验分数 | 失败关闭为 `evidence_admission_score_invalid` |
+| Candidate 存在且分数均低于 `min_score` | Evidence Evaluation 失败 | metadata 为 `knowledge_candidate_threshold_not_met`，不误报零 Candidate |
+| external probe 收到 trace-safe no-evidence reason | runner 分类 | stage code 不变，只投影 allowlist reason |
+| 未知 reason 或非 Admission stage 携带 reason | diagnostic/CLI 校验 | 拒绝 reason；不根据正文猜测 |
+| 失败 CLI 输出 | v2 envelope 序列化 | 只包含 schema、status、stage error 和可选 allowlist reason |
+
+### 58.3 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | scorer boundary 无 reason；threshold 错标为 `zero_knowledge_candidates`；runner 无 reason；CLI 构造 reason 时退回 generic failure | 4 failed，失败点均为目标行为 |
+| GREEN | 新增 typed Admission reason、threshold metadata、runner trace-safe mapping 和 v2 CLI reason projection | 4 passed |
+| REFACTOR | scorer reason 贯穿 runner；普通 `PA_KNOWLEDGE_001` 不猜 reason；未知 reason 与跨 stage reason 均拒绝 | 核心集合 11 passed |
+
+### 58.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 核心新增行为 | 11 passed | scorer、threshold、runner、CLI 与负向 allowlist |
+| 受影响回归 | 146 passed、1 existing warning | KSS retrieval、governed run、formal Candidate、readiness 与 production roles |
+| 完整默认后端 | 2474 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 沙箱首轮仅 8 项 loopback bind 被禁止；同一完整命令在允许本机测试端口的环境中通过 |
+| 静态与一致性 | 全仓 Ruff、Mypy 372 sources、domain context、diff、uv lock 通过 | 未执行全仓格式化；没有新增依赖 |
+| external dependency | 未执行 | 0 新 Query、0 model/scorer request、0 validation artifact |
+
+### 58.5 状态与下一边界
+
+- [KNOWN | HIGH] ADR-0230 与 TDD-05Z 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] failure envelope 显式升级为
+  `production-local-formal-candidate-external-smoke-failure.v2`；success envelope 保持 v1。
+- [BOUNDARY | HIGH] 本片不能追溯分类 TDD-05Y 已结束的 live failure，也不是 positive external
+  cited-answer evidence、formal online-smoke qualification、publication approval、release Gate 或
+  Production GO。
+- [FRAME | HIGH] 若后续需要再次验证 exact Draft，必须重新取得 exact Candidate、固定问题、模型
+  目的地及 Query/artifact 副作用预算的明确授权。新的调用失败时，只能依据 v2 的 bounded stage/
+  reason 选择下一项本地检查，仍不得自动重试。
+
+## 59. TDD-06A：fixed-synthetic production-local Admission Scorer verification
+
+### 59.1 冻结边界
+
+[FRAME | HIGH] 本片只增加一个零参数 production-local Scorer 验证入口。它固定构造一个完全虚构
+的问题和一个 relevance Candidate，经既有 production runtime binding 取得部署装配的 Admission
+Scorer。调用者不能提供 Draft、Release、问题、Candidate、Model Connection、credential 或预算。
+
+[BOUNDARY | HIGH] verifier 不调用 KSS service/query factory、Draft-selected answer model、artifact
+store 或 formal publication service。它不能创建 Query、Grant、Reference、validation artifact、
+Formal Command、Version 或 Active pointer，也不能进入 Phase F。
+
+### 59.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | 固定 synthetic scorer verifier 与零参数 host 入口尚不存在 | 聚焦文件 5 failed，均为目标文件缺失 |
+| GREEN | 通过 public runtime binding 对一个固定 synthetic Candidate 评分；KSS fake 被设置为调用即失败 | 5 passed |
+| REFACTOR | 增加 Scorer identity、Candidate set、NaN/越界/布尔分值、失败脱敏、零参数与 deployment-owned 配置合同 | 最终聚焦 10 passed |
+
+### 59.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦行为 | 10 passed | 固定 synthetic 输入、KSS 零调用、identity/response fail-closed 与 secret-free envelope |
+| 受影响回归 | 59 passed、1 existing warning | production runtime、KSS client、roles、external probe 与 readiness |
+| 完整默认后端 | 2484 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 没有新增依赖或 migration |
+| production-local build/baseline | image `e2bb61b0c78a7e648ccd4d662a4094660327094f49c49ca804f7fb6b79011088`；baseline 通过 | schema `0024`；`/readyz` 仍只因 `published_agent=not_ready` 返回预期 503 |
+| fixed synthetic live verifier | 1 Candidate、1 score、固定 Scorer ID/revision，status passed | 仅调用 `models.internal` compatibility Scorer；输出不含输入正文、标识、分数、credential 或 response |
+| 副作用只读核对 | KSS Query=22；Formal Command=0 | 与 TDD-05Y 后已记录状态一致；未调用 DeepSeek 或 formal endpoint |
+
+### 59.4 状态
+
+- [KNOWN | HIGH] ADR-0231 与 TDD-06A 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] production-local compatibility Scorer 的 identity、versioned Secret Handle、Vault
+  resolution、guarded egress 和 strict exact-candidate response contract 已由固定 synthetic live run
+  联合覆盖。
+- [BOUNDARY | HIGH] 该结果不能判断 Draft@14 的 Candidate 质量、阈值或 policy root cause，不能
+  追溯分类 TDD-05Y，也不是 positive external KSS/model cited-answer evidence、formal online-smoke
+  qualification、publication approval、release Gate 或 Production GO。

@@ -149,6 +149,24 @@ class FormalProductionAgentPublicationCommandRecord(FrozenModel):
     actor_subject: str = Field(min_length=1, max_length=255)
     idempotency_key: str = Field(min_length=1, max_length=128)
     receipt: FormalProductionAgentPublicationCommandReceipt
+    execution_claim: FormalProductionAgentPublicationExecutionClaim | None = None
+    candidate_checkpoint: FormalProductionAgentPublicationCandidateCheckpoint | None = None
+
+
+class FormalProductionAgentPublicationExecutionClaim(FrozenModel):
+    """Internal fenced lease for one formal-publication execution attempt."""
+
+    fencing_token: int = Field(strict=True, ge=1)
+    owner_id: str = Field(min_length=1, max_length=128)
+    lease_expires_at: str = Field(min_length=1)
+
+
+class FormalProductionAgentPublicationCandidateCheckpoint(FrozenModel):
+    """Immutable candidate identity frozen before publication side effects."""
+
+    formal_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_release_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpointed_at: str = Field(min_length=1)
 
 
 class FormalProductionAgentPublicationCommandReservation(FrozenModel):
@@ -156,6 +174,7 @@ class FormalProductionAgentPublicationCommandReservation(FrozenModel):
 
     record: FormalProductionAgentPublicationCommandRecord
     created: bool
+    acquired: bool
 
 
 def complete_formal_publication_command_success(

@@ -224,7 +224,7 @@
 | `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF、TDD-04F controlled cancel BFF、TDD-04G bounded audit read BFF 与 TDD-04H exact-resource expiry BFF 已实现；常驻执行进程和自动过期调度待实现 |
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | 三类可叠加 Hybrid Knowledge Configuration Role Bundle | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | 首期不做复杂 RBAC 或强制四眼，复用全局 named permission 映射 | 已更新 | 用户已确认 |
-| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F、TDD-04A 至 04H 与 TDD-05A 至 05N 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F、TDD-04A 至 04H 与 TDD-05A 至 05R 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
 
 [KNOWN | HIGH] TDD-04E 已在既有 Scope 内完成 controlled Preparation publication BFF：
 KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :publish`；BFF 要求
@@ -684,3 +684,221 @@ revision 和 Memory/Tools 布尔结果，固定 `publication_authorized=false`�
 TDD-05P read-only preflight；不运行 Phase F、Reference、Query Grant、Query、online smoke、
 Published Version 或 Active pointer 变更。旧 Release 的历史 Grant 冲突仍是后续独立阻断，
 本片不得修复、删除或绕过它。
+
+[FRAME | HIGH] 2026-08-31 用户确认进入 TDD-05R，并明确不处理已有历史 Grant 的兼容。
+本片不修改同一 client/Release 的不可变事实，也不增加兼容探测、revoke、reconcile 或 SQL。
+checked-in production-local 将 active runtime Query authority 切换到版本化 identity
+`proof-agent-production-local-v2`。ProofAgent runtime、KSS deployment policy 和 KSS bootstrap
+必须使用同一 identity。
+
+[FRAME | HIGH] 新 identity 使用独立 Secret Handle
+`knowledge/source-service/runtime-client-v2`、独立 Vault path 和新生成的
+`KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN`。旧 Secret Handle 不再进入 active locator map；旧
+client、Secret 和 Grant 保持原状，本片不宣称其已撤销。bootstrap 仍只注册 credential digest，
+新的 exact-Release Grant 仍只由既有 KSS operator-authenticated endpoint 创建。
+
+[FRAME | HIGH] TDD-05R 的可观察成功标准是：静态契约绑定三处 identity 与新 Secret；隔离
+PostgreSQL 在同一 Release 存在旧 client Grant 时仍可为 v2 client 创建独立 Grant；保留卷通过
+既有 verifier 为当前 Draft 选择的 exact Release 创建并精确重放 v2 Grant，随后完成有界 Query。
+本片不运行 formal publication，不创建 Published/Active Agent Version，不改变 readiness，不处理
+真实外部模型、stuck-command recovery、Dashboard 或 Production GO。具体决策见 ADR-0222。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05S formal publication command
+recovery/takeover。本片只处理进程在 durable `in_progress` 之后退出的恢复。首次命令获得一个由
+PostgreSQL 时间控制的租约和 fence；同键、同请求在租约未到期时只重放 `in_progress`，到期后仅
+允许一个执行者原子接管并递增 fence。旧执行者不能提交 Version、Active pointer、command receipt
+或 audit。
+
+[FRAME | HIGH] command ID 必须稳定派生 Phase F Record、provisional Version 和 validation Run
+identity；Phase F 时间固定为原始 command `started_at`。接管必须精确重放同一 Reference request
+与 idempotency key，不能因进程重启创建第二套 provisional external identity。租约由部署配置，范围
+为 1–3600 秒；请求 body、浏览器和 operator 不能选择 owner、时限或 fence。
+
+[FRAME | HIGH] 本片增加 expand-only `0023_formal_publish_claim` 和 production-local 900 秒配置，
+但不运行 formal publication endpoint，不增加后台扫描、heartbeat、cancel、Dashboard、Reference
+deregistration、Grant revoke、真实外部模型或 Production GO。接管仍重新装配并重验 exact candidate；
+中间 candidate checkpoint 和自动恢复进程属于后续独立切片。具体决策见 ADR-0223。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05T durable Formal Candidate checkpoint。
+本片只冻结同一 durable formal command 首次成功装配的 candidate identity。首次执行必须在 Phase F、
+Reference、Query Grant、online smoke 和最终发布前，以当前 fenced claim 原子写入
+`formal_candidate_sha256`、`knowledge_release_candidate_sha256` 和 PostgreSQL checkpoint 时间。
+
+[FRAME | HIGH] 到期接管仍须从 exact Draft revision、live KSS catalog 和 deployment-owned Profile
+重新装配 Candidate。两个摘要必须与既有 checkpoint 完全一致；任一摘要漂移都以稳定失败结束原
+command，且不得进入 Phase F 或任何后续外部调用。操作者必须在复核新 Candidate 后使用新的
+`Idempotency-Key` 发起新命令，不能把旧 checkpoint 改绑到新 Candidate。
+
+[FRAME | HIGH] checkpoint 只属于内部恢复权威，不进入 public receipt、Dashboard 或请求 body。
+checkpoint 写入必须校验当前 command state、command identity、lease owner 和 fencing token；旧执行者
+或 terminal command 不能写入或改写 checkpoint。相同摘要的重复写入返回原 checkpoint 时间，
+不同摘要保持原值并失败关闭。迁移使用 expand-only `0024_formal_candidate_checkpoint`。
+
+[FRAME | HIGH] 本片不持久化完整 Candidate payload，不增加后台 recovery process、heartbeat、cancel、
+Reference/Grant 清理、真实外部模型、formal endpoint 调用或 Production GO。具体决策见 ADR-0224。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入下一切片。源码复核确认，既有
+formal publication POST 已经在同一请求与 `Idempotency-Key` 下负责未到期重放和
+到期接管。TDD-05U 因此不增加第二条 recovery 写路径，只增加 exact command
+receipt 读取，供原操作者判断是否需要精确重放。
+
+[FRAME | HIGH] 公开接口为
+`GET /api/config/agents/{agent_id}/drafts/{draft_id}/formal-publications/{command_id}`。
+调用者必须持有 `agent.publish`，并且 OIDC actor subject 必须与 command 创建者
+完全一致。错误 command ID、其他 actor、错误 Agent 或 Draft path 统一返回
+`formal_publication_command_not_found`，不泄露资源是否存在。
+
+[FRAME | HIGH] 响应只复用既有 trace-safe public receipt。它不返回 actor、
+`Idempotency-Key`、lease owner、fencing token、Candidate checkpoint、原请求、问题或证据
+内容，也不改变 lease、command 状态或外部系统。本片不增加列表、后台扫描、
+请求正文持久化、自动接管、Dashboard 或 Production GO。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05V exact Formal Candidate
+external dependency probe。production-local Phase F compatibility endpoint 按设计固定返回
+`authorized=false`；本片不伪造 Phase F，也不调用 formal publication endpoint。
+
+[FRAME | HIGH] 新增一个显式 host 入口，只接受 exact `agent_id`、`draft_id` 和
+正数 `draft_revision`。同一 production composition 只读装配 Candidate；Draft 选择 exact
+KSS Release 与 model-role configuration，deployment 注入 Binding Profile、Secret Handle、egress、
+Admission Scorer 和执行预算。验证问题是 checked-in 非敏感 fixture，调用者不能
+选择 Release、model connection、credential、Profile、question 或 budget。
+
+[FRAME | HIGH] probe 通过既有 governed `RunPurpose.VALIDATION` 执行 exact Candidate，要求
+`ANSWERED_WITH_CITATIONS` 和至少一条 accepted nonblank citation，并通过既有 immutable
+artifact store 保留 trace/receipt 后 exact read-back。成功输出不返回 question、answer、
+Candidate/Evidence 内容、credential、raw prompt 或上游 detail；只返回 exact Candidate/Release、
+question SHA-256、model connection IDs、run、outcome、citation count 和 artifact refs。
+
+[BOUNDARY | HIGH] 本片允许新增一条 durable KSS Query 和两个 immutable validation
+artifacts，但必须精确复用既有 active Query Grant。不创建或重放 Command、Phase F、
+Reference、Grant、Published Version 或 Active pointer。缺少 KSS、Grant、Admission、model、
+credential、egress 或 artifact 依赖时失败关闭。结果不是 formal online-smoke
+qualification、publication approval、release Gate 或 Production GO。具体决策见 ADR-0226。
+
+[KNOWN | HIGH] production-local exact Draft@13 验证发现 Candidate Contract Bundle 的 audit
+paths 会逃逸 materialized package。secure materializer 因此在 KSS Query 前返回
+`formal_candidate_contract_bundle_not_materializable`。本片不放宽 traversal 校验、不重写
+Candidate、不改 Draft/Grant；Command、Version、Active、Reference、Grant、Query 六项计数前后
+不变。下一片如处理该 blocker，必须通过既有 Workspace complete-Contract validation、exact
+revision CAS 和 audit 创建新的 Draft revision，并只收敛 Contract paths。
+
+[FRAME | HIGH] 2026-08-31 用户确认进入 TDD-05W exact Draft Contract path normalization。
+新增一个显式 production-local host 入口，只接受 exact `agent_id`、`draft_id` 和 expected
+revision。调用者不能提供目标路径或 Contract 内容。checked-in 命令只允许把
+`../../runs/latest/trace.jsonl` 和
+`../../runs/latest/governance_receipt.md` 分别收敛为 `./trace.jsonl` 和
+`./governance_receipt.md`。
+
+[FRAME | HIGH] 命令必须要求两个 `audit` 字段唯一、为 scalar 且同时处于已知旧状态。
+missing、duplicate、mixed、unexpected 或 already-normalized 都在 Workspace 写入前失败。
+候选 YAML 的 parsed structure 只能在这两个字段变化；真正保存继续复用既有 complete-Contract
+validation、exact revision CAS、原子 Draft save 和 configuration audit。成功后还必须重验
+Agent/Draft identity、`revision + 1`、exact YAML bytes 和两个新路径。具体决策见 ADR-0227。
+
+[BOUNDARY | HIGH] 本片最多创建一个新 Draft revision 和一条既有类型的 configuration audit。
+它不修改 Policy/Tools/extra files，不创建 Command、Phase F、Reference、Grant、Version 或 Active
+pointer，也不授权发布。完成后只对新 revision 重跑 read-only preflight 与 TDD-05V probe；不调用
+formal publication endpoint。
+
+[KNOWN | HIGH] 用户随后明确授权对 exact Draft@14 执行一次固定问题 probe，允许最多一条新 KSS
+Query 和两份 immutable validation artifacts。实际只执行一次：exact Release Query succeeded，返回
+3 条 Candidate Evidence；随后以 `formal_candidate_external_smoke_failed` 失败，未写入 ProofAgent
+validation artifacts。Command、Version、Active 与 Reference 保持 0，Grant 保持 5，Query 由 21
+变为 22。没有重试，也没有进入 formal publication。
+
+[FRAME | HIGH] 下一切片应先收敛 secret-free probe stage diagnostics，而不是再次调用真实依赖。
+稳定错误只允许区分 KSS、Evidence Admission、model transport/output、citation validation 和
+artifact retention；不得返回 question、answer、Candidate/Evidence content、credential、raw prompt
+或 provider detail。完成测试和本地回归后，任何新 external probe 都需要新的明确外发授权。
+
+[FRAME | HIGH] TDD-05X 按 ADR-0228 固定上述五类错误码。分类只读取既有结构化错误码、
+accepted/citation 事实和 trace-safe final-answer validation code，不解析 exception message、
+provider response 或业务内容。结构化事实缺失或含义不明确时继续返回
+`formal_candidate_external_smoke_failed`，不猜测根因。
+
+[BOUNDARY | HIGH] 本片只改现有 probe 的失败诊断，不新增执行路径、重试、HTTP/Dashboard
+接口或外部调用。验证全部使用本地可控替身；本片不会再次执行真实 KSS/model probe。任何后续
+真实 probe 仍需针对 exact Candidate 和允许副作用取得新的明确授权。
+
+[FRAME | HIGH] 2026-08-31 用户在收到 TDD-05X 完成结果及下一切片副作用说明后确认“继续下一
+切片”。这足以继续本地 preflight、ArtifactStore 修复和无外发验证，但安全审批要求对具体数据外发
+作更明确确认：把 `agent_management_insurance_specialist`、Draft
+`c8191d9e-ee0a-5324-8c6d-e0b88622ab61` revision 14 的 fixed-question Candidate Evidence
+发送给只读确认的当前受管连接 `model_deepseek` revision 1（ACTIVE，DeepSeek
+`deepseek-v4-flash`，`https://api.deepseek.com`），并允许最多一条新 KSS Query 和两份
+immutable validation artifacts；不读取或外发 credential。
+
+[FRAME | HIGH] 执行前必须重建包含 TDD-05X 的 production-local 镜像，通过 baseline，并重验
+Draft@14 read-only preflight、exact Candidate/Release identity 及 Query/artifact 前置计数。probe
+只能调用既有三参数 host entry 一次。成功时记录 bounded success result；失败时只记录新增的 stable
+stage code，并立即停止，不读取 exception detail、Candidate Evidence、answer、raw prompt、provider
+response、credential 或 `.env` 内容，也不使用本次授权重试。
+
+[BOUNDARY | HIGH] TDD-05Y 不创建或重放 Formal Publication Command、Phase F、KSS Reference、
+Query Grant、Published Agent Version 或 Active pointer，不调用 formal publication endpoint，也不
+授权上线。执行后必须核对 Query/artifact 增量与 Command、Version、Active、Reference、Grant 状态。
+无论结果成功或失败，都只是 bounded production-local external-dependency evidence，不是 formal
+online-smoke qualification、publication approval、release Gate 或 Production GO。
+
+[KNOWN | HIGH] TDD-05Y 在消耗唯一外部 Query 前发现生产 composition 注入当前
+`S3ArtifactStore`，但候选验证运行时仍调用已淘汰的 `key/content/media_type + get_exact`
+协议。真实执行即使通过 model/citation 阶段，也会在 artifact retention 失败；既有测试因使用旧协议
+fake 未覆盖该边界。因此暂停外部 probe，授权预算保持未使用。
+
+[FRAME | HIGH] 本片先以 TDD 把候选验证运行时收敛到仓库唯一的 `ArtifactStore` 端口：使用
+`ArtifactPutRequest` 写入 RUN_TRACE/GOVERNANCE_RECEIPT，以 exact version head/open 回读验证，
+再由存储适配器生成不含凭据的 canonical artifact URI。只修复 production composition 已存在的
+接口不一致，不新增存储、执行器、重试或发布入口。
+
+[KNOWN | HIGH] ArtifactStore cutover、重建 baseline、真实 MinIO validation pair 和 Draft@14
+read-only preflight 已通过。用户随后按 exact Draft、模型目的地、副作用预算、单次执行和禁止发布
+范围作出明确同意。既有三参数入口只执行一次，返回
+`formal_candidate_external_smoke_evidence_admission_failed` 后立即停止，没有重试。
+
+[KNOWN | HIGH] 本次调用精确重放既有 succeeded KSS Query
+`knowledge-query-f25bebcd4a9946578c46280a68387e32`，没有创建新 Query；Query 保持 22，Grant
+保持 5，Command、Version、Active、Reference、Artifact 保持 0。结果只定位到 Evidence
+Admission 边界，不读取或输出 Candidate Evidence、answer、provider detail、credential 或日志，
+也不构成 positive cited-answer evidence 或发布授权。
+
+## 14. TDD-05Z：secret-free Evidence Admission reason diagnostics
+
+[FRAME | HIGH] 本片只细化 external probe 已有 Evidence Admission 阶段诊断。公开失败 envelope
+保留原 stage `error_code`，并仅在结构化事实充分时增加 allowlist `reason_code`。允许分类
+Scorer 不可用、分数无效、Candidate 集为空、分数缺失、未达阈值和策略拒绝；不得返回分数、
+阈值、Candidate/Evidence 标识或内容、question、answer、provider response、credential、raw prompt、
+artifact path 或 exception message。
+
+[FRAME | HIGH] Scorer adapter 通过 typed port error 传递边界类别；完成的 governed Run 只从既有
+trace-safe `evidence_evaluation.metadata.no_evidence_reason_code` 投影类别。错误正文不得参与分类；
+未知或不完整事实不输出 `reason_code`。有 Candidate 且存在受管分数但全部低于 `min_score` 时，
+内部 metadata 使用 `knowledge_candidate_threshold_not_met`，不再误标为
+`zero_knowledge_candidates`。
+
+[BOUNDARY | HIGH] failure envelope 是 strict contract，因此从 v1 显式升级到 v2；success envelope
+不变。非 Admission stage 不接受 Admission reason。本片不新增重试、持久化、HTTP/Dashboard
+入口、KSS Query、model/scorer 调用、artifact、Grant 或发布状态变化。
+
+[KNOWN | HIGH] RED 的四个用例分别证明 scorer category 缺失、threshold metadata 错标、runner
+丢失 allowlist reason 和 CLI 无法投影 reason。GREEN/REFACTOR 后 11 项核心行为、146 项受影响
+回归通过；完整后端在允许本机回环端口的环境中为 2474 passed、272 skipped、2 deselected，另有
+一项既有 Authlib warning。没有执行真实 KSS、Scorer 或模型调用。
+
+## 15. TDD-06A：fixed-synthetic production-local Admission Scorer verification
+
+[FRAME | HIGH] 2026-09-01 用户要求继续下一切片。本片只增加一个零参数 production-local
+Admission Scorer 验证入口。入口固定构造一个完全虚构的问题和一个 relevance Candidate，通过既有
+production `KnowledgeCandidateRuntime.bind_for_run()` 取得部署装配的 Scorer，并只调用
+`KnowledgeCandidateAdmissionScorer.score_candidates()`。调用者不能传入 Draft、Release、问题、
+Candidate、Model Connection、credential 或 budget。
+
+[FRAME | HIGH] 验证必须复用 deployment-owned Scorer ID/revision、versioned Secret Handle、Vault
+Secret Provider 和 guarded egress。响应必须覆盖 exact synthetic Candidate set，且每个分值为 0 至
+1 的有限数。成功输出只包含 Scorer identity/revision、固定输入摘要、计数和显式 false authority
+flags；失败输出不能包含 exception、请求、响应或 credential detail。
+
+[BOUNDARY | HIGH] 本片不调用构造出的 KSS service 或 query factory，不调用 Draft 选择的 answer
+model，不写 artifact，也不创建 Query、Grant、Reference、Formal Command、Version 或 Active
+pointer。通过结果只能证明 production-local compatibility Scorer composition；不能判断 Draft@14
+Candidate 质量、阈值或 policy root cause，也不是 external model evidence、Phase F、publication
+approval、release Gate 或 Production GO。具体决策见 ADR-0231。

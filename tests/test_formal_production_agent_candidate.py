@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace, TracebackType
-from typing import Literal, cast
+from typing import BinaryIO, Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -32,6 +33,7 @@ from proof_agent.contracts import (
     FormalProductionAgentPhaseFPreparation,
     FormalProductionAgentPhaseFRecord,
     FormalProductionAgentQueryGrantStaging,
+    FormalProductionAgentPublicationCommandReceipt,
     FormalProductionAgentPublicationCommandRequest,
     FormalProductionAgentPublicationCommandState,
     FormalProductionAgentPublicationEvidence,
@@ -53,6 +55,8 @@ from proof_agent.contracts import (
     SharedModelConnectionLifecycleState,
 )
 from proof_agent.contracts.persistence import (
+    FormalProductionAgentPublicationCandidateCheckpoint,
+    FormalProductionAgentPublicationExecutionClaim,
     FormalProductionAgentPublicationCommandRecord,
     FormalProductionAgentPublicationCommandReservation,
     PersistenceConflictError,
@@ -62,6 +66,14 @@ from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceManagementWorkspace,
     KnowledgeServiceReadinessProjection,
     KnowledgeServiceReleaseProjection,
+)
+from proof_agent.contracts.artifacts import (
+    ArtifactObjectVersion,
+    ArtifactPutRequest,
+)
+from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionError,
+    KnowledgeCandidateAdmissionFailureReason,
 )
 from proof_agent.control.formal_production_agent_candidate import (
     FormalProductionAgentCandidateAssembler,
@@ -98,6 +110,8 @@ from proof_agent.control.production_agent_publication_configuration import (
 )
 from proof_agent.control.production_agent import ProductionAgentValidationError
 from proof_agent.delivery.production_agent_validation import (
+    FormalCandidateExternalSmokeDiagnosticError,
+    FormalProductionAgentCandidateExternalSmokeRunner,
     FormalProductionAgentOnlineSmokeRunner,
 )
 from proof_agent.errors import ProofAgentError
@@ -327,24 +341,48 @@ class _OnlineSmokeValidator:
 class _ExactArtifactStore:
     def __init__(self, *, readback_override: bytes | None = None) -> None:
         self.contents: dict[str, bytes] = {}
+        self.versions: dict[ArtifactObjectVersion, bytes] = {}
         self.readback_override = readback_override
 
     def put_immutable(
         self,
-        *,
-        key: str,
-        content: bytes,
-        media_type: str,
-    ) -> ExactArtifactRef:
-        artifact_uri = f"s3://formal-online-smoke/{key}"
-        self.contents[artifact_uri] = content
-        return ExactArtifactRef(
-            artifact_uri=artifact_uri,
-            version_id=f"artifact-{len(self.contents)}",
-            sha256=hashlib.sha256(content).hexdigest(),
-            size_bytes=len(content),
-            media_type=media_type,
+        request: ArtifactPutRequest,
+        body: BinaryIO,
+    ) -> ArtifactObjectVersion:
+        content = body.read()
+        assert request.expected_sha256 == hashlib.sha256(content).hexdigest()
+        assert request.expected_size_bytes == len(content)
+        sequence = len(self.versions) + 1
+        ref = ArtifactObjectVersion(
+            object_id=f"artifact-{sequence}",
+            bucket="formal-online-smoke",
+            object_key=f"objects/00/00000000-0000-0000-0000-{sequence:012d}",
+            version_id=f"artifact-{sequence}",
+            sha256=request.expected_sha256,
+            size_bytes=request.expected_size_bytes,
+            kind=request.kind,
+            owner=request.owner,
+            content_type=request.content_type,
+            created_at=datetime(2026, 7, 15, tzinfo=UTC),
+            display_filename=request.display_filename,
         )
+        self.versions[ref] = content
+        return ref
+
+    def head_exact(self, reference: ArtifactObjectVersion) -> ArtifactObjectVersion:
+        assert reference in self.versions
+        return reference
+
+    def open_exact(self, reference: ArtifactObjectVersion) -> BytesIO:
+        if self.readback_override is not None:
+            return BytesIO(self.readback_override)
+        return BytesIO(self.versions[reference])
+
+    def exact_uri(self, reference: ArtifactObjectVersion) -> str:
+        self.head_exact(reference)
+        artifact_uri = f"s3://{reference.bucket}/{reference.object_key}"
+        self.contents[artifact_uri] = self.versions[reference]
+        return artifact_uri
 
     def get_exact(self, reference: ExactArtifactRef) -> bytes:
         if self.readback_override is not None:
@@ -433,21 +471,98 @@ class _FormalPublicationCommands:
     def reserve(
         self,
         record: FormalProductionAgentPublicationCommandRecord,
+        *,
+        lease_duration: timedelta,
     ) -> FormalProductionAgentPublicationCommandReservation:
+        assert lease_duration > timedelta(0)
         key = (record.actor_subject, record.idempotency_key)
         existing = self._unit.pending_commands.get(key)
         if existing is None:
             existing = self._unit.factory.state.formal_publication_commands.get(key)
         if existing is not None:
+            existing_claim = existing.execution_claim
+            proposed_claim = record.execution_claim
+            assert proposed_claim is not None
+            if (
+                existing.receipt.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS
+                and existing_claim is not None
+                and _test_timestamp(existing_claim.lease_expires_at)
+                <= _test_timestamp(record.receipt.started_at)
+            ):
+                taken_over = existing.model_copy(
+                    update={
+                        "execution_claim": FormalProductionAgentPublicationExecutionClaim(
+                            fencing_token=existing_claim.fencing_token + 1,
+                            owner_id=proposed_claim.owner_id,
+                            lease_expires_at=proposed_claim.lease_expires_at,
+                        )
+                    }
+                )
+                self._unit.pending_commands[key] = taken_over
+                return FormalProductionAgentPublicationCommandReservation(
+                    record=taken_over,
+                    created=False,
+                    acquired=True,
+                )
             return FormalProductionAgentPublicationCommandReservation(
                 record=existing,
                 created=False,
+                acquired=False,
             )
         self._unit.pending_commands[key] = record
         return FormalProductionAgentPublicationCommandReservation(
             record=record,
             created=True,
+            acquired=True,
         )
+
+    def find_owned(
+        self,
+        *,
+        command_id: str,
+        actor_subject: str,
+    ) -> FormalProductionAgentPublicationCommandRecord | None:
+        records = (
+            *self._unit.factory.state.formal_publication_commands.values(),
+            *self._unit.pending_commands.values(),
+        )
+        return next(
+            (
+                record
+                for record in records
+                if record.receipt.command_id == command_id and record.actor_subject == actor_subject
+            ),
+            None,
+        )
+
+    def checkpoint_candidate(
+        self,
+        record: FormalProductionAgentPublicationCommandRecord,
+        *,
+        formal_candidate_sha256: str,
+        knowledge_release_candidate_sha256: str,
+    ) -> FormalProductionAgentPublicationCommandRecord:
+        key = (record.actor_subject, record.idempotency_key)
+        current = self._unit.pending_commands.get(key)
+        if current is None:
+            current = self._unit.factory.state.formal_publication_commands.get(key)
+        assert current is not None
+        assert current.receipt.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS
+        assert current.receipt.command_id == record.receipt.command_id
+        assert current.execution_claim == record.execution_claim
+        if current.candidate_checkpoint is not None:
+            return current
+        checkpointed = current.model_copy(
+            update={
+                "candidate_checkpoint": FormalProductionAgentPublicationCandidateCheckpoint(
+                    formal_candidate_sha256=formal_candidate_sha256,
+                    knowledge_release_candidate_sha256=(knowledge_release_candidate_sha256),
+                    checkpointed_at=current.receipt.started_at,
+                )
+            }
+        )
+        self._unit.pending_commands[key] = checkpointed
+        return checkpointed
 
     def complete(
         self,
@@ -462,10 +577,16 @@ class _FormalPublicationCommands:
         assert current is not None
         assert current.receipt.command_id == record.receipt.command_id
         assert current.receipt.request_sha256 == record.receipt.request_sha256
+        assert current.execution_claim == record.execution_claim
+        assert current.candidate_checkpoint == record.candidate_checkpoint
         if current.receipt.state is not FormalProductionAgentPublicationCommandState.IN_PROGRESS:
             return current
         self._unit.pending_commands[key] = record
         return record
+
+
+def _test_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 class _FormalPublicationUnitOfWork:
@@ -1265,6 +1386,544 @@ def test_formal_online_smoke_runner_executes_exact_governed_validation_and_retai
     assert list((tmp_path / "formal-smoke-work").iterdir()) == []
 
 
+def test_formal_candidate_external_smoke_runs_exact_candidate_without_phase_f(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    artifact_store = _ExactArtifactStore()
+    execute_calls: list[dict[str, object]] = []
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        execute_calls.append(kwargs)
+        assert kwargs["run_id"] == "formal-candidate-probe-run-1"
+        assert kwargs["run_purpose"] is RunPurpose.VALIDATION
+        agent = kwargs["published_agent"]
+        assert agent.agent_id == candidate.agent_id
+        assert agent.source_draft_id == candidate.draft_id
+        assert agent.agent_version_id == (
+            f"formal-candidate-probe-{candidate.formal_candidate_sha256}"
+        )
+        assert agent.validation_run_id == "formal-candidate-probe-run-1"
+        assert agent.resolved_knowledge_bindings == candidate.resolved_knowledge_bindings
+        assert agent.runtime_facts.agent_version_id == agent.agent_version_id
+        assert agent.manifest_path.read_text(encoding="utf-8") == (
+            candidate.contract_bundle.agent_yaml
+        )
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"final_output"}\n')
+        receipt.write_bytes(b"# governed candidate dependency probe\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                evidence_chunks=(
+                    SimpleNamespace(
+                        status="accepted",
+                        citation="knowledge://insurance/rules/r1#p1",
+                    ),
+                ),
+            ),
+        )
+
+    runner = FormalProductionAgentCandidateExternalSmokeRunner(
+        configuration_store=object(),
+        knowledge_candidate_runtime=object(),
+        guarded_http_client=object(),
+        secret_provider=object(),
+        model_credential_resolver=object(),
+        artifact_store=artifact_store,
+        work_root=tmp_path / "candidate-probe-work",
+        institution_authorization=InstitutionAuthorizationContext(
+            institutions=("branch-shanghai",)
+        ),
+        identifier_factory=lambda: "formal-candidate-probe-run-1",
+        execute=execute,
+    )
+
+    result = runner.validate_candidate_external_smoke(
+        candidate,
+        question="航班延误保险如何理赔？",
+    )
+
+    assert result.agent_id == candidate.agent_id
+    assert result.draft_id == candidate.draft_id
+    assert result.draft_revision == candidate.draft_revision
+    assert result.formal_candidate_sha256 == candidate.formal_candidate_sha256
+    assert result.knowledge_release_candidate_sha256 == (
+        candidate.knowledge_release_candidate_sha256
+    )
+    assert result.knowledge_base_release_id == (
+        candidate.knowledge_release_candidate.knowledge_base_release_id
+    )
+    assert result.validation_run_id == "formal-candidate-probe-run-1"
+    assert result.model_connection_ids == ("model_production_primary",)
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert result.accepted_citation_count == 1
+    assert artifact_store.get_exact(result.trace_ref).endswith(b"\n")
+    assert artifact_store.get_exact(result.receipt_ref).startswith(b"# governed")
+    assert len(execute_calls) == 1
+    assert list((tmp_path / "candidate-probe-work").iterdir()) == []
+
+
+def test_formal_candidate_external_smoke_fails_closed_without_cited_evidence(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    artifact_store = _ExactArtifactStore()
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"refusal"}\n')
+        receipt.write_bytes(b"# refused candidate dependency probe\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                evidence_chunks=(),
+            ),
+        )
+
+    runner = FormalProductionAgentCandidateExternalSmokeRunner(
+        configuration_store=object(),
+        knowledge_candidate_runtime=object(),
+        guarded_http_client=object(),
+        secret_provider=object(),
+        model_credential_resolver=object(),
+        artifact_store=artifact_store,
+        work_root=tmp_path / "candidate-probe-work",
+        institution_authorization=InstitutionAuthorizationContext(
+            institutions=("branch-shanghai",)
+        ),
+        identifier_factory=lambda: "formal-candidate-probe-run-2",
+        execute=execute,
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == (
+        "formal_candidate_external_smoke_evidence_admission_failed"
+    )
+    assert artifact_store.contents == {}
+    assert list((tmp_path / "candidate-probe-work").iterdir()) == []
+
+
+def test_formal_candidate_external_smoke_exposes_only_allowlisted_admission_reason(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    secret_sentinel = "private-admission-metadata-must-not-appear"
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"evidence_evaluation"}\n')
+        receipt.write_bytes(b"# governed refusal\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                evidence_chunks=(
+                    SimpleNamespace(
+                        status="rejected",
+                        citation="knowledge://insurance/rules/r1#p1",
+                        admission_score=0.24,
+                    ),
+                ),
+                trace_events=(
+                    {
+                        "event_type": "evidence_evaluation",
+                        "payload": {
+                            "metadata": {
+                                "no_evidence_reason_code": (
+                                    "knowledge_candidate_threshold_not_met"
+                                ),
+                                "private_detail": secret_sentinel,
+                            }
+                        },
+                    },
+                ),
+            ),
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id="formal-candidate-probe-admission-reason",
+    )
+
+    with pytest.raises(FormalCandidateExternalSmokeDiagnosticError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert raised.value.code == ("formal_candidate_external_smoke_evidence_admission_failed")
+    assert getattr(raised.value, "reason_code", None) == ("evidence_admission_threshold_not_met")
+    assert secret_sentinel not in str(raised.value)
+
+
+def test_formal_candidate_external_smoke_preserves_structured_scorer_reason(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    secret_sentinel = "private-scorer-boundary-detail-must-not-appear"
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        raise KnowledgeCandidateAdmissionError(
+            KnowledgeCandidateAdmissionFailureReason.SCORER_UNAVAILABLE,
+            secret_sentinel,
+            secret_sentinel,
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id="formal-candidate-probe-scorer-unavailable",
+    )
+
+    with pytest.raises(FormalCandidateExternalSmokeDiagnosticError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert raised.value.code == ("formal_candidate_external_smoke_evidence_admission_failed")
+    assert raised.value.reason_code == "evidence_admission_scorer_unavailable"
+    assert secret_sentinel not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("stage_code", "reason_code"),
+    (
+        (
+            "formal_candidate_external_smoke_evidence_admission_failed",
+            "private-unapproved-admission-reason",
+        ),
+        (
+            "formal_candidate_external_smoke_model_failed",
+            "evidence_admission_scorer_unavailable",
+        ),
+    ),
+)
+def test_formal_candidate_external_smoke_rejects_unapproved_reason_projection(
+    stage_code: str,
+    reason_code: str,
+) -> None:
+    with pytest.raises(ValueError, match="admission reason code is invalid"):
+        FormalCandidateExternalSmokeDiagnosticError(
+            stage_code,
+            reason_code=reason_code,
+        )
+
+
+def test_formal_candidate_external_smoke_classifies_kss_failure_without_detail(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    secret_sentinel = "private-kss-response-must-not-appear"
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        raise ProofAgentError(
+            "PA_KNOWLEDGE_002",
+            secret_sentinel,
+            "private-kss-fix-must-not-appear",
+        )
+
+    runner = FormalProductionAgentCandidateExternalSmokeRunner(
+        configuration_store=object(),
+        knowledge_candidate_runtime=object(),
+        guarded_http_client=object(),
+        secret_provider=object(),
+        model_credential_resolver=object(),
+        artifact_store=_ExactArtifactStore(),
+        work_root=tmp_path / "candidate-probe-work",
+        institution_authorization=InstitutionAuthorizationContext(
+            institutions=("branch-shanghai",)
+        ),
+        identifier_factory=lambda: "formal-candidate-probe-run-kss-failure",
+        execute=execute,
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == ("formal_candidate_external_smoke_kss_failed")
+    assert secret_sentinel not in str(raised.value)
+    assert list((tmp_path / "candidate-probe-work").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("source_code", "expected_code"),
+    (
+        (
+            "PA_KNOWLEDGE_001",
+            "formal_candidate_external_smoke_evidence_admission_failed",
+        ),
+        ("PA_MODEL_002", "formal_candidate_external_smoke_model_failed"),
+        (
+            "PA_MODEL_CONNECTION_001",
+            "formal_candidate_external_smoke_model_failed",
+        ),
+    ),
+)
+def test_formal_candidate_external_smoke_classifies_structured_execution_failure(
+    tmp_path: Path,
+    source_code: str,
+    expected_code: str,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    secret_sentinel = f"private-{source_code}-detail-must-not-appear"
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        raise ProofAgentError(source_code, secret_sentinel, secret_sentinel)
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id=f"formal-candidate-probe-{source_code.casefold()}",
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == expected_code
+    assert getattr(raised.value, "reason_code", None) is None
+    assert secret_sentinel not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "evidence_chunks", "trace_events", "expected_code"),
+    (
+        (
+            ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+            (SimpleNamespace(status="accepted", citation="   "),),
+            (),
+            "formal_candidate_external_smoke_citation_validation_failed",
+        ),
+        (
+            ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            (
+                SimpleNamespace(
+                    status="accepted",
+                    citation="knowledge://insurance/rules/r1#p1",
+                ),
+            ),
+            (
+                {
+                    "event_type": "final_answer_validation_failed",
+                    "payload": {"error_code": "citation_binding_failed"},
+                },
+            ),
+            "formal_candidate_external_smoke_citation_validation_failed",
+        ),
+        (
+            ReceiptOutcome.REFUSED_NO_EVIDENCE,
+            (
+                SimpleNamespace(
+                    status="accepted",
+                    citation="knowledge://insurance/rules/r1#p1",
+                ),
+            ),
+            (
+                {
+                    "event_type": "final_answer_validation_failed",
+                    "payload": {"error_code": "schema_failed"},
+                },
+            ),
+            "formal_candidate_external_smoke_model_failed",
+        ),
+    ),
+)
+def test_formal_candidate_external_smoke_classifies_trace_safe_run_failure(
+    tmp_path: Path,
+    outcome: ReceiptOutcome,
+    evidence_chunks: tuple[SimpleNamespace, ...],
+    trace_events: tuple[dict[str, object], ...],
+    expected_code: str,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"bounded_failure"}\n')
+        receipt.write_bytes(b"# bounded candidate dependency probe\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=outcome,
+                evidence_chunks=evidence_chunks,
+                trace_events=trace_events,
+            ),
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id="formal-candidate-probe-trace-safe-failure",
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == expected_code
+
+
+def test_formal_candidate_external_smoke_classifies_artifact_retention_failure(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+    artifact_store = _ExactArtifactStore(readback_override=b"private-corrupted-bytes")
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"final_output"}\n')
+        receipt.write_bytes(b"# governed candidate dependency probe\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                evidence_chunks=(
+                    SimpleNamespace(
+                        status="accepted",
+                        citation="knowledge://insurance/rules/r1#p1",
+                    ),
+                ),
+                trace_events=(),
+            ),
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=artifact_store,
+        execute=execute,
+        run_id="formal-candidate-probe-artifact-retention-failure",
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == (
+        "formal_candidate_external_smoke_artifact_retention_failed"
+    )
+
+
+def test_formal_candidate_external_smoke_classifies_missing_source_artifact(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        root = dependencies.runs_dir.parent
+        return SimpleNamespace(
+            result=SimpleNamespace(
+                trace_path=root / "missing-trace.jsonl",
+                receipt_path=root / "missing-receipt.md",
+            ),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                evidence_chunks=(
+                    SimpleNamespace(
+                        status="accepted",
+                        citation="knowledge://insurance/rules/r1#p1",
+                    ),
+                ),
+                trace_events=(),
+            ),
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id="formal-candidate-probe-source-artifact-failure",
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert getattr(raised.value, "code", None) == (
+        "formal_candidate_external_smoke_artifact_retention_failed"
+    )
+
+
+def test_formal_candidate_external_smoke_does_not_guess_ambiguous_failure_stage(
+    tmp_path: Path,
+) -> None:
+    candidate = _real_reference_staging().preparation.candidate
+
+    def execute(**kwargs: object) -> SimpleNamespace:
+        dependencies = kwargs["dependencies"]
+        trace = dependencies.runs_dir.parent / "trace.jsonl"
+        receipt = dependencies.runs_dir.parent / "receipt.md"
+        trace.write_bytes(b'{"event_type":"refusal"}\n')
+        receipt.write_bytes(b"# governed candidate dependency probe refusal\n")
+        return SimpleNamespace(
+            result=SimpleNamespace(trace_path=trace, receipt_path=receipt),
+            detail=SimpleNamespace(
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                evidence_chunks=(
+                    SimpleNamespace(
+                        status="accepted",
+                        citation="knowledge://insurance/rules/r1#p1",
+                    ),
+                ),
+                trace_events=(),
+            ),
+        )
+
+    runner = _formal_candidate_external_runner(
+        tmp_path=tmp_path,
+        artifact_store=_ExactArtifactStore(),
+        execute=execute,
+        run_id="formal-candidate-probe-ambiguous-failure",
+    )
+
+    with pytest.raises(ProductionAgentValidationError) as raised:
+        runner.validate_candidate_external_smoke(
+            candidate,
+            question="航班延误保险如何理赔？",
+        )
+
+    assert not isinstance(raised.value, FormalCandidateExternalSmokeDiagnosticError)
+    assert getattr(raised.value, "code", None) is None
+
+
 def test_formal_online_smoke_runner_counts_only_cited_accepted_evidence(
     tmp_path: Path,
 ) -> None:
@@ -1446,6 +2105,138 @@ def test_formal_publication_command_preflight_is_read_only_before_phase_f() -> N
     assert factory.units[0].committed is False
 
 
+def test_formal_publication_command_receipt_read_is_actor_and_path_scoped() -> None:
+    state = _FormalPublicationState(record=AgentDraftRecord(draft=_draft(), revision=11))
+    command_record = FormalProductionAgentPublicationCommandRecord(
+        actor_subject=_release_actor().subject,
+        idempotency_key="formal-publish-status",
+        receipt=FormalProductionAgentPublicationCommandReceipt(
+            command_id="019ba001-1111-7000-8000-000000000810",
+            state=FormalProductionAgentPublicationCommandState.IN_PROGRESS,
+            agent_id=_draft().agent_id,
+            draft_id=_draft().draft_id,
+            draft_revision=11,
+            request_sha256="1" * 64,
+            started_at="2026-08-30T13:10:00Z",
+        ),
+        execution_claim=FormalProductionAgentPublicationExecutionClaim(
+            fencing_token=1,
+            owner_id="formal-publisher-process-1",
+            lease_expires_at="2026-08-30T13:25:00Z",
+        ),
+        candidate_checkpoint=FormalProductionAgentPublicationCandidateCheckpoint(
+            formal_candidate_sha256="2" * 64,
+            knowledge_release_candidate_sha256="3" * 64,
+            checkpointed_at="2026-08-30T13:10:01Z",
+        ),
+    )
+    state.formal_publication_commands[
+        (command_record.actor_subject, command_record.idempotency_key)
+    ] = command_record
+    factory = _FormalPublicationUnitOfWorkFactory(state)
+    service = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=_formal_publisher(
+            factory=factory,
+            authority=_PhaseFAuthority(),
+            registrar=_ReferenceRegistrar(),
+            validator=_OnlineSmokeValidator(),
+        ),
+        binding_profile=_binding_profile(),
+    )
+
+    receipt = service.get_receipt(
+        agent_id=_draft().agent_id,
+        draft_id=_draft().draft_id,
+        command_id=command_record.receipt.command_id,
+        actor=_release_actor(),
+    )
+
+    assert receipt == command_record.receipt
+    for query in (
+        {"actor": _release_actor().model_copy(update={"subject": "another-operator"})},
+        {"agent_id": "another-agent"},
+        {"draft_id": "019ba001-1111-7000-8000-000000000799"},
+        {"command_id": "019ba001-1111-7000-8000-000000000899"},
+        {"command_id": "not-a-command-id"},
+    ):
+        inputs = {
+            "agent_id": _draft().agent_id,
+            "draft_id": _draft().draft_id,
+            "command_id": command_record.receipt.command_id,
+            "actor": _release_actor(),
+            **query,
+        }
+        with pytest.raises(FormalProductionAgentPublicationCommandRejected) as raised:
+            service.get_receipt(**inputs)
+        assert raised.value.code == "formal_publication_command_not_found"
+    assert state.formal_publication_commands == {
+        (command_record.actor_subject, command_record.idempotency_key): command_record
+    }
+    assert all(unit.committed is False for unit in factory.units)
+
+
+def test_formal_publisher_rejects_checkpoint_drift_before_phase_f() -> None:
+    state = _FormalPublicationState(record=AgentDraftRecord(draft=_draft(), revision=11))
+    factory = _FormalPublicationUnitOfWorkFactory(state)
+    authority = _PhaseFAuthority()
+    registrar = _ReferenceRegistrar()
+    provisioner = _QueryGrantProvisioner()
+    validator = _OnlineSmokeValidator()
+    publisher = _formal_publisher(
+        factory=factory,
+        authority=authority,
+        registrar=registrar,
+        provisioner=provisioner,
+        validator=validator,
+    )
+    candidate = publisher.preflight(
+        agent_id=state.record.draft.agent_id,
+        draft_id=state.record.draft.draft_id,
+        draft_revision=state.record.revision,
+        binding_profile=_binding_profile(),
+    )
+    command_record = FormalProductionAgentPublicationCommandRecord(
+        actor_subject=_release_actor().subject,
+        idempotency_key="checkpoint-drift",
+        receipt=FormalProductionAgentPublicationCommandReceipt(
+            command_id="019ba001-1111-7000-8000-000000000809",
+            state=FormalProductionAgentPublicationCommandState.IN_PROGRESS,
+            agent_id=candidate.agent_id,
+            draft_id=candidate.draft_id,
+            draft_revision=candidate.draft_revision,
+            request_sha256="1" * 64,
+            started_at="2026-08-30T12:31:00Z",
+        ),
+        execution_claim=FormalProductionAgentPublicationExecutionClaim(
+            fencing_token=1,
+            owner_id="formal-publisher-process-1",
+            lease_expires_at="2026-08-30T12:46:00Z",
+        ),
+        candidate_checkpoint=FormalProductionAgentPublicationCandidateCheckpoint(
+            formal_candidate_sha256="0" * 64,
+            knowledge_release_candidate_sha256=(candidate.knowledge_release_candidate_sha256),
+            checkpointed_at="2026-08-30T12:31:01Z",
+        ),
+    )
+
+    with pytest.raises(FormalProductionAgentPublicationRejected) as raised:
+        publisher.publish_checkpointed_candidate(
+            candidate=candidate,
+            evidence=_phase_f_evidence(),
+            smoke_question="等待期如何解释？",
+            actor=_release_actor(),
+            command_record=command_record,
+        )
+
+    assert raised.value.code == "formal_publication_candidate_checkpoint_conflict"
+    assert authority.records == []
+    assert registrar.calls == []
+    assert provisioner.calls == []
+    assert validator.calls == []
+    assert state.publications == []
+
+
 def test_formal_publisher_atomically_publishes_exact_qualification_after_cas() -> None:
     active = ActiveAgentVersion(
         agent_id=_draft().agent_id,
@@ -1549,8 +2340,8 @@ def test_formal_publication_command_persists_success_and_exact_replay_once() -> 
 
     assert first.replayed is False
     assert first.receipt.state is FormalProductionAgentPublicationCommandState.SUCCEEDED
-    assert first.receipt.published_version_id == "provisional-version-1"
-    assert first.receipt.validation_run_id == "validation-run-1"
+    assert first.receipt.published_version_id == validator.calls[0].provisional_version_id
+    assert first.receipt.validation_run_id == validator.calls[0].validation_run_id
     assert first.receipt.release_reference_id == "release-reference-05c"
     assert replay.replayed is True
     assert replay.receipt == first.receipt
@@ -1603,9 +2394,13 @@ def test_formal_publication_command_rejects_changed_request_before_external_call
     assert len(validator.calls) == 1
 
 
-def test_formal_publication_command_replays_in_progress_after_process_exit() -> None:
+def test_formal_publication_command_takes_over_after_process_exit_lease_expires() -> None:
     class _ProcessExitPublisher:
-        def publish(self, **kwargs: object) -> AgentPublicationRecord:
+        def preflight(self, **kwargs: object) -> FormalProductionAgentCandidate:
+            del kwargs
+            return _assemble(AgentDraftRecord(draft=_draft(), revision=11))
+
+        def publish_checkpointed_candidate(self, **kwargs: object) -> AgentPublicationRecord:
             del kwargs
             raise SystemExit("simulated process exit")
 
@@ -1622,6 +2417,8 @@ def test_formal_publication_command_replays_in_progress_after_process_exit() -> 
         binding_profile=_binding_profile(),
         identifier_factory=lambda: "019ba001-1111-7000-8000-000000000806",
         clock=lambda: datetime(2026, 8, 30, 13, 6, tzinfo=UTC),
+        execution_owner="formal-publisher-process-1",
+        lease_duration=timedelta(seconds=30),
     )
     with pytest.raises(SystemExit):
         interrupted.publish(
@@ -1632,19 +2429,29 @@ def test_formal_publication_command_replays_in_progress_after_process_exit() -> 
             actor=_release_actor(),
         )
 
+    persisted = state.formal_publication_commands[
+        (_release_actor().subject, "formal-publish-interrupted")
+    ]
+    assert persisted.candidate_checkpoint is not None
+    first_checkpoint = persisted.candidate_checkpoint
+
     registrar = _ReferenceRegistrar()
     validator = _OnlineSmokeValidator()
-    resumed = FormalProductionAgentPublicationCommandService(
-        unit_of_work_factory=factory,
-        publisher=_formal_publisher(
-            factory=factory,
-            authority=_PhaseFAuthority(),
-            registrar=registrar,
-            validator=validator,
-        ),
-        binding_profile=_binding_profile(),
+    publisher = _formal_publisher(
+        factory=factory,
+        authority=_PhaseFAuthority(),
+        registrar=registrar,
+        validator=validator,
     )
-    replay = resumed.publish(
+    before_expiry = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=publisher,
+        binding_profile=_binding_profile(),
+        clock=lambda: datetime(2026, 8, 30, 13, 6, 29, tzinfo=UTC),
+        execution_owner="formal-publisher-process-2",
+        lease_duration=timedelta(seconds=30),
+    )
+    in_progress = before_expiry.publish(
         agent_id=_draft().agent_id,
         draft_id=_draft().draft_id,
         request=request,
@@ -1652,11 +2459,200 @@ def test_formal_publication_command_replays_in_progress_after_process_exit() -> 
         actor=_release_actor(),
     )
 
-    assert replay.replayed is True
-    assert replay.receipt.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS
-    assert state.publications == []
+    assert in_progress.replayed is True
+    assert in_progress.receipt.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS
     assert registrar.calls == []
     assert validator.calls == []
+
+    after_expiry = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=publisher,
+        binding_profile=_binding_profile(),
+        clock=lambda: datetime(2026, 8, 30, 13, 6, 31, tzinfo=UTC),
+        execution_owner="formal-publisher-process-2",
+        lease_duration=timedelta(seconds=30),
+    )
+    recovered = after_expiry.publish(
+        agent_id=_draft().agent_id,
+        draft_id=_draft().draft_id,
+        request=request,
+        idempotency_key="formal-publish-interrupted",
+        actor=_release_actor(),
+    )
+
+    assert recovered.replayed is True
+    assert recovered.receipt.state is FormalProductionAgentPublicationCommandState.SUCCEEDED
+    assert len(state.publications) == 1
+    assert len(registrar.calls) == 1
+    assert len(validator.calls) == 1
+    terminal = state.formal_publication_commands[
+        (_release_actor().subject, "formal-publish-interrupted")
+    ]
+    assert terminal.candidate_checkpoint == first_checkpoint
+
+
+def test_formal_publication_command_takeover_reuses_external_identities() -> None:
+    state = _FormalPublicationState(record=AgentDraftRecord(draft=_draft(), revision=11))
+    factory = _FormalPublicationUnitOfWorkFactory(state)
+    registrar = _ReferenceRegistrar()
+    request = FormalProductionAgentPublicationCommandRequest(
+        draft_revision=11,
+        evidence=_phase_f_evidence(),
+        smoke_question="等待期如何解释？",
+    )
+    first_ids = iter(("phase-first", "version-first", "run-first"))
+    first_authority = _PhaseFAuthority()
+    interrupted_validator = _OnlineSmokeValidator(failure=SystemExit("process exit"))
+    interrupted = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=_formal_publisher(
+            factory=factory,
+            authority=_PhaseFAuthority(),
+            registrar=registrar,
+            validator=interrupted_validator,
+            phase_f_preparer=FormalProductionAgentPhaseFPreparer(
+                phase_f_authority=first_authority,
+                identifier_factory=lambda: next(first_ids),
+                clock=lambda: datetime(2026, 8, 30, 13, 7, tzinfo=UTC),
+            ),
+        ),
+        binding_profile=_binding_profile(),
+        identifier_factory=lambda: "019ba001-1111-7000-8000-000000000807",
+        clock=lambda: datetime(2026, 8, 30, 13, 7, tzinfo=UTC),
+        execution_owner="formal-publisher-process-1",
+        lease_duration=timedelta(seconds=30),
+    )
+
+    with pytest.raises(SystemExit):
+        interrupted.publish(
+            agent_id=_draft().agent_id,
+            draft_id=_draft().draft_id,
+            request=request,
+            idempotency_key="formal-publish-stable-identities",
+            actor=_release_actor(),
+        )
+
+    persisted = state.formal_publication_commands[
+        (_release_actor().subject, "formal-publish-stable-identities")
+    ]
+    assert persisted.candidate_checkpoint is not None
+    first_checkpoint = persisted.candidate_checkpoint
+
+    second_ids = iter(("phase-second", "version-second", "run-second"))
+    second_authority = _PhaseFAuthority()
+    resumed_validator = _OnlineSmokeValidator()
+    resumed = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=_formal_publisher(
+            factory=factory,
+            authority=_PhaseFAuthority(),
+            registrar=registrar,
+            validator=resumed_validator,
+            phase_f_preparer=FormalProductionAgentPhaseFPreparer(
+                phase_f_authority=second_authority,
+                identifier_factory=lambda: next(second_ids),
+                clock=lambda: datetime(2026, 8, 30, 13, 7, 31, tzinfo=UTC),
+            ),
+        ),
+        binding_profile=_binding_profile(),
+        clock=lambda: datetime(2026, 8, 30, 13, 7, 31, tzinfo=UTC),
+        execution_owner="formal-publisher-process-2",
+        lease_duration=timedelta(seconds=30),
+    )
+
+    recovered = resumed.publish(
+        agent_id=_draft().agent_id,
+        draft_id=_draft().draft_id,
+        request=request,
+        idempotency_key="formal-publish-stable-identities",
+        actor=_release_actor(),
+    )
+
+    assert recovered.receipt.state is FormalProductionAgentPublicationCommandState.SUCCEEDED
+    assert len(registrar.calls) == 2
+    assert registrar.calls[0] == registrar.calls[1]
+    assert interrupted_validator.calls[0].provisional_version_id == (
+        resumed_validator.calls[0].provisional_version_id
+    )
+    assert interrupted_validator.calls[0].validation_run_id == (
+        resumed_validator.calls[0].validation_run_id
+    )
+    assert first_authority.records == second_authority.records
+    terminal = state.formal_publication_commands[
+        (_release_actor().subject, "formal-publish-stable-identities")
+    ]
+    assert terminal.candidate_checkpoint == first_checkpoint
+
+
+def test_formal_publication_command_takeover_rejects_candidate_digest_drift_before_phase_f() -> (
+    None
+):
+    state = _FormalPublicationState(record=AgentDraftRecord(draft=_draft(), revision=11))
+    factory = _FormalPublicationUnitOfWorkFactory(state)
+    registrar = _ReferenceRegistrar()
+    request = FormalProductionAgentPublicationCommandRequest(
+        draft_revision=11,
+        evidence=_phase_f_evidence(),
+        smoke_question="等待期如何解释？",
+    )
+    first_authority = _PhaseFAuthority()
+    interrupted = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=_formal_publisher(
+            factory=factory,
+            authority=first_authority,
+            registrar=registrar,
+            validator=_OnlineSmokeValidator(failure=SystemExit("process exit")),
+            catalog=_catalog(catalog_revision="kss-catalog-before-exit"),
+        ),
+        binding_profile=_binding_profile(),
+        identifier_factory=lambda: "019ba001-1111-7000-8000-000000000808",
+        clock=lambda: datetime(2026, 8, 30, 13, 8, tzinfo=UTC),
+        execution_owner="formal-publisher-process-1",
+        lease_duration=timedelta(seconds=30),
+    )
+
+    with pytest.raises(SystemExit):
+        interrupted.publish(
+            agent_id=_draft().agent_id,
+            draft_id=_draft().draft_id,
+            request=request,
+            idempotency_key="formal-publish-candidate-checkpoint",
+            actor=_release_actor(),
+        )
+
+    resumed_authority = _PhaseFAuthority()
+    resumed = FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=factory,
+        publisher=_formal_publisher(
+            factory=factory,
+            authority=resumed_authority,
+            registrar=registrar,
+            validator=_OnlineSmokeValidator(),
+            catalog=_catalog(catalog_revision="kss-catalog-after-exit"),
+        ),
+        binding_profile=_binding_profile(),
+        clock=lambda: datetime(2026, 8, 30, 13, 8, 31, tzinfo=UTC),
+        execution_owner="formal-publisher-process-2",
+        lease_duration=timedelta(seconds=30),
+    )
+
+    recovered = resumed.publish(
+        agent_id=_draft().agent_id,
+        draft_id=_draft().draft_id,
+        request=request,
+        idempotency_key="formal-publish-candidate-checkpoint",
+        actor=_release_actor(),
+    )
+
+    assert recovered.replayed is True
+    assert recovered.receipt.state is FormalProductionAgentPublicationCommandState.FAILED
+    assert recovered.receipt.failure_code == "formal_publication_candidate_checkpoint_conflict"
+    assert len(first_authority.records) == 1
+    assert resumed_authority.records == []
+    assert len(registrar.calls) == 1
+    assert state.publications == []
+    assert state.active is None
 
 
 def test_formal_publication_command_persists_and_replays_stable_failure() -> None:
@@ -2234,6 +3230,29 @@ def _formal_online_runner(
     )
 
 
+def _formal_candidate_external_runner(
+    *,
+    tmp_path: Path,
+    artifact_store: object,
+    execute: Callable[..., object],
+    run_id: str,
+) -> FormalProductionAgentCandidateExternalSmokeRunner:
+    return FormalProductionAgentCandidateExternalSmokeRunner(
+        configuration_store=object(),
+        knowledge_candidate_runtime=object(),
+        guarded_http_client=object(),
+        secret_provider=object(),
+        model_credential_resolver=object(),
+        artifact_store=artifact_store,
+        work_root=tmp_path / "candidate-probe-work",
+        institution_authorization=InstitutionAuthorizationContext(
+            institutions=("branch-shanghai",)
+        ),
+        identifier_factory=lambda: run_id,
+        execute=execute,
+    )
+
+
 def _online_smoke_request(
     staging: FormalProductionAgentQueryGrantStaging,
 ) -> FormalProductionAgentOnlineSmokeRequest:
@@ -2271,11 +3290,13 @@ def _formal_publisher(
     registrar: _ReferenceRegistrar,
     provisioner: _QueryGrantProvisioner | None = None,
     validator: _OnlineSmokeValidator,
+    phase_f_preparer: FormalProductionAgentPhaseFPreparer | None = None,
+    catalog: KnowledgeServiceManagementWorkspace | None = None,
 ) -> FormalProductionAgentPublisher:
     candidate_assembler = FormalProductionAgentCandidateAssembler(
         unit_of_work_factory=factory,
         knowledge_release_catalog=_Catalog(
-            _catalog(),
+            catalog or _catalog(),
             before_call=lambda: _require_no_open_transaction(factory),
         ),
         publication_configuration_projector=ProductionAgentPublicationConfigurationProjector(
@@ -2285,7 +3306,7 @@ def _formal_publisher(
     return FormalProductionAgentPublisher(
         unit_of_work_factory=factory,
         candidate_assembler=candidate_assembler,
-        phase_f_preparer=_phase_f_preparer(authority),
+        phase_f_preparer=phase_f_preparer or _phase_f_preparer(authority),
         reference_stager=FormalProductionAgentReferenceStager(registrar=registrar),
         query_grant_stager=FormalProductionAgentQueryGrantStager(
             provisioner=provisioner or _QueryGrantProvisioner(),

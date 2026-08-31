@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,7 @@ from proof_agent.control.formal_production_agent_publication_command import (
     FormalProductionAgentPublicationCommandService,
 )
 from proof_agent.delivery.production_agent_validation import (
+    FormalProductionAgentCandidateExternalSmokeRunner,
     FormalProductionAgentOnlineSmokeRunner,
 )
 
@@ -163,6 +165,7 @@ def test_production_api_composes_exact_formal_command_with_dedicated_reference_c
                 '{"roles":["release-validator"]}'
             ),
             "PROOF_AGENT_RELEASE_WORK_DIR": str(tmp_path / "formal-publication"),
+            "PROOF_AGENT_FORMAL_PUBLICATION_COMMAND_LEASE_SECONDS": "600",
         },
         unit_of_work_factory=lambda: None,  # type: ignore[arg-type,return-value]
         knowledge_service_management=object(),
@@ -175,6 +178,7 @@ def test_production_api_composes_exact_formal_command_with_dedicated_reference_c
     )
 
     assert isinstance(command, FormalProductionAgentPublicationCommandService)
+    assert command._lease_duration == timedelta(seconds=600)
     assert command._binding_profile.binding_id == "insurance-knowledge"
     assert command._binding_profile.client_credential_ref.handle_id == ("knowledge/runtime-client")
     assert command._binding_profile.client_credential_ref.version_id == ("runtime-client-v7")
@@ -208,6 +212,34 @@ def test_production_api_composes_exact_formal_command_with_dedicated_reference_c
             purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
         ),
     ]
+
+
+def test_production_composes_candidate_external_smoke_from_the_same_runtime(
+    tmp_path,
+) -> None:
+    runtime_configuration = object()
+    knowledge_runtime = object()
+    artifact_store = object()
+
+    runner = production_roles._compose_formal_candidate_external_smoke_runner(
+        values={
+            "PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON": (
+                '{"roles":["release-validator"]}'
+            ),
+            "PROOF_AGENT_RELEASE_WORK_DIR": str(tmp_path / "formal-publication"),
+        },
+        runtime_configuration=runtime_configuration,
+        knowledge_candidate_runtime=knowledge_runtime,
+        guarded_http_client=object(),  # type: ignore[arg-type]
+        secret_provider=object(),  # type: ignore[arg-type]
+        model_credential_resolver=object(),
+        artifact_store=artifact_store,
+    )
+
+    assert isinstance(runner, FormalProductionAgentCandidateExternalSmokeRunner)
+    assert runner._runtime._configuration_store is runtime_configuration
+    assert runner._runtime._knowledge_candidate_runtime is knowledge_runtime
+    assert runner._runtime._artifact_store is artifact_store
 
 
 @pytest.mark.parametrize(
@@ -298,6 +330,7 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
     )
     captured: dict[str, object] = {}
     formal_publication_command = object()
+    formal_candidate_external_smoke_runner = object()
 
     def create_app_stub(**kwargs):
         captured.update(kwargs)
@@ -361,6 +394,11 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         "_compose_formal_production_agent_publication_command",
         lambda **kwargs: formal_publication_command,
     )
+    monkeypatch.setattr(
+        production_roles,
+        "_compose_formal_candidate_external_smoke_runner",
+        lambda **kwargs: formal_candidate_external_smoke_runner,
+    )
     monkeypatch.setattr(production_roles, "create_app", create_app_stub)
 
     application = create_production_api_application(
@@ -407,6 +445,10 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         production_roles.ProductionAgentPublicationConfigurationProjector,
     )
     assert captured["formal_production_agent_publication_command"] is formal_publication_command
+    assert (
+        application.state.formal_production_agent_candidate_external_smoke_runner
+        is formal_candidate_external_smoke_runner
+    )
 
 
 def test_embedded_reference_profile_source_selection_is_removed() -> None:

@@ -37,6 +37,7 @@ def test_filesystem_store_puts_and_reads_one_verified_exact_version(tmp_path: Pa
     assert store.head_exact(ref) == ref
     with store.open_exact(ref) as body:
         assert body.read() == b"trace"
+    assert store.exact_uri(ref) == (tmp_path / ref.object_key).resolve().as_uri()
     assert list(
         store.iter_versions_before(prefix="objects/", before=NOW + timedelta(seconds=1))
     ) == [ref]

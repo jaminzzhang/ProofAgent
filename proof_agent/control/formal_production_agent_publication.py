@@ -18,6 +18,7 @@ from proof_agent.contracts import (
     ConfigurationOperation,
     ConfigurationOperationAudit,
     FormalProductionAgentCandidate,
+    FormalProductionAgentPublicationCommandState,
     FormalProductionAgentPublicationEvidence,
     KnowledgeReleaseEvidenceSet,
     ProductionKssBindingProfile,
@@ -43,6 +44,7 @@ from proof_agent.control.formal_production_agent_online_smoke import (
 )
 from proof_agent.control.formal_production_agent_phase_f import (
     FormalProductionAgentPhaseFPreparer,
+    formal_production_agent_phase_f_identity_for_command,
 )
 from proof_agent.control.formal_production_agent_query_grant_staging import (
     FormalProductionAgentQueryGrantStager,
@@ -119,12 +121,84 @@ class FormalProductionAgentPublisher:
             draft_revision=draft_revision,
             binding_profile=binding_profile,
         )
+        if command_record is not None:
+            return self.publish_checkpointed_candidate(
+                candidate=candidate,
+                evidence=evidence,
+                smoke_question=smoke_question,
+                actor=actor,
+                command_record=command_record,
+            )
+        return self._publish_candidate(
+            candidate=candidate,
+            evidence=evidence,
+            smoke_question=smoke_question,
+            actor=actor,
+            command_record=None,
+        )
+
+    def publish_checkpointed_candidate(
+        self,
+        *,
+        candidate: FormalProductionAgentCandidate,
+        evidence: KnowledgeReleaseEvidenceSet,
+        smoke_question: str,
+        actor: AuditActorFacts,
+        command_record: FormalProductionAgentPublicationCommandRecord,
+    ) -> AgentPublicationRecord:
+        """Publish only when the current command froze the exact candidate identity."""
+
+        receipt = command_record.receipt
+        checkpoint = command_record.candidate_checkpoint
+        if (
+            receipt.state is not FormalProductionAgentPublicationCommandState.IN_PROGRESS
+            or command_record.execution_claim is None
+            or command_record.actor_subject != actor.subject
+            or receipt.agent_id != candidate.agent_id
+            or receipt.draft_id != candidate.draft_id
+            or receipt.draft_revision != candidate.draft_revision
+            or checkpoint is None
+            or checkpoint.formal_candidate_sha256 != candidate.formal_candidate_sha256
+            or checkpoint.knowledge_release_candidate_sha256
+            != candidate.knowledge_release_candidate_sha256
+        ):
+            raise FormalProductionAgentPublicationRejected(
+                code="formal_publication_candidate_checkpoint_conflict",
+                detail="The durable Formal Candidate checkpoint does not match.",
+            )
+        return self._publish_candidate(
+            candidate=candidate,
+            evidence=evidence,
+            smoke_question=smoke_question,
+            actor=actor,
+            command_record=command_record,
+        )
+
+    def _publish_candidate(
+        self,
+        *,
+        candidate: FormalProductionAgentCandidate,
+        evidence: KnowledgeReleaseEvidenceSet,
+        smoke_question: str,
+        actor: AuditActorFacts,
+        command_record: FormalProductionAgentPublicationCommandRecord | None,
+    ) -> AgentPublicationRecord:
+        """Publish one internally verified exact candidate through governed stages."""
+
         preparation = self._phase_f_preparer.prepare(
             candidate=candidate,
             evidence=evidence,
             actor=actor,
+            identity=(
+                None
+                if command_record is None
+                else formal_production_agent_phase_f_identity_for_command(
+                    command_record.receipt.command_id
+                )
+            ),
+            prepared_at=(None if command_record is None else command_record.receipt.started_at),
         )
-        active_expectation = self._capture_active_expectation(agent_id=agent_id)
+        active_expectation = self._capture_active_expectation(agent_id=candidate.agent_id)
         reference_staging = self._reference_stager.stage(preparation=preparation)
         query_grant_staging = self._query_grant_stager.stage(
             reference_staging=reference_staging,

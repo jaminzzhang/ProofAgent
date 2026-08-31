@@ -286,11 +286,14 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     runtime_bootstrap = services["kss-runtime-client-bootstrap"]
 
     locators = json.loads(api_environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"])
-    assert locators["knowledge/source-service/client"] == {
+    runtime_handle = api_environment["PROOF_AGENT_KSS_CLIENT_SECRET_HANDLE"]
+    assert runtime_handle == "knowledge/source-service/runtime-client-v2"
+    assert locators[runtime_handle] == {
         "mount": "secret",
-        "path": "proof-agent/knowledge-source-service-client",
+        "path": "proof-agent/knowledge-source-service-runtime-client-v2",
         "field": "value",
     }
+    assert "knowledge/source-service/client" not in locators
     assert locators["knowledge/admission-scorer"] == {
         "mount": "secret",
         "path": "proof-agent/knowledge-admission-scorer",
@@ -300,6 +303,7 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     assert api_environment["PROOF_AGENT_KSS_ADMISSION_SCORER_REVISION"] == (
         "insurance-evidence-admission.local-compatibility.v1"
     )
+    assert api_environment["PROOF_AGENT_FORMAL_PUBLICATION_COMMAND_LEASE_SECONDS"] == "900"
     assert {
         key: api_environment[key]
         for key in (
@@ -316,13 +320,15 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
         "PROOF_AGENT_KSS_QUERY_MAX_MODEL_TOKENS": "1000",
         "PROOF_AGENT_KSS_QUERY_MAX_DURATION_MS": "10000",
     }
-    assert vault_environment["KSS_AGENT_CLIENT_BEARER_TOKEN"] == (
-        "${KSS_AGENT_CLIENT_BEARER_TOKEN}"
+    assert vault_environment["KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN"] == (
+        "${KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN}"
     )
+    assert "KSS_AGENT_CLIENT_BEARER_TOKEN" not in vault_environment
     assert vault_environment["KSS_ADMISSION_SCORER_BEARER_TOKEN"] == (
         "${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
     )
-    assert "proof-agent/knowledge-source-service-client" in vault_command
+    assert "proof-agent/knowledge-source-service-runtime-client-v2" in vault_command
+    assert "proof-agent/knowledge-source-service-client" not in vault_command
     assert "proof-agent/knowledge-admission-scorer" in vault_command
     assert model_plane_environment["KSS_ADMISSION_SCORER_BEARER_TOKEN"] == (
         "${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
@@ -330,7 +336,7 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     policy = json.loads(kss_api_environment["KSS_QUERY_GRANT_POLICY_JSON"])
     assert policy["client_id"] == runtime_bootstrap["environment"]["KSS_RUNTIME_CLIENT_ID"]
     assert api_environment["PROOF_AGENT_KSS_RUNTIME_CLIENT_ID"] == policy["client_id"]
-    assert policy["client_id"] == "proof-agent-production-local"
+    assert policy["client_id"] == "proof-agent-production-local-v2"
     assert policy["allowed_strategies"] == ["single_pass", "agentic"]
     assert policy["execution_budget"] == {
         "max_rounds": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_ROUNDS"]),
@@ -342,7 +348,7 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     assert policy["effective_access_scope_digest"].startswith("sha256:")
     assert len(policy["effective_access_scope_digest"]) == 71
     assert runtime_bootstrap["environment"]["KSS_RUNTIME_CLIENT_BEARER_TOKEN"] == (
-        "${KSS_AGENT_CLIENT_BEARER_TOKEN}"
+        "${KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN}"
     )
     assert runtime_bootstrap["command"] == [
         "-m",
@@ -369,6 +375,8 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     )
 
     prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(encoding="utf-8")
+    assert "ensure_random_secret KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN" in prepare
+    assert "ensure_random_secret KSS_AGENT_CLIENT_BEARER_TOKEN" not in prepare
     assert "PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
     assert "api.deepseek.com" in prepare
     assert "refresh_public_setting PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare

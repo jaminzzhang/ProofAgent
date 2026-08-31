@@ -405,6 +405,12 @@ class _RecordingFormalPublicationCommand:
             raise self.error
         return self.result
 
+    def get_receipt(self, **kwargs: Any) -> FormalProductionAgentPublicationCommandReceipt:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.result.receipt
+
 
 def _formal_command_result(
     state: FormalProductionAgentPublicationCommandState,
@@ -686,6 +692,77 @@ def test_formal_publication_command_returns_trace_safe_success_and_replay_status
     )
     assert replay.status_code == 200
     assert replay.json()["replayed"] is True
+
+
+def test_formal_publication_command_get_returns_trace_safe_receipt_for_owner() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(FormalProductionAgentPublicationCommandState.IN_PROGRESS)
+    )
+    application.state.formal_production_agent_publication_command = command
+    path = (
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications/"
+        "019ba001-1111-7000-8000-000000000805"
+    )
+
+    response = TestClient(application).get(path)
+
+    assert response.status_code == 200
+    assert response.json() == command.result.receipt.model_dump(mode="json")
+    serialized = response.text
+    assert "replayed" not in serialized
+    assert "formal-publish-11" not in serialized
+    assert "等待期如何解释" not in serialized
+    assert "candidate_checkpoint" not in serialized
+    assert "lease_owner" not in serialized
+    assert command.calls == [
+        {
+            "agent_id": "agent_management_insurance_specialist",
+            "draft_id": "019ba001-1111-7000-8000-000000000701",
+            "command_id": "019ba001-1111-7000-8000-000000000805",
+            "actor": AuditActorFacts(
+                subject="local-user",
+                identity_provider="enterprise-oidc",
+                session_id="development-session",
+                permissions=tuple(sorted(permission.value for permission in _all_permissions())),
+            ),
+        }
+    ]
+
+
+def test_formal_publication_command_get_requires_publish_and_hides_missing_resource() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(FormalProductionAgentPublicationCommandState.IN_PROGRESS)
+    )
+    application.state.formal_production_agent_publication_command = command
+    path = (
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications/"
+        "019ba001-1111-7000-8000-000000000805"
+    )
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("agent.view")})
+    )
+
+    denied = TestClient(application).get(path)
+
+    assert denied.status_code == 403
+    assert command.calls == []
+
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset(_all_permissions())
+    )
+    command.error = FormalProductionAgentPublicationCommandRejected(
+        code="formal_publication_command_not_found",
+        detail="must not reveal whether another actor owns the command",
+    )
+    missing = TestClient(application).get(path)
+
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "formal_publication_command_not_found"}
+    assert "another actor" not in missing.text
 
 
 def test_formal_publication_command_exposes_in_progress_and_stable_failure() -> None:

@@ -17,6 +17,10 @@ from proof_agent.contracts.knowledge_candidates import (
     NonBlankText,
 )
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionError,
+    KnowledgeCandidateAdmissionFailureReason,
+)
 from proof_agent.errors import ProofAgentError
 
 
@@ -183,9 +187,9 @@ def _nonblank(value: str, field: str) -> str:
     return normalized
 
 
-def _scorer_error(message: str) -> ProofAgentError:
-    return ProofAgentError(
-        "PA_KNOWLEDGE_001",
+def _scorer_error(message: str) -> KnowledgeCandidateAdmissionError:
+    return KnowledgeCandidateAdmissionError(
+        KnowledgeCandidateAdmissionFailureReason.SCORER_UNAVAILABLE,
         message,
         "Restore the approved Evidence Admission scorer revision; no KSS rank was used as a fallback.",
     )

@@ -23,6 +23,8 @@ from proof_agent.contracts.ports.knowledge_source_operations import (
     KnowledgeSourceOperationRepository,
 )
 from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionError,
+    KnowledgeCandidateAdmissionFailureReason,
     KnowledgeCandidateAdmissionScorer,
     KnowledgeCandidateService,
 )
@@ -45,6 +47,8 @@ __all__ = [
     "ConfigurationUnitOfWork",
     "FormalProductionAgentPublicationCommandRepository",
     "GuardedHttpClient",
+    "KnowledgeCandidateAdmissionError",
+    "KnowledgeCandidateAdmissionFailureReason",
     "KnowledgeCandidateAdmissionScorer",
     "KnowledgeCandidateService",
     "KnowledgeQueryGrantProvisioner",

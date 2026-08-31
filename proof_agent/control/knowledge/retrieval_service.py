@@ -33,6 +33,8 @@ from proof_agent.contracts.knowledge_candidates import (
     KnowledgeTextLinesCitation,
 )
 from proof_agent.contracts.ports.knowledge_candidates import (
+    KnowledgeCandidateAdmissionError,
+    KnowledgeCandidateAdmissionFailureReason,
     KnowledgeCandidateAdmissionScorer,
     KnowledgeCandidateService,
 )
@@ -208,7 +210,11 @@ class KnowledgeRetrievalService:
             no_evidence_reason_code=(
                 "knowledge_candidate_admission_pending"
                 if evidence and scorer is None
-                else "zero_knowledge_candidates"
+                else (
+                    "knowledge_candidate_threshold_not_met"
+                    if evidence
+                    else "zero_knowledge_candidates"
+                )
             ),
         )
         return KnowledgeRetrievalResult(
@@ -286,8 +292,8 @@ def _validated_candidate_admission_scores(
     normalized: dict[str, float] = {}
     for candidate_evidence_id, score in scores.items():
         if not isfinite(score) or not 0.0 <= score <= 1.0:
-            raise ProofAgentError(
-                "PA_KNOWLEDGE_001",
+            raise KnowledgeCandidateAdmissionError(
+                KnowledgeCandidateAdmissionFailureReason.SCORE_INVALID,
                 "Knowledge Candidate admission scorer returned a value outside the approved normalized range of 0 through 1.",
                 "Use an approved calibrated scorer that returns finite normalized admission values.",
             )

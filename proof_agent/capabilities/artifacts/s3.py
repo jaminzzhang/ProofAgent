@@ -160,6 +160,12 @@ class S3ArtifactStore:
             raise ArtifactStoreError("exact S3 artifact digest does not match")
         return BytesIO(content)
 
+    def exact_uri(self, ref: ArtifactObjectVersion) -> str:
+        """Return the credential-free URI for this configured exact object namespace."""
+
+        self._require_authority(ref)
+        return f"s3://{self._bucket}/{self._physical_key(ref.object_key)}"
+
     def delete_exact(self, ref: ArtifactObjectVersion) -> None:
         self.head_exact(ref)
         try:

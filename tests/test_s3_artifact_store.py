@@ -93,7 +93,12 @@ def put_request(content: bytes = b"receipt") -> ArtifactPutRequest:
 
 def test_s3_store_puts_verifies_and_reads_exact_version() -> None:
     client = VersionedS3()
-    store = S3ArtifactStore(client=client, bucket="proof-agent", clock=lambda: NOW)
+    store = S3ArtifactStore(
+        client=client,
+        bucket="proof-agent",
+        key_prefix="runs/",
+        clock=lambda: NOW,
+    )
 
     ref = store.put_immutable(put_request(), BytesIO(b"receipt"))
 
@@ -101,6 +106,7 @@ def test_s3_store_puts_verifies_and_reads_exact_version() -> None:
     assert store.head_exact(ref) == ref
     with store.open_exact(ref) as body:
         assert body.read() == b"receipt"
+    assert store.exact_uri(ref) == f"s3://proof-agent/runs/{ref.object_key}"
     assert client.puts[0]["IfNoneMatch"] == "*"
     assert list(
         store.iter_versions_before(prefix="objects/", before=NOW + timedelta(seconds=1))

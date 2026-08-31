@@ -98,6 +98,17 @@ def test_upgrade_empty_database_to_head_and_repeat(postgres_dsn: str) -> None:
             "current",
             "approved_metadata_revision_id",
         } <= review_columns
+        formal_command_columns = {
+            column["name"] for column in inspector.get_columns("formal_agent_publication_commands")
+        }
+        assert {
+            "execution_fencing_token",
+            "lease_owner",
+            "lease_expires_at",
+            "formal_candidate_sha256",
+            "knowledge_release_candidate_sha256",
+            "candidate_checkpointed_at",
+        } <= formal_command_columns
     finally:
         engine.dispose()
 

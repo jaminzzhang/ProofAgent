@@ -38,6 +38,8 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0018_publication_preparation",
         "0019_ingestion_operation_link",
         "0022_formal_publish_cmd",
+        "0023_formal_publish_claim",
+        "0024_formal_candidate_checkpoint",
     }
 )
 METADATA_V2_DIRECT_CUTOVER_REVISIONS: Final = frozenset(
@@ -195,15 +197,16 @@ def _require_expand_only_path(current: str | None, target: str) -> None:
         revisions = tuple(scripts.iterate_revisions(target, current))
     except CommandError as exc:
         raise UnsafeMigrationError("migration path is not known to this image") from exc
-    unsafe = tuple(sorted(
-        revision.revision
-        for revision in revisions
-        if revision.revision not in EXPAND_ONLY_REVISIONS
-    ))
+    unsafe = tuple(
+        sorted(
+            revision.revision
+            for revision in revisions
+            if revision.revision not in EXPAND_ONLY_REVISIONS
+        )
+    )
     if unsafe:
         raise UnsafeMigrationError(
-            "migration path contains a revision not declared expand-only: "
-            + ", ".join(unsafe)
+            "migration path contains a revision not declared expand-only: " + ", ".join(unsafe)
         )
 
 
@@ -225,8 +228,7 @@ def _require_metadata_v2_direct_cutover_path(
     unsafe = tuple(sorted(name for name in revision_names if name not in admitted))
     if unsafe:
         raise UnsafeMigrationError(
-            "Metadata V2 direct-cutover path contains an unapproved revision: "
-            + ", ".join(unsafe)
+            "Metadata V2 direct-cutover path contains an unapproved revision: " + ", ".join(unsafe)
         )
 
 

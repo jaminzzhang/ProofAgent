@@ -291,7 +291,9 @@ validation purpose 运行并 exact-read-back 保留 Trace/Receipt。TDD-05H/05I 
 verifier。三个历史 queryable Release 都已有不同历史 Grant，所以首次 live verifier 在 Query 前
 冲突失败关闭。操作者随后在 verifier 外部通过既有 KSS 管理发布 API 准备一个新的 exact Release；
 两次 verifier 运行精确重放同一 Grant，并完成两个独立的 bounded Query。该结果仍无真实外部
-KSS/model 上游联机证据。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销
+KSS/model 上游联机证据。TDD-05R 随后按 ADR-0222 将 active production-local runtime authority
+切到 `proof-agent-production-local-v2`，不读取或改写旧 Grant，并为当前 Draft 所选 exact Release
+创建和重放新的 v2 Grant。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销
 只提供 KSS 本地 query denial 和受影响数量；删除资格 GET 只是只读 blocker projection。当前尚未
 实现真实上游 smoke、真实注销 verifier、后台认证对账、deregistration/lifecycle 网络命令、
 生产 client Secret/egress 接线、生产 artifact-retention adapter、物理删除、affected-reference

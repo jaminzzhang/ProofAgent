@@ -197,6 +197,32 @@ def publish_formal_production_agent(
     return payload
 
 
+@agent_router.get("/{agent_id}/drafts/{draft_id}/formal-publications/{command_id}")
+def get_formal_production_agent_publication_command(
+    agent_id: str,
+    draft_id: str,
+    command_id: str,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Return one actor-owned trace-safe formal-publication receipt."""
+
+    require_operator_permission(identity, Permission.AGENT_PUBLISH)
+    try:
+        receipt = _formal_publication_command(request).get_receipt(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            command_id=command_id,
+            actor=_audit_actor(request, identity),
+        )
+    except FormalProductionAgentPublicationCommandRejected as exc:
+        raise HTTPException(
+            status_code=_formal_command_rejection_status(exc.code),
+            detail=exc.code,
+        ) from exc
+    return cast(dict[str, Any], receipt.model_dump(mode="json"))
+
+
 @workflow_template_router.get("")
 def list_production_workflow_templates(
     identity: OperatorIdentityContext = Depends(get_operator_identity),
@@ -778,6 +804,8 @@ def _formal_publication_command(request: Request) -> Any:
 
 
 def _formal_command_rejection_status(code: str) -> int:
+    if code == "formal_publication_command_not_found":
+        return 404
     if code == "formal_publication_idempotency_conflict":
         return 409
     if code == "formal_publication_idempotency_key_invalid":

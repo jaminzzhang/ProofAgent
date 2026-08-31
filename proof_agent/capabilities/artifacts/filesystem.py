@@ -105,6 +105,12 @@ class FilesystemArtifactStore:
             raise ArtifactStoreError("exact artifact digest does not match")
         return BytesIO(content)
 
+    def exact_uri(self, ref: ArtifactObjectVersion) -> str:
+        """Return the local exact object URI after rechecking its authority."""
+
+        self.head_exact(ref)
+        return self._safe_path(ref.object_key).as_uri()
+
     def delete_exact(self, ref: ArtifactObjectVersion) -> None:
         self.head_exact(ref)
         self._safe_path(ref.object_key).unlink()

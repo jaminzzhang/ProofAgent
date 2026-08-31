@@ -106,3 +106,13 @@ path; the old Reference-only smoke input is removed. A Grant remains durable whe
 later smoke or publication step fails because no selective revoke authority exists.
 This is an explicit residual authorization risk, not an activation result or
 Production GO.
+
+[KNOWN | HIGH] ADR-0223 adds a fenced, database-time execution claim to the durable
+formal command. An expired exact replay may take over with a higher fencing token;
+Phase F/Version/Run identities and the Phase F timestamp remain stable for the command.
+Only the current claim may complete the final publication transaction. This does not
+authorize publication or add a background recovery process.
+
+[KNOWN | HIGH] ADR-0224 now freezes both exact Candidate digests before Phase F and
+requires any takeover to reassemble and match them. The checkpoint remains internal
+command recovery authority and does not change this ADR's publication approval boundary.

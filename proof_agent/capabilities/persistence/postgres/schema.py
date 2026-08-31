@@ -56,6 +56,12 @@ formal_agent_publication_commands = sa.Table(
     sa.Column("started_at", UTC_TIMESTAMP, nullable=False),
     sa.Column("completed_at", UTC_TIMESTAMP),
     sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("execution_fencing_token", sa.BigInteger()),
+    sa.Column("lease_owner", sa.Text()),
+    sa.Column("lease_expires_at", UTC_TIMESTAMP),
+    sa.Column("formal_candidate_sha256", sa.String(64)),
+    sa.Column("knowledge_release_candidate_sha256", sa.String(64)),
+    sa.Column("candidate_checkpointed_at", UTC_TIMESTAMP),
     sa.UniqueConstraint(
         "actor_subject",
         "idempotency_key",
@@ -68,6 +74,23 @@ formal_agent_publication_commands = sa.Table(
     sa.CheckConstraint(
         "draft_revision > 0",
         name="formal_agent_publication_commands_revision",
+    ),
+    sa.CheckConstraint(
+        "(execution_fencing_token IS NULL AND lease_owner IS NULL AND "
+        "lease_expires_at IS NULL) OR "
+        "(execution_fencing_token > 0 AND "
+        "char_length(lease_owner) BETWEEN 1 AND 128 AND "
+        "lease_expires_at IS NOT NULL)",
+        name="formal_agent_publication_commands_execution_claim",
+    ),
+    sa.CheckConstraint(
+        "(formal_candidate_sha256 IS NULL AND "
+        "knowledge_release_candidate_sha256 IS NULL AND "
+        "candidate_checkpointed_at IS NULL) OR "
+        "(formal_candidate_sha256 ~ '^[0-9a-f]{64}$' AND "
+        "knowledge_release_candidate_sha256 ~ '^[0-9a-f]{64}$' AND "
+        "candidate_checkpointed_at IS NOT NULL)",
+        name="formal_agent_publication_commands_candidate_checkpoint",
     ),
 )
 

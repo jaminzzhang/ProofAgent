@@ -338,6 +338,41 @@ class FormalProductionAgentReferenceStaging(StrictFrozenModel):
         return self
 
 
+class FormalProductionAgentCandidateExternalSmokeResult(StrictFrozenModel):
+    """Cited external-dependency evidence for one exact unpublished Candidate."""
+
+    schema_version: Literal["formal-production-agent-candidate-external-smoke.v1"] = (
+        "formal-production-agent-candidate-external-smoke.v1"
+    )
+    agent_id: str = Field(strict=True, min_length=1, max_length=128)
+    draft_id: str = Field(strict=True, min_length=1, max_length=128)
+    draft_revision: int = Field(strict=True, ge=1)
+    formal_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_release_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_base_release_id: KnowledgeServiceIdentifier
+    validation_run_id: KnowledgeServiceIdentifier
+    model_connection_ids: tuple[KnowledgeServiceIdentifier, ...] = Field(
+        min_length=1,
+        max_length=8,
+    )
+    outcome: ReceiptOutcome
+    accepted_citation_count: int = Field(strict=True, ge=1)
+    trace_ref: ExactArtifactRef
+    receipt_ref: ExactArtifactRef
+
+    @model_validator(mode="after")
+    def require_distinct_external_smoke_evidence(
+        self,
+    ) -> "FormalProductionAgentCandidateExternalSmokeResult":
+        if self.outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS:
+            raise ValueError("External smoke must answer with governed citations")
+        if len(set(self.model_connection_ids)) != len(self.model_connection_ids):
+            raise ValueError("External smoke Model Connection identities must be distinct")
+        if self.trace_ref == self.receipt_ref:
+            raise ValueError("External smoke trace and receipt artifacts must be distinct")
+        return self
+
+
 class FormalProductionAgentQueryGrantStaging(StrictFrozenModel):
     """Exact Query Grant staging with no publication or activation claim."""
 

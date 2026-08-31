@@ -870,12 +870,32 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
     ).query_grant_policy
     assert grant_policy is not None
     access = PostgresKnowledgeAccessControl.from_dsn(kss_postgres_dsn)
+    historical_client_id = "proof-agent-production-local"
+    provision_runtime_client(
+        access,
+        client_id=historical_client_id,
+        bearer_token="historical-runtime-secret-token-05r",
+    )
+    historical_grant = access.grant_release_query(
+        client_grant_id="historical-query-grant-05r",
+        client_id=historical_client_id,
+        knowledge_base_release_id=release.knowledge_base_release_id,
+        allowed_strategies=("single_pass",),
+        max_rounds=1,
+        max_model_calls=1,
+        max_candidates=10,
+        max_model_tokens=500,
+        max_duration_ms=5000,
+        effective_access_scope_digest=f"sha256:{'9' * 64}",
+    )
     provision_runtime_client(
         access,
         client_id=runtime_bootstrap_environment["KSS_RUNTIME_CLIENT_ID"],
         bearer_token="runtime-secret-token-1",
     )
     assert grant_policy.client_id == runtime_bootstrap_environment["KSS_RUNTIME_CLIENT_ID"]
+    assert grant_policy.client_id == "proof-agent-production-local-v2"
+    assert grant_policy.client_id != historical_grant.client_id
     grant_request = ProvisionKnowledgeQueryGrantRequest(
         knowledge_base_release_id=release.knowledge_base_release_id,
     )
@@ -987,6 +1007,7 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
     grant = provisioned.model_dump(mode="json")
     assert grant["schema_version"] == "knowledge-query-grant.v1"
     assert grant["client_id"] == grant_policy.client_id
+    assert grant["client_grant_id"] != historical_grant.client_grant_id
     assert grant["knowledge_space_id"] == release.knowledge_space_id
     assert grant["knowledge_base_release_id"] == release.knowledge_base_release_id
     assert grant["execution_budget"] == grant_policy.execution_budget.model_dump(mode="json")

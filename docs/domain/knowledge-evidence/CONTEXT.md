@@ -140,6 +140,14 @@ _Avoid_: Anonymous file access, raw storage URL, unaudited download
 The governed retrieval outcome when no Candidate Evidence becomes Accepted Evidence after routing, provider retrieval, fusion, citation enforcement, and evidence admission, or when a selected required Knowledge Binding fails. It follows insufficient-evidence or refusal behavior and does not permit free-form final-answer generation, invented citations, or source-backed claims.
 _Avoid_: Best-effort answer, empty Sources list, hallucinated citation, silent provider failure
 
+**Evidence Admission Diagnostic Reason**:
+A stable, content-free category explaining why ProofAgent could not convert Candidate Evidence into Accepted Evidence. The allowlist distinguishes unavailable or invalid scoring, an empty Candidate set, missing scores, scores below threshold, and policy denial without including content, score values, thresholds, Candidate identities, provider responses, credentials, prompts, answers, or stack traces. Missing structured facts remain unclassified.
+_Avoid_: Exception message, root-cause claim, raw score, Candidate Evidence summary, retry authority
+
+**Synthetic Admission Scorer Verification**:
+A production-local compatibility check that binds the deployment-owned Admission Scorer through the normal production runtime and scores one fixed synthetic Candidate. It verifies Scorer identity, versioned Secret Handle resolution, guarded egress, and the exact response contract without calling KSS, an Agent answer model, artifact storage, or publication authority. A pass does not classify a real Candidate failure or qualify a Published Agent.
+_Avoid_: Real Candidate replay, Evidence quality assessment, threshold calibration, external model smoke, publication Gate
+
 **Remote Citation Link Allowlist**:
 The protocol and domain validation policy that determines whether an external remote Knowledge Source citation URL may be rendered as a clickable Dashboard or customer-facing link. A citation that fails validation remains visible as non-clickable source text.
 _Avoid_: Arbitrary external link, javascript URL, secret-bearing URL
@@ -455,6 +463,72 @@ or revoke those Grants. An operator then published a separate local exact Releas
 outside the verifier; two live checks replayed one exact active Grant and completed two
 distinct bounded Queries. This is local compatibility evidence, not production scope
 enforcement or external model proof.
+
+[FRAME | HIGH] ADR-0222 and TDD-05R supersede the active production-local client choice
+without rewriting TDD-05O history. The checked-in harness uses
+`proof-agent-production-local-v2` plus a distinct versioned Secret Handle for new
+runtime Query authority. Existing clients and Grants remain historical facts and are
+not compatibility inputs. The same operator-only endpoint creates a new Grant for an
+explicit exact Release; runtime and Reference credentials still cannot self-grant.
+
+**Formal Production Publication Command Claim**:
+The database-time lease, execution owner and monotonic fencing token attached to one
+durable `in_progress` Formal Production Agent publication command. Exact replay before
+expiry returns the existing in-progress receipt without external work; exact replay
+after expiry may atomically acquire one higher token. Phase F, provisional Version,
+validation Run and downstream Reference identities remain stable because they derive
+from the durable command, and only the current exact claim may commit success or
+failure. The lease does not itself authorize publication or freeze a Formal Candidate.
+_Avoid_: Process-local lock, timestamp-only ownership, new Idempotency-Key for recovery,
+duplicate external identity, stale-owner terminal commit, background scanner
+
+**Formal Production Candidate Checkpoint**:
+The immutable internal identity frozen for one durable Formal Production Agent
+publication command after read-only Candidate assembly and before Phase F. It contains
+the exact Formal Candidate digest, Knowledge Release candidate digest and PostgreSQL
+checkpoint time. Only the current fenced claim may create or replay it. A takeover must
+reassemble the Candidate from the exact Draft revision and current authorities, then
+match both digests before any Phase F or downstream external call. Digest drift fails
+the old command and requires a reviewed new command identity; it never rewrites the
+checkpoint or authorizes publication.
+_Avoid_: Full Candidate payload store, mutable latest Candidate, public receipt field,
+request-selected digest, checkpoint rebinding, publication approval
+
+**Formal Publication Command Status Read**:
+The read-only, actor-owned lookup of one exact Formal Production Agent publication
+command receipt by Agent, Draft and command identity. It requires publication
+permission and the same trusted actor subject that created the command. It returns only
+the trace-safe public receipt and never exposes the idempotency key, execution claim,
+Candidate checkpoint or raw request. Missing, foreign-actor and path-mismatched
+resources share one not-found result. Recovery remains an exact replay of the original
+POST; the read cannot acquire or renew a lease.
+_Avoid_: Command list, cross-operator audit, recovery mutation, lease renewal,
+checkpoint projection, raw request projection, publication approval
+
+**Formal Candidate External Dependency Probe**:
+An explicitly invoked, non-publication validation of one exact Formal Production Agent
+Candidate against the configured KSS runtime, ProofAgent Evidence Admission and external
+model. The caller selects only exact Agent, Draft and revision; deployment supplies the
+fixed non-sensitive question and all connection, credential, policy and budget authority.
+Success requires cited accepted evidence and immutable trace/receipt read-back. The probe
+may create one KSS Query and validation artifacts, but cannot create or replay Phase F,
+Reference, Grant, Published Version or Active state. An unmaterializable exact Candidate
+fails before Query and must not be rewritten inside the probe.
+_Avoid_: Formal online-smoke qualification, publication approval, caller-selected model,
+mutable latest Candidate, manifest substitution, Contract rewrite, path-validation bypass,
+Production GO
+
+**Exact Draft Contract Path Normalization**:
+An explicitly invoked production-local repair of one exact Draft revision whose
+`audit.trace_path` and `audit.receipt_path` are the fixed known legacy pair. It replaces
+only those two scalar values with fixed package-local paths, then delegates the complete
+Contract to the Agent Configuration Workspace for validation, exact revision CAS,
+atomic save and configuration audit. Success creates one new Draft revision and one
+existing-type audit event. Mixed, unexpected, duplicate, missing or already-normalized
+paths fail before write. It is not a generic path repair, runtime Candidate rewrite,
+compatibility layer, publication command or Production GO.
+_Avoid_: Caller-selected path, direct database mutation, in-place Draft rewrite,
+materializer bypass, manifest substitution, publication approval
 
 **Knowledge Query Access Scope**:
 The effective access boundary that Knowledge Source Service derives by intersecting a Knowledge Service Client Grant, the exact Knowledge Base Version's Space and resource policy, and any caller-supplied narrowing context. It is enforced before every document, record, row, and retrieval-index lookup, and caller context can never expand it.

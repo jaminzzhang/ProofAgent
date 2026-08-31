@@ -51,3 +51,7 @@ verifier correctly receives a bounded conflict before Query. TDD-05O does not ad
 rewrite, revoke or delete those Grants. A positive full-stack replay requires another
 existing queryable Release without a conflicting Grant; isolated PostgreSQL evidence
 proves the positive deployment-policy → operator Grant → bounded Query path meanwhile.
+
+[KNOWN | HIGH] ADR-0222 supersedes only the active checked-in production-local client
+choice after TDD-05O. TDD-05R moves runtime Query authority to a distinct versioned
+client and Secret while preserving this ADR's policy/bootstrap/operator separation.

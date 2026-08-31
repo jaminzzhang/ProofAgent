@@ -458,6 +458,51 @@ def test_http_admission_scorer_uses_its_approved_contract_without_reusing_rank()
     assert "reranked_rank" not in candidate
 
 
+def test_http_admission_scorer_classifies_boundary_failure_without_detail() -> None:
+    secret_sentinel = "private-admission-response-must-not-appear"
+
+    class UnavailableAdmissionScorerHttpClient:
+        def request(self, *args: object, **kwargs: object) -> GuardedHttpResponse:
+            del args, kwargs
+            raise RuntimeError(secret_sentinel)
+
+    scorer = HttpKnowledgeCandidateAdmissionScorer(
+        endpoint="https://knowledge-models.internal.example",
+        http_client=UnavailableAdmissionScorerHttpClient(),
+        authorization_header_factory=lambda: "Bearer scorer-token",
+        scorer_id="insurance-evidence-admission",
+        scorer_revision="insurance-evidence-admission.v3",
+    )
+    query = KnowledgeCandidateQuery.model_validate(
+        {
+            "idempotency_key": "run-1:retrieval-1:attempt-1",
+            "knowledge_base_release_id": "release-1",
+            "question": "航班延误需要哪些材料？",
+            "strategy": "single_pass",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 10,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 1000,
+            },
+            "deadline_at": "2026-08-12T09:01:00Z",
+        }
+    )
+    result = KnowledgeCandidateResult.model_validate(
+        {"knowledge_query_id": "query-1", **_result_payload()}
+    )
+
+    with pytest.raises(ProofAgentError) as raised:
+        scorer.score_candidates(query=query, result=result)
+
+    assert raised.value.code == "PA_KNOWLEDGE_001"
+    assert getattr(raised.value, "admission_reason_code", None) == (
+        "evidence_admission_scorer_unavailable"
+    )
+    assert secret_sentinel not in str(raised.value)
+
+
 def test_control_plane_routes_exact_query_without_flattening_structured_groups(
     tmp_path: Any,
 ) -> None:
@@ -559,6 +604,51 @@ def test_control_plane_applies_an_explicit_candidate_admission_scorer(
     assert result.evidence_result.status == "passed"
 
 
+def test_control_plane_classifies_scores_below_admission_threshold(
+    tmp_path: Any,
+) -> None:
+    candidate_service = StaticCandidateService()
+    service = KnowledgeRetrievalService(
+        trace=TraceWriter(tmp_path / "trace.jsonl", run_id="run-1"),
+        policy=PolicyEngine(()),
+        knowledge_candidate_service=candidate_service,
+        knowledge_candidate_admission_scorer=StaticCandidateAdmissionScorer(
+            {"candidate-doc-1": 0.24}
+        ),
+    )
+    candidate_query = KnowledgeCandidateQuery.model_validate(
+        {
+            "idempotency_key": "run-1:retrieval-1:attempt-1",
+            "knowledge_base_release_id": "release-1",
+            "question": "理赔增长原因和 2025 年理赔总额",
+            "strategy": "single_pass",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 10,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 1000,
+            },
+            "deadline_at": datetime(2026, 8, 12, 9, 1, tzinfo=UTC),
+        }
+    )
+
+    result = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question=candidate_query.question,
+            strategy="single_step",
+            top_k=10,
+            min_score=0.25,
+            knowledge_candidate_query=candidate_query,
+        )
+    )
+
+    assert result.evidence_result.status == "failed"
+    assert result.evidence_result.metadata["no_evidence_reason_code"] == (
+        "knowledge_candidate_threshold_not_met"
+    )
+
+
 def test_control_plane_rejects_an_invalid_candidate_admission_score(
     tmp_path: Any,
 ) -> None:
@@ -599,6 +689,9 @@ def test_control_plane_rejects_an_invalid_candidate_admission_score(
         )
 
     assert exc.value.code == "PA_KNOWLEDGE_001"
+    assert getattr(exc.value, "admission_reason_code", None) == (
+        "evidence_admission_score_invalid"
+    )
     assert "approved normalized range" in str(exc.value)
 
 

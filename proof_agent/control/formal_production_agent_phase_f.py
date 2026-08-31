@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+import hashlib
 import re
 from uuid import uuid4
 
@@ -39,6 +41,15 @@ class FormalProductionAgentPhaseFRejected(RuntimeError):
         super().__init__(detail)
 
 
+@dataclass(frozen=True)
+class FormalProductionAgentPhaseFIdentity:
+    """Stable identities for one retryable formal-publication command."""
+
+    record_id: str
+    provisional_version_id: str
+    validation_run_id: str
+
+
 class FormalProductionAgentPhaseFPreparer:
     """Verify exact evidence and produce an authorized, unpublished version candidate."""
 
@@ -59,6 +70,8 @@ class FormalProductionAgentPhaseFPreparer:
         candidate: FormalProductionAgentCandidate,
         evidence: KnowledgeReleaseEvidenceSet,
         actor: AuditActorFacts,
+        identity: FormalProductionAgentPhaseFIdentity | None = None,
+        prepared_at: str | None = None,
     ) -> FormalProductionAgentPhaseFPreparation:
         try:
             require_formal_production_agent_candidate(candidate)
@@ -68,7 +81,7 @@ class FormalProductionAgentPhaseFPreparer:
                 detail="The Formal Production Agent Candidate integrity check failed.",
             ) from exc
 
-        record_id, version_id, validation_run_id = self._new_distinct_identities()
+        record_id, version_id, validation_run_id = self._identities(identity)
         source = WorkflowStageConfigurationRuntimeSource(
             source_type=(WorkflowStageConfigurationRuntimeSourceType.FORMAL_PRODUCTION_CANDIDATE),
             reference=(
@@ -92,14 +105,16 @@ class FormalProductionAgentPhaseFPreparer:
                 detail="The Formal Candidate Workflow Stage configuration is invalid.",
             )
 
-        prepared_at = _timestamp(self._clock())
+        stable_prepared_at = (
+            _timestamp(self._clock()) if prepared_at is None else _canonical_timestamp(prepared_at)
+        )
         record = seal_formal_production_agent_phase_f_record(
             record_id=record_id,
             provisional_version_id=version_id,
             validation_run_id=validation_run_id,
             candidate=candidate,
             evidence=evidence,
-            created_at=prepared_at,
+            created_at=stable_prepared_at,
             created_by=actor.subject,
         )
         try:
@@ -122,7 +137,7 @@ class FormalProductionAgentPhaseFPreparer:
             display_name=candidate.display_name,
             purpose=candidate.purpose,
             contract_bundle=candidate.contract_bundle,
-            prepared_at=prepared_at,
+            prepared_at=stable_prepared_at,
             prepared_by=actor.subject,
             formal_candidate_sha256=candidate.formal_candidate_sha256,
             knowledge_release_candidate_sha256=(candidate.knowledge_release_candidate_sha256),
@@ -162,6 +177,37 @@ class FormalProductionAgentPhaseFPreparer:
             )
         return identities
 
+    def _identities(
+        self,
+        identity: FormalProductionAgentPhaseFIdentity | None,
+    ) -> tuple[str, str, str]:
+        if identity is None:
+            return self._new_distinct_identities()
+        identities = (
+            _bounded_identifier(identity.record_id),
+            _bounded_identifier(identity.provisional_version_id),
+            _bounded_identifier(identity.validation_run_id),
+        )
+        if len(set(identities)) != 3:
+            raise FormalProductionAgentPhaseFRejected(
+                code="phase_f_identity_invalid",
+                detail="Phase F preparation identities must be distinct.",
+            )
+        return identities
+
+
+def formal_production_agent_phase_f_identity_for_command(
+    command_id: str,
+) -> FormalProductionAgentPhaseFIdentity:
+    """Derive retry-stable Phase F identities from one durable command identity."""
+
+    digest = hashlib.sha256(command_id.encode("utf-8")).hexdigest()
+    return FormalProductionAgentPhaseFIdentity(
+        record_id=f"formal-phase-f-{digest}",
+        provisional_version_id=f"formal-version-{digest}",
+        validation_run_id=f"formal-validation-{digest}",
+    )
+
 
 def _bounded_identifier(value: str) -> str:
     normalized = value.strip()
@@ -182,7 +228,20 @@ def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _canonical_timestamp(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise FormalProductionAgentPhaseFRejected(
+            code="phase_f_clock_invalid",
+            detail="Phase F preparation clock must be timezone-aware.",
+        ) from exc
+    return _timestamp(parsed)
+
+
 __all__ = [
+    "FormalProductionAgentPhaseFIdentity",
     "FormalProductionAgentPhaseFPreparer",
     "FormalProductionAgentPhaseFRejected",
+    "formal_production_agent_phase_f_identity_for_command",
 ]

@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import BinaryIO
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -31,6 +33,11 @@ from proof_agent.contracts import (
 )
 from proof_agent.contracts.ports.model_credentials import ModelCredentialValidation
 from proof_agent.contracts.ports.secret_provider import ResolvedSecretMaterial
+from proof_agent.contracts.artifacts import (
+    ArtifactKind,
+    ArtifactObjectVersion,
+    ArtifactPutRequest,
+)
 from proof_agent.control.production_agent import (
     ProductionAgentValidationError,
     validate_production_agent_candidate,
@@ -96,6 +103,7 @@ class ModelConnections:
     def get_model_connection(self, connection_id: str):
         return self.connection if connection_id == self.connection.connection_id else None
 
+
 class ModelCredentials:
     def __init__(self, *, resolvable: bool = True) -> None:
         self.resolvable = resolvable
@@ -159,9 +167,7 @@ def _write_manifest(
     answer_provider: str = "openai_compatible",
     memory_enabled: bool = False,
 ) -> Path:
-    fixture = Path(
-        "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
-    )
+    fixture = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
     raw = yaml.safe_load(fixture.read_text(encoding="utf-8"))
     raw["name"] = AGENT_ID
     raw["package_knowledge_sources"] = []
@@ -412,9 +418,7 @@ def test_rejects_more_than_one_frozen_kss_binding(tmp_path: Path) -> None:
     with pytest.raises(ProductionAgentValidationError, match="exactly one"):
         validate_production_agent_candidate(
             agent=replace(agent, resolved_knowledge_bindings=bindings),
-            version=version.model_copy(
-                update={"resolved_knowledge_bindings": bindings}
-            ),
+            version=version.model_copy(update={"resolved_knowledge_bindings": bindings}),
             **_validation_dependencies(),
         )
 
@@ -562,9 +566,7 @@ def test_publication_service_validates_phase_f_and_smoke_run_before_atomic_activ
     assert publication.active_pointer_expectation.version_id is None
     operation_metadata = publication.version.operation_audit[0].metadata
     assert operation_metadata["validation_trace_ref"]["artifact_uri"].startswith("s3://")
-    assert operation_metadata["validation_receipt_ref"]["version_id"].startswith(
-        "opaque-"
-    )
+    assert operation_metadata["validation_receipt_ref"]["version_id"].startswith("opaque-")
     assert [event.event_type for event in audits.events] == [
         "agent.candidate_staged",
         "agent.version_published",
@@ -658,21 +660,43 @@ def test_publication_service_rejects_activation_pointer_changed_during_smoke(
 
 class ExactStore:
     def __init__(self) -> None:
-        self.values = {}
+        self.values: dict[ArtifactObjectVersion, bytes] = {}
 
-    def put_immutable(self, *, key, content, media_type):
-        ref = ExactArtifactRef(
-            artifact_uri=f"s3://proof-agent/{key}",
-            version_id=f"opaque-{len(self.values) + 1}",
-            sha256=hashlib.sha256(content).hexdigest(),
-            size_bytes=len(content),
-            media_type=media_type,
+    def put_immutable(
+        self,
+        request: ArtifactPutRequest,
+        body: BinaryIO,
+    ) -> ArtifactObjectVersion:
+        content = body.read()
+        assert hashlib.sha256(content).hexdigest() == request.expected_sha256
+        assert len(content) == request.expected_size_bytes
+        sequence = len(self.values) + 1
+        ref = ArtifactObjectVersion(
+            object_id=f"artifact-{sequence}",
+            bucket="proof-agent",
+            object_key=f"objects/00/00000000-0000-0000-0000-{sequence:012d}",
+            version_id=f"opaque-{sequence}",
+            sha256=request.expected_sha256,
+            size_bytes=request.expected_size_bytes,
+            kind=request.kind,
+            owner=request.owner,
+            content_type=request.content_type,
+            created_at=datetime(2026, 7, 15, tzinfo=UTC),
+            display_filename=request.display_filename,
         )
         self.values[ref] = content
         return ref
 
-    def get_exact(self, ref):
-        return self.values[ref]
+    def head_exact(self, ref: ArtifactObjectVersion) -> ArtifactObjectVersion:
+        assert ref in self.values
+        return ref
+
+    def open_exact(self, ref: ArtifactObjectVersion) -> BytesIO:
+        return BytesIO(self.values[ref])
+
+    def exact_uri(self, ref: ArtifactObjectVersion) -> str:
+        self.head_exact(ref)
+        return f"s3://{ref.bucket}/{ref.object_key}"
 
 
 def test_online_candidate_validator_executes_real_path_and_retains_exact_artifacts(
@@ -721,5 +745,13 @@ def test_online_candidate_validator_executes_real_path_and_retains_exact_artifac
 
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.accepted_citation_count == 2
-    assert store.get_exact(result.trace_ref).endswith(b"\n")
-    assert store.get_exact(result.receipt_ref).startswith(b"# governed")
+    stored = list(store.values.items())
+    assert [ref.kind for ref, _content in stored] == [
+        ArtifactKind.RUN_TRACE,
+        ArtifactKind.GOVERNANCE_RECEIPT,
+    ]
+    assert all(ref.owner.owner_type == "agent_validation" for ref, _content in stored)
+    assert result.trace_ref.artifact_uri == store.exact_uri(stored[0][0])
+    assert result.receipt_ref.artifact_uri == store.exact_uri(stored[1][0])
+    assert stored[0][1].endswith(b"\n")
+    assert stored[1][1].startswith(b"# governed")

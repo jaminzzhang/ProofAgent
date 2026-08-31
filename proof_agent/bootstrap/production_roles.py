@@ -101,6 +101,7 @@ from proof_agent.deployment.compatibility import (
     load_deployment_compatibility_manifest,
 )
 from proof_agent.delivery.production_agent_validation import (
+    FormalProductionAgentCandidateExternalSmokeRunner,
     FormalProductionAgentOnlineSmokeRunner,
 )
 from proof_agent.delivery.agent_configuration_contracts import (
@@ -360,6 +361,15 @@ def create_production_api_application(
             model_credential_resolver=model_credentials,
             artifact_store=artifact_store,
         )
+        formal_candidate_external_smoke_runner = _compose_formal_candidate_external_smoke_runner(
+            values=values,
+            runtime_configuration=runtime_configuration,
+            knowledge_candidate_runtime=knowledge_candidate_runtime,
+            guarded_http_client=guarded,
+            secret_provider=secret_provider,
+            model_credential_resolver=model_credentials,
+            artifact_store=artifact_store,
+        )
         application = create_app(
             mode="production",
             operator_session_service=security.operator_session_service,
@@ -381,6 +391,9 @@ def create_production_api_application(
             release_bundle_materializer=release_bundle_materializer,
             release_bundle_attestation_verifier=release_bundle_attestation_verifier,
             release_bundle_audit_repository=persistence.audit,
+        )
+        application.state.formal_production_agent_candidate_external_smoke_runner = (
+            formal_candidate_external_smoke_runner
         )
 
         def close_resources() -> None:
@@ -538,7 +551,7 @@ def _compose_formal_production_agent_publication_command(
     guarded_http_client: GuardedHttpClient,
     secret_provider: SecretProvider,
     model_credential_resolver: object,
-    artifact_store: object,
+    artifact_store: S3ArtifactStore,
 ) -> FormalProductionAgentPublicationCommandService:
     """Compose the only production formal-publication authority exposed by the API."""
 
@@ -626,6 +639,31 @@ def _compose_formal_production_agent_publication_command(
         unit_of_work_factory=unit_of_work_factory,  # type: ignore[arg-type]
         publisher=publisher,
         binding_profile=binding_profile,
+        lease_duration=timedelta(seconds=_formal_publication_command_lease_seconds(values)),
+    )
+
+
+def _compose_formal_candidate_external_smoke_runner(
+    *,
+    values: Mapping[str, str],
+    runtime_configuration: object,
+    knowledge_candidate_runtime: object,
+    guarded_http_client: GuardedHttpClient,
+    secret_provider: SecretProvider,
+    model_credential_resolver: object,
+    artifact_store: S3ArtifactStore,
+) -> FormalProductionAgentCandidateExternalSmokeRunner:
+    """Compose the explicit non-publication external-dependency probe."""
+
+    return FormalProductionAgentCandidateExternalSmokeRunner(
+        configuration_store=runtime_configuration,
+        knowledge_candidate_runtime=knowledge_candidate_runtime,
+        guarded_http_client=guarded_http_client,
+        secret_provider=secret_provider,
+        model_credential_resolver=model_credential_resolver,
+        artifact_store=artifact_store,
+        work_root=Path(_required(values, "PROOF_AGENT_RELEASE_WORK_DIR")),
+        institution_authorization=_release_institution_authorization(values),
     )
 
 
@@ -865,6 +903,18 @@ def _required(values: Mapping[str, str], key: str) -> str:
     if not value:
         raise ValueError(f"{key} is required in production")
     return value
+
+
+def _formal_publication_command_lease_seconds(values: Mapping[str, str]) -> int:
+    key = "PROOF_AGENT_FORMAL_PUBLICATION_COMMAND_LEASE_SECONDS"
+    raw = values.get(key, "900").strip()
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer from 1 through 3600") from exc
+    if not 1 <= seconds <= 3600:
+        raise ValueError(f"{key} must be an integer from 1 through 3600")
+    return seconds
 
 
 __all__ = [
