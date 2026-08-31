@@ -127,6 +127,59 @@ ProofAgent 入口为 `https://proof-agent.localhost:8443`，KSS readiness 为
 `https://proof-agent.localhost:8444/readyz`。Dashboard 通过同源
 `/api/config/knowledge-service` BFF 管理 KSS；浏览器不持有 operator token。
 
+checked-in 本地栈使用 `KSS_QUERY_GRANT_POLICY_JSON` 固定 runtime client、允许的
+strategy、预算上限和 access-scope digest。KSS migration 完成后，一次性 bootstrap
+只注册 runtime client credential digest；另一个 bootstrap 注册专用 Reference client。
+两个 bootstrap 都不创建 Query Grant。只有 KSS operator credential 可以针对正式候选
+已选定的 exact Release 创建 Grant，runtime 与 Reference credential 不能自授权限。
+该 policy 是 secret-free 本地 fixture，不应写入 Agent Draft，也不是生产 access-scope
+enforcement 或发布 Gate 证据。
+
+全栈启动并通过基线检查后，操作者可以显式验证一个已存在的 exact Release：
+
+```bash
+./scripts/production-local-verify-query-authority.sh <exact-kss-release-id>
+```
+
+该命令不会查找 `latest`、创建 Release、启动/停止 Compose 或修改 readiness。它会创建或精确
+重放当前 deployment policy 的持久化本地 Grant，再执行一次有界 `single_pass` Query；成功时只
+输出 secret-free JSON。若同一 runtime client/Release 已有不同 ID、预算、strategy 或 scope 的
+历史 Grant，KSS 返回稳定冲突并在 Query 前停止。不要删除旧 Grant、改写数据库或放宽 policy 来
+“修复”该冲突；应由既有 KSS 发布流程提供另一个已存在、queryable 且没有冲突 Grant 的 exact
+Release，再由操作者显式重试。成功创建的本地 Grant 会保留，因为当前没有 selective revoke
+能力；它不代表 Agent 已发布、激活或获得用户侧 Run 权限。
+
+重复验证同一 Release 时，成功输出中的 `client_grant_id` 必须保持不变，
+`knowledge_query_id` 必须变化。前者证明 Grant 精确重放，后者证明每次 Query 使用独立标识。
+准备无冲突 Release 是 verifier 外部的 KSS 管理操作。不要把 Release 创建逻辑加入 verifier。
+
+在运行正式发布命令前，可以对一个 exact Draft revision 执行只读候选预检：
+
+```bash
+./scripts/production-local-verify-formal-publication-preflight.sh \
+  <exact-agent-id> <exact-draft-id> <exact-draft-revision>
+```
+
+该命令使用 production API 的同一 Draft/KSS/deployment Profile 组合，但不会预留 formal
+publication command，也不会运行 Phase F、注册 Reference、创建 Grant、提交 Query、运行 online
+smoke、创建 Version 或更新 Active pointer。成功 JSON 中的
+`publication_authorized` 固定为 `false`；候选摘要只适合后续精确复核，不是发布批准。失败时只输出
+稳定 error/blocker code。若出现 `memory_must_be_disabled`，应通过既有 Draft 编辑权限和 revision CAS
+显式关闭首期生产 Memory，再对新 revision 重新预检；不要直接改数据库或放宽候选规则。
+
+production-local 可以使用以下单用途命令完成该 exact CAS：
+
+```bash
+./scripts/production-local-disable-draft-memory.sh \
+  <exact-agent-id> <exact-draft-id> <expected-draft-revision>
+```
+
+命令要求 Tools 已禁用、Memory 已启用，且 Memory 不含 `scopes`。它只把 Memory
+收敛为 disabled 形态：原位修改 `enabled` 并移除必须同时清理的 `provider`；其余
+YAML 原始字节保持不变。真正写入仍由既有 Workspace 执行完整 Contract 校验、revision
+CAS、原子保存和审计。成功输出的 `publication_authorized` 固定为 `false`。对新
+revision 重放会以 `draft_memory_already_disabled` 失败关闭，不会再生成 revision。
+
 正式候选至少需要：exact KSS product binding、Deployment Compatibility Manifest、
 Client Grant、versioned secret、批准的 Admission Scorer、真实依赖 readiness、shadow、
 pilot、容量、恢复演练、Blue/Green 证据和 Product Release Authority `GO`。

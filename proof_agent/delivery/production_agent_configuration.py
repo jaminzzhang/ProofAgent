@@ -11,12 +11,17 @@ from proof_agent.contracts import (
     AgentDraftRecord,
     AuditActorFacts,
     DraftKnowledgeReleaseBindingCandidate,
+    FormalProductionAgentPublicationCommandRequest,
+    FormalProductionAgentPublicationCommandState,
     Permission,
 )
 from proof_agent.contracts.knowledge_service_management import KnowledgeServiceIdentifier
 from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationConflict,
     AgentConfigurationNotFound,
+)
+from proof_agent.control.formal_production_agent_publication_command import (
+    FormalProductionAgentPublicationCommandRejected,
 )
 from proof_agent.control.workflow.templates import (
     list_workflow_templates,
@@ -106,10 +111,7 @@ class ProductionAgentContractUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_candidate_file(self) -> "ProductionAgentContractUpdateRequest":
-        if all(
-            value is None
-            for value in (self.agent_yaml, self.policy_yaml, self.tools_yaml)
-        ):
+        if all(value is None for value in (self.agent_yaml, self.policy_yaml, self.tools_yaml)):
             raise ValueError("at least one Contract file is required")
         return self
 
@@ -129,17 +131,13 @@ class ProductionWorkflowStagesUpdateRequest(BaseModel):
     stages: list[WorkflowStageUpdateItemRequest]
 
 
-class ProductionBusinessFlowSkillPackCreateRequest(
-    BusinessFlowSkillPackCreateFields
-):
+class ProductionBusinessFlowSkillPackCreateRequest(BusinessFlowSkillPackCreateFields):
     """Revisioned create command for a production Draft Skill Pack."""
 
     expected_revision: int = Field(ge=1)
 
 
-class ProductionBusinessFlowSkillPackUpdateRequest(
-    BusinessFlowSkillPackUpdateFields
-):
+class ProductionBusinessFlowSkillPackUpdateRequest(BusinessFlowSkillPackUpdateFields):
     """Revisioned update command for a production Draft Skill Pack."""
 
     expected_revision: int = Field(ge=1)
@@ -155,6 +153,48 @@ class ProductionKnowledgeReleaseBindingUpdateRequest(BaseModel):
     knowledge_base_id: KnowledgeServiceIdentifier
     knowledge_base_version_id: KnowledgeServiceIdentifier
     knowledge_base_release_id: KnowledgeServiceIdentifier
+
+
+@agent_router.post("/{agent_id}/drafts/{draft_id}/formal-publications")
+def publish_formal_production_agent(
+    agent_id: str,
+    draft_id: str,
+    body: FormalProductionAgentPublicationCommandRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    ],
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Reserve or replay one exact Formal Production Agent publication command."""
+
+    require_operator_permission(identity, Permission.AGENT_PUBLISH)
+    try:
+        result = _formal_publication_command(request).publish(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            request=body,
+            idempotency_key=idempotency_key,
+            actor=_audit_actor(request, identity),
+        )
+    except FormalProductionAgentPublicationCommandRejected as exc:
+        raise HTTPException(
+            status_code=_formal_command_rejection_status(exc.code),
+            detail=exc.code,
+        ) from exc
+    receipt = result.receipt
+    if receipt.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS:
+        response.status_code = 202
+    elif receipt.state is FormalProductionAgentPublicationCommandState.SUCCEEDED:
+        response.status_code = 200 if result.replayed else 201
+    else:
+        assert receipt.failure_code is not None
+        response.status_code = _formal_command_failure_status(receipt.failure_code)
+    payload = cast(dict[str, Any], receipt.model_dump(mode="json"))
+    payload["replayed"] = result.replayed
+    return payload
 
 
 @workflow_template_router.get("")
@@ -213,8 +253,7 @@ def list_production_agents(
             "capabilities": {
                 "mode": "production",
                 "can_create": (
-                    inventory.can_create
-                    and Permission.AGENT_EDIT in identity.permissions
+                    inventory.can_create and Permission.AGENT_EDIT in identity.permissions
                 ),
                 "can_import_manifest": False,
                 "canonical_template": _CANONICAL_TEMPLATE,
@@ -463,9 +502,7 @@ def update_production_agent_knowledge_binding(
     return _knowledge_binding_payload(result)
 
 
-@agent_router.get(
-    "/{agent_id}/drafts/{draft_id}/publication-configuration"
-)
+@agent_router.get("/{agent_id}/drafts/{draft_id}/publication-configuration")
 def get_production_agent_publication_configuration(
     agent_id: str,
     draft_id: str,
@@ -542,9 +579,7 @@ def create_production_agent_skill_pack(
     return business_flow_skill_pack_result_payload(result)
 
 
-@agent_router.patch(
-    "/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}"
-)
+@agent_router.patch("/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
 def update_production_agent_skill_pack(
     agent_id: str,
     draft_id: str,
@@ -580,9 +615,7 @@ def update_production_agent_skill_pack(
     return business_flow_skill_pack_result_payload(result)
 
 
-@agent_router.delete(
-    "/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}"
-)
+@agent_router.delete("/{agent_id}/drafts/{draft_id}/skills/business-flows/{pack_id}")
 def delete_production_agent_skill_pack(
     agent_id: str,
     draft_id: str,
@@ -637,9 +670,7 @@ def update_production_agent_workflow_stages(
                 expected_revision=body.expected_revision,
                 template=body.template,
                 template_descriptor_version=body.template_descriptor_version,
-                stages=tuple(
-                    workflow_stage_config_request(item) for item in body.stages
-                ),
+                stages=tuple(workflow_stage_config_request(item) for item in body.stages),
                 actor=_audit_actor(request, identity),
             ),
         )
@@ -660,9 +691,7 @@ def update_production_agent_workflow_stages(
     return record.draft.contract_bundle.model_dump(mode="json")
 
 
-@agent_router.post(
-    "/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview"
-)
+@agent_router.post("/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview")
 def preview_production_agent_workflow_stage(
     agent_id: str,
     draft_id: str,
@@ -734,16 +763,48 @@ def _application(request: Request) -> Any:
     return application
 
 
+def _formal_publication_command(request: Request) -> Any:
+    command = getattr(
+        request.app.state,
+        "formal_production_agent_publication_command",
+        None,
+    )
+    if command is None:
+        raise HTTPException(
+            status_code=503,
+            detail="formal_publication_command_unavailable",
+        )
+    return command
+
+
+def _formal_command_rejection_status(code: str) -> int:
+    if code == "formal_publication_idempotency_conflict":
+        return 409
+    if code == "formal_publication_idempotency_key_invalid":
+        return 422
+    return 503
+
+
+def _formal_command_failure_status(code: str) -> int:
+    if code.endswith("_not_found"):
+        return 404
+    if code.endswith("_conflict") or code in {
+        "formal_candidate_authoring_blocked",
+        "phase_f_authority_denied",
+        "online_smoke_failed",
+    }:
+        return 409
+    if "unavailable" in code or code.endswith("_clock_invalid"):
+        return 503
+    return 422
+
+
 def _audit_actor(
     request: Request,
     identity: OperatorIdentityContext,
 ) -> AuditActorFacts:
     session = getattr(request.state, "session_resolution", None)
-    session_id = (
-        session.projection.session_id
-        if session is not None
-        else "development-session"
-    )
+    session_id = session.projection.session_id if session is not None else "development-session"
     return AuditActorFacts(
         subject=identity.operator_id,
         identity_provider="enterprise-oidc",
@@ -818,8 +879,7 @@ def _version_payload(version: Any) -> dict[str, Any]:
             else None
         ),
         "operation_audit": [
-            operation.model_dump(mode="json")
-            for operation in version.operation_audit
+            operation.model_dump(mode="json") for operation in version.operation_audit
         ],
     }
 
@@ -827,9 +887,7 @@ def _version_payload(version: Any) -> dict[str, Any]:
 def _configuration_exception(
     error: AgentConfigurationConflict | AgentConfigurationNotFound,
 ) -> HTTPException:
-    status_code = (
-        409 if isinstance(error, AgentConfigurationConflict) else 404
-    )
+    status_code = 409 if isinstance(error, AgentConfigurationConflict) else 404
     return HTTPException(status_code=status_code, detail=error.code)
 
 
@@ -845,13 +903,9 @@ def _knowledge_binding_payload(result: Any) -> dict[str, Any]:
     candidate = result.record.draft.knowledge_release_binding_candidate
     return {
         "revision": result.record.revision,
-        "candidate": (
-            None if candidate is None else candidate.model_dump(mode="json")
-        ),
+        "candidate": (None if candidate is None else candidate.model_dump(mode="json")),
         "readiness": result.catalog.readiness.model_dump(mode="json"),
-        "releases": [
-            release.model_dump(mode="json") for release in result.catalog.releases
-        ],
+        "releases": [release.model_dump(mode="json") for release in result.catalog.releases],
     }
 
 
@@ -864,14 +918,10 @@ def _publication_configuration_payload(result: Any) -> dict[str, Any]:
         "can_publish_from_dashboard": result.can_publish_from_dashboard,
         "workflow": {
             "template": result.workflow_template,
-            "template_descriptor_version": (
-                result.workflow_template_descriptor_version
-            ),
+            "template_descriptor_version": (result.workflow_template_descriptor_version),
         },
         "knowledge": {
-            "candidate": (
-                None if candidate is None else candidate.model_dump(mode="json")
-            ),
+            "candidate": (None if candidate is None else candidate.model_dump(mode="json")),
             "queryable": result.knowledge_release_queryable,
         },
         "model_roles": [

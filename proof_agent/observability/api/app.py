@@ -112,6 +112,7 @@ def create_app(
     production_readiness_probe: Callable[[], object] | None = None,
     production_configuration_uow_factory: object | None = None,
     agent_configuration_workspace: object | None = None,
+    formal_production_agent_publication_command: object | None = None,
     knowledge_service_management_client: object | None = None,
     release_registry_repository: object | None = None,
     release_bundle_materializer: object | None = None,
@@ -173,6 +174,10 @@ def create_app(
                     agent_configuration_workspace,
                 ),
                 (
+                    "Formal Production Agent publication command",
+                    formal_production_agent_publication_command,
+                ),
+                (
                     "Knowledge Source Service management client",
                     knowledge_service_management_client,
                 ),
@@ -200,18 +205,15 @@ def create_app(
     application.state.conversation_repository = conversation_repository
     application.state.guarded_http_client = guarded_http_client
     application.state.production_readiness_probe = production_readiness_probe
-    application.state.production_configuration_uow_factory = (
-        production_configuration_uow_factory
-    )
+    application.state.production_configuration_uow_factory = production_configuration_uow_factory
     application.state.agent_configuration_workspace = agent_configuration_workspace
-    application.state.knowledge_service_management_client = (
-        knowledge_service_management_client
+    application.state.formal_production_agent_publication_command = (
+        formal_production_agent_publication_command
     )
+    application.state.knowledge_service_management_client = knowledge_service_management_client
     application.state.release_registry_repository = release_registry_repository
     application.state.release_bundle_materializer = release_bundle_materializer
-    application.state.release_bundle_attestation_verifier = (
-        release_bundle_attestation_verifier
-    )
+    application.state.release_bundle_attestation_verifier = release_bundle_attestation_verifier
     application.state.release_bundle_audit_repository = release_bundle_audit_repository
 
     @application.get("/livez", include_in_schema=False)
@@ -233,14 +235,13 @@ def create_app(
         payload = payload_method()
         ready = getattr(readiness, "ready", False) is True
         return JSONResponse(status_code=200 if ready else 503, content=payload)
+
     if selected_mode == "production":
         assert operator_session_service is not None
         assert stable_origin is not None
         application.state.operator_session_service = operator_session_service
         application.state.stable_origin = stable_origin
-        application.state.security_configuration_repository = (
-            security_configuration_repository
-        )
+        application.state.security_configuration_repository = security_configuration_repository
         application.state.secret_provider = secret_provider
         application.state.recovery_oidc_group_mapping = recovery_oidc_group_mapping
         application.add_middleware(
@@ -300,9 +301,7 @@ def create_app(
                 skill_pack_inspector=LocalAgentConfigurationSkillPackAdapter(),
                 scope=AgentConfigurationScope.MULTI_AGENT,
             )
-            application.state.agent_configuration_workspace_persistence = (
-                workspace_persistence
-            )
+            application.state.agent_configuration_workspace_persistence = workspace_persistence
         application.state.agent_configuration_workspace = agent_configuration_workspace
         controlled_react_store_root = history_dir.parent / "controlled_react"
         application.state.controlled_react_snapshot_store = FileControlledReActSnapshotStore(

@@ -171,6 +171,53 @@ def test_local_production_verifier_covers_knowledge_service_authorities() -> Non
     assert "local/proof-agent-knowledge-local" in verifier
 
 
+def test_local_production_query_authority_verifier_requires_one_explicit_release() -> None:
+    verifier = (PROJECT_ROOT / "scripts/production-local-verify-query-authority.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "EXACT_RELEASE_ID=$1" in verifier
+    assert "replace-with-exact-kss-release-id" in verifier
+    assert 'PROOF_AGENT_KSS_RELEASE_ID="$EXACT_RELEASE_ID"' in verifier
+    assert "/opt/proof-agent-local/verify_kss_query_authority.py" in verifier
+    assert '"$ROOT_DIR/scripts/production-local-up.sh"' not in verifier
+    assert "down" not in verifier
+
+
+def test_local_production_formal_preflight_requires_one_exact_draft_revision() -> None:
+    verifier = (
+        PROJECT_ROOT / "scripts/production-local-verify-formal-publication-preflight.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "EXACT_AGENT_ID=$1" in verifier
+    assert "EXACT_DRAFT_ID=$2" in verifier
+    assert "EXACT_DRAFT_REVISION=$3" in verifier
+    assert 'PROOF_AGENT_PREFLIGHT_AGENT_ID="$EXACT_AGENT_ID"' in verifier
+    assert 'PROOF_AGENT_PREFLIGHT_DRAFT_ID="$EXACT_DRAFT_ID"' in verifier
+    assert 'PROOF_AGENT_PREFLIGHT_DRAFT_REVISION="$EXACT_DRAFT_REVISION"' in verifier
+    assert "/opt/proof-agent-local/verify_formal_publication_preflight.py" in verifier
+    assert '"$ROOT_DIR/scripts/production-local-up.sh"' not in verifier
+    assert "formal-publications" not in verifier
+    assert "down" not in verifier
+
+
+def test_local_production_draft_memory_disable_requires_one_exact_cas_target() -> None:
+    command = (PROJECT_ROOT / "scripts/production-local-disable-draft-memory.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "EXACT_AGENT_ID=$1" in command
+    assert "EXACT_DRAFT_ID=$2" in command
+    assert "EXPECTED_DRAFT_REVISION=$3" in command
+    assert 'PROOF_AGENT_DRAFT_MEMORY_AGENT_ID="$EXACT_AGENT_ID"' in command
+    assert 'PROOF_AGENT_DRAFT_MEMORY_DRAFT_ID="$EXACT_DRAFT_ID"' in command
+    assert 'PROOF_AGENT_DRAFT_MEMORY_EXPECTED_REVISION="$EXPECTED_DRAFT_REVISION"' in command
+    assert "/opt/proof-agent-local/disable_draft_memory.py" in command
+    assert '"$ROOT_DIR/scripts/production-local-up.sh"' not in command
+    assert "formal-publications" not in command
+    assert "down" not in command
+
+
 def test_local_production_has_no_embedded_hybrid_bootstrap() -> None:
     services = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))["services"]
 
@@ -214,9 +261,7 @@ def test_local_production_connects_dashboard_bff_to_kss_without_browser_secret()
     vault_environment = services["vault-init"]["environment"]
     vault_command = services["vault-init"]["command"][0]
 
-    assert api_environment["PROOF_AGENT_KSS_ENDPOINT"] == (
-        "https://proof-agent.localhost:8444"
-    )
+    assert api_environment["PROOF_AGENT_KSS_ENDPOINT"] == ("https://proof-agent.localhost:8444")
     handle_id = api_environment["PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"]
     assert handle_id == "knowledge/source-service/operator"
     locators = json.loads(api_environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"])
@@ -234,9 +279,11 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     compose = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))
     services = compose["services"]
     api_environment = services["api"]["environment"]
+    kss_api_environment = services["kss-api"]["environment"]
     vault_environment = services["vault-init"]["environment"]
     vault_command = services["vault-init"]["command"][0]
     model_plane_environment = services["model-plane"]["environment"]
+    runtime_bootstrap = services["kss-runtime-client-bootstrap"]
 
     locators = json.loads(api_environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"])
     assert locators["knowledge/source-service/client"] == {
@@ -280,18 +327,104 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     assert model_plane_environment["KSS_ADMISSION_SCORER_BEARER_TOKEN"] == (
         "${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
     )
-    assert services["security-bootstrap"]["environment"][
-        "PROOF_AGENT_MODEL_EGRESS_CIDRS"
-    ] == "${PROOF_AGENT_MODEL_EGRESS_CIDRS:-}"
-
-    prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(
-        encoding="utf-8"
+    policy = json.loads(kss_api_environment["KSS_QUERY_GRANT_POLICY_JSON"])
+    assert policy["client_id"] == runtime_bootstrap["environment"]["KSS_RUNTIME_CLIENT_ID"]
+    assert api_environment["PROOF_AGENT_KSS_RUNTIME_CLIENT_ID"] == policy["client_id"]
+    assert policy["client_id"] == "proof-agent-production-local"
+    assert policy["allowed_strategies"] == ["single_pass", "agentic"]
+    assert policy["execution_budget"] == {
+        "max_rounds": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_ROUNDS"]),
+        "max_model_calls": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_MODEL_CALLS"]),
+        "max_candidates": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_CANDIDATES"]),
+        "max_model_tokens": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_MODEL_TOKENS"]),
+        "max_duration_ms": int(api_environment["PROOF_AGENT_KSS_QUERY_MAX_DURATION_MS"]),
+    }
+    assert policy["effective_access_scope_digest"].startswith("sha256:")
+    assert len(policy["effective_access_scope_digest"]) == 71
+    assert runtime_bootstrap["environment"]["KSS_RUNTIME_CLIENT_BEARER_TOKEN"] == (
+        "${KSS_AGENT_CLIENT_BEARER_TOKEN}"
     )
+    assert runtime_bootstrap["command"] == [
+        "-m",
+        "knowledge_source_service.bootstrap.runtime_client",
+    ]
+    assert runtime_bootstrap["restart"] == "no"
+    assert runtime_bootstrap["read_only"] is True
+    assert runtime_bootstrap["cap_drop"] == ["ALL"]
+    assert runtime_bootstrap["security_opt"] == ["no-new-privileges:true"]
+    assert (
+        services["kss-api"]["depends_on"]["kss-runtime-client-bootstrap"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert "KSS_RUNTIME_CLIENT_BEARER_TOKEN" not in kss_api_environment
+
+    bootstrap_script = (
+        PROJECT_ROOT / "knowledge_source_service" / "bootstrap" / "runtime_client.py"
+    ).read_text(encoding="utf-8")
+    assert "register_client" in bootstrap_script
+    assert "grant_release_query" not in bootstrap_script
+    assert (
+        services["security-bootstrap"]["environment"]["PROOF_AGENT_MODEL_EGRESS_CIDRS"]
+        == "${PROOF_AGENT_MODEL_EGRESS_CIDRS:-}"
+    )
+
+    prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(encoding="utf-8")
     assert "PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
     assert "api.deepseek.com" in prepare
-    assert (
-        "refresh_public_setting PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
+    assert "refresh_public_setting PROOF_AGENT_MODEL_EGRESS_CIDRS" in prepare
+
+
+def test_local_production_wires_a_dedicated_reference_registration_client() -> None:
+    compose = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))
+    services = compose["services"]
+    api_environment = services["api"]["environment"]
+    vault_environment = services["vault-init"]["environment"]
+    vault_command = services["vault-init"]["command"][0]
+    bootstrap = services["kss-reference-client-bootstrap"]
+
+    reference_handle = api_environment["PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_HANDLE"]
+    assert reference_handle == "knowledge/source-service/reference-client"
+    assert api_environment["PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_VERSION_ID"] == "1"
+    assert api_environment["PA_KNOWLEDGE_EVALUATION_ENDPOINT"] == ("https://models.internal:9448")
+    assert reference_handle not in {
+        api_environment["PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"],
+        api_environment["PROOF_AGENT_KSS_CLIENT_SECRET_HANDLE"],
+    }
+    locators = json.loads(api_environment["PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON"])
+    assert locators[reference_handle] == {
+        "mount": "secret",
+        "path": "proof-agent/knowledge-source-service-reference-client",
+        "field": "value",
+    }
+    assert "KSS_REFERENCE_CLIENT_BEARER_TOKEN" not in api_environment
+    assert vault_environment["KSS_REFERENCE_CLIENT_BEARER_TOKEN"] == (
+        "${KSS_REFERENCE_CLIENT_BEARER_TOKEN}"
     )
+    assert "proof-agent/knowledge-source-service-reference-client" in vault_command
+
+    assert bootstrap["environment"]["KSS_REFERENCE_CLIENT_ID"] == (
+        "proof-agent-formal-publication-reference"
+    )
+    assert bootstrap["environment"]["KSS_REFERENCE_CLIENT_BEARER_TOKEN"] == (
+        "${KSS_REFERENCE_CLIENT_BEARER_TOKEN}"
+    )
+    assert bootstrap["restart"] == "no"
+    assert bootstrap["read_only"] is True
+    assert bootstrap["cap_drop"] == ["ALL"]
+    assert bootstrap["security_opt"] == ["no-new-privileges:true"]
+    assert (
+        services["kss-api"]["depends_on"]["kss-reference-client-bootstrap"]["condition"]
+        == "service_completed_successfully"
+    )
+
+    bootstrap_script = (
+        PROJECT_ROOT / "knowledge_source_service" / "bootstrap" / "reference_client.py"
+    ).read_text(encoding="utf-8")
+    assert "register_client" in bootstrap_script
+    assert "grant_release_query" not in bootstrap_script
+
+    prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(encoding="utf-8")
+    assert "ensure_random_secret KSS_REFERENCE_CLIENT_BEARER_TOKEN" in prepare
 
 
 def test_local_production_compatibility_fixture_is_fresh_and_explicitly_local(

@@ -897,74 +897,6 @@ def doctor() -> None:
         typer.echo(f"{label}: {value}")
 
 
-@app.command("production-publish-agent")
-def production_publish_agent(
-    agent: str = typer.Option(..., "--agent", help="Production Agent package YAML path"),
-    release_evidence: str = typer.Option(
-        ...,
-        "--release-evidence",
-        help="Exact four-reference Phase F evidence JSON",
-    ),
-    smoke_question: str = typer.Option(
-        ...,
-        "--smoke-question",
-        help="Bounded online KSS retrieval and cited-answer smoke question",
-    ),
-) -> None:
-    """Verify Phase F, run the exact online path, then atomically activate in PostgreSQL."""
-
-    from proof_agent.bootstrap.production_roles import (
-        compose_production_agent_publisher,
-    )
-    from proof_agent.contracts import AuditActorFacts, KnowledgeReleaseEvidenceSet
-
-    evidence_path = Path(release_evidence)
-    composition = None
-    try:
-        if evidence_path.is_symlink() or not evidence_path.is_file():
-            raise ValueError("release evidence must be a regular file")
-        content = evidence_path.read_bytes()
-        if not 1 <= len(content) <= 1024 * 1024:
-            raise ValueError("release evidence is outside its size envelope")
-        evidence = KnowledgeReleaseEvidenceSet.model_validate_json(content)
-        actor = AuditActorFacts(
-            subject=_required_cli_environment("PROOF_AGENT_RELEASE_ACTOR_SUBJECT"),
-            identity_provider=_required_cli_environment(
-                "PROOF_AGENT_RELEASE_ACTOR_IDENTITY_PROVIDER"
-            ),
-            session_id=_required_cli_environment("PROOF_AGENT_RELEASE_ACTOR_SESSION_ID"),
-        )
-        composition = compose_production_agent_publisher()
-        publication = composition.publisher.publish(
-            agent_manifest_path=Path(agent),
-            evidence=evidence,
-            smoke_question=smoke_question,
-            actor=actor,
-        )
-    except Exception as exc:
-        typer.echo(f"Production Agent publication failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    finally:
-        if composition is not None:
-            composition.close()
-    typer.echo(
-        json.dumps(
-            {
-                "agent_id": publication.version.agent_id,
-                "agent_version_id": publication.version.version_id,
-                "knowledge_release_record_id": (
-                    publication.version.knowledge_release_record.record_id
-                    if publication.version.knowledge_release_record is not None
-                    else None
-                ),
-                "validation_run_id": publication.version.validation_run_id,
-                "status": "published",
-            },
-            sort_keys=True,
-        )
-    )
-
-
 @app.command()
 def inspect(path: str) -> None:
     """Summarize a trace JSONL file or Governance Receipt markdown artifact."""
@@ -2015,13 +1947,6 @@ def _optional_env_status(names: Iterable[str]) -> str:
     if present:
         return ", ".join(present)
     return "not configured (optional for deterministic demo)"
-
-
-def _required_cli_environment(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise ValueError(f"{name} is required")
-    return value
 
 
 def _inspect_trace(path: Path) -> None:

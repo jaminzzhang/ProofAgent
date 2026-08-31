@@ -159,10 +159,9 @@ def run_process_role(
             ocr_extractor=ocr_extractor,
             snapshot_connections=snapshot_connections,
             synchronization_id_factory=(
-                (lambda: f"source-sync-{uuid4().hex}")
-                if snapshot_connections is not None
-                else None
+                (lambda: f"source-sync-{uuid4().hex}") if snapshot_connections is not None else None
             ),
+            query_grant_policy=(configuration.query_grant_policy if role == "api" else None),
         )
         if role == "api":
             try:
@@ -179,11 +178,14 @@ def run_process_role(
             )
             return 0
         if role == "query-executor":
-            idle_seconds = _positive_integer(
-                environment,
-                "KSS_QUERY_IDLE_MILLISECONDS",
-                200,
-            ) / 1000
+            idle_seconds = (
+                _positive_integer(
+                    environment,
+                    "KSS_QUERY_IDLE_MILLISECONDS",
+                    200,
+                )
+                / 1000
+            )
             try:
                 while True:
                     if not runtime.query_executor.run_once():
@@ -222,19 +224,13 @@ def _ocr_extractor(
 ) -> HttpDocumentOcrExtractor | None:
     fields = {
         "KSS_OCR_ENDPOINT": environment.get("KSS_OCR_ENDPOINT", "").strip(),
-        "KSS_OCR_BEARER_TOKEN": secret_environment_value(
-            environment, "KSS_OCR_BEARER_TOKEN"
-        ),
-        "KSS_OCR_MODEL_REVISION": environment.get(
-            "KSS_OCR_MODEL_REVISION", ""
-        ).strip(),
+        "KSS_OCR_BEARER_TOKEN": secret_environment_value(environment, "KSS_OCR_BEARER_TOKEN"),
+        "KSS_OCR_MODEL_REVISION": environment.get("KSS_OCR_MODEL_REVISION", "").strip(),
     }
     if any(fields.values()):
         missing = tuple(key for key, value in fields.items() if not value)
         if missing:
-            raise ValueError(
-                "KSS OCR configuration is incomplete: " + ", ".join(missing)
-            )
+            raise ValueError("KSS OCR configuration is incomplete: " + ", ".join(missing))
         return HttpDocumentOcrExtractor(
             endpoint=fields["KSS_OCR_ENDPOINT"],
             bearer_token=fields["KSS_OCR_BEARER_TOKEN"],
@@ -248,13 +244,9 @@ def _agentic_controller(
     environment: Mapping[str, str],
 ) -> HttpAgenticRetrievalController | None:
     endpoint = environment.get("KSS_AGENTIC_CONTROLLER_ENDPOINT", "").strip()
-    bearer_token = secret_environment_value(
-        environment, "KSS_AGENTIC_CONTROLLER_BEARER_TOKEN"
-    )
+    bearer_token = secret_environment_value(environment, "KSS_AGENTIC_CONTROLLER_BEARER_TOKEN")
     if bool(endpoint) != bool(bearer_token):
-        raise ValueError(
-            "KSS Agentic controller endpoint and credential are required together"
-        )
+        raise ValueError("KSS Agentic controller endpoint and credential are required together")
     if not endpoint:
         return None
     return HttpAgenticRetrievalController(
@@ -289,8 +281,7 @@ def _projection_encoder(
         missing = tuple(key for key, value in fields.items() if not value)
         if missing:
             raise ValueError(
-                "KSS projection encoder configuration is incomplete: "
-                + ", ".join(missing)
+                "KSS projection encoder configuration is incomplete: " + ", ".join(missing)
             )
         return HttpProjectionTextEncoder(
             endpoint=fields["endpoint"],
@@ -318,9 +309,7 @@ def _run_sync_scheduler(
     configuration: ApiRuntimeConfiguration,
     environment: Mapping[str, str],
 ) -> int:
-    repository = PostgresKnowledgeQueryRepository.from_dsn(
-        configuration.postgres_dsn
-    )
+    repository = PostgresKnowledgeQueryRepository.from_dsn(configuration.postgres_dsn)
     batch_size = _positive_integer(
         environment,
         "KSS_RESULT_REAPER_BATCH_SIZE",
@@ -361,10 +350,8 @@ def _run_knowledge_worker(
         catalog=catalog,
         projection=projection,
     )
-    synchronization_repository = (
-        PostgresKnowledgeSourceSynchronizationRepository.from_dsn(
-            configuration.postgres_dsn
-        )
+    synchronization_repository = PostgresKnowledgeSourceSynchronizationRepository.from_dsn(
+        configuration.postgres_dsn
     )
     snapshot_connections = ConfiguredSnapshotConnectionRegistry.from_environment(
         environment,

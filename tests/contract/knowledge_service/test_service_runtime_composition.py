@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -9,11 +10,14 @@ from fastapi.testclient import TestClient
 import psycopg
 from psycopg.rows import dict_row
 import pytest
+from pydantic import ValidationError
+import yaml  # type: ignore[import-untyped]
 
 from knowledge_source_service.adapters.memory.artifacts import (
     InMemoryImmutableArtifactStore,
 )
 from knowledge_source_service.adapters.postgres.access_control import (
+    KnowledgeAccessConflict,
     PostgresKnowledgeAccessControl,
 )
 from knowledge_source_service.adapters.postgres.knowledge_catalog import (
@@ -24,6 +28,7 @@ from knowledge_source_service.adapters.postgres.knowledge_queries import (
 )
 from knowledge_source_service.adapters.postgres.release_references import (
     PostgresReleaseLifecycleRepository,
+    PostgresReleaseReferenceRepository,
 )
 from knowledge_source_service.adapters.postgres.migrations import (
     apply_knowledge_service_migrations,
@@ -36,6 +41,9 @@ from knowledge_source_service.application.knowledge_releases import (
     KnowledgeReleaseApplication,
     PublishKnowledgeReleaseCommand,
 )
+from knowledge_source_service.application.query_grants import (
+    KnowledgeQueryGrantProvisioningApplication,
+)
 from knowledge_source_service.application.release_references import (
     KnowledgeBaseReleaseLifecycleApplication,
 )
@@ -45,6 +53,15 @@ from knowledge_source_service.application.projection_encoding import (
 from knowledge_source_service.bootstrap.runtime import (
     BasePreparationExecutionConfiguration,
     compose_runtime,
+)
+from knowledge_source_service.bootstrap.reference_client import (
+    provision_reference_client,
+)
+from knowledge_source_service.bootstrap.runtime_client import provision_runtime_client
+from knowledge_source_service.configuration import ApiRuntimeConfiguration
+from knowledge_source_service.contracts.access_control import (
+    KnowledgeQueryGrantPolicy,
+    ProvisionKnowledgeQueryGrantRequest,
 )
 from knowledge_source_service.contracts.release_references import (
     DeprecateKnowledgeBaseReleaseRequest,
@@ -74,7 +91,17 @@ from proof_agent.capabilities.knowledge.source_service_client import (
 from proof_agent.capabilities.knowledge.source_service_management_client import (
     KnowledgeSourceServiceManagementClient,
 )
-from proof_agent.contracts import Permission
+from proof_agent.capabilities.knowledge.source_service_query_grant_provisioner import (
+    KnowledgeSourceServiceQueryGrantProvisioner,
+)
+from proof_agent.capabilities.knowledge.source_service_release_reference_registrar import (
+    KnowledgeSourceServiceReleaseReferenceRegistrar,
+)
+from proof_agent.contracts import (
+    Permission,
+    ProductionAgentKnowledgeQueryGrantRequest,
+    ProductionAgentReleaseReferenceRequest,
+)
 from proof_agent.contracts.knowledge_candidates import KnowledgeCandidateQuery
 from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
 from proof_agent.delivery.knowledge_service_management_api import (
@@ -85,6 +112,8 @@ from proof_agent.observability.api.operator_identity import OperatorIdentityCont
 
 
 pytestmark = pytest.mark.postgres_integration
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 class _RuntimeSnapshotReader:
@@ -115,6 +144,37 @@ class _RuntimeConnectionProfilePolicy:
     def validate(self, configuration: HttpSnapshotProfile) -> str:
         assert configuration.kind == "http_json"
         return "runtime-profile-policy-v1"
+
+
+def test_runtime_requires_operator_authentication_for_query_grant_policy() -> None:
+    with pytest.raises(
+        ValueError,
+        match="Query Grant provisioning requires operator authentication",
+    ):
+        compose_runtime(
+            postgres_dsn="not-used-before-query-grant-auth-validation",
+            artifacts=InMemoryImmutableArtifactStore(),
+            release_identity="kss-query-grant-auth-test",
+            dependency_readiness=lambda: {},
+            clock=lambda: datetime(2026, 8, 30, tzinfo=UTC),
+            query_id_factory=lambda: "query-unused",
+            trace_id_factory=lambda: "trace-unused",
+            worker_id="worker-unused",
+            lease_duration=timedelta(seconds=30),
+            result_retention=timedelta(hours=24),
+            query_grant_policy=KnowledgeQueryGrantPolicy(
+                client_id="proof-agent-runtime",
+                allowed_strategies=("single_pass",),
+                execution_budget={
+                    "max_rounds": 1,
+                    "max_model_calls": 1,
+                    "max_candidates": 20,
+                    "max_model_tokens": 1000,
+                    "max_duration_ms": 5000,
+                },
+                effective_access_scope_digest=f"sha256:{'c' * 64}",
+            ),
+        )
 
 
 def test_runtime_composes_management_synchronization_api_and_worker(
@@ -770,22 +830,68 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
         )
         .release
     )
+    other_source = DocumentIntakeApplication(
+        artifacts=artifacts,
+        catalog=catalog,
+        pipeline_revision="document-pipeline-v1",
+        max_content_bytes=1024,
+    ).create_source_version(
+        DocumentIntakeCommand(
+            knowledge_space_id="space-runtime",
+            knowledge_source_id="source-runtime",
+            display_filename="runtime-v2.md",
+            media_type="text/markdown",
+            content="# 其他版本\n这是另一个可查询 Release。\n".encode(),
+        )
+    )
+    other_release = (
+        KnowledgeReleaseApplication(
+            artifacts=artifacts,
+            catalog=catalog,
+            projection=projection,
+            encoder=encoder,
+        )
+        .publish(
+            PublishKnowledgeReleaseCommand(
+                knowledge_space_id="space-runtime",
+                knowledge_base_id="base-runtime",
+                knowledge_source_version_ids=(other_source.version.knowledge_source_version_id,),
+            )
+        )
+        .release
+    )
+    compose = yaml.safe_load(
+        (REPOSITORY_ROOT / "docker-compose.production-local.yml").read_text(encoding="utf-8")
+    )
+    services = compose["services"]
+    runtime_bootstrap_environment = services["kss-runtime-client-bootstrap"]["environment"]
+    grant_policy = ApiRuntimeConfiguration.from_environment(
+        services["kss-api"]["environment"]
+    ).query_grant_policy
+    assert grant_policy is not None
     access = PostgresKnowledgeAccessControl.from_dsn(kss_postgres_dsn)
-    access.register_client(
-        client_id="proof-agent-runtime",
+    provision_runtime_client(
+        access,
+        client_id=runtime_bootstrap_environment["KSS_RUNTIME_CLIENT_ID"],
         bearer_token="runtime-secret-token-1",
     )
-    access.grant_release_query(
-        client_grant_id="grant-runtime",
-        client_id="proof-agent-runtime",
+    assert grant_policy.client_id == runtime_bootstrap_environment["KSS_RUNTIME_CLIENT_ID"]
+    grant_request = ProvisionKnowledgeQueryGrantRequest(
         knowledge_base_release_id=release.knowledge_base_release_id,
-        allowed_strategies=("single_pass", "agentic"),
-        max_rounds=1,
-        max_model_calls=1,
-        max_candidates=20,
-        max_model_tokens=1000,
-        max_duration_ms=5000,
-        effective_access_scope_digest=f"sha256:{'c' * 64}",
+    )
+    with pytest.raises(ValidationError):
+        ProvisionKnowledgeQueryGrantRequest.model_validate(
+            {
+                **grant_request.model_dump(mode="json"),
+                "knowledge_space_id": release.knowledge_space_id,
+                "client_id": "proof-agent-formal-publication-reference",
+                "execution_budget": grant_policy.execution_budget.model_dump(mode="json"),
+            }
+        )
+    provision_reference_client(
+        access,
+        client_id="proof-agent-formal-publication-reference",
+        bearer_token="reference-secret-token-05j",
     )
     now = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
     query_ids = iter(("query-runtime-1", "query-runtime-2"))
@@ -804,11 +910,122 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
         worker_id="query-worker-runtime-1",
         lease_duration=timedelta(seconds=30),
         result_retention=timedelta(hours=24),
+        authenticate_operator=bearer_operator_authenticator(
+            operator_id="operator-runtime",
+            expected_token="operator-runtime-secret",
+        ),
+        query_grant_policy=grant_policy,
         projection=projection,
         encoder=encoder,
         agentic_controller=agentic_controller,
     )
     client = TestClient(runtime.http_application)
+    operator_authorization = {"Authorization": "Bearer operator-runtime-secret"}
+    reference_registrar = KnowledgeSourceServiceReleaseReferenceRegistrar(
+        endpoint="https://knowledge.internal",
+        http_client=_TestClientGuardedHttpClient(
+            client=client,
+            after_create=lambda: None,
+        ),
+        authorization_header_factory=lambda: "Bearer reference-secret-token-05j",
+    )
+    reference_request = ProductionAgentReleaseReferenceRequest(
+        knowledge_space_id=release.knowledge_space_id,
+        knowledge_base_id=release.knowledge_base_id,
+        knowledge_base_release_id=release.knowledge_base_release_id,
+        external_resource_id="provisional-agent-version-runtime-05n",
+    )
+    first_reference = reference_registrar.register_release_reference(
+        reference_request,
+        idempotency_key="formal-agent-reference:provisional-agent-version-runtime-05n",
+    )
+    replayed_reference = reference_registrar.register_release_reference(
+        reference_request,
+        idempotency_key="formal-agent-reference:provisional-agent-version-runtime-05n",
+    )
+    reference_ledger = PostgresReleaseReferenceRepository.from_dsn(kss_postgres_dsn)
+
+    assert replayed_reference == first_reference
+    assert first_reference.authenticated_client_id == ("proof-agent-formal-publication-reference")
+    assert reference_ledger.get(first_reference.release_reference_id) is not None
+    assert len(reference_ledger.audit(release.knowledge_base_release_id)) == 1
+
+    grant_provisioner = KnowledgeSourceServiceQueryGrantProvisioner(
+        endpoint="https://knowledge.internal",
+        http_client=_TestClientGuardedHttpClient(
+            client=client,
+            after_create=lambda: None,
+        ),
+        authorization_header_factory=lambda: "Bearer operator-runtime-secret",
+    )
+    proof_agent_grant_request = ProductionAgentKnowledgeQueryGrantRequest(
+        knowledge_base_release_id=release.knowledge_base_release_id,
+    )
+    provisioned = grant_provisioner.provision_query_grant(proof_agent_grant_request)
+    replayed = grant_provisioner.provision_query_grant(proof_agent_grant_request)
+    unauthorized_provisioning = client.post(
+        "/v1/knowledge-query-grants",
+        headers={"Authorization": "Bearer runtime-secret-token-1"},
+        json=grant_request.model_dump(mode="json"),
+    )
+    unauthorized_reference_provisioning = client.post(
+        "/v1/knowledge-query-grants",
+        headers={"Authorization": "Bearer reference-secret-token-05j"},
+        json=grant_request.model_dump(mode="json"),
+    )
+    forged_policy_sentinel = "forged-query-grant-policy-secret-sentinel"
+    forged_provisioning = client.post(
+        "/v1/knowledge-query-grants",
+        headers=operator_authorization,
+        json={
+            **grant_request.model_dump(mode="json"),
+            "client_id": forged_policy_sentinel,
+        },
+    )
+
+    assert replayed == provisioned
+    grant = provisioned.model_dump(mode="json")
+    assert grant["schema_version"] == "knowledge-query-grant.v1"
+    assert grant["client_id"] == grant_policy.client_id
+    assert grant["knowledge_space_id"] == release.knowledge_space_id
+    assert grant["knowledge_base_release_id"] == release.knowledge_base_release_id
+    assert grant["execution_budget"] == grant_policy.execution_budget.model_dump(mode="json")
+    assert grant["allowed_strategies"] == ["single_pass", "agentic"]
+    assert unauthorized_provisioning.status_code == 401
+    assert unauthorized_provisioning.json()["code"] == "invalid_operator_credential"
+    assert unauthorized_reference_provisioning.status_code == 401
+    assert unauthorized_reference_provisioning.json()["code"] == ("invalid_operator_credential")
+    assert forged_provisioning.status_code == 422
+    assert forged_provisioning.json()["code"] == "invalid_management_request"
+    assert forged_policy_sentinel not in forged_provisioning.text
+    with pytest.raises(KnowledgeAccessConflict):
+        KnowledgeQueryGrantProvisioningApplication(
+            registry=access,
+            policy=grant_policy.model_copy(
+                update={
+                    "execution_budget": grant_policy.execution_budget.model_copy(
+                        update={"max_candidates": 21}
+                    )
+                }
+            ),
+        ).provision(grant_request)
+    forged_client_sentinel = "forged-runtime-client-secret-sentinel"
+    invalid_reference = client.post(
+        "/v1/knowledge-base-release-references",
+        headers={
+            "Authorization": "Bearer runtime-secret-token-1",
+            "Idempotency-Key": "formal-agent-reference:invalid-runtime-body",
+        },
+        json={
+            "knowledge_space_id": release.knowledge_space_id,
+            "knowledge_base_id": release.knowledge_base_id,
+            "knowledge_base_release_id": release.knowledge_base_release_id,
+            "external_resource_kind": "published_agent_version",
+            "external_resource_id": "provisional-invalid-runtime-version",
+            "purpose": "execution_or_rollback",
+            "authenticated_client_id": forged_client_sentinel,
+        },
+    )
 
     denied = client.post(
         "/v1/knowledge-queries",
@@ -823,6 +1040,63 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
                 "max_rounds": 1,
                 "max_model_calls": 1,
                 "max_candidates": 20,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 5000,
+            },
+            "deadline_at": "2026-08-12T10:01:00Z",
+        },
+    )
+    reference_query_denied = client.post(
+        "/v1/knowledge-queries",
+        headers={
+            "Authorization": "Bearer reference-secret-token-05j",
+            "Idempotency-Key": "reference-client-query-without-grant",
+        },
+        json={
+            "knowledge_base_release_id": release.knowledge_base_release_id,
+            "question": "专用 Reference client 不应获得查询权限",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 20,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 5000,
+            },
+            "deadline_at": "2026-08-12T10:01:00Z",
+        },
+    )
+    other_release_denied = client.post(
+        "/v1/knowledge-queries",
+        headers={
+            "Authorization": "Bearer runtime-secret-token-1",
+            "Idempotency-Key": "runtime-other-release-attempt",
+        },
+        json={
+            "knowledge_base_release_id": other_release.knowledge_base_release_id,
+            "question": "不得越界到其他 Release",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 20,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 5000,
+            },
+            "deadline_at": "2026-08-12T10:01:00Z",
+        },
+    )
+    over_budget_denied = client.post(
+        "/v1/knowledge-queries",
+        headers={
+            "Authorization": "Bearer runtime-secret-token-1",
+            "Idempotency-Key": "runtime-over-budget-attempt",
+        },
+        json={
+            "knowledge_base_release_id": release.knowledge_base_release_id,
+            "question": "不得超过 Grant 预算",
+            "execution_budget": {
+                "max_rounds": 1,
+                "max_model_calls": 1,
+                "max_candidates": 21,
                 "max_model_tokens": 1000,
                 "max_duration_ms": 5000,
             },
@@ -855,8 +1129,17 @@ def test_runtime_composes_authenticated_api_queue_worker_and_exact_retrieval(
         headers={"Authorization": "Bearer runtime-secret-token-1"},
     )
 
+    assert invalid_reference.status_code == 422
+    assert invalid_reference.json()["code"] == "invalid_knowledge_service_request"
+    assert forged_client_sentinel not in invalid_reference.text
     assert denied.status_code == 401
     assert denied.headers["www-authenticate"] == "Bearer"
+    assert reference_query_denied.status_code == 403
+    assert reference_query_denied.json()["code"] == "knowledge_query_access_denied"
+    assert other_release_denied.status_code == 403
+    assert other_release_denied.json()["code"] == "knowledge_query_access_denied"
+    assert over_budget_denied.status_code == 403
+    assert over_budget_denied.json()["code"] == "knowledge_query_access_denied"
     assert created.status_code == 202
     assert worked is True
     assert completed.status_code == 200

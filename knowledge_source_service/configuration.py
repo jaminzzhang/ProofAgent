@@ -8,6 +8,10 @@ import os
 from pathlib import Path
 import stat
 
+from pydantic import ValidationError
+
+from knowledge_source_service.contracts.access_control import KnowledgeQueryGrantPolicy
+
 
 _REQUIRED_API_CONFIGURATION = (
     "KSS_OBJECT_STORE_URI",
@@ -74,6 +78,7 @@ class ApiRuntimeConfiguration:
     object_store_uri: str
     search_endpoint: str
     release_identity: str
+    query_grant_policy: KnowledgeQueryGrantPolicy | None = None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> ApiRuntimeConfiguration:
@@ -86,9 +91,7 @@ class ApiRuntimeConfiguration:
                 if key != "KSS_POSTGRES_DSN"
             },
         }
-        missing = tuple(
-            key for key in _REQUIRED_API_CONFIGURATION if not values[key]
-        )
+        missing = tuple(key for key in _REQUIRED_API_CONFIGURATION if not values[key])
         if missing:
             raise MissingRequiredConfiguration(missing)
         return cls(
@@ -96,4 +99,17 @@ class ApiRuntimeConfiguration:
             object_store_uri=values["KSS_OBJECT_STORE_URI"],
             search_endpoint=values["KSS_SEARCH_ENDPOINT"],
             release_identity=values["KSS_RELEASE_IDENTITY"],
+            query_grant_policy=_query_grant_policy_from_environment(environment),
         )
+
+
+def _query_grant_policy_from_environment(
+    environment: Mapping[str, str],
+) -> KnowledgeQueryGrantPolicy | None:
+    payload = environment.get("KSS_QUERY_GRANT_POLICY_JSON", "").strip()
+    if not payload:
+        return None
+    try:
+        return KnowledgeQueryGrantPolicy.model_validate_json(payload)
+    except ValidationError as error:
+        raise ValueError("KSS_QUERY_GRANT_POLICY_JSON is invalid") from error

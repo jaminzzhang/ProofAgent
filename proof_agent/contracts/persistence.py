@@ -11,6 +11,8 @@ from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.agent_configuration import (
     ActiveAgentVersion,
     DraftAgent,
+    FormalProductionAgentPublicationCommandReceipt,
+    FormalProductionAgentPublicationCommandState,
     KnowledgeSource,
     PublishedAgentVersion,
 )
@@ -75,6 +77,10 @@ class PersistenceInvariantError(RuntimeError):
     """An adapter returned state that violates a persistence contract."""
 
 
+class PersistenceIdempotencyConflictError(RuntimeError):
+    """One idempotency scope was reused for a different canonical request."""
+
+
 class AgentDraftRecord(FrozenModel):
     """A Draft Agent plus its adapter-neutral optimistic revision."""
 
@@ -103,13 +109,8 @@ class AgentActivationRecord(FrozenModel):
 
     @model_validator(mode="after")
     def require_matching_rollback_origin(self) -> "AgentActivationRecord":
-        if (
-            self.activation.rollback_from_version_id
-            != self.active_pointer_expectation.version_id
-        ):
-            raise ValueError(
-                "activation rollback origin must match active pointer expectation"
-            )
+        if self.activation.rollback_from_version_id != self.active_pointer_expectation.version_id:
+            raise ValueError("activation rollback origin must match active pointer expectation")
         return self
 
 
@@ -127,7 +128,67 @@ class AgentPublicationRecord(FrozenModel):
             raise ValueError("activation agent_id must match published version")
         if self.activation.version_id != self.version.version_id:
             raise ValueError("activation version_id must match published version")
+        formal_evidence = self.version.formal_production_evidence
+        if formal_evidence is not None:
+            if formal_evidence.source_draft_revision != self.draft_revision:
+                raise ValueError("formal evidence Draft revision must match publication")
+            if self.active_pointer_expectation is None:
+                raise ValueError("formal publication requires an Active pointer expectation")
+            if (
+                self.activation.activated_at != self.version.published_at
+                or self.activation.activated_by != self.version.published_by
+                or self.activation.rollback_from_version_id is not None
+            ):
+                raise ValueError("formal publication activation must match publication facts")
         return self
+
+
+class FormalProductionAgentPublicationCommandRecord(FrozenModel):
+    """Internal idempotency identity paired with its trace-safe public receipt."""
+
+    actor_subject: str = Field(min_length=1, max_length=255)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    receipt: FormalProductionAgentPublicationCommandReceipt
+
+
+class FormalProductionAgentPublicationCommandReservation(FrozenModel):
+    """Result of atomically reserving an actor-scoped idempotency key."""
+
+    record: FormalProductionAgentPublicationCommandRecord
+    created: bool
+
+
+def complete_formal_publication_command_success(
+    record: FormalProductionAgentPublicationCommandRecord,
+    publication: AgentPublicationRecord,
+) -> FormalProductionAgentPublicationCommandRecord:
+    """Build the exact terminal command record for one committed publication."""
+
+    evidence = publication.version.formal_production_evidence
+    if evidence is None:
+        raise ValueError("formal command success requires formal publication evidence")
+    receipt = record.receipt
+    if (
+        receipt.state is not FormalProductionAgentPublicationCommandState.IN_PROGRESS
+        or receipt.agent_id != publication.version.agent_id
+        or receipt.draft_id != publication.version.source_draft_id
+        or receipt.draft_revision != publication.draft_revision
+    ):
+        raise ValueError("formal command identity must match publication")
+    return record.model_copy(
+        update={
+            "receipt": receipt.model_copy(
+                update={
+                    "state": FormalProductionAgentPublicationCommandState.SUCCEEDED,
+                    "completed_at": publication.version.published_at,
+                    "published_version_id": publication.version.version_id,
+                    "validation_run_id": publication.version.validation_run_id,
+                    "release_reference_id": evidence.release_reference.release_reference_id,
+                    "published_at": publication.version.published_at,
+                }
+            )
+        }
+    )
 
 
 class RunMetadataRecord(FrozenModel):

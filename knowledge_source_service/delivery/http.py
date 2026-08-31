@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from knowledge_source_service.application.knowledge_queries import (
@@ -15,6 +16,9 @@ from knowledge_source_service.application.knowledge_queries import (
     KnowledgeQueryApplication,
     KnowledgeQueryTerminalStateConflict,
     KnowledgeServiceClient,
+)
+from knowledge_source_service.application.release_references import (
+    KnowledgeBaseReleaseReferenceApplication,
 )
 from knowledge_source_service.contracts.knowledge_query import (
     CreateKnowledgeQueryRequest,
@@ -27,6 +31,11 @@ from knowledge_source_service.contracts.health import (
     KnowledgeServiceLiveness,
     KnowledgeServiceReadiness,
 )
+from knowledge_source_service.contracts.release_references import (
+    KnowledgeBaseReleaseReference,
+    RegisterKnowledgeBaseReleaseReferenceRequest,
+)
+from knowledge_source_service.domain.release_references import ReleaseReferenceError
 
 
 AuthenticateKnowledgeClient = Callable[[Request], KnowledgeServiceClient]
@@ -97,6 +106,7 @@ def _knowledge_query_not_found_problem(trace_id: str) -> KnowledgeServiceProblem
 def create_application(
     *,
     query_application: KnowledgeQueryApplication,
+    release_references: KnowledgeBaseReleaseReferenceApplication | None = None,
     authenticate_client: AuthenticateKnowledgeClient,
     trace_id_factory: Callable[[], str],
     release_identity: str,
@@ -182,9 +192,7 @@ def create_application(
             title="Knowledge Query access denied",
             status=status.HTTP_403_FORBIDDEN,
             code="knowledge_query_access_denied",
-            detail=(
-                "The client is not permitted to query the selected Knowledge Base Release."
-            ),
+            detail=("The client is not permitted to query the selected Knowledge Base Release."),
             trace_id=trace_id_factory(),
             retryable=False,
         )
@@ -228,14 +236,86 @@ def create_application(
         _error: KnowledgeQueryTerminalStateConflict,
     ) -> JSONResponse:
         problem = KnowledgeServiceProblem(
-            type=(
-                "urn:knowledge-source-service:problem:"
-                "knowledge-query-terminal-state-conflict"
-            ),
+            type=("urn:knowledge-source-service:problem:knowledge-query-terminal-state-conflict"),
             title="Knowledge Query terminal state conflict",
             status=status.HTTP_409_CONFLICT,
             code="knowledge_query_terminal_state_conflict",
             detail="A terminal Knowledge Query cannot be cancelled.",
+            trace_id=trace_id_factory(),
+            retryable=False,
+        )
+        return _problem_response(problem)
+
+    @application.exception_handler(ReleaseReferenceError)
+    def handle_release_reference_error(
+        _request: Request,
+        error: ReleaseReferenceError,
+    ) -> JSONResponse:
+        if error.code in {
+            "release_reference_idempotency_conflict",
+            "release_reference_external_resource_conflict",
+            "release_reference_identity_conflict",
+        }:
+            problem = KnowledgeServiceProblem(
+                type="urn:knowledge-source-service:problem:release-reference-conflict",
+                title="Knowledge Base Release Reference conflict",
+                status=status.HTTP_409_CONFLICT,
+                code="release_reference_conflict",
+                detail="The Reference command conflicts with durable authority.",
+                trace_id=trace_id_factory(),
+                retryable=False,
+            )
+            return _problem_response(problem)
+        if error.code in {
+            "release_reference_release_not_admissible",
+            "release_reference_release_scope_mismatch",
+        }:
+            problem = KnowledgeServiceProblem(
+                type="urn:knowledge-source-service:problem:release-reference-not-admissible",
+                title="Knowledge Base Release is not admissible",
+                status=status.HTTP_409_CONFLICT,
+                code="release_reference_not_admissible",
+                detail="The exact Release is not admissible in the requested scope.",
+                trace_id=trace_id_factory(),
+                retryable=False,
+            )
+            return _problem_response(problem)
+        if error.code in {
+            "release_reference_invalid_client",
+            "release_reference_invalid_idempotency_key",
+        }:
+            problem = KnowledgeServiceProblem(
+                type="urn:knowledge-source-service:problem:invalid-release-reference-request",
+                title="Invalid Knowledge Base Release Reference request",
+                status=status.HTTP_400_BAD_REQUEST,
+                code="invalid_release_reference_request",
+                detail="The Reference command failed bounded validation.",
+                trace_id=trace_id_factory(),
+                retryable=False,
+            )
+            return _problem_response(problem)
+        problem = KnowledgeServiceProblem(
+            type="urn:knowledge-source-service:problem:release-reference-unavailable",
+            title="Knowledge Base Release Reference unavailable",
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="release_reference_unavailable",
+            detail="The exact Reference could not be verified or persisted.",
+            trace_id=trace_id_factory(),
+            retryable=True,
+        )
+        return _problem_response(problem)
+
+    @application.exception_handler(RequestValidationError)
+    def handle_invalid_knowledge_service_request(
+        _request: Request,
+        _error: RequestValidationError,
+    ) -> JSONResponse:
+        problem = KnowledgeServiceProblem(
+            type="urn:knowledge-source-service:problem:invalid-request",
+            title="Invalid Knowledge service request",
+            status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code="invalid_knowledge_service_request",
+            detail="The request failed bounded validation.",
             trace_id=trace_id_factory(),
             retryable=False,
         )
@@ -289,5 +369,22 @@ def create_application(
         if query is None:
             return _problem_response(_knowledge_query_not_found_problem(trace_id_factory()))
         return query
+
+    if release_references is not None:
+
+        @application.post(
+            "/v1/knowledge-base-release-references",
+            response_model=KnowledgeBaseReleaseReference,
+        )
+        def register_knowledge_base_release_reference(
+            request: RegisterKnowledgeBaseReleaseReferenceRequest,
+            idempotency_key: str = Depends(require_idempotency_key),
+            client: KnowledgeServiceClient = Depends(authenticate_client),
+        ) -> KnowledgeBaseReleaseReference:
+            return release_references.register(
+                request,
+                authenticated_client_id=client.client_id,
+                idempotency_key=idempotency_key,
+            )
 
     return application

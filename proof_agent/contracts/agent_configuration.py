@@ -14,12 +14,21 @@ from proof_agent.contracts._base import (
 )
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
-from proof_agent.contracts.knowledge_release import KnowledgeReleaseRecord
+from proof_agent.contracts.knowledge_release import (
+    FormalProductionAgentPhaseFRecord,
+    KnowledgeReleaseEvidenceSet,
+    KnowledgeReleaseRecord,
+    ProvisionedProductionAgentKnowledgeQueryGrant,
+    RegisteredProductionAgentReleaseReference,
+)
+from proof_agent.contracts.knowledge_index import ExactArtifactRef
 from proof_agent.contracts.knowledge_service_management import KnowledgeServiceIdentifier
+from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.shared_assets import ResolvedSharedAssetVersions
 from proof_agent.contracts.workflow_stage_configuration import (
     EffectiveWorkflowStageConfiguration,
     WorkflowStageAvailabilitySet,
+    WorkflowStageConfigurationRuntimeSource,
 )
 
 
@@ -235,6 +244,335 @@ class FormalProductionAgentCandidate(StrictFrozenModel):
         return self
 
 
+class ProvisionalProductionAgentVersion(StrictFrozenModel):
+    """Phase F-authorized candidate facts that are not published or active."""
+
+    schema_version: Literal["provisional-production-agent-version.v1"] = (
+        "provisional-production-agent-version.v1"
+    )
+    agent_id: str = Field(strict=True, min_length=1, max_length=128)
+    version_id: str = Field(strict=True, min_length=1, max_length=128)
+    source_draft_id: str = Field(strict=True, min_length=1, max_length=128)
+    source_draft_revision: int = Field(strict=True, ge=1)
+    validation_run_id: str = Field(strict=True, min_length=1, max_length=128)
+    display_name: str = Field(strict=True, min_length=1, max_length=200)
+    purpose: str = Field(strict=True, max_length=4_000)
+    contract_bundle: ContractBundle
+    prepared_at: str = Field(strict=True, min_length=1)
+    prepared_by: str = Field(strict=True, min_length=1, max_length=256)
+    formal_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_release_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet
+    phase_f_record: FormalProductionAgentPhaseFRecord
+    workflow_stage_availability: WorkflowStageAvailabilitySet
+    effective_workflow_stage_configuration: EffectiveWorkflowStageConfiguration
+    workflow_stage_configuration_source: WorkflowStageConfigurationRuntimeSource
+
+    @model_validator(mode="after")
+    def require_phase_f_record_identity(self) -> "ProvisionalProductionAgentVersion":
+        if (
+            self.phase_f_record.provisional_version_id != self.version_id
+            or self.phase_f_record.validation_run_id != self.validation_run_id
+            or self.phase_f_record.formal_candidate_sha256 != self.formal_candidate_sha256
+        ):
+            raise ValueError("Provisional version Formal Candidate identity must match")
+        if (
+            self.phase_f_record.knowledge_release_candidate_sha256
+            != self.knowledge_release_candidate_sha256
+        ):
+            raise ValueError("Provisional version Knowledge Release identity must match")
+        return self
+
+
+class FormalProductionAgentPhaseFPreparation(StrictFrozenModel):
+    """Authorized Phase F preparation with no publication or activation claim."""
+
+    schema_version: Literal["formal-production-agent-phase-f-preparation.v1"] = (
+        "formal-production-agent-phase-f-preparation.v1"
+    )
+    candidate: FormalProductionAgentCandidate
+    provisional_version: ProvisionalProductionAgentVersion
+
+    @model_validator(mode="after")
+    def require_provisional_version_matches_candidate(
+        self,
+    ) -> "FormalProductionAgentPhaseFPreparation":
+        candidate = self.candidate
+        provisional = self.provisional_version
+        if (
+            provisional.agent_id != candidate.agent_id
+            or provisional.source_draft_id != candidate.draft_id
+            or provisional.source_draft_revision != candidate.draft_revision
+            or provisional.display_name != candidate.display_name
+            or provisional.purpose != candidate.purpose
+            or provisional.contract_bundle != candidate.contract_bundle
+            or provisional.resolved_knowledge_bindings != candidate.resolved_knowledge_bindings
+            or provisional.formal_candidate_sha256 != candidate.formal_candidate_sha256
+            or provisional.knowledge_release_candidate_sha256
+            != candidate.knowledge_release_candidate_sha256
+        ):
+            raise ValueError("Phase F provisional version must match the exact candidate")
+        return self
+
+
+class FormalProductionAgentReferenceStaging(StrictFrozenModel):
+    """Reference-first staging result with no publication or activation claim."""
+
+    schema_version: Literal["formal-production-agent-reference-staging.v1"] = (
+        "formal-production-agent-reference-staging.v1"
+    )
+    preparation: FormalProductionAgentPhaseFPreparation
+    release_reference: RegisteredProductionAgentReleaseReference
+
+    @model_validator(mode="after")
+    def require_reference_matches_preparation(self) -> "FormalProductionAgentReferenceStaging":
+        release = self.preparation.candidate.knowledge_release_candidate
+        reference = self.release_reference
+        if (
+            reference.knowledge_space_id != release.knowledge_space_id
+            or reference.knowledge_base_id != release.knowledge_base_id
+            or reference.knowledge_base_release_id != release.knowledge_base_release_id
+            or reference.external_resource_id != self.preparation.provisional_version.version_id
+        ):
+            raise ValueError("Release Reference must match the exact Phase F preparation")
+        return self
+
+
+class FormalProductionAgentQueryGrantStaging(StrictFrozenModel):
+    """Exact Query Grant staging with no publication or activation claim."""
+
+    schema_version: Literal["formal-production-agent-query-grant-staging.v1"] = (
+        "formal-production-agent-query-grant-staging.v1"
+    )
+    reference_staging: FormalProductionAgentReferenceStaging
+    query_grant: ProvisionedProductionAgentKnowledgeQueryGrant
+
+    @model_validator(mode="after")
+    def require_grant_matches_candidate(self) -> "FormalProductionAgentQueryGrantStaging":
+        release = self.reference_staging.preparation.candidate.knowledge_release_candidate
+        if (
+            self.query_grant.knowledge_base_release_id != release.knowledge_base_release_id
+            or self.query_grant.knowledge_space_id != release.knowledge_space_id
+        ):
+            raise ValueError("Query Grant must match the exact Formal Candidate Release")
+        return self
+
+
+class FormalProductionAgentOnlineSmokeRequest(StrictFrozenModel):
+    """Exact registered candidate facts presented to an online smoke validator."""
+
+    schema_version: Literal["formal-production-agent-online-smoke-request.v1"] = (
+        "formal-production-agent-online-smoke-request.v1"
+    )
+    agent_id: str = Field(strict=True, min_length=1, max_length=128)
+    provisional_version_id: KnowledgeServiceIdentifier
+    validation_run_id: KnowledgeServiceIdentifier
+    formal_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_release_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_space_id: KnowledgeServiceIdentifier
+    knowledge_base_id: KnowledgeServiceIdentifier
+    knowledge_base_release_id: KnowledgeServiceIdentifier
+    release_reference_id: KnowledgeServiceIdentifier
+    smoke_question: str = Field(strict=True, min_length=1, max_length=4_000)
+
+
+class FormalProductionAgentOnlineSmokeResult(StrictFrozenModel):
+    """Exact retained result returned by one online smoke validator."""
+
+    schema_version: Literal["formal-production-agent-online-smoke-result.v1"] = (
+        "formal-production-agent-online-smoke-result.v1"
+    )
+    agent_id: str = Field(strict=True, min_length=1, max_length=128)
+    provisional_version_id: KnowledgeServiceIdentifier
+    validation_run_id: KnowledgeServiceIdentifier
+    release_reference_id: KnowledgeServiceIdentifier
+    outcome: ReceiptOutcome
+    accepted_citation_count: int = Field(strict=True, ge=0)
+    trace_ref: ExactArtifactRef
+    receipt_ref: ExactArtifactRef
+
+    @model_validator(mode="after")
+    def require_distinct_evidence(self) -> "FormalProductionAgentOnlineSmokeResult":
+        if self.trace_ref == self.receipt_ref:
+            raise ValueError("Online smoke trace and receipt artifacts must be distinct")
+        return self
+
+
+class FormalProductionAgentOnlineSmokeQualification(StrictFrozenModel):
+    """Successful exact online smoke with no publication or activation claim."""
+
+    schema_version: Literal["formal-production-agent-online-smoke-qualification.v2"] = (
+        "formal-production-agent-online-smoke-qualification.v2"
+    )
+    query_grant_staging: FormalProductionAgentQueryGrantStaging
+    request: FormalProductionAgentOnlineSmokeRequest
+    result: FormalProductionAgentOnlineSmokeResult
+
+    @model_validator(mode="after")
+    def require_exact_successful_smoke(
+        self,
+    ) -> "FormalProductionAgentOnlineSmokeQualification":
+        reference_staging = self.query_grant_staging.reference_staging
+        preparation = reference_staging.preparation
+        candidate = preparation.candidate
+        provisional = preparation.provisional_version
+        release = candidate.knowledge_release_candidate
+        reference = reference_staging.release_reference
+        request = self.request
+        result = self.result
+        if (
+            request.agent_id != candidate.agent_id
+            or request.provisional_version_id != provisional.version_id
+            or request.validation_run_id != provisional.validation_run_id
+            or request.formal_candidate_sha256 != candidate.formal_candidate_sha256
+            or request.knowledge_release_candidate_sha256
+            != candidate.knowledge_release_candidate_sha256
+            or request.knowledge_space_id != release.knowledge_space_id
+            or request.knowledge_base_id != release.knowledge_base_id
+            or request.knowledge_base_release_id != release.knowledge_base_release_id
+            or request.release_reference_id != reference.release_reference_id
+            or result.agent_id != request.agent_id
+            or result.provisional_version_id != request.provisional_version_id
+            or result.validation_run_id != request.validation_run_id
+            or result.release_reference_id != request.release_reference_id
+        ):
+            raise ValueError("Online smoke must match the exact registered staging")
+        if (
+            result.outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS
+            or result.accepted_citation_count < 1
+        ):
+            raise ValueError("Online smoke must answer with governed citations")
+        return self
+
+
+class FormalProductionAgentPublicationEvidence(StrictFrozenModel):
+    """Exact formal evidence retained by one immutable Published Agent Version."""
+
+    schema_version: Literal["formal-production-agent-publication-evidence.v1"] = (
+        "formal-production-agent-publication-evidence.v1"
+    )
+    source_draft_revision: int = Field(strict=True, ge=1)
+    phase_f_record: FormalProductionAgentPhaseFRecord
+    release_reference: RegisteredProductionAgentReleaseReference
+    online_smoke_result: FormalProductionAgentOnlineSmokeResult
+
+    @model_validator(mode="after")
+    def require_exact_qualified_identity(
+        self,
+    ) -> "FormalProductionAgentPublicationEvidence":
+        record = self.phase_f_record
+        reference = self.release_reference
+        smoke = self.online_smoke_result
+        if (
+            record.provisional_version_id != reference.external_resource_id
+            or smoke.provisional_version_id != record.provisional_version_id
+            or smoke.validation_run_id != record.validation_run_id
+            or smoke.release_reference_id != reference.release_reference_id
+        ):
+            raise ValueError("Formal publication evidence identities must match")
+        if (
+            smoke.outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS
+            or smoke.accepted_citation_count < 1
+        ):
+            raise ValueError("Formal publication evidence requires a passing online smoke")
+        return self
+
+
+class FormalProductionAgentPublicationCommandState(str, Enum):
+    """Durable lifecycle of one idempotent formal-publication command."""
+
+    IN_PROGRESS = "in_progress"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class FormalProductionAgentPublicationCommandRequest(StrictFrozenModel):
+    """Caller-supplied formal-publication inputs, excluding trusted identities."""
+
+    draft_revision: int = Field(strict=True, ge=1)
+    evidence: KnowledgeReleaseEvidenceSet
+    smoke_question: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def require_exact_evidence_fields(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and set(value) != {
+            "shadow",
+            "capacity",
+            "acceptance",
+            "recovery",
+        }:
+            raise ValueError("evidence must contain only the four Phase F artifacts")
+        return value
+
+    @field_validator("smoke_question", mode="after")
+    @classmethod
+    def normalize_smoke_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("smoke_question must not be blank")
+        return normalized
+
+
+class FormalProductionAgentPublicationCommandReceipt(StrictFrozenModel):
+    """Trace-safe durable receipt without raw evidence, question, or secrets."""
+
+    schema_version: Literal["formal-production-agent-publication-command.v1"] = (
+        "formal-production-agent-publication-command.v1"
+    )
+    command_id: str = Field(min_length=1, max_length=128)
+    state: FormalProductionAgentPublicationCommandState
+    agent_id: str = Field(min_length=1, max_length=255)
+    draft_id: str = Field(min_length=1, max_length=255)
+    draft_revision: int = Field(strict=True, ge=1)
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    started_at: str = Field(min_length=1)
+    completed_at: str | None = None
+    published_version_id: str | None = None
+    validation_run_id: str | None = None
+    release_reference_id: str | None = None
+    published_at: str | None = None
+    failure_code: str | None = None
+
+    @model_validator(mode="after")
+    def require_state_payload(self) -> "FormalProductionAgentPublicationCommandReceipt":
+        success_fields = (
+            self.published_version_id,
+            self.validation_run_id,
+            self.release_reference_id,
+            self.published_at,
+        )
+        if self.state is FormalProductionAgentPublicationCommandState.IN_PROGRESS:
+            if (
+                self.completed_at is not None
+                or any(success_fields)
+                or self.failure_code is not None
+            ):
+                raise ValueError("in-progress command cannot contain terminal fields")
+        elif self.state is FormalProductionAgentPublicationCommandState.SUCCEEDED:
+            if (
+                self.completed_at is None
+                or not all(success_fields)
+                or self.failure_code is not None
+            ):
+                raise ValueError("succeeded command requires exact publication fields")
+        elif (
+            self.completed_at is None
+            or any(success_fields)
+            or self.failure_code is None
+            or not self.failure_code.strip()
+        ):
+            raise ValueError("failed command requires only a stable failure code")
+        return self
+
+
+class FormalProductionAgentPublicationCommandResult(StrictFrozenModel):
+    """One command result plus whether it came from durable replay state."""
+
+    receipt: FormalProductionAgentPublicationCommandReceipt
+    replayed: bool
+
+
 class DraftAgent(FrozenModel):
     """Editable Agent configuration state before publication."""
 
@@ -272,6 +610,7 @@ class PublishedAgentVersion(FrozenModel):
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)
     resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
     knowledge_release_record: KnowledgeReleaseRecord | None = None
+    formal_production_evidence: FormalProductionAgentPublicationEvidence | None = None
     workflow_stage_availability: WorkflowStageAvailabilitySet | None = None
     effective_workflow_stage_configuration: PublishedWorkflowStageConfigurationSnapshot | None = (
         None
@@ -286,6 +625,40 @@ class PublishedAgentVersion(FrozenModel):
         if not value.strip():
             raise ValueError("validation_run_id is required")
         return value
+
+    @model_validator(mode="after")
+    def require_formal_production_evidence_identity(self) -> "PublishedAgentVersion":
+        evidence = self.formal_production_evidence
+        if evidence is None:
+            return self
+        record = evidence.phase_f_record
+        reference = evidence.release_reference
+        smoke = evidence.online_smoke_result
+        bindings = self.resolved_knowledge_bindings
+        if self.knowledge_release_record is not None:
+            raise ValueError("Formal publication cannot retain a legacy release record")
+        if (
+            record.provisional_version_id != self.version_id
+            or record.validation_run_id != self.validation_run_id
+            or record.created_by != self.published_by
+            or reference.external_resource_id != self.version_id
+            or smoke.agent_id != self.agent_id
+            or smoke.provisional_version_id != self.version_id
+            or smoke.validation_run_id != self.validation_run_id
+        ):
+            raise ValueError("Published Agent Version formal evidence identity must match")
+        if not any(
+            item.operation is ConfigurationOperation.PUBLISHED and item.actor == self.published_by
+            for item in self.operation_audit
+        ):
+            raise ValueError("Formal Published Agent Version requires publication audit")
+        if (
+            bindings is None
+            or len(bindings.bindings) != 1
+            or bindings.bindings[0].knowledge_base_release_id != reference.knowledge_base_release_id
+        ):
+            raise ValueError("Published Agent Version formal KSS binding must match")
+        return self
 
 
 class ActiveAgentVersion(FrozenModel):

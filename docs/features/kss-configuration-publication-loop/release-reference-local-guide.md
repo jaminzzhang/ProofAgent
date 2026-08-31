@@ -1,6 +1,6 @@
 # KSS Release Reference 与 Release lifecycle 本地调用指南
 
-[KNOWN | HIGH] TDD-03A 至 03F 提供可信 application Interface，用于注册和可信注销 exact KSS Release 引用、执行 Release deprecation/ordinary retirement/emergency revocation，以及只读评估删除资格。TDD-04A 只把删除资格评估接入受 `knowledge_source.view` 保护的 KSS 管理 GET 和同源 ProofAgent BFF GET；没有 lifecycle/Reference HTTP/BFF 命令或 Dashboard 页面，也不会删除 artifact、激活、替换或通知 Agent。
+[KNOWN | HIGH] TDD-03A 至 03F 提供可信 application Interface，用于注册和可信注销 exact KSS Release 引用、执行 Release deprecation/ordinary retirement/emergency revocation，以及只读评估删除资格。TDD-04A 只把删除资格评估接入受 `knowledge_source.view` 保护的 KSS 管理 GET 和同源 ProofAgent BFF GET；TDD-05D 另行公开 Bearer client-authenticated Reference registration，并在 ProofAgent 增加独立 guarded registrar。注销和 lifecycle 仍无网络命令或 Dashboard 页面，也不会删除 artifact、发布、激活、替换或通知 Agent。
 
 ## 注册
 
@@ -31,6 +31,40 @@ reference = application.register(
 - 仅 exact `queryable` Release 可注册。Space、Base 和 Release tuple 必须全部匹配。
 - 同一客户端的 immutable external resource 只能绑定一个 Release；需要变更知识时必须创建新的 Published Agent Version identity。
 - 返回值和审计均为 secret-free identity/lifecycle facts，不包含 Agent configuration、用户内容或凭据。
+
+### 通过公共客户端 API 注册
+
+ProofAgent 或其他已注册服务客户端调用：
+
+```http
+POST /v1/knowledge-base-release-references
+Authorization: Bearer <service-client-credential>
+Idempotency-Key: formal-agent-reference:<provisional-version-id>
+Content-Type: application/json
+```
+
+Body 只包含上例 `RegisterKnowledgeBaseReleaseReferenceRequest` 的六个字段，不包含
+`authenticated_client_id`。KSS 只从 Bearer authentication 结果取得客户端身份；首次命令和
+exact replay 都返回 `200` 与同一 `knowledge-base-release-reference.v1` active resource。
+ProofAgent 的 concrete registrar 只接受 HTTPS origin，经 `GuardedHttpClient` 发出请求，使用
+专用 client authorization factory，并拒绝 redirect、非 `200`、过大或非法响应、unknown field
+和任一 Scope/Release/external-resource/kind/purpose/state 漂移。它不复用管理端 Knowledge
+Operator credential，也不使 Reference staging 成为 Published 或 Active Agent Version。
+
+### production-local 专用客户端
+
+[KNOWN | HIGH] TDD-05J 的 checked-in production-local 配置使用
+`knowledge/source-service/reference-client` Secret Handle。一次性
+`kss-reference-client-bootstrap` 在 KSS migration 后、KSS API 启动前注册
+`proof-agent-formal-publication-reference` client identity。Vault fixture、Reference Handle、
+runtime Query Handle 和 Operator Handle 相互独立；production composition 检测到 Handle 复用时
+立即失败。
+
+该 bootstrap 只调用 `register_client`，不调用 `grant_release_query`。原因是当前
+`knowledge_client_grants` 只授权 exact-Release Knowledge Query；它不是 Reference registration
+Grant。没有 Query Grant 时，专用 Reference client 可以按公共客户端合同注册 Reference，但调用
+Knowledge Query 会返回 `403 knowledge_query_access_denied`。这项本地 fixture 不能替代生产 Secret、
+runtime Query client Grant、部署验证或 Production GO。
 
 ## 注销
 
@@ -203,6 +237,15 @@ retired Release 因此返回 `artifact_retention_unverified`，不会被推断�
 
 ## 稳定错误
 
+公共 HTTP 把内部错误收敛为不回显输入的 problem code：认证失败为
+`invalid_client_credential`；缺失或空白 HTTP key 为 `invalid_idempotency_key`；请求 contract
+非法为 `invalid_knowledge_service_request`；application key 非法为
+`invalid_release_reference_request`；幂等或 external-resource 冲突为
+`release_reference_conflict`；Release 不可采用或 Scope 不匹配为
+`release_reference_not_admissible`；存储或完整性不可确认统一为可重试的
+`release_reference_unavailable`。下表是 application/repository 内部诊断 code，不应原样回显
+私有输入或数据库 detail。
+
 | code | 含义 |
 | --- | --- |
 | `release_reference_invalid_client` | 可信客户端身份格式无效 |
@@ -238,4 +281,19 @@ retired Release 因此返回 `artifact_retention_unverified`，不会被推断�
 
 ## 当前边界
 
-[FRAME | HIGH] 注册成功不代表 Agent 已发布或激活。跨服务顺序仍应是“先注册 KSS Reference，后尝试 ProofAgent publication/activation”；后续失败保留引用是安全孤儿。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销只提供 KSS 本地 query denial 和受影响数量；删除资格 GET 只是只读 blocker projection。当前尚未实现 ProofAgent publication/activation 接线、真实注销 verifier、后台认证对账、lifecycle/Reference 网络命令、生产 artifact-retention adapter、物理删除、affected-reference 明细/通知、Dashboard lifecycle 页面、ProofAgent runtime/rollback 失败关闭接线、生产 retention 配置或部署，因此该本地投影不能外推为生产退役、删除授权或完整紧急止损授权。
+[FRAME | HIGH] 注册成功本身不代表 Agent 已发布或激活。跨服务顺序仍是“先注册 KSS
+Reference，后尝试 ProofAgent smoke/publication/activation”；后续失败保留引用是安全孤儿。
+TDD-05F 的 application-only formal publisher core 已消费 TDD-05E qualification，并以最终一个
+Configuration UoW 原子提交 Published Version、Active pointer CAS 与 publication audit。TDD-05G 已
+提供 concrete governed online smoke runner：从 exact staging 安全物化临时只读 package，以
+validation purpose 运行并 exact-read-back 保留 Trace/Receipt。TDD-05H/05I 已增加持久化幂等正式
+发布命令并完成 production composition cutover；TDD-05O 进一步增加显式 exact Query authority
+verifier。三个历史 queryable Release 都已有不同历史 Grant，所以首次 live verifier 在 Query 前
+冲突失败关闭。操作者随后在 verifier 外部通过既有 KSS 管理发布 API 准备一个新的 exact Release；
+两次 verifier 运行精确重放同一 Grant，并完成两个独立的 bounded Query。该结果仍无真实外部
+KSS/model 上游联机证据。弃用有意保留既有查询与引用，普通退役只能处理零 active Reference；紧急撤销
+只提供 KSS 本地 query denial 和受影响数量；删除资格 GET 只是只读 blocker projection。当前尚未
+实现真实上游 smoke、真实注销 verifier、后台认证对账、deregistration/lifecycle 网络命令、
+生产 client Secret/egress 接线、生产 artifact-retention adapter、物理删除、affected-reference
+明细/通知、Dashboard lifecycle 页面、ProofAgent runtime/rollback 失败关闭接线、生产 retention
+配置或部署，因此该本地投影不能外推为生产发布、退役、删除授权或完整紧急止损授权。

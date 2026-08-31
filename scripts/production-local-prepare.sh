@@ -64,6 +64,7 @@ ensure_random_secret() {
 ensure_random_secret KSS_MODEL_BEARER_TOKEN
 ensure_random_secret KSS_OPERATOR_BEARER_TOKEN
 ensure_random_secret KSS_AGENT_CLIENT_BEARER_TOKEN
+ensure_random_secret KSS_REFERENCE_CLIENT_BEARER_TOKEN
 ensure_random_secret KSS_ADMISSION_SCORER_BEARER_TOKEN
 ensure_random_secret KSS_POSTGRES_PASSWORD
 

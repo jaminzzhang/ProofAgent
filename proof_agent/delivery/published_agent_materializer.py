@@ -11,7 +11,7 @@ import yaml  # type: ignore[import-untyped]
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.file_locking import artifact_lock_path, locked
-from proof_agent.contracts.agent_configuration import PublishedAgentVersion
+from proof_agent.contracts.agent_configuration import ContractBundle, PublishedAgentVersion
 from proof_agent.contracts.ports.agent_lifecycle import AgentLifecycleRepository
 from proof_agent.delivery.published_agents import (
     PublishedAgent,
@@ -69,73 +69,7 @@ class PublishedAgentMaterializer:
         )
 
     def _materialize(self, version: PublishedAgentVersion, destination: Path) -> None:
-        bundle = version.contract_bundle
-        try:
-            raw = yaml.safe_load(bundle.agent_yaml)
-        except yaml.YAMLError as exc:
-            raise PublishedAgentMaterializationError(
-                "Published Agent manifest YAML is invalid"
-            ) from exc
-        if not isinstance(raw, dict):
-            raise PublishedAgentMaterializationError(
-                "Published Agent manifest must be a mapping"
-            )
-        audit = raw.get("audit")
-        if not isinstance(audit, dict):
-            raise PublishedAgentMaterializationError(
-                "Published Agent manifest has no exact audit paths"
-            )
-        for field in ("trace_path", "receipt_path"):
-            value = audit.get(field)
-            if not isinstance(value, str):
-                raise PublishedAgentMaterializationError(
-                    "Published Agent manifest has no exact audit paths"
-                )
-            _safe_relative_path(value)
-        policy = raw.get("policy")
-        if not isinstance(policy, dict) or not isinstance(policy.get("file"), str):
-            raise PublishedAgentMaterializationError(
-                "Published Agent manifest has no exact policy file"
-            )
-        policy_path = _safe_relative_path(policy["file"])
-        tools_path: PurePosixPath | None = None
-        capabilities = raw.get("capabilities")
-        tools = capabilities.get("tools") if isinstance(capabilities, dict) else None
-        if isinstance(tools, dict) and tools.get("enabled"):
-            if not isinstance(tools.get("file"), str) or not bundle.tools_yaml:
-                raise PublishedAgentMaterializationError(
-                    "Published Agent enabled tools have no exact contract file"
-                )
-            tools_path = _safe_relative_path(tools["file"])
-        reserved = {PurePosixPath("agent.yaml"), policy_path}
-        if tools_path is not None:
-            reserved.add(tools_path)
-        extras: dict[PurePosixPath, str] = {}
-        for name, content in bundle.extra_files.items():
-            path = _safe_relative_path(name)
-            if path in reserved:
-                raise PublishedAgentMaterializationError(
-                    "Published Agent extra file shadows a core contract"
-                )
-            extras[path] = content
-
-        staging = Path(tempfile.mkdtemp(prefix=".agent-package-", dir=self._cache_dir))
-        try:
-            for path, content in sorted(extras.items(), key=lambda item: str(item[0])):
-                _write_private(staging, path, content)
-            _write_private(staging, policy_path, bundle.policy_yaml)
-            if tools_path is not None:
-                _write_private(staging, tools_path, bundle.tools_yaml)
-            _write_private(staging, PurePosixPath("agent.yaml"), bundle.agent_yaml)
-            load_agent_manifest(
-                staging / "agent.yaml",
-                require_writable_artifacts=False,
-            )
-            os.replace(staging, destination)
-            _make_read_only(destination)
-        except Exception:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
+        materialize_agent_contract_bundle(version.contract_bundle, destination)
 
 
 class PublishedAgentAuthority:
@@ -167,10 +101,12 @@ class PublishedAgentAuthority:
         agents = tuple(
             agent
             for active in self._agents.list_active()
-            if (agent := self.resolve_exact(
-                agent_id=active.agent_id,
-                version_id=active.version_id,
-            ))
+            if (
+                agent := self.resolve_exact(
+                    agent_id=active.agent_id,
+                    version_id=active.version_id,
+                )
+            )
             is not None
             and (not customer_facing_only or agent.customer_facing)
         )
@@ -178,8 +114,7 @@ class PublishedAgentAuthority:
 
     def list_agent_ids(self, *, customer_facing_only: bool = False) -> tuple[str, ...]:
         return tuple(
-            agent.agent_id
-            for agent in self.list_agents(customer_facing_only=customer_facing_only)
+            agent.agent_id for agent in self.list_agents(customer_facing_only=customer_facing_only)
         )
 
     def list_active_agent_ids(self) -> tuple[str, ...]:
@@ -213,6 +148,83 @@ def _version_digest(version: PublishedAgentVersion) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def materialize_agent_contract_bundle(
+    bundle: ContractBundle,
+    destination: Path,
+) -> Path:
+    """Materialize one immutable Contract Bundle as a private read-only package."""
+
+    destination = destination.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if destination.exists():
+        raise PublishedAgentMaterializationError("Agent Contract Bundle destination already exists")
+    try:
+        raw = yaml.safe_load(bundle.agent_yaml)
+    except yaml.YAMLError as exc:
+        raise PublishedAgentMaterializationError(
+            "Published Agent manifest YAML is invalid"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise PublishedAgentMaterializationError("Published Agent manifest must be a mapping")
+    audit = raw.get("audit")
+    if not isinstance(audit, dict):
+        raise PublishedAgentMaterializationError(
+            "Published Agent manifest has no exact audit paths"
+        )
+    for field in ("trace_path", "receipt_path"):
+        value = audit.get(field)
+        if not isinstance(value, str):
+            raise PublishedAgentMaterializationError(
+                "Published Agent manifest has no exact audit paths"
+            )
+        _safe_relative_path(value)
+    policy = raw.get("policy")
+    if not isinstance(policy, dict) or not isinstance(policy.get("file"), str):
+        raise PublishedAgentMaterializationError(
+            "Published Agent manifest has no exact policy file"
+        )
+    policy_path = _safe_relative_path(policy["file"])
+    tools_path: PurePosixPath | None = None
+    capabilities = raw.get("capabilities")
+    tools = capabilities.get("tools") if isinstance(capabilities, dict) else None
+    if isinstance(tools, dict) and tools.get("enabled"):
+        if not isinstance(tools.get("file"), str) or not bundle.tools_yaml:
+            raise PublishedAgentMaterializationError(
+                "Published Agent enabled tools have no exact contract file"
+            )
+        tools_path = _safe_relative_path(tools["file"])
+    reserved = {PurePosixPath("agent.yaml"), policy_path}
+    if tools_path is not None:
+        reserved.add(tools_path)
+    extras: dict[PurePosixPath, str] = {}
+    for name, content in bundle.extra_files.items():
+        path = _safe_relative_path(name)
+        if path in reserved:
+            raise PublishedAgentMaterializationError(
+                "Published Agent extra file shadows a core contract"
+            )
+        extras[path] = content
+
+    staging = Path(tempfile.mkdtemp(prefix=".agent-package-", dir=destination.parent))
+    try:
+        for path, content in sorted(extras.items(), key=lambda item: str(item[0])):
+            _write_private(staging, path, content)
+        _write_private(staging, policy_path, bundle.policy_yaml)
+        if tools_path is not None:
+            _write_private(staging, tools_path, bundle.tools_yaml)
+        _write_private(staging, PurePosixPath("agent.yaml"), bundle.agent_yaml)
+        load_agent_manifest(
+            staging / "agent.yaml",
+            require_writable_artifacts=False,
+        )
+        os.replace(staging, destination)
+        _make_read_only(destination)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return destination / "agent.yaml"
+
+
 def _safe_relative_path(value: str) -> PurePosixPath:
     if not value or "\\" in value or "\x00" in value:
         raise PublishedAgentMaterializationError("Published Agent file path is unsafe")
@@ -239,4 +251,5 @@ __all__ = [
     "PublishedAgentAuthority",
     "PublishedAgentMaterializationError",
     "PublishedAgentMaterializer",
+    "materialize_agent_contract_bundle",
 ]

@@ -6,8 +6,14 @@ import hashlib
 import json
 from typing import Protocol
 
-from proof_agent.contracts import ContractBundle, ExactArtifactRef, ResolvedKnowledgeBindingSet
+from proof_agent.contracts import (
+    ContractBundle,
+    ExactArtifactRef,
+    FormalProductionAgentCandidate,
+    ResolvedKnowledgeBindingSet,
+)
 from proof_agent.contracts.knowledge_release import (
+    FormalProductionAgentPhaseFRecord,
     KnowledgeReleaseEvidenceSet,
     KnowledgeReleaseRecord,
 )
@@ -16,6 +22,13 @@ from proof_agent.errors import ErrorCode, ProofAgentError
 
 class KnowledgeReleaseEvidenceAuthority(Protocol):
     def verify_release_record(self, record: KnowledgeReleaseRecord) -> bool: ...
+
+
+class FormalProductionAgentPhaseFAuthority(Protocol):
+    def verify_phase_f_record(
+        self,
+        record: FormalProductionAgentPhaseFRecord,
+    ) -> bool: ...
 
 
 def knowledge_release_candidate_sha256(
@@ -68,6 +81,65 @@ def seal_knowledge_release_record(
     )
 
 
+def seal_formal_production_agent_phase_f_record(
+    *,
+    record_id: str,
+    provisional_version_id: str,
+    validation_run_id: str,
+    candidate: FormalProductionAgentCandidate,
+    evidence: KnowledgeReleaseEvidenceSet,
+    created_at: str,
+    created_by: str,
+) -> FormalProductionAgentPhaseFRecord:
+    payload = {
+        "schema_version": "formal-production-agent-phase-f-record.v1",
+        "record_id": record_id,
+        "provisional_version_id": provisional_version_id,
+        "validation_run_id": validation_run_id,
+        "formal_candidate_sha256": candidate.formal_candidate_sha256,
+        "knowledge_release_candidate_sha256": (candidate.knowledge_release_candidate_sha256),
+        "evidence": evidence.model_dump(mode="json"),
+        "created_at": created_at,
+        "created_by": created_by,
+    }
+    return FormalProductionAgentPhaseFRecord(
+        record_id=record_id,
+        provisional_version_id=provisional_version_id,
+        validation_run_id=validation_run_id,
+        formal_candidate_sha256=candidate.formal_candidate_sha256,
+        knowledge_release_candidate_sha256=(candidate.knowledge_release_candidate_sha256),
+        evidence=evidence,
+        created_at=created_at,
+        created_by=created_by,
+        record_sha256=_sha256(payload),
+    )
+
+
+def require_formal_production_agent_phase_f_record(
+    *,
+    record: FormalProductionAgentPhaseFRecord,
+    candidate: FormalProductionAgentCandidate,
+) -> None:
+    payload = record.model_dump(mode="json", exclude={"record_sha256"})
+    if _sha256(payload) != record.record_sha256:
+        raise _release_error("Formal Production Agent Phase F Record digest is invalid.")
+    if record.formal_candidate_sha256 != candidate.formal_candidate_sha256:
+        raise _release_error("Phase F Record does not match the Formal Candidate.")
+    if record.knowledge_release_candidate_sha256 != candidate.knowledge_release_candidate_sha256:
+        raise _release_error("Phase F Record does not match the Knowledge Release candidate.")
+    digests = tuple(
+        artifact.sha256
+        for artifact in (
+            record.evidence.shadow,
+            record.evidence.capacity,
+            record.evidence.acceptance,
+            record.evidence.recovery,
+        )
+    )
+    if len(set(digests)) != 4:
+        raise _release_error("Formal Phase F evidence artifacts must be distinct.")
+
+
 def require_knowledge_release_record(
     *,
     record: KnowledgeReleaseRecord,
@@ -111,8 +183,11 @@ def _release_error(message: str) -> ProofAgentError:
 
 
 __all__ = [
+    "FormalProductionAgentPhaseFAuthority",
     "knowledge_release_candidate_sha256",
     "KnowledgeReleaseEvidenceAuthority",
+    "require_formal_production_agent_phase_f_record",
     "require_knowledge_release_record",
+    "seal_formal_production_agent_phase_f_record",
     "seal_knowledge_release_record",
 ]

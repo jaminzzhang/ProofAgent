@@ -167,6 +167,46 @@ class FormalProductionAgentCandidateAssembler:
         )
 
 
+def formal_production_agent_candidate_sha256(
+    candidate: FormalProductionAgentCandidate,
+) -> str:
+    """Recompute the exact formal-candidate identity from retained facts."""
+
+    return _formal_candidate_sha256(
+        agent_id=candidate.agent_id,
+        draft_id=candidate.draft_id,
+        draft_revision=candidate.draft_revision,
+        display_name=candidate.display_name,
+        purpose=candidate.purpose,
+        contract_bundle=candidate.contract_bundle.model_dump(mode="json"),
+        knowledge_release_candidate=candidate.knowledge_release_candidate.model_dump(mode="json"),
+        knowledge_service_catalog_revision=(candidate.knowledge_service_catalog_revision),
+        resolved_knowledge_bindings=candidate.resolved_knowledge_bindings.model_dump(mode="json"),
+        knowledge_release_candidate_sha256=(candidate.knowledge_release_candidate_sha256),
+    )
+
+
+def require_formal_production_agent_candidate(
+    candidate: FormalProductionAgentCandidate,
+) -> None:
+    """Fail closed when a retained Formal Candidate no longer matches its digests."""
+
+    expected_release_candidate = knowledge_release_candidate_sha256(
+        candidate.contract_bundle,
+        candidate.resolved_knowledge_bindings,
+    )
+    if candidate.knowledge_release_candidate_sha256 != expected_release_candidate:
+        raise FormalProductionAgentCandidateRejected(
+            code="formal_candidate_integrity_invalid",
+            detail="The Formal Production Agent Candidate integrity check failed.",
+        )
+    if candidate.formal_candidate_sha256 != formal_production_agent_candidate_sha256(candidate):
+        raise FormalProductionAgentCandidateRejected(
+            code="formal_candidate_integrity_invalid",
+            detail="The Formal Production Agent Candidate integrity check failed.",
+        )
+
+
 def _formal_candidate_sha256(**payload: object) -> str:
     canonical = json.dumps(
         {
@@ -184,4 +224,6 @@ __all__ = [
     "FormalProductionAgentCandidateAssembler",
     "FormalProductionAgentCandidateRejected",
     "FormalProductionKnowledgeReleaseCatalog",
+    "formal_production_agent_candidate_sha256",
+    "require_formal_production_agent_candidate",
 ]

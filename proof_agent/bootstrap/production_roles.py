@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import base64
 import binascii
 from dataclasses import dataclass
@@ -25,6 +25,12 @@ from proof_agent.capabilities.artifacts.materialization import VerifiedArtifactM
 from proof_agent.capabilities.knowledge.source_service_management_client import (
     KnowledgeSourceServiceManagementClient,
 )
+from proof_agent.capabilities.knowledge.source_service_query_grant_provisioner import (
+    KnowledgeSourceServiceQueryGrantProvisioner,
+)
+from proof_agent.capabilities.knowledge.source_service_release_reference_registrar import (
+    KnowledgeSourceServiceReleaseReferenceRegistrar,
+)
 from proof_agent.capabilities.persistence.postgres.bundle import PostgresPersistenceBundle
 from proof_agent.capabilities.persistence.postgres.database import check_database, head_revision
 from proof_agent.capabilities.persistence.postgres.configuration_uow import (
@@ -39,11 +45,12 @@ from proof_agent.capabilities.persistence.postgres.runtime_assets import (
 from proof_agent.contracts import (
     InstitutionAuthorizationContext,
     ProductionDeploymentIdentity,
+    ProductionKssBindingProfile,
     ProductionSecretHandle,
-    ResolvedKnowledgeSourceServiceBinding,
     RoleActivationState,
     SecretPurpose,
 )
+from proof_agent.contracts.ports import ConfigurationUnitOfWork
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.contracts.worker_roles import ProductionWorkerRole
@@ -53,8 +60,26 @@ from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationWorkspace,
     load_server_owned_agent_template,
 )
-from proof_agent.control.production_agent_publication import (
-    ProductionAgentPublicationService,
+from proof_agent.control.formal_production_agent_candidate import (
+    FormalProductionAgentCandidateAssembler,
+)
+from proof_agent.control.formal_production_agent_online_smoke import (
+    FormalProductionAgentOnlineSmokeService,
+)
+from proof_agent.control.formal_production_agent_phase_f import (
+    FormalProductionAgentPhaseFPreparer,
+)
+from proof_agent.control.formal_production_agent_query_grant_staging import (
+    FormalProductionAgentQueryGrantStager,
+)
+from proof_agent.control.formal_production_agent_publication import (
+    FormalProductionAgentPublisher,
+)
+from proof_agent.control.formal_production_agent_publication_command import (
+    FormalProductionAgentPublicationCommandService,
+)
+from proof_agent.control.formal_production_agent_reference_staging import (
+    FormalProductionAgentReferenceStager,
 )
 from proof_agent.control.production_agent_publication_configuration import (
     ProductionAgentPublicationConfigurationProjector,
@@ -76,7 +101,7 @@ from proof_agent.deployment.compatibility import (
     load_deployment_compatibility_manifest,
 )
 from proof_agent.delivery.production_agent_validation import (
-    ProductionOnlineAgentCandidateValidator,
+    FormalProductionAgentOnlineSmokeRunner,
 )
 from proof_agent.delivery.agent_configuration_contracts import (
     LocalAgentConfigurationContractValidator,
@@ -139,6 +164,12 @@ class ProductionKnowledgeReleaseAuthority:
         self._timeout_seconds = timeout_seconds
 
     def verify_release_record(self, record: object) -> bool:
+        return self._verify_record(record)
+
+    def verify_phase_f_record(self, record: object) -> bool:
+        return self._verify_record(record)
+
+    def _verify_record(self, record: object) -> bool:
         model_dump = getattr(record, "model_dump", None)
         if not callable(model_dump):
             raise ValueError("Knowledge Release Record is invalid")
@@ -205,25 +236,6 @@ class ProductionExecutorComposition:
             raise ExceptionGroup("production Executor shutdown failed", failures)
 
 
-@dataclass
-class ProductionAgentPublisherComposition:
-    publisher: ProductionAgentPublicationService
-    resources: tuple[object, ...]
-
-    def close(self) -> None:
-        failures: list[Exception] = []
-        for resource in reversed(self.resources):
-            close = getattr(resource, "close", None)
-            if not callable(close):
-                continue
-            try:
-                close()
-            except Exception as exc:
-                failures.append(exc)
-        if failures:
-            raise ExceptionGroup("production Agent Publisher shutdown failed", failures)
-
-
 def create_production_api_application(
     environment: Mapping[str, str] | None = None,
 ) -> FastAPI:
@@ -249,6 +261,11 @@ def create_production_api_application(
         secret_provider = compose_production_vault_secret_provider(
             guarded,
             environment=values,
+        )
+        knowledge_candidate_runtime = compose_production_knowledge_candidate_runtime(
+            values,
+            http_client=guarded,
+            secret_provider=secret_provider,
         )
         security = compose_production_security(
             persistence,
@@ -332,6 +349,17 @@ def create_production_api_application(
                 )
             ),
         )
+        formal_publication_command = _compose_formal_production_agent_publication_command(
+            values=values,
+            unit_of_work_factory=publication_uow,
+            knowledge_service_management=knowledge_service_management,
+            runtime_configuration=runtime_configuration,
+            knowledge_candidate_runtime=knowledge_candidate_runtime,
+            guarded_http_client=guarded,
+            secret_provider=secret_provider,
+            model_credential_resolver=model_credentials,
+            artifact_store=artifact_store,
+        )
         application = create_app(
             mode="production",
             operator_session_service=security.operator_session_service,
@@ -347,6 +375,7 @@ def create_production_api_application(
             production_readiness_probe=readiness,
             production_configuration_uow_factory=publication_uow,
             agent_configuration_workspace=agent_configuration_workspace,
+            formal_production_agent_publication_command=formal_publication_command,
             knowledge_service_management_client=knowledge_service_management,
             release_registry_repository=persistence.releases,
             release_bundle_materializer=release_bundle_materializer,
@@ -437,12 +466,8 @@ def compose_production_run_executor(
             store=execution_store,
             runs_dir=work_dir / "latest",
             configuration_store=runtime_configuration,
-            controlled_react_snapshot_store=FileControlledReActSnapshotStore(
-                control_store_root
-            ),
-            controlled_react_observation_truth_store=FileObservationTruthStore(
-                control_store_root
-            ),
+            controlled_react_snapshot_store=FileControlledReActSnapshotStore(control_store_root),
+            controlled_react_observation_truth_store=FileObservationTruthStore(control_store_root),
             knowledge_candidate_runtime=knowledge_candidate_runtime,
             guarded_http_client=guarded,
             secret_provider=secret_provider,
@@ -486,9 +511,7 @@ def compose_production_run_executor(
                     model_credentials,
                 ),
                 "role_lease": role_controller.check_ready,
-                "secret_provider": lambda: _secret_provider_ready(
-                    secret_provider, values
-                ),
+                "secret_provider": lambda: _secret_provider_ready(secret_provider, values),
             },
         )
         return ProductionExecutorComposition(
@@ -505,91 +528,105 @@ def compose_production_run_executor(
         raise
 
 
-def compose_production_agent_publisher(
-    environment: Mapping[str, str] | None = None,
-) -> ProductionAgentPublisherComposition:
-    """Compose the guarded Phase F → online smoke → PG activation boundary."""
+def _compose_formal_production_agent_publication_command(
+    *,
+    values: Mapping[str, str],
+    unit_of_work_factory: Callable[[], ConfigurationUnitOfWork],
+    knowledge_service_management: object,
+    runtime_configuration: object,
+    knowledge_candidate_runtime: object,
+    guarded_http_client: GuardedHttpClient,
+    secret_provider: SecretProvider,
+    model_credential_resolver: object,
+    artifact_store: object,
+) -> FormalProductionAgentPublicationCommandService:
+    """Compose the only production formal-publication authority exposed by the API."""
 
-    values = _environment(environment)
-    persistence = compose_application_persistence(environment=values)
-    if not isinstance(persistence, PostgresPersistenceBundle):
-        persistence.close()
-        raise ValueError("production Agent Publisher requires PostgreSQL persistence")
-    resources: list[object] = [persistence]
-    try:
-        model_credential_cipher = compose_model_credential_cipher(values)
-        model_credentials = PostgresModelCredentialRepository(
-            persistence.engine,
-            cipher=model_credential_cipher,
-        )
-        runtime_configuration = PostgresRuntimeSharedAssetReader(
-            models=persistence.models,
-            tools=persistence.tools,
-        )
-        guarded = compose_production_egress_client(persistence)
-        secret_provider = compose_production_vault_secret_provider(
-            guarded,
-            environment=values,
-        )
-        knowledge_candidate_runtime = compose_production_knowledge_candidate_runtime(
+    binding_profile = _production_kss_binding_profile(values, secret_provider)
+    phase_f_authority = ProductionKnowledgeReleaseAuthority(
+        endpoint=_required(values, "PA_KNOWLEDGE_EVALUATION_ENDPOINT"),
+        secret_handle=_required(
             values,
-            http_client=guarded,
-            secret_provider=secret_provider,
-        )
-        knowledge_binding = _production_kss_binding(values, secret_provider)
-        artifact_store = _artifact_store(values)
-        resources.append(artifact_store)
-        release_authority = ProductionKnowledgeReleaseAuthority(
-            endpoint=_required(values, "PA_KNOWLEDGE_EVALUATION_ENDPOINT"),
-            secret_handle=_required(
-                values,
-                "PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE",
-            ),
-            guarded_http_client=guarded,
-            secret_provider=secret_provider,
-            timeout_seconds=float(
-                values.get("PA_KNOWLEDGE_EVALUATION_TIMEOUT_SECONDS", "30")
-            ),
-        )
-        try:
-            institution_authorization = InstitutionAuthorizationContext.model_validate_json(
-                _required(
-                    values,
-                    "PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON",
+            "PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE",
+        ),
+        guarded_http_client=guarded_http_client,
+        secret_provider=secret_provider,
+        timeout_seconds=float(values.get("PA_KNOWLEDGE_EVALUATION_TIMEOUT_SECONDS", "30")),
+    )
+    reference_credential = ProductionSecretHandle(
+        protocol_id=secret_provider.protocol_id,
+        handle_id=_required(
+            values,
+            "PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_HANDLE",
+        ),
+        purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
+        version_id=_required(
+            values,
+            "PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_VERSION_ID",
+        ),
+    )
+    if reference_credential.handle_id in {
+        binding_profile.client_credential_ref.handle_id,
+        _required(values, "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"),
+    }:
+        raise ValueError("KSS Reference client must use a dedicated Secret Handle")
+    reference_registrar = KnowledgeSourceServiceReleaseReferenceRegistrar(
+        endpoint=_required(values, "PROOF_AGENT_KSS_ENDPOINT"),
+        http_client=guarded_http_client,
+        authorization_header_factory=lambda: _knowledge_service_client_authorization(
+            secret_provider,
+            reference_credential,
+        ),
+        timeout_seconds=float(values.get("PROOF_AGENT_KSS_REFERENCE_TIMEOUT_SECONDS", "10")),
+    )
+    query_grant_provisioner = KnowledgeSourceServiceQueryGrantProvisioner(
+        endpoint=_required(values, "PROOF_AGENT_KSS_ENDPOINT"),
+        http_client=guarded_http_client,
+        authorization_header_factory=lambda: _knowledge_service_authorization(
+            secret_provider,
+            _required(values, "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"),
+        ),
+        timeout_seconds=float(values.get("PROOF_AGENT_KSS_TIMEOUT_SECONDS", "10")),
+    )
+    online_smoke_runner = FormalProductionAgentOnlineSmokeRunner(
+        configuration_store=runtime_configuration,
+        knowledge_candidate_runtime=knowledge_candidate_runtime,
+        guarded_http_client=guarded_http_client,
+        secret_provider=secret_provider,
+        model_credential_resolver=model_credential_resolver,
+        artifact_store=artifact_store,
+        work_root=Path(_required(values, "PROOF_AGENT_RELEASE_WORK_DIR")),
+        institution_authorization=_release_institution_authorization(values),
+    )
+    publisher = FormalProductionAgentPublisher(
+        unit_of_work_factory=unit_of_work_factory,
+        candidate_assembler=FormalProductionAgentCandidateAssembler(
+            unit_of_work_factory=unit_of_work_factory,
+            knowledge_release_catalog=knowledge_service_management,  # type: ignore[arg-type]
+            publication_configuration_projector=(
+                ProductionAgentPublicationConfigurationProjector(
+                    configuration_store=runtime_configuration,  # type: ignore[arg-type]
                 )
-            )
-        except ValueError as exc:
-            raise ValueError(
-                "PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON is invalid"
-            ) from exc
-        candidate_validator = ProductionOnlineAgentCandidateValidator(
-            configuration_store=runtime_configuration,
-            knowledge_candidate_runtime=knowledge_candidate_runtime,
-            guarded_http_client=guarded,
-            secret_provider=secret_provider,
-            model_credential_resolver=model_credentials,
-            artifact_store=artifact_store,
-            work_root=Path(_required(values, "PROOF_AGENT_RELEASE_WORK_DIR")),
-            institution_authorization=institution_authorization,
-        )
-        publisher = ProductionAgentPublicationService(
-            unit_of_work_factory=persistence.configuration_uow,
-            knowledge_binding=knowledge_binding,
-            release_authority=release_authority,
-            configuration_store=runtime_configuration,
-            model_credential_resolver=model_credentials,
-            candidate_validator=candidate_validator,
-        )
-        return ProductionAgentPublisherComposition(
-            publisher=publisher,
-            resources=tuple(resources),
-        )
-    except BaseException:
-        for resource in reversed(resources):
-            close = getattr(resource, "close", None)
-            if callable(close):
-                close()
-        raise
+            ),
+        ),
+        phase_f_preparer=FormalProductionAgentPhaseFPreparer(
+            phase_f_authority=phase_f_authority,
+        ),
+        reference_stager=FormalProductionAgentReferenceStager(
+            registrar=reference_registrar,
+        ),
+        query_grant_stager=FormalProductionAgentQueryGrantStager(
+            provisioner=query_grant_provisioner,
+        ),
+        online_smoke_service=FormalProductionAgentOnlineSmokeService(
+            online_smoke_validator=online_smoke_runner,
+        ),
+    )
+    return FormalProductionAgentPublicationCommandService(
+        unit_of_work_factory=unit_of_work_factory,  # type: ignore[arg-type]
+        publisher=publisher,
+        binding_profile=binding_profile,
+    )
 
 
 def _published_agent_authority(
@@ -628,17 +665,13 @@ def _production_readiness_identity(
         schema_revision=schema_revision,
         schema_compatible_from=schema_revision,
         schema_compatible_through=schema_revision,
-        deployment_compatibility_manifest_sha256=(
-            deployment_compatibility_sha256(compatibility)
-        ),
+        deployment_compatibility_manifest_sha256=(deployment_compatibility_sha256(compatibility)),
     )
 
 
 def _activation_state(values: Mapping[str, str]) -> RoleActivationState:
     try:
-        return RoleActivationState(
-            _required(values, "PROOF_AGENT_ACTIVATION_STATE").lower()
-        )
+        return RoleActivationState(_required(values, "PROOF_AGENT_ACTIVATION_STATE").lower())
     except ValueError as exc:
         raise ValueError(
             "PROOF_AGENT_ACTIVATION_STATE must be standby, active or draining"
@@ -753,16 +786,12 @@ def _knowledge_service_authorization(
     return f"Bearer {token}"
 
 
-def _production_kss_binding(
+def _production_kss_binding_profile(
     values: Mapping[str, str],
     provider: SecretProvider,
-) -> ResolvedKnowledgeSourceServiceBinding:
-    return ResolvedKnowledgeSourceServiceBinding(
+) -> ProductionKssBindingProfile:
+    return ProductionKssBindingProfile(
         binding_id=_required(values, "PROOF_AGENT_KSS_BINDING_ID"),
-        knowledge_base_release_id=_required(
-            values,
-            "PROOF_AGENT_KSS_RELEASE_ID",
-        ),
         client_credential_ref=ProductionSecretHandle(
             protocol_id=provider.protocol_id,
             handle_id=_required(
@@ -786,6 +815,42 @@ def _production_kss_binding(
     )
 
 
+def _release_institution_authorization(
+    values: Mapping[str, str],
+) -> InstitutionAuthorizationContext:
+    try:
+        return InstitutionAuthorizationContext.model_validate_json(
+            _required(
+                values,
+                "PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON",
+            )
+        )
+    except ValueError as exc:
+        raise ValueError("PROOF_AGENT_RELEASE_INSTITUTION_AUTHORIZATION_JSON is invalid") from exc
+
+
+def _knowledge_service_client_authorization(
+    provider: SecretProvider,
+    handle: ProductionSecretHandle,
+) -> str:
+    resolved = provider.resolve(handle)
+    if resolved.provider_version_id != handle.version_id:
+        raise ValueError("KSS Reference client credential version is unavailable")
+    material = resolved.reveal_for_use()
+    try:
+        token = material.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("KSS Reference client credential is invalid") from exc
+    if (
+        not token
+        or len(material) > 16 * 1024
+        or token != token.strip()
+        or any(character.isspace() for character in token)
+    ):
+        raise ValueError("KSS Reference client credential is invalid")
+    return f"Bearer {token}"
+
+
 def _environment(environment: Mapping[str, str] | None) -> Mapping[str, str]:
     import os
 
@@ -804,10 +869,8 @@ def _required(values: Mapping[str, str], key: str) -> str:
 
 __all__ = [
     "ProductionExecutorComposition",
-    "ProductionAgentPublisherComposition",
     "ProductionKnowledgeReleaseAuthority",
     "SOLE_PRODUCTION_AGENT_ID",
     "compose_production_run_executor",
-    "compose_production_agent_publisher",
     "create_production_api_application",
 ]

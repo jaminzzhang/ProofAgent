@@ -41,6 +41,36 @@ active_agent_versions = sa.Table(
     sa.Column("activated_at", UTC_TIMESTAMP, nullable=False),
 )
 
+formal_agent_publication_commands = sa.Table(
+    "formal_agent_publication_commands",
+    metadata,
+    sa.Column("command_id", UUID, primary_key=True),
+    sa.Column("actor_subject", sa.Text(), nullable=False),
+    sa.Column("idempotency_key", sa.Text(), nullable=False),
+    sa.Column("request_sha256", sa.String(64), nullable=False),
+    sa.Column("state", sa.Text(), nullable=False),
+    sa.Column("agent_id", sa.Text(), nullable=False),
+    sa.Column("draft_id", UUID, nullable=False),
+    sa.Column("draft_revision", sa.Integer(), nullable=False),
+    sa.Column("receipt_json", JSONB, nullable=False),
+    sa.Column("started_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("completed_at", UTC_TIMESTAMP),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.UniqueConstraint(
+        "actor_subject",
+        "idempotency_key",
+        name="formal_agent_publication_commands_actor_key",
+    ),
+    sa.CheckConstraint(
+        "state IN ('in_progress','succeeded','failed')",
+        name="formal_agent_publication_commands_state",
+    ),
+    sa.CheckConstraint(
+        "draft_revision > 0",
+        name="formal_agent_publication_commands_revision",
+    ),
+)
+
 knowledge_sources = sa.Table(
     "knowledge_sources",
     metadata,

@@ -115,8 +115,126 @@ _Avoid_: Independent manifest candidate, mutable latest Draft, Dashboard-ready s
 [KNOWN | HIGH] TDD-05A adds a read-only Control assembler and immutable candidate
 contract containing the exact Agent/Draft/revision, reviewable Contract Bundle,
 Draft-owned KSS tuple, live catalog revision, resolved binding and two distinct
-digests. This object is not yet accepted by the existing publisher and carries no
-Reference, Phase F, smoke, Published Version or activation result.
+digests. TDD-05B adds Control-owned integrity revalidation and consumes this object
+for candidate-bound Phase F preparation. TDD-05F adds a new application-only formal
+publisher core that consumes it. TDD-05H adds the durable public command, and TDD-05I
+makes the production API its only composition root while removing the old manifest
+production entry.
+
+**Formal Production Agent Phase F Record**:
+An immutable record that binds Shadow, Capacity, Acceptance and Recovery evidence to
+one exact Formal Production Agent Candidate digest and its Knowledge Release digest,
+then requires an independent Phase F authority decision.
+_Avoid_: Generic release evidence detached from the Draft root, mutable evidence set,
+Phase F means publication
+
+**Provisional Production Agent Version**:
+The candidate-bound output of successful Phase F preparation. It retains the exact
+Draft revision, resolved KSS binding, Phase F Record and effective Workflow Stage
+configuration, and uses preparation metadata rather than publication metadata.
+_Avoid_: Published Agent Version, Active Agent Version, executable latest candidate
+
+[KNOWN | HIGH] TDD-05B creates both strict contracts without persistence side effects.
+It does not register a KSS Reference, run online smoke, write a Published Version or
+change the Active Agent Version.
+
+**Formal Production Agent Reference Staging**:
+The Reference-first Control result that retains one exact Phase F preparation and the
+matching active KSS Release Reference for the future Published Agent Version identity.
+It proves registration ordering only; it is not executable and does not grant
+publication or activation authority.
+_Avoid_: Published Agent Version, Active Agent Version, compensating Reference delete,
+best-effort registration
+
+[KNOWN | HIGH] TDD-05C adds this strict contract and an injected registrar port. The
+Phase F Record also binds the provisional version and validation run identities before
+the cross-service call. TDD-05D adds the concrete, dedicated HTTPS guarded registrar;
+it preserves the Control-owned key and exact request, rejects redirects and response
+drift, and maps the authenticated KSS wire receipt into this contract. The current
+formal publisher core consumes this staging through TDD-05F; TDD-05I supplies its
+dedicated versioned Reference service-client credential in production composition.
+
+**Formal Production Agent Query Grant Staging**:
+The Control result created after exact Reference registration and before formal online
+smoke. It retains the validated Reference staging and one strict active KSS Query Grant
+receipt whose Release and Knowledge Space match the Formal Candidate. It proves the
+runtime client received policy-bounded query authority; it does not publish or activate
+the Agent.
+_Avoid_: caller-selected Grant policy, Reference-only smoke input, Grant means Active
+Agent, compensating revoke without authority
+
+[KNOWN | HIGH] TDD-05M adds this strict contract and Control stager. The only
+provisioning request field is the Candidate's exact Release. KSS continues to own
+client, Space derivation, strategies, budget and scope policy. Receipt failure or drift
+stops before online smoke and final storage. A successful Grant remains durable if a
+later step fails; selective revocation and reconciliation remain separate work.
+
+**Formal Production Agent Online Smoke Qualification**:
+The application-only Control result produced after exact Query Grant staging. Its
+strict `v2` contract retains that staging, a Control-derived smoke request, and a
+matching validator result with a governed citation outcome plus distinct exact trace
+and receipt artifacts. It is evidence for a later publication attempt, not a Published
+or Active Agent Version.
+_Avoid_: smoke passed means published, caller-selected latest Release, best-effort
+identity match, compensating Reference delete
+
+[KNOWN | HIGH] TDD-05E adds this strict contract and a single online validator port.
+The service has no Agent Store, Active pointer, audit writer or KSS deregistrar. A
+failed or uncertain smoke therefore returns a stable rejection, leaves the registered
+Reference in KSS, and cannot publish or activate an Agent. TDD-05F consumes only a
+successful qualification. TDD-05G supplies the concrete governed execution runner;
+environment-backed live KSS/model validation remains subsequent work.
+
+[KNOWN | HIGH] TDD-05M removes the Reference-staging-only smoke input. Both Control
+and the concrete runner now require the Query Grant staging and revalidate its nested
+Candidate, Reference and Grant identities before governed execution.
+
+**Formal Production Agent Online Smoke Runner**:
+The Delivery adapter that receives one Control-derived strict smoke request together
+with its exact validated Query Grant staging, revalidates their immutable identities,
+executes the provisional Agent package through the governed validation path, and
+returns exact outcome, cited-evidence count, Trace and Receipt artifact references.
+_Avoid_: caller-reported pass, mutable candidate lookup, Production run, publisher or
+activation authority
+
+[KNOWN | HIGH] TDD-05G implements this boundary. The provisional Contract Bundle is
+materialized into a private read-only temporary package with safe relative paths;
+execution uses `RunPurpose.VALIDATION`, the exact validation run identity, frozen KSS
+and Workflow Stage facts, and injected Institution Authorization. Trace/Receipt are
+bounded and exact-read-back retained. Control, not the runner, owns the cited-answer
+Gate.
+
+**Formal Production Agent Publication Evidence**:
+The strict immutable envelope retained by one Published Agent Version that binds its
+exact source Draft revision, approved Phase F Record, active KSS Release Reference
+receipt and exact online smoke result to the same version, validation run and Release.
+_Avoid_: detached checklist, caller-reported smoke, latest Release lookup, mixed-run
+evidence
+
+**Formal Production Agent Publisher Core**:
+The application-only orchestrator that captures the current Active pointer expectation
+before external Reference, Query Grant and smoke calls, then atomically enforces Draft
+revision and Active pointer CAS while persisting the immutable Published Version,
+activation and publication audit in one Configuration UoW.
+_Avoid_: transaction held over network calls, best-effort activation, compensating KSS
+Reference delete, public command without durable idempotency
+
+[KNOWN | HIGH] TDD-05F implements both boundaries. Concurrent Draft or Active change
+and audit/storage failure roll back all final Version/activation/audit state, while an
+already registered KSS Reference remains for trusted reconciliation. TDD-05G provides
+the concrete online runner; TDD-05H adds a persisted-idempotency public command whose
+success receipt shares the final transaction. TDD-05I requires that command in
+production API composition and removes the old manifest production CLI/composition.
+Environment-backed live upstream proof and stuck-command recovery remain absent.
+
+**Formal Production Agent Publication Command**:
+The permission-protected, actor-scoped and durably idempotent server command that binds
+one exact Agent/Draft/revision request to the Formal Publisher Core and returns a
+stable in-progress, succeeded or failed receipt. Production exposes it only through
+the API composition root and requires all exact external and persistence dependencies
+at startup.
+_Avoid_: independent manifest CLI, caller-supplied Binding Profile, in-memory retry,
+optional production command dependency
 
 **Agent Knowledge Release Catalog Projection**:
 A trace-safe, read-only Agent Configuration Workspace projection of KSS readiness and exact Release identities used to author or review a Draft KSS Release Binding Candidate.

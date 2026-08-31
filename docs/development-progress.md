@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-08-30
+Updated: 2026-08-31
 
 ## Current decision
 
@@ -14,6 +14,400 @@ approved scorer revision, exact grant and versioned secret, real dependency read
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-08-31 production-local exact Draft Memory repair (TDD-05Q)
+
+- [KNOWN | HIGH] A three-argument production-local maintenance command now disables
+  Memory only through the existing Agent Configuration Workspace. It validates the exact
+  Agent/Draft/revision, requires Tools disabled and Memory enabled, preserves YAML outside
+  the Memory mapping, then uses the existing complete-Contract validation, revision CAS,
+  atomic save and configuration audit.
+- [KNOWN | HIGH] The first live attempt failed closed before persistence because disabled
+  Memory cannot retain an active provider. The Draft remained at revision 12 and its
+  contract-update audit count remained 6. Read-only inspection confirmed no Memory scopes;
+  the minimal valid normalization therefore changed `enabled` to false and removed only
+  the provider line.
+- [KNOWN | HIGH] The final exact CAS advanced Draft 12 to 13 and contract-update audit
+  count 6 to 7. A replay against revision 13 returns `draft_memory_already_disabled` and
+  does not create revision 14. Tools remain disabled, and the command never authorizes
+  publication.
+- [KNOWN | HIGH] The read-only Formal Candidate preflight now assembles Draft@13 against
+  exact Release `release-a4b70851cb914862000e15c3`; its formal candidate SHA-256 is
+  `ecd122b4a85e0bf5d0899e07e26e69eda043814880b9b3be59660475dccaf272`.
+  Formal Command, Agent Version, Active Version and KSS Reference remain 0; Query Grant
+  remains 4 and Knowledge Query remains 19.
+- [COMPUTED | HIGH] Final focused checks passed 16 tests, the affected core set passed
+  271, and the complete backend passed 2427 with 267 dependency-conditioned skips and
+  2 deselected. Ruff, format, Mypy, shell syntax, image build, API health, live CAS,
+  replay and preflight checks passed.
+- [FRAME | HIGH] TDD-05Q is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. Candidate assembly is not a formal command approval. The old
+  Release still has an independent historical Query Grant conflict, and Phase F, real
+  upstream smoke, publication Gates and Production GO remain outside this slice.
+
+## 2026-08-31 production-local Formal Candidate preflight (TDD-05P)
+
+- [KNOWN | HIGH] The production formal command now exposes a read-only `preflight()`
+  that reuses its exact Draft/KSS/deployment-Profile candidate assembler without
+  reserving a command or entering Phase F, Reference, Query Grant, online smoke or
+  publication stages. A three-argument production-local verifier returns only bounded,
+  secret-free candidate facts and explicitly states that publication is not authorized.
+- [KNOWN | HIGH] The final retained-volume live preflight failed closed for the exact
+  current Draft@12 with `memory_must_be_disabled`. Read-only inspection confirmed Tools
+  disabled and Memory enabled. The verifier did not modify the Draft or fabricate
+  candidate digests.
+- [COMPUTED | HIGH] Formal Command, Agent Version, Active Version, KSS Reference,
+  Query Grant and Knowledge Query counts were identical before and after the live run.
+  The affected suite passed 172 tests; the complete default backend passed 2412 with
+  267 dependency-conditioned skips and 2 deselected. Focused checks, Ruff, format,
+  Mypy, shell syntax, diff checks, final image build/up and the production-local
+  baseline passed.
+- [FRAME | HIGH] The preflight capability is `LOCAL_VERIFIED`, while the current exact
+  candidate is `BLOCKED` and the feature remains `PARTIAL_VERIFICATION`. Any Draft
+  Memory change requires a separate exact CAS mutation; it would not resolve the old
+  Release Grant conflict or constitute publication approval or Production GO.
+
+## 2026-08-31 production-local exact Query authority verifier (TDD-05O)
+
+- [KNOWN | HIGH] A new explicit host verifier accepts one existing exact KSS Release,
+  provisions or replays its operator-owned deployment-policy Grant, then runs one
+  runtime-client `single_pass` Query. It rejects placeholders and identity, Release,
+  strategy, budget or access-scope drift. Success and known failure output are bounded,
+  machine-readable and secret-free.
+- [KNOWN | HIGH] Retained-volume upgrade exposed and fixed a local identity compatibility
+  defect: the existing runtime token remains bound to `proof-agent-production-local`, so
+  checked-in local policy/bootstrap/runtime wiring preserves that identity. The generic
+  bootstrap default remains unchanged. Current checkout build/up and the full baseline
+  verifier pass; readiness remains intentionally blocked only by the unpublished Agent.
+- [KNOWN | HIGH] The first explicit live Release stopped before Query with a stable 409
+  because each of the three retained queryable Releases already had a historical immutable
+  smoke Grant under different ID/scope facts. No historical Grant was altered or removed.
+  The operator then used the existing KSS management publication API, outside the verifier,
+  to create an independent local Base from two existing immutable Source Versions and
+  publish a new queryable exact Release with no Grant.
+- [KNOWN | HIGH] Two verifier runs against that new Release both exited 0. They replayed
+  the same active Grant ID, created two different succeeded Query IDs, and each returned
+  3 candidates within the checked-in `single_pass` budget. Read-only PostgreSQL checks
+  confirmed exactly one target Grant, two target Queries, 4 Releases and 4 Grants in the
+  retained local database.
+- [COMPUTED | HIGH] Focused positive checks passed 15 tests; the affected set passed 100;
+  the PostgreSQL-enabled full backend passed 2633 with 37 dependency-conditioned skips
+  and 2 deselected. The final verifier-focused regression passed 30 tests with one existing
+  warning, and the production-local baseline exited 0 after the two live runs.
+- [FRAME | HIGH] TDD-05O is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. The new local Release and Grant are durable test evidence and
+  remain in the retained stack because this slice has no selective revoke. This slice adds
+  no Grant reconciliation/revoke, operator audit migration, formal Agent publication,
+  external model proof, deployment approval or Production GO.
+
+## 2026-08-31 production-local Query Grant policy/bootstrap (TDD-05N)
+
+- [KNOWN | HIGH] KSS process configuration now parses one strict, secret-free
+  `KSS_QUERY_GRANT_POLICY_JSON` into the frozen deployment policy. Unknown or invalid
+  fields fail configuration closed; omitting the value keeps the provisioning route
+  unavailable. Only the API role injects the policy into operator-authenticated runtime
+  composition.
+- [KNOWN | HIGH] The checked-in production-local harness now runs a hardened one-shot
+  runtime client bootstrap after KSS migration. It reuses the existing runtime Secret,
+  registers only its credential digest, creates no Grant, and must complete alongside
+  the dedicated Reference bootstrap before KSS API startup. Static contracts require
+  policy and bootstrap client identities to match.
+- [COMPUTED | HIGH] The isolated PostgreSQL vertical read the checked-in policy and
+  bootstrap facts, then passed Reference registration, operator-only exact-Release
+  Grant provisioning and bounded Query. The affected set passed 84 tests; KSS contracts
+  passed 422 with 13 dependency-conditioned skips; the PostgreSQL-enabled full backend
+  passed 2624 with 37 dependency-conditioned skips and 2 deselected. Ruff, format and
+  Mypy over 471 product source files passed.
+- [FRAME | HIGH] TDD-05N is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. The production-local full stack, real model, formal
+  publication, production access-scope enforcement, deployment and release Gates were
+  not executed. This slice adds no SQL, new Secret, revoke/reconciler or operator audit
+  store and is not Production GO.
+
+## 2026-08-30 candidate-bound Query Grant Control staging (TDD-05M)
+
+- [KNOWN | HIGH] Formal publication now stages one exact runtime Query Grant after
+  active KSS Reference registration and before online smoke. Control derives the only
+  request field from the validated Formal Candidate and rejects unavailable,
+  inactive, Release-drifted or Space-drifted receipts before smoke or final writes.
+- [KNOWN | HIGH] `FormalProductionAgentOnlineSmokeQualification` is now the strict
+  `v2` contract and accepts only `FormalProductionAgentQueryGrantStaging`. The old
+  Reference-staging-only call shape is removed. Production composition reuses the
+  existing KSS operator Secret boundary for the guarded provisioner; runtime and
+  Reference credentials still cannot provision Grants.
+- [COMPUTED | HIGH] Focused formal-candidate checks passed 72 tests and production
+  composition checks passed 11. The affected set passed 141 tests with 13
+  dependency-conditioned skips. The PostgreSQL-enabled full backend passed 2620 tests
+  with 37 dependency-conditioned skips, 2 deselected and one existing Authlib
+  deprecation warning. Ruff, format, Mypy over 470 product source files, lock,
+  domain-context and diff checks passed.
+- [FRAME | HIGH] TDD-05M is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. A successfully staged Grant remains as exact,
+  policy-bounded KSS authority if smoke or publication later fails. This slice adds no
+  selective revoke/reconciler, operator-command audit store, new Secret Handle,
+  production-local configuration, live model call, deployment, Git commit or
+  Production GO.
+
+## 2026-08-30 Query Grant operator transport and guarded adapter (TDD-05L)
+
+- [KNOWN | HIGH] KSS now exposes `POST /v1/knowledge-query-grants` only when runtime
+  composition injects both the immutable TDD-05K policy and authenticated operator
+  management. The strict request contains only `knowledge_base_release_id`; the
+  existing `knowledge_source.edit` permission protects the command. Runtime Query and
+  Reference credentials cannot authenticate this operator endpoint.
+- [KNOWN | HIGH] ProofAgent now owns a provider-neutral `KnowledgeQueryGrantProvisioner`
+  port and a guarded HTTPS adapter. The adapter sends only the exact Release, validates
+  the complete secret-free `knowledge-query-grant.v1` receipt, rejects redirects,
+  non-success or oversized responses, unknown fields, inactive or duplicate-strategy
+  receipts, and exact-Release drift.
+- [COMPUTED | HIGH] Focused transport, adapter, runtime and canonical OpenAPI checks
+  passed 25 tests. The isolated PostgreSQL/KSS/ProofAgent vertical passed. KSS contracts
+  passed 418 tests with 13 dependency-conditioned skips; the PostgreSQL-enabled full
+  backend passed 2611 tests with 37 dependency-conditioned skips, 2 deselected and one
+  existing Authlib deprecation warning.
+- [FRAME | HIGH] TDD-05L is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. The provisioner is not composed into formal publication.
+  This slice adds no SQL, operator-command audit store, Secret Handle, production-local
+  configuration, live model call, deployment, Git commit or Production GO.
+
+## 2026-08-30 runtime Query Grant provisioning core (TDD-05K)
+
+- [KNOWN | HIGH] KSS now exposes an application-only, secret-free provisioning seam
+  for one runtime Query client policy and one exact Release. The immutable policy owns
+  client identity, allowed strategies, maximum execution budget and effective
+  access-scope digest; each call may supply only `knowledge_base_release_id`.
+- [KNOWN | HIGH] KSS derives Knowledge Space from its Release authority and returns a
+  strict `knowledge-query-grant.v1` receipt. Complete Grant facts determine the
+  content-addressed Grant ID. Exact replay returns the same receipt, while a changed
+  policy for the same client/Release conflicts instead of widening authorization.
+- [COMPUTED | HIGH] The isolated PostgreSQL/KSS HTTP vertical proved exact replay,
+  caller rejection for client/Space/budget fields, one exact Release, budget enforcement,
+  and stable `403 knowledge_query_access_denied` for another queryable Release,
+  over-budget work and the dedicated Reference client. KSS contracts passed 411 tests
+  with 13 dependency-conditioned skips. The PostgreSQL-enabled full backend passed
+  2588 tests with 37 dependency-conditioned skips and 2 deselected.
+- [FRAME | HIGH] TDD-05K is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. No KSS provisioning HTTP endpoint, ProofAgent transport,
+  formal publisher composition, migration, production-local stack, live model call,
+  deployment, Git commit or Production GO was added.
+
+## 2026-08-30 production-local dedicated Reference client (TDD-05J)
+
+- [KNOWN | HIGH] The checked-in production-local harness now declares a dedicated,
+  versioned KSS Reference client Secret Handle, stores its local fixture at an isolated
+  Vault path, and runs a hardened one-shot KSS client bootstrap after KSS migration and
+  before the KSS API. The production API configuration also supplies the already-hosted
+  local Phase F evaluator origin required by the TDD-05I composition.
+- [KNOWN | HIGH] Production composition rejects a Reference Secret Handle that is shared
+  with either the Knowledge Operator or runtime Query client. The KSS bootstrap stores
+  only the credential digest through `PostgresKnowledgeAccessControl`; it does not create
+  an exact-Release Knowledge Query Grant or print the credential.
+- [COMPUTED | HIGH] The dedicated registrar vertical passed against an isolated PostgreSQL
+  service and recorded `proof-agent-formal-publication-reference` as the authenticated
+  Reference owner. A Query using that credential returned the stable
+  `403 knowledge_query_access_denied` result because no Query Grant exists. The affected
+  set passed 593 tests with 13 dependency-conditioned skips. The PostgreSQL-enabled full
+  backend passed 2588 tests with 37 dependency-conditioned skips and 2 deselected. Full
+  Ruff, Mypy over 368 product source files, lock, Compose config, domain-context and diff
+  checks passed.
+- [FRAME | HIGH] TDD-05J is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. This is a checked-in local deployment contract, not a production
+  credential, deployment rehearsal or Production GO. Runtime Query client provisioning,
+  an exact-Release Query Grant, live KSS/model smoke, formal Agent publication, command
+  recovery, Dashboard work and production cutover remain outside this slice.
+
+## 2026-08-30 formal publication production composition cutover (TDD-05I)
+
+- [KNOWN | HIGH] The production API now composes the durable formal publication command
+  from PostgreSQL Configuration UoW, live KSS catalog, a deployment-owned KSS Binding
+  Profile, the independent Phase F authority, a dedicated versioned KSS Reference client,
+  the governed online smoke runner, immutable artifact storage and trusted Institution
+  Authorization. Draft state remains the only exact Release-selection authority.
+- [KNOWN | HIGH] `create_app(mode="production")` now fails during startup when the
+  command is absent. The old `production-publish-agent` manifest CLI and
+  `compose_production_agent_publisher` composition were removed, so they can no longer
+  bypass the exact Draft, Reference-first and durable command-receipt chain. Development
+  composition remains optional and fails unavailable at the endpoint seam.
+- [COMPUTED | HIGH] The final focused composition/security set passed 16 tests and the
+  directly affected set passed 180 with 13 dependency-conditioned skips. The complete
+  backend passed 2354 tests with 267 dependency-conditioned skips and 2 deselected after
+  the 8 socket-bound cases were rerun in a loopback-capable environment. Full Ruff,
+  Mypy over 367 product source files, lock, domain-context and diff checks passed.
+- [FRAME | HIGH] TDD-05I is `LOCAL_VERIFIED`; the feature remains
+  `PARTIAL_VERIFICATION`. The checked-in production-local deployment does not yet provide
+  the newly required dedicated Reference client Secret/Grant, so startup correctly remains
+  fail-closed there until a separate deployment slice supplies it. No live KSS/model call,
+  command recovery, Dashboard, deployment, Git commit or Production GO was performed.
+
+## 2026-08-30 durable formal publication command (TDD-05H)
+
+- [KNOWN | HIGH] ProofAgent now exposes a strict `agent.publish`-protected formal
+  publication command contract. The server derives actor identity from the trusted
+  operator context, injects the deployment-owned KSS Binding Profile, fingerprints the
+  exact path/body, and persists actor-scoped `Idempotency-Key` state before any KSS or
+  model call. Exact retries return the same success, failure, or `in_progress` receipt;
+  a changed request is rejected before another external call.
+- [KNOWN | HIGH] Migration `0022_formal_publish_cmd` and the PostgreSQL Configuration
+  UoW add durable command receipts. Successful completion is committed atomically with
+  Published Version, Active CAS and publication audit. Receipt-write failure rolls all
+  final publication state back, and a stored terminal result cannot be downgraded.
+  Process loss before terminal completion deliberately leaves `in_progress`; no unsafe
+  timeout takeover or background retry was added.
+- [COMPUTED | HIGH] The focused formal chain passed 63 tests; real PostgreSQL migration,
+  repository, UoW and concurrent reservation passed 9; the affected set passed 170.
+  The final PostgreSQL-enabled backend passed 2578 tests with 37 dependency-conditioned
+  skips and 2 deselected. Ruff passed, Mypy passed over 367 product source files, 15
+  slice Python files were format-clean, and lock/domain checks passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05H while the feature remains
+  `PARTIAL_VERIFICATION`. The production role composition does not yet inject the new
+  command, the old manifest publisher/runtime path remains, and no live KSS/model,
+  Dashboard, deployment, Git commit or Production GO evidence was produced.
+
+## 2026-08-30 governed online smoke runner adapter (TDD-05G)
+
+- [KNOWN | HIGH] ProofAgent now has a concrete formal online smoke runner that receives
+  the Control-validated strict request and exact Reference staging together. It
+  revalidates candidate, Phase F, version/run, digest, Space/Base/Release and Reference
+  identity before any execution; no mutable latest lookup or candidate registry is
+  introduced.
+- [KNOWN | HIGH] The runner safely materializes the provisional Contract Bundle as a
+  private read-only temporary Agent package and reuses the existing governed execution
+  path with `RunPurpose.VALIDATION`, exact run/KSS/runtime facts and injected institution
+  authorization. Only accepted evidence with a nonblank citation is counted; bounded
+  Trace and Receipt files are retained in immutable storage with exact read-back.
+  TDD-05E Control remains the cited-answer qualification authority.
+- [COMPUTED | HIGH] The focused slice passed 57 tests; the core compatibility set
+  passed 76; the directly affected set passed 144 with 15 dependency-conditioned
+  skips. The full backend passed 2338 tests with 264 dependency-conditioned skips and
+  2 deselected after rerunning the socket-bound cases in a loopback-capable environment.
+  Mypy passed over 460 product source files; full Ruff, changed-file format, lock,
+  domain-context and diff checks passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05G, while the feature remains
+  `PARTIAL_VERIFICATION`. The execution boundary was controlled in tests; there is no
+  environment-backed live KSS/model smoke evidence. The old manifest publisher and
+  runtime composition remain unchanged, and no public durable-idempotency formal
+  publication command, Dashboard, deployment, Git commit or Production GO was added.
+
+## 2026-08-30 formal publisher core and atomic activation (TDD-05F)
+
+- [KNOWN | HIGH] ProofAgent now has a new application-only formal publisher core that
+  consumes the exact Draft/KSS/Profile candidate, candidate-bound Phase F, durable KSS
+  Reference staging and exact online smoke chain. It freezes the current Active pointer
+  through a short read-only UoW before Reference registration, then closes the
+  transaction before all external calls.
+- [KNOWN | HIGH] A successful smoke produces one immutable Published Agent Version
+  with a strict evidence envelope retaining the exact Draft revision, Phase F Record,
+  active Reference receipt and smoke result. A final Configuration UoW atomically
+  checks Draft revision, compares the Active pointer, persists Version/activation and
+  appends publication audit. Draft/Active drift or audit/storage failure rolls back
+  all final writes; the already registered Reference is conservatively retained.
+- [COMPUTED | HIGH] The focused slice passed 53 tests, including adversarial failure
+  contracts. Real PostgreSQL repository/UoW tests passed 12; the affected set passed
+  373 tests with 4 dependency-conditioned skips. The PostgreSQL-enabled full backend
+  passed 2561 tests with 37 dependency-conditioned skips and 2 deselected. Mypy passed
+  over 460 product source files; full Ruff, changed-file format, lock and domain-context
+  checks passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05F, while the feature remains
+  `PARTIAL_VERIFICATION`. The old manifest publisher is unchanged and runtime/Delivery
+  does not route to the new core. No real online runner, persisted-idempotency public
+  command, Dashboard, deployment or Production GO was added. TDD-05B through TDD-05F
+  remain uncommitted.
+
+## 2026-08-30 exact online smoke Control (TDD-05E)
+
+- [KNOWN | HIGH] ProofAgent now has an application-only online smoke service that
+  accepts only a validated `FormalProductionAgentReferenceStaging` with an active KSS
+  Reference. Control derives a strict request bound to the exact agent, provisional
+  version, validation run, candidate digests, Space/Base/Release and Reference ID.
+- [KNOWN | HIGH] Only `ANSWERED_WITH_CITATIONS` with at least one accepted citation
+  and distinct exact trace/receipt artifacts forms a strict qualification. Invalid
+  staging, blank question, validator failure, unsuccessful outcome, identity drift or
+  evidence aliasing fails closed through stable, non-sensitive errors. No Store,
+  Active pointer, audit writer or deregistrar port exists in this service, so failure
+  cannot publish or activate and leaves the registered Reference conservatively in
+  KSS.
+- [COMPUTED | HIGH] The focused slice passed 45 tests; the directly affected set
+  passed 322 tests with 4 dependency-conditioned skips. The full backend passed 2326
+  tests with 263 dependency-conditioned skips and 2 deselected after rerunning in an
+  environment that permits loopback binding. Mypy passed over 459 product source
+  files; full Ruff, changed-file format, lock, domain-context and diff checks passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05E, while the feature remains
+  `PARTIAL_VERIFICATION`. No real online runner adapter, formal publisher consumption,
+  Published Version, Active CAS, Delivery, Dashboard, deployment or Production GO was
+  added. TDD-05B through TDD-05E remain uncommitted.
+
+## 2026-08-30 authenticated Reference registration transport (TDD-05D)
+
+- [KNOWN | HIGH] KSS now exposes `POST /v1/knowledge-base-release-references` on
+  its public client surface. The route uses existing Bearer client authentication,
+  requires `Idempotency-Key`, derives client identity only from authentication, and
+  delegates the strict exact request to the existing Reference application and
+  PostgreSQL ledger. First registration and exact replay both return `200` with the
+  same active resource.
+- [KNOWN | HIGH] ProofAgent now has a separate HTTPS guarded registrar using a
+  dedicated service-client authorization factory. It sends only the exact TDD-05C
+  request and Control-owned key, rejects redirects, non-success, oversized/invalid or
+  drifted wire responses, and maps the KSS resource into the strict local receipt.
+  It does not reuse the Knowledge management/operator client.
+- [COMPUTED | HIGH] KSS HTTP and registrar focused contracts passed 27 tests. The
+  affected KSS/ProofAgent set passed 161 tests, including 39 real-PostgreSQL Reference
+  and runtime tests. The full PostgreSQL-enabled backend passed 2541 tests with 37
+  dependency-conditioned skips and 2 deselected; Mypy passed over 458 product source
+  files. Full Ruff, affected format, domain-context, OpenAPI fingerprint and
+  `git diff --check` passed.
+- [KNOWN | HIGH] The isolated project `proofagent-kss-reference-tdd05d` used only
+  PostgreSQL 17.5 on loopback port 55489. A ProofAgent → guarded HTTP → KSS runtime →
+  PostgreSQL vertical proved exact replay leaves one active Reference and one audit.
+  The exact Compose project and temporary volume were removed after verification.
+  No production credential, data, service or deployment was used.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05D, while the feature remains
+  `PARTIAL_VERIFICATION`. No formal publisher consumption, online smoke, Agent
+  Store/audit write, Published Version, Active CAS, deregistration/reconciler,
+  production Secret/egress composition, Dashboard, deployment or Production GO was
+  added. TDD-05B through TDD-05D remain uncommitted.
+
+## 2026-08-30 Reference-first formal publication staging (TDD-05C)
+
+- [KNOWN | HIGH] ProofAgent now has an application-only Reference stager that consumes
+  one exact Phase F preparation. It revalidates candidate and record integrity before
+  using an injected authenticated KSS registrar port. Control derives the idempotency
+  key from the provisional version ID and accepts no caller-selected key.
+- [KNOWN | HIGH] The strict request binds the Draft-owned Space/Base/Release to the
+  future `published_agent_version` identity for `execution_or_rollback`. The active
+  receipt must match every request fact. Drift or upstream failure is rejected; a
+  registration that may already have succeeded is conservatively retained rather than
+  compensated by an unsafe deregistration. The Phase F Record now also binds the
+  provisional version and validation run identities.
+- [COMPUTED | HIGH] The focused slice passed 34 tests; the directly affected set passed
+  157. The full backend passed 2288 tests with 263 dependency-conditioned skips and 2
+  deselected. Mypy passed over 457 product source files; full Ruff, format,
+  domain-context and `git diff --check` passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for the TDD-05C port boundary, while the
+  feature remains `PARTIAL_VERIFICATION`. No KSS registration HTTP or production
+  adapter, Agent Store/audit write, online smoke, Published Version, activation,
+  Delivery, deployment, production configuration or Production GO was added. TDD-05B
+  and TDD-05C remain uncommitted.
+
+## 2026-08-30 candidate-bound Phase F preparation (TDD-05B)
+
+- [KNOWN | HIGH] ProofAgent now has an application-only Phase F preparer that first
+  revalidates both retained Formal Production Agent Candidate digests and resolves
+  Workflow Stage availability from the exact candidate Contract. It accepts four
+  exact evidence artifacts and a trusted actor, with no Store or audit write.
+- [KNOWN | HIGH] A strict immutable Phase F Record binds the formal-candidate digest,
+  Knowledge Release digest, distinct Shadow/Capacity/Acceptance/Recovery evidence,
+  actor and timestamp. Only an independent authority's explicit approval returns a
+  `ProvisionalProductionAgentVersion`; that contract retains the exact Draft revision,
+  KSS binding and Workflow facts while making no published or active claim.
+- [COMPUTED | HIGH] The focused slice passed 18 tests; the directly affected set passed
+  113. The full backend passed 2272 tests with 263 dependency-conditioned skips and 2
+  deselected. Mypy passed over 456 product source files; Ruff, format, domain-context
+  and `git diff --check` passed.
+- [FRAME | HIGH] This is `LOCAL_VERIFIED` for TDD-05B, while the feature remains
+  `PARTIAL_VERIFICATION`. The current publisher is unchanged. No KSS Reference,
+  online smoke, Published Version write, Active pointer CAS, Delivery, deployment,
+  production configuration or Production GO was added. These TDD-05B changes are
+  not yet committed.
 
 ## 2026-08-30 exact Formal Production Agent Candidate assembler (TDD-05A)
 

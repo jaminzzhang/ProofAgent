@@ -66,6 +66,7 @@ class WorkflowStageConfigurationRuntimeSourceType(str, Enum):
     """Trace-safe category for the source of stage runtime configuration."""
 
     PUBLISHED_AGENT_VERSION = "published_agent_version"
+    FORMAL_PRODUCTION_CANDIDATE = "formal_production_candidate"
     PACKAGE_LOCAL_LATEST = "package_local_latest"
 
 
@@ -92,9 +93,7 @@ class WorkflowStageConfigurationTraceSummary(WorkflowStageConfigurationModel):
     source: WorkflowStageConfigurationRuntimeSource
     template_name: str
     template_descriptor_version: str
-    stages: tuple[WorkflowStageConfigurationTraceStageSummary, ...] = Field(
-        default_factory=tuple
-    )
+    stages: tuple[WorkflowStageConfigurationTraceStageSummary, ...] = Field(default_factory=tuple)
 
 
 class PublishedAgentRuntimeFacts(WorkflowStageConfigurationModel):

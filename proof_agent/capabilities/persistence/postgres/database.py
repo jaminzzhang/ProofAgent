@@ -37,6 +37,7 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0017_metadata_import_jobs",
         "0018_publication_preparation",
         "0019_ingestion_operation_link",
+        "0022_formal_publish_cmd",
     }
 )
 METADATA_V2_DIRECT_CUTOVER_REVISIONS: Final = frozenset(

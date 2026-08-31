@@ -10,6 +10,11 @@ import psycopg
 from psycopg import errors
 from psycopg.rows import dict_row
 
+from knowledge_source_service.contracts.access_control import (
+    KnowledgeQueryGrant,
+    KnowledgeQueryGrantBudget,
+)
+from knowledge_source_service.application.query_grants import KnowledgeQueryGrantConflict
 from knowledge_source_service.contracts.knowledge_query import CreateKnowledgeQueryRequest
 from knowledge_source_service.ports.authorization import KnowledgeQueryAdmission
 
@@ -19,7 +24,7 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 AllowedStrategy = Literal["single_pass", "agentic"]
 
 
-class KnowledgeAccessConflict(RuntimeError):
+class KnowledgeAccessConflict(KnowledgeQueryGrantConflict):
     """A client or Grant identity is already bound to different authority facts."""
 
 
@@ -75,7 +80,7 @@ class PostgresKnowledgeAccessControl:
         max_model_tokens: int,
         max_duration_ms: int,
         effective_access_scope_digest: str,
-    ) -> None:
+    ) -> KnowledgeQueryGrant:
         _validate_authority_id(client_grant_id, "client_grant_id")
         _validate_authority_id(client_id, "client_id")
         if (
@@ -162,6 +167,23 @@ class PostgresKnowledgeAccessControl:
             raise KnowledgeAccessConflict(
                 "Client Grant conflicts with existing client or Release authority"
             ) from error
+        return KnowledgeQueryGrant(
+            client_grant_id=str(row["client_grant_id"]),
+            client_id=str(row["client_id"]),
+            knowledge_space_id=str(row["knowledge_space_id"]),
+            knowledge_base_release_id=str(row["knowledge_base_release_id"]),
+            allowed_strategies=tuple(row["allowed_strategies"]),
+            execution_budget=KnowledgeQueryGrantBudget(
+                max_rounds=int(row["max_rounds"]),
+                max_model_calls=int(row["max_model_calls"]),
+                max_candidates=int(row["max_candidates"]),
+                max_model_tokens=int(row["max_model_tokens"]),
+                max_duration_ms=int(row["max_duration_ms"]),
+            ),
+            effective_access_scope_digest=str(row["effective_access_scope_digest"]),
+            active=True,
+            created_at=row["created_at"],
+        )
 
     def authenticate_bearer_token(self, bearer_token: str) -> str | None:
         try:

@@ -35,6 +35,7 @@ from knowledge_source_service.application.base_preparations import (
 )
 from knowledge_source_service.application.release_references import (
     KnowledgeBaseReleaseLifecycleApplication,
+    KnowledgeBaseReleaseReferenceApplication,
 )
 from knowledge_source_service.application.knowledge_queries import (
     KnowledgeQueryApplication,
@@ -43,13 +44,21 @@ from knowledge_source_service.application.knowledge_queries import (
 from knowledge_source_service.application.synchronizations import (
     KnowledgeSourceSynchronizationApplication,
 )
+from knowledge_source_service.contracts.access_control import (
+    KnowledgeQueryGrant,
+    KnowledgeQueryGrantBudget,
+    ProvisionKnowledgeQueryGrantRequest,
+)
 from knowledge_source_service.delivery.http import create_application
 from knowledge_source_service.delivery.management_http import (
     KnowledgeOperator,
     create_management_application,
 )
 from knowledge_source_service.ports.authorization import KnowledgeQueryAdmission
-from knowledge_source_service.ports.release_references import ReleaseLifecycleRepository
+from knowledge_source_service.ports.release_references import (
+    ReleaseLifecycleRepository,
+    ReleaseReferenceRepository,
+)
 
 
 _CONTRACT_TIME = datetime(2026, 1, 1, tzinfo=UTC)
@@ -64,6 +73,30 @@ class _OpenApiAuthorizer:
         )
 
 
+class _OpenApiQueryGrants:
+    def provision(
+        self,
+        request: ProvisionKnowledgeQueryGrantRequest,
+    ) -> KnowledgeQueryGrant:
+        return KnowledgeQueryGrant(
+            client_grant_id="openapi-query-grant",
+            client_id="openapi-runtime-client",
+            knowledge_space_id="openapi-space",
+            knowledge_base_release_id=request.knowledge_base_release_id,
+            allowed_strategies=("single_pass",),
+            execution_budget=KnowledgeQueryGrantBudget(
+                max_rounds=1,
+                max_model_calls=1,
+                max_candidates=1,
+                max_model_tokens=1,
+                max_duration_ms=1,
+            ),
+            effective_access_scope_digest=f"sha256:{'0' * 64}",
+            active=True,
+            created_at=_CONTRACT_TIME,
+        )
+
+
 def build_openapi_contract_bytes() -> bytes:
     """Return canonical bytes for every production API route and schema."""
 
@@ -74,8 +107,16 @@ def build_openapi_contract_bytes() -> bytes:
         clock=lambda: _CONTRACT_TIME,
         id_factory=lambda: "openapi-query",
     )
+    management_catalog = InMemoryKnowledgeCatalog()
+    reference_repository = InMemoryReleaseReferenceRepository(
+        catalog=management_catalog,
+        clock=lambda: _CONTRACT_TIME,
+    )
     application = create_application(
         query_application=query_application,
+        release_references=KnowledgeBaseReleaseReferenceApplication(
+            repository=cast(ReleaseReferenceRepository, reference_repository)
+        ),
         authenticate_client=lambda _request: KnowledgeServiceClient(client_id="openapi-client"),
         trace_id_factory=lambda: "openapi-trace",
         release_identity="openapi-contract-v1",
@@ -91,7 +132,6 @@ def build_openapi_contract_bytes() -> bytes:
         id_factory=lambda: "openapi-synchronization",
         admit_connection=lambda _connection_id: True,
     )
-    management_catalog = InMemoryKnowledgeCatalog()
     management = create_management_application(
         catalog=management_catalog,  # type: ignore[arg-type]
         artifacts=artifacts,
@@ -113,14 +153,9 @@ def build_openapi_contract_bytes() -> bytes:
             id_factory=lambda: "openapi-preparation",
         ),
         release_lifecycle=KnowledgeBaseReleaseLifecycleApplication(
-            repository=cast(
-                ReleaseLifecycleRepository,
-                InMemoryReleaseReferenceRepository(
-                    catalog=management_catalog,
-                    clock=lambda: _CONTRACT_TIME,
-                ),
-            )
+            repository=cast(ReleaseLifecycleRepository, reference_repository)
         ),
+        query_grants=_OpenApiQueryGrants(),  # type: ignore[arg-type]
     )
     application.include_router(management.router)
     application.exception_handlers.update(management.exception_handlers)

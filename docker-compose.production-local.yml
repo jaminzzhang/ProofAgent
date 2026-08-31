@@ -26,16 +26,20 @@ x-proof-agent-environment: &proof-agent-environment
   PROOF_AGENT_SECRET_PROVIDER_COMPATIBILITY_INPUT: /opt/proof-agent-local/compatibility-input.json
   PROOF_AGENT_MODEL_CREDENTIAL_KEYRING_FILE: /run/proof-agent-secrets/model-credential-keyring.json
   PROOF_AGENT_SECRET_HANDLE_LOCATORS_JSON: >-
-    {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"},"knowledge/source-service/operator":{"mount":"secret","path":"proof-agent/knowledge-source-service-operator","field":"value"},"knowledge/source-service/client":{"mount":"secret","path":"proof-agent/knowledge-source-service-client","field":"value"},"knowledge/admission-scorer":{"mount":"secret","path":"proof-agent/knowledge-admission-scorer","field":"value"}}
+    {"session-key-v1":{"mount":"secret","path":"proof-agent/session","field":"value"},"csrf-key":{"mount":"secret","path":"proof-agent/csrf","field":"value"},"oidc-client-secret":{"mount":"secret","path":"proof-agent/oidc","field":"value"},"knowledge/opensearch/proof-agent":{"mount":"secret","path":"proof-agent/opensearch","field":"value"},"evaluation/proof-agent/release":{"mount":"secret","path":"proof-agent/evaluation","field":"value"},"knowledge/source-service/operator":{"mount":"secret","path":"proof-agent/knowledge-source-service-operator","field":"value"},"knowledge/source-service/client":{"mount":"secret","path":"proof-agent/knowledge-source-service-client","field":"value"},"knowledge/source-service/reference-client":{"mount":"secret","path":"proof-agent/knowledge-source-service-reference-client","field":"value"},"knowledge/admission-scorer":{"mount":"secret","path":"proof-agent/knowledge-admission-scorer","field":"value"}}
   PROOF_AGENT_SECRET_PROBE_HANDLE: session-key-v1
   PROOF_AGENT_VAULT_AGENT_TOKEN_FILE: /run/vault-agent/token
   PROOF_AGENT_KNOWLEDGE_EVALUATION_SECRET_HANDLE: evaluation/proof-agent/release
+  PA_KNOWLEDGE_EVALUATION_ENDPOINT: https://models.internal:9448
   PROOF_AGENT_KSS_ENDPOINT: https://proof-agent.localhost:8444
   PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE: knowledge/source-service/operator
   PROOF_AGENT_KSS_BINDING_ID: kss-insurance-production
   PROOF_AGENT_KSS_RELEASE_ID: replace-with-exact-kss-release-id
+  PROOF_AGENT_KSS_RUNTIME_CLIENT_ID: proof-agent-production-local
   PROOF_AGENT_KSS_CLIENT_SECRET_HANDLE: knowledge/source-service/client
   PROOF_AGENT_KSS_CLIENT_SECRET_VERSION_ID: "1"
+  PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_HANDLE: knowledge/source-service/reference-client
+  PROOF_AGENT_KSS_REFERENCE_CLIENT_SECRET_VERSION_ID: "1"
   PROOF_AGENT_KSS_ADMISSION_SCORER_ENDPOINT: https://models.internal:9447
   PROOF_AGENT_KSS_ADMISSION_SCORER_SECRET_HANDLE: knowledge/admission-scorer
   PROOF_AGENT_KSS_ADMISSION_SCORER_SECRET_VERSION_ID: "1"
@@ -102,6 +106,11 @@ x-kss-api-environment: &kss-api-environment
   <<: *kss-query-environment
   KSS_OPERATOR_ID: local-production-operator
   KSS_OPERATOR_BEARER_TOKEN: ${KSS_OPERATOR_BEARER_TOKEN}
+  # effective_access_scope_digest is SHA-256 over the local fixture label
+  # "proofagent-production-local-exact-release-scope-v1". This identifies the
+  # checked-in harness policy; it is not production scope-enforcement evidence.
+  KSS_QUERY_GRANT_POLICY_JSON: >-
+    {"allowed_strategies":["single_pass","agentic"],"client_id":"proof-agent-production-local","effective_access_scope_digest":"sha256:5cd8e32248f278bcef31a31482b5a15e218f541ccd80e21daccfe58121b6088b","execution_budget":{"max_candidates":20,"max_duration_ms":10000,"max_model_calls":2,"max_model_tokens":1000,"max_rounds":2}}
   KSS_OCR_ENDPOINT: https://models.internal:9451/v1/extract
   KSS_OCR_BEARER_TOKEN: ${KSS_MODEL_BEARER_TOKEN}
   KSS_OCR_MODEL_REVISION: kss-ocr-local-production-v1
@@ -224,6 +233,7 @@ services:
       LOCAL_EVALUATION_TOKEN: ${LOCAL_EVALUATION_TOKEN}
       KSS_OPERATOR_BEARER_TOKEN: ${KSS_OPERATOR_BEARER_TOKEN}
       KSS_AGENT_CLIENT_BEARER_TOKEN: ${KSS_AGENT_CLIENT_BEARER_TOKEN}
+      KSS_REFERENCE_CLIENT_BEARER_TOKEN: ${KSS_REFERENCE_CLIENT_BEARER_TOKEN}
       KSS_ADMISSION_SCORER_BEARER_TOKEN: ${KSS_ADMISSION_SCORER_BEARER_TOKEN}
     volumes:
       - vault-agent-token:/run/vault-agent
@@ -238,6 +248,9 @@ services:
         vault kv put secret/proof-agent/knowledge-source-service-operator value="$${KSS_OPERATOR_BEARER_TOKEN}"
         if ! vault kv get secret/proof-agent/knowledge-source-service-client >/dev/null 2>&1; then
           vault kv put secret/proof-agent/knowledge-source-service-client value="$${KSS_AGENT_CLIENT_BEARER_TOKEN}"
+        fi
+        if ! vault kv get secret/proof-agent/knowledge-source-service-reference-client >/dev/null 2>&1; then
+          vault kv put secret/proof-agent/knowledge-source-service-reference-client value="$${KSS_REFERENCE_CLIENT_BEARER_TOKEN}"
         fi
         if ! vault kv get secret/proof-agent/knowledge-admission-scorer >/dev/null 2>&1; then
           vault kv put secret/proof-agent/knowledge-admission-scorer value="$${KSS_ADMISSION_SCORER_BEARER_TOKEN}"
@@ -387,6 +400,32 @@ services:
     command: ["migrate"]
     restart: "no"
 
+  kss-runtime-client-bootstrap:
+    <<: *kss-service
+    depends_on:
+      kss-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *kss-common-environment
+      KSS_RUNTIME_CLIENT_ID: proof-agent-production-local
+      KSS_RUNTIME_CLIENT_BEARER_TOKEN: ${KSS_AGENT_CLIENT_BEARER_TOKEN}
+    entrypoint: ["python"]
+    command: ["-m", "knowledge_source_service.bootstrap.runtime_client"]
+    restart: "no"
+
+  kss-reference-client-bootstrap:
+    <<: *kss-service
+    depends_on:
+      kss-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *kss-common-environment
+      KSS_REFERENCE_CLIENT_ID: proof-agent-formal-publication-reference
+      KSS_REFERENCE_CLIENT_BEARER_TOKEN: ${KSS_REFERENCE_CLIENT_BEARER_TOKEN}
+    entrypoint: ["python"]
+    command: ["-m", "knowledge_source_service.bootstrap.reference_client"]
+    restart: "no"
+
   kss-api:
     <<: *kss-service
     build:
@@ -399,6 +438,10 @@ services:
       gateway:
         condition: service_healthy
       kss-migrate:
+        condition: service_completed_successfully
+      kss-reference-client-bootstrap:
+        condition: service_completed_successfully
+      kss-runtime-client-bootstrap:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
@@ -458,7 +501,7 @@ services:
       - --locked
       - --expand-only
       - --target
-      - 0021_metadata_workbook_v2
+      - 0022_formal_publish_cmd
     restart: "no"
     networks: [production]
 

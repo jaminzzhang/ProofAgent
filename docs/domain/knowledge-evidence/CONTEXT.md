@@ -283,8 +283,11 @@ and active/deregistered counts, fails closed without explicit artifact-retention
 clearance, and adds no state, receipt or audit. TDD-04A exposes only that exact
 read through authenticated KSS management HTTP and a same-origin secret-free BFF;
 both require `knowledge_source.view`, and production-shaped composition fails closed
-without an artifact-retention authority. There is still no lifecycle or Reference
-command network Interface, ProofAgent verifier, background reconciliation,
+without an artifact-retention authority. TDD-05D separately exposes only Reference
+registration through the Bearer-authenticated public client API and composes the
+existing PostgreSQL ledger in KSS runtime; the authenticated client ID is never caller
+input, and exact replay returns the same active Reference. There is still no
+deregistration or lifecycle command network Interface, ProofAgent verifier, background reconciliation,
 affected-reference detail/notification, Dashboard lifecycle page, ProofAgent
 runtime/rollback integration, production
 artifact-retention adapter, physical deletion, production retention
@@ -426,8 +429,32 @@ The organization-internal ownership and isolation boundary for Knowledge Sources
 _Avoid_: SaaS tenant, Knowledge Base, client-supplied namespace, cross-Space search
 
 **Knowledge Service Client Grant**:
-The service-to-service authorization from one authenticated Agent client to an allowlisted set of Knowledge Spaces, Knowledge Bases, actions, and maximum visibility bounds. Each Agent has its own Grant even when several Agents use the same Space; the Grant never assigns end-user permissions or decides business entitlement.
-_Avoid_: Shared Space API key, caller-declared permission, Agent policy, tenant id
+The service-to-service authorization from one registered Agent client to one exact Knowledge Base Release, allowed Query strategies, maximum execution budget, and effective access-scope digest. Its immutable policy is deployment-owned; an authenticated KSS operator provisioning call supplies only the exact Release, KSS derives Space from Release authority, and the Grant never assigns end-user permissions or decides business entitlement. Runtime Query and Reference client credentials cannot authenticate the provisioning command. Each Agent has its own Grant even when several Agents use the same Space.
+_Avoid_: Shared Space API key, self-granting runtime client, Reference credential reuse, caller-selected client or budget, caller-declared Space, Agent policy, tenant id
+
+[KNOWN | HIGH] TDD-05M composes this authorization into the Formal Production Agent
+Control path after exact Reference registration and before online smoke. ProofAgent
+submits only the Candidate's exact Release and verifies the active receipt's Release
+and KSS-derived Space. A Grant can remain after downstream publication failure; it is
+still limited by exact Release and immutable deployment policy, and does not authorize
+ProofAgent to start a user-facing run.
+
+[KNOWN | HIGH] TDD-05N composes the matching production-local deployment facts. One
+strict secret-free policy fixes the runtime client, strategies, budget and scope digest;
+a separate one-shot bootstrap registers only that client's existing credential digest.
+The KSS API waits for runtime and Reference identities and still requires the operator
+credential for exact-Release Grant provisioning. This local harness contract does not
+prove production scope enforcement or grant any user-facing execution authority.
+
+[KNOWN | HIGH] TDD-05O adds an operator-invoked verifier for one explicitly selected,
+existing exact Release. It provisions or replays the deployment-policy Grant before a
+runtime `single_pass` Query, then revalidates Release, client, budget and access-scope
+lineage. Three retained historical Releases hold different immutable Grants, and the
+first live check stopped at conflict before Query. The verifier did not adopt, rewrite
+or revoke those Grants. An operator then published a separate local exact Release
+outside the verifier; two live checks replayed one exact active Grant and completed two
+distinct bounded Queries. This is local compatibility evidence, not production scope
+enforcement or external model proof.
 
 **Knowledge Query Access Scope**:
 The effective access boundary that Knowledge Source Service derives by intersecting a Knowledge Service Client Grant, the exact Knowledge Base Version's Space and resource policy, and any caller-supplied narrowing context. It is enforced before every document, record, row, and retrieval-index lookup, and caller context can never expand it.

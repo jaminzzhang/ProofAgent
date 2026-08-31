@@ -7,6 +7,9 @@ from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.contracts.ports.audit import AuditRepository
 from proof_agent.contracts.ports.case_memory import CaseMemoryRepository
 from proof_agent.contracts.ports.conversations import ConversationRepository
+from proof_agent.contracts.ports.formal_publication_commands import (
+    FormalProductionAgentPublicationCommandRepository,
+)
 from proof_agent.contracts.ports.shared_assets import (
     ModelConnectionReader,
     ModelAssetRepository,
@@ -23,6 +26,7 @@ from proof_agent.contracts.ports.knowledge_candidates import (
     KnowledgeCandidateAdmissionScorer,
     KnowledgeCandidateService,
 )
+from proof_agent.contracts.ports.knowledge_query_grants import KnowledgeQueryGrantProvisioner
 from proof_agent.contracts.ports.release_registry import ReleaseRegistryRepository
 from proof_agent.contracts.ports.oidc import OidcClient, OperatorSessionRepository
 from proof_agent.contracts.ports.security_configuration import SecurityConfigurationRepository
@@ -39,9 +43,11 @@ __all__ = [
     "CaseMemoryRepository",
     "ConversationRepository",
     "ConfigurationUnitOfWork",
+    "FormalProductionAgentPublicationCommandRepository",
     "GuardedHttpClient",
     "KnowledgeCandidateAdmissionScorer",
     "KnowledgeCandidateService",
+    "KnowledgeQueryGrantProvisioner",
     "KnowledgeSourceOperationRepository",
     "ModelAssetRepository",
     "ModelConnectionReader",

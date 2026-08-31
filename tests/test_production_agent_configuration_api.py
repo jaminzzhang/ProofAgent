@@ -15,6 +15,11 @@ from proof_agent.contracts import (
     ContractBundle,
     DraftKnowledgeReleaseBindingCandidate,
     DraftAgent,
+    ExactArtifactRef,
+    FormalProductionAgentPublicationCommandReceipt,
+    FormalProductionAgentPublicationCommandResult,
+    FormalProductionAgentPublicationCommandState,
+    KnowledgeReleaseEvidenceSet,
     WorkflowStageConfig,
     WorkflowStageContextConfig,
     WorkflowStagePromptConfig,
@@ -45,6 +50,9 @@ from proof_agent.control.production_agent_publication_configuration import (
     ProductionAgentPublicationConfiguration,
     ProductionAgentPublicationConfigurationBlocker,
     ProductionAgentPublicationModelRole,
+)
+from proof_agent.control.formal_production_agent_publication_command import (
+    FormalProductionAgentPublicationCommandRejected,
 )
 from proof_agent.observability.api.operator_identity import OperatorIdentityContext
 
@@ -158,19 +166,13 @@ class RecordingApplication:
         bundle = record.draft.contract_bundle.model_copy(
             update={
                 "agent_yaml": (
-                    record.draft.contract_bundle.agent_yaml
-                    if agent_yaml is None
-                    else agent_yaml
+                    record.draft.contract_bundle.agent_yaml if agent_yaml is None else agent_yaml
                 ),
                 "policy_yaml": (
-                    record.draft.contract_bundle.policy_yaml
-                    if policy_yaml is None
-                    else policy_yaml
+                    record.draft.contract_bundle.policy_yaml if policy_yaml is None else policy_yaml
                 ),
                 "tools_yaml": (
-                    record.draft.contract_bundle.tools_yaml
-                    if tools_yaml is None
-                    else tools_yaml
+                    record.draft.contract_bundle.tools_yaml if tools_yaml is None else tools_yaml
                 ),
             }
         )
@@ -386,6 +388,75 @@ def _application() -> tuple[FastAPI, RecordingApplication]:
     return application, service
 
 
+class _RecordingFormalPublicationCommand:
+    def __init__(
+        self,
+        result: FormalProductionAgentPublicationCommandResult,
+        *,
+        error: FormalProductionAgentPublicationCommandRejected | None = None,
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    def publish(self, **kwargs: Any) -> FormalProductionAgentPublicationCommandResult:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def _formal_command_result(
+    state: FormalProductionAgentPublicationCommandState,
+    *,
+    replayed: bool = False,
+    failure_code: str | None = None,
+) -> FormalProductionAgentPublicationCommandResult:
+    terminal = state is not FormalProductionAgentPublicationCommandState.IN_PROGRESS
+    success = state is FormalProductionAgentPublicationCommandState.SUCCEEDED
+    return FormalProductionAgentPublicationCommandResult(
+        replayed=replayed,
+        receipt=FormalProductionAgentPublicationCommandReceipt(
+            command_id="019ba001-1111-7000-8000-000000000805",
+            state=state,
+            agent_id="agent_management_insurance_specialist",
+            draft_id="019ba001-1111-7000-8000-000000000701",
+            draft_revision=11,
+            request_sha256="1" * 64,
+            started_at="2026-08-30T13:05:00Z",
+            completed_at="2026-08-30T13:06:00Z" if terminal else None,
+            published_version_id=("019ba001-1111-7000-8000-000000000901" if success else None),
+            validation_run_id="validation-run-1" if success else None,
+            release_reference_id="release-reference-1" if success else None,
+            published_at="2026-08-30T13:06:00Z" if success else None,
+            failure_code=failure_code,
+        ),
+    )
+
+
+def _formal_command_body() -> dict[str, Any]:
+    def artifact(name: str, digest: str) -> ExactArtifactRef:
+        return ExactArtifactRef(
+            artifact_uri=f"s3://formal-publication/{name}.json",
+            version_id=f"artifact-{name}",
+            sha256=digest * 64,
+            size_bytes=128,
+            media_type="application/json",
+        )
+
+    evidence = KnowledgeReleaseEvidenceSet(
+        shadow=artifact("shadow", "1"),
+        capacity=artifact("capacity", "2"),
+        acceptance=artifact("acceptance", "3"),
+        recovery=artifact("recovery", "4"),
+    )
+    return {
+        "draft_revision": 11,
+        "evidence": evidence.model_dump(mode="json"),
+        "smoke_question": "等待期如何解释？",
+    }
+
+
 def _draft_record() -> AgentDraftRecord:
     return AgentDraftRecord(
         revision=1,
@@ -540,12 +611,12 @@ def test_create_production_agent_uses_server_owned_contract_and_returns_revision
                 "memory",
                 "response",
             ],
-                "editable_modules": [
-                    "general",
-                    "workflow",
-                    "skills",
-                    "knowledge",
-                    "tools",
+            "editable_modules": [
+                "general",
+                "workflow",
+                "skills",
+                "knowledge",
+                "tools",
                 "policy",
                 "model",
                 "memory",
@@ -572,6 +643,158 @@ def test_create_production_agent_uses_server_owned_contract_and_returns_revision
             ),
         }
     ]
+
+
+def test_formal_publication_command_returns_trace_safe_success_and_replay_status() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(FormalProductionAgentPublicationCommandState.SUCCEEDED)
+    )
+    application.state.formal_production_agent_publication_command = command
+    path = (
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications"
+    )
+
+    response = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["state"] == "succeeded"
+    assert response.json()["replayed"] is False
+    serialized = response.text
+    assert "formal-publish-11" not in serialized
+    assert "等待期如何解释" not in serialized
+    assert "artifact-shadow" not in serialized
+    call = command.calls[0]
+    assert call["agent_id"] == "agent_management_insurance_specialist"
+    assert call["draft_id"] == "019ba001-1111-7000-8000-000000000701"
+    assert call["idempotency_key"] == "formal-publish-11"
+    assert call["actor"].subject == "local-user"
+
+    command.result = _formal_command_result(
+        FormalProductionAgentPublicationCommandState.SUCCEEDED,
+        replayed=True,
+    )
+    replay = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+    assert replay.status_code == 200
+    assert replay.json()["replayed"] is True
+
+
+def test_formal_publication_command_exposes_in_progress_and_stable_failure() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(
+            FormalProductionAgentPublicationCommandState.IN_PROGRESS,
+            replayed=True,
+        )
+    )
+    application.state.formal_production_agent_publication_command = command
+    path = (
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications"
+    )
+
+    in_progress = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+    assert in_progress.status_code == 202
+    assert in_progress.json()["state"] == "in_progress"
+
+    command.result = _formal_command_result(
+        FormalProductionAgentPublicationCommandState.FAILED,
+        replayed=True,
+        failure_code="online_smoke_unavailable",
+    )
+    failed = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+    assert failed.status_code == 503
+    assert failed.json()["failure_code"] == "online_smoke_unavailable"
+    assert "private" not in failed.text
+
+
+def test_formal_publication_command_requires_publish_permission_key_and_strict_body() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(FormalProductionAgentPublicationCommandState.SUCCEEDED)
+    )
+    application.state.formal_production_agent_publication_command = command
+    path = (
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications"
+    )
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("agent.view")})
+    )
+    denied = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+    assert denied.status_code == 403
+    assert command.calls == []
+
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset(_all_permissions())
+    )
+    missing_key = TestClient(application).post(path, json=_formal_command_body())
+    assert missing_key.status_code == 422
+    private_body = {
+        **_formal_command_body(),
+        "binding_profile": {"caller": "must-not-control"},
+    }
+    private = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=private_body,
+    )
+    assert private.status_code == 422
+    nested_private_body = _formal_command_body()
+    nested_private_body["evidence"] = {
+        **nested_private_body["evidence"],
+        "raw_bundle": "must-not-exist",
+    }
+    nested_private = TestClient(application).post(
+        path,
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=nested_private_body,
+    )
+    assert nested_private.status_code == 422
+    assert command.calls == []
+
+
+def test_formal_publication_command_maps_idempotency_conflict_without_detail_leak() -> None:
+    application, _ = _application()
+    command = _RecordingFormalPublicationCommand(
+        _formal_command_result(FormalProductionAgentPublicationCommandState.IN_PROGRESS),
+        error=FormalProductionAgentPublicationCommandRejected(
+            code="formal_publication_idempotency_conflict",
+            detail="safe public detail",
+        ),
+    )
+    application.state.formal_production_agent_publication_command = command
+    response = TestClient(application).post(
+        "/api/config/agents/agent_management_insurance_specialist/drafts/"
+        "019ba001-1111-7000-8000-000000000701/formal-publications",
+        headers={"Idempotency-Key": "formal-publish-11"},
+        json=_formal_command_body(),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "formal_publication_idempotency_conflict"}
+    assert "safe public detail" not in response.text
 
 
 def test_list_production_agents_declares_server_owned_capabilities() -> None:
@@ -626,9 +849,7 @@ def test_read_production_draft_contract_and_versions_after_creation() -> None:
 
     draft = client.get(route)
     contract = client.get(f"{route}/contract")
-    versions = client.get(
-        "/api/config/agents/agent_management_insurance_specialist/versions"
-    )
+    versions = client.get("/api/config/agents/agent_management_insurance_specialist/versions")
 
     assert draft.status_code == 200
     assert draft.json()["revision"] == 1
@@ -702,25 +923,19 @@ def test_update_production_contract_delegates_revisioned_candidate_to_workspace(
     )
 
     assert response.status_code == 200
-    assert response.json()["agent_yaml"].endswith(
-        "response:\n  include_review_results: false\n"
-    )
+    assert response.json()["agent_yaml"].endswith("response:\n  include_review_results: false\n")
     assert service.calls[-1] == {
         "agent_id": "agent_management_insurance_specialist",
         "draft_id": "019ba001-1111-7000-8000-000000000701",
         "expected_revision": 7,
-        "agent_yaml": (
-            "schema_version: 3\nresponse:\n  include_review_results: false\n"
-        ),
+        "agent_yaml": ("schema_version: 3\nresponse:\n  include_review_results: false\n"),
         "policy_yaml": None,
         "tools_yaml": None,
         "actor": AuditActorFacts(
             subject="local-user",
             identity_provider="enterprise-oidc",
             session_id="development-session",
-            permissions=tuple(
-                sorted(permission.value for permission in _all_permissions())
-            ),
+            permissions=tuple(sorted(permission.value for permission in _all_permissions())),
         ),
         "operation": "contract_update",
     }
@@ -816,10 +1031,7 @@ def test_production_workflow_catalog_is_available_to_viewers() -> None:
     detail = client.get("/api/config/workflow-templates/react_enterprise_qa_v3")
 
     assert catalog.status_code == 200
-    assert any(
-        item["name"] == "react_enterprise_qa_v3"
-        for item in catalog.json()["data"]
-    )
+    assert any(item["name"] == "react_enterprise_qa_v3" for item in catalog.json()["data"])
     assert detail.status_code == 200
     assert detail.json()["descriptor_version"] == "react_enterprise_qa.v3"
     assert detail.json()["stages"]
@@ -870,18 +1082,14 @@ def test_update_and_preview_production_workflow_delegate_typed_commands() -> Non
                     task_instructions=("Check coverage.",),
                     output_preferences=("Cite evidence.",),
                 ),
-                context=WorkflowStageContextConfig(
-                    options={"include_agent_purpose": True}
-                ),
+                context=WorkflowStageContextConfig(options={"include_agent_purpose": True}),
             ),
         ),
         "actor": AuditActorFacts(
             subject="local-user",
             identity_provider="enterprise-oidc",
             session_id="development-session",
-            permissions=tuple(
-                sorted(permission.value for permission in _all_permissions())
-            ),
+            permissions=tuple(sorted(permission.value for permission in _all_permissions())),
         ),
         "operation": "workflow_stages_update",
     }
@@ -1059,9 +1267,7 @@ def test_production_skill_pack_routes_delegate_revisioned_typed_commands() -> No
             "description": "Updated appeals guidance.",
         },
     )
-    deleted = client.delete(
-        f"{route}/business-flows/appeals_qa?expected_revision=9"
-    )
+    deleted = client.delete(f"{route}/business-flows/appeals_qa?expected_revision=9")
 
     assert read.status_code == 200
     assert read.json()["revision"] == 1
@@ -1127,9 +1333,7 @@ def test_production_skill_pack_routes_require_permissions_revision_and_strict_bo
         f"{route}/business-flows/appeals_qa",
         json={"expected_revision": 1, "label": "Appeals Specialist"},
     )
-    denied_delete = client.delete(
-        f"{route}/business-flows/appeals_qa?expected_revision=1"
-    )
+    denied_delete = client.delete(f"{route}/business-flows/appeals_qa?expected_revision=1")
     application.state.operator_identity_provider = _StaticIdentityProvider(
         frozenset({_permission("agent.edit")})
     )
@@ -1149,9 +1353,7 @@ def test_production_skill_pack_routes_require_permissions_revision_and_strict_bo
         f"{route}/business-flows/appeals_qa",
         json={"label": "Appeals Specialist"},
     )
-    missing_delete_revision = client.delete(
-        f"{route}/business-flows/appeals_qa"
-    )
+    missing_delete_revision = client.delete(f"{route}/business-flows/appeals_qa")
     unknown_field = client.post(
         f"{route}/business-flows",
         json={
@@ -1213,9 +1415,7 @@ def test_production_skill_pack_mutation_maps_failures_without_internal_detail(
     detail: str,
 ) -> None:
     application, _ = _application()
-    application.state.agent_configuration_workspace = _FailingSkillPackApplication(
-        error
-    )
+    application.state.agent_configuration_workspace = _FailingSkillPackApplication(error)
     route = (
         "/api/config/agents/agent_management_insurance_specialist/"
         "drafts/019ba001-1111-7000-8000-000000000701/skills/business-flows"
@@ -1257,9 +1457,7 @@ def test_production_skill_pack_read_maps_failures_without_internal_detail(
     detail: str,
 ) -> None:
     application, _ = _application()
-    application.state.agent_configuration_workspace = _FailingSkillPackApplication(
-        error
-    )
+    application.state.agent_configuration_workspace = _FailingSkillPackApplication(error)
     route = (
         "/api/config/agents/agent_management_insurance_specialist/"
         "drafts/019ba001-1111-7000-8000-000000000701/skills"
@@ -1349,9 +1547,7 @@ def test_production_knowledge_binding_routes_delegate_exact_revisioned_candidate
     ]
     assert updated.status_code == 200
     assert updated.json()["revision"] == 8
-    assert updated.json()["candidate"] == _knowledge_binding_candidate().model_dump(
-        mode="json"
-    )
+    assert updated.json()["candidate"] == _knowledge_binding_candidate().model_dump(mode="json")
     assert [call["operation"] for call in service.calls] == [
         "knowledge_binding_read",
         "knowledge_binding_update",
@@ -1360,7 +1556,9 @@ def test_production_knowledge_binding_routes_delegate_exact_revisioned_candidate
     assert service.calls[-1]["candidate"] == _knowledge_binding_candidate()
 
 
-def test_production_knowledge_binding_requires_both_authority_permissions_and_strict_revision() -> None:
+def test_production_knowledge_binding_requires_both_authority_permissions_and_strict_revision() -> (
+    None
+):
     application, service = _application()
     route = (
         "/api/config/agents/agent_management_insurance_specialist/"
@@ -1414,9 +1612,7 @@ def test_production_knowledge_binding_requires_both_authority_permissions_and_st
     assert denied_update_without_edit.status_code == 403
     assert missing_revision.status_code == 422
     assert unknown_field.status_code == 422
-    assert [call["operation"] for call in service.calls] == [
-        "knowledge_binding_read"
-    ]
+    assert [call["operation"] for call in service.calls] == ["knowledge_binding_read"]
 
 
 @pytest.mark.parametrize(
@@ -1483,9 +1679,7 @@ def test_production_knowledge_binding_maps_failures_without_internal_detail(
     detail: str,
 ) -> None:
     application, _ = _application()
-    application.state.agent_configuration_workspace = _FailingKnowledgeBindingApplication(
-        error
-    )
+    application.state.agent_configuration_workspace = _FailingKnowledgeBindingApplication(error)
     route = (
         "/api/config/agents/agent_management_insurance_specialist/"
         "drafts/019ba001-1111-7000-8000-000000000701/knowledge-binding"
@@ -1596,9 +1790,7 @@ def test_production_publication_configuration_returns_trace_safe_authoritative_p
             {
                 "code": "memory_must_be_disabled",
                 "module_id": "memory",
-                "message": (
-                    "Initial production publication requires Memory to be disabled."
-                ),
+                "message": ("Initial production publication requires Memory to be disabled."),
             }
         ],
         "formal_requirements": {
@@ -1693,8 +1885,8 @@ def test_production_publication_configuration_maps_failures_without_internal_det
     detail: str,
 ) -> None:
     application, _ = _application()
-    application.state.agent_configuration_workspace = (
-        _FailingPublicationConfigurationApplication(error)
+    application.state.agent_configuration_workspace = _FailingPublicationConfigurationApplication(
+        error
     )
     route = (
         "/api/config/agents/agent_management_insurance_specialist/"
@@ -1808,27 +2000,19 @@ class _FailingSkillPackApplication(RecordingApplication):
         super().__init__()
         self._error = error
 
-    def get_business_flow_skill_packs(
-        self, **kwargs: Any
-    ) -> AgentConfigurationSkillPackResult:
+    def get_business_flow_skill_packs(self, **kwargs: Any) -> AgentConfigurationSkillPackResult:
         del kwargs
         raise self._error
 
-    def create_business_flow_skill_pack(
-        self, **kwargs: Any
-    ) -> AgentConfigurationSkillPackResult:
+    def create_business_flow_skill_pack(self, **kwargs: Any) -> AgentConfigurationSkillPackResult:
         del kwargs
         raise self._error
 
-    def update_business_flow_skill_pack(
-        self, **kwargs: Any
-    ) -> AgentConfigurationSkillPackResult:
+    def update_business_flow_skill_pack(self, **kwargs: Any) -> AgentConfigurationSkillPackResult:
         del kwargs
         raise self._error
 
-    def delete_business_flow_skill_pack(
-        self, **kwargs: Any
-    ) -> AgentConfigurationSkillPackResult:
+    def delete_business_flow_skill_pack(self, **kwargs: Any) -> AgentConfigurationSkillPackResult:
         del kwargs
         raise self._error
 

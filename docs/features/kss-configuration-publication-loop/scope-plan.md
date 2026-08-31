@@ -224,7 +224,7 @@
 | `docs/adr/0217-use-a-durable-one-use-release-preparation-state-machine.md` | ADR | durable Preparation、one-use ready candidate 与 fenced Worker 状态机 | 已新增 | accepted design；核心状态/事务、application-only cancel/expiry/publication、TDD-04C start/status BFF、TDD-04D one-shot execution runtime、TDD-04E controlled publish BFF、TDD-04F controlled cancel BFF、TDD-04G bounded audit read BFF 与 TDD-04H exact-resource expiry BFF 已实现；常驻执行进程和自动过期调度待实现 |
 | `docs/domain/knowledge-evidence/CONTEXT.md` | 术语 | 三类可叠加 Hybrid Knowledge Configuration Role Bundle | 已更新 | 用户已确认 |
 | `docs/domain/knowledge-evidence/decisions.md` | 歧义记录 | 首期不做复杂 RBAC 或强制四眼，复用全局 named permission 映射 | 已更新 | 用户已确认 |
-| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F 与 TDD-04A 至 04H 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
+| `docs/PROJ_CONTEXT.md` | Feature 索引 | TDD-01A/01B、TDD-02A 至 02G、TDD-03A 至 03F、TDD-04A 至 04H 与 TDD-05A 至 05N 本地执行状态为 `PARTIAL_VERIFICATION`，不是生产切换证据 | 已更新 | 当前事实 |
 
 [KNOWN | HIGH] TDD-04E 已在既有 Scope 内完成 controlled Preparation publication BFF：
 KSS 管理入口与 ProofAgent 同源入口均为 no-body `POST :publish`；BFF 要求
@@ -287,3 +287,400 @@ Contract/Release/Profile 在不同 Draft revision 下保持前者稳定、后者
 catalog failure/unversioned snapshot、deprecated 或 parent tuple 漂移、Profile 夹带 Release、
 非 versioned Knowledge credential 均失败关闭。现有 publisher、production composition、Reference、
 Phase F、smoke、Published Version 与 Active pointer 未改动。
+
+[FRAME | HIGH] 2026-08-30 用户要求提交 Git 后继续下一切片，进入 TDD-05B
+candidate-bound Phase F preparation。本片新增一个无持久化副作用的 Control 入口，只接受
+TDD-05A `FormalProductionAgentCandidate`、四类 exact evidence 和可信 actor。入口先重验
+Formal Candidate 的 Knowledge Release digest 与 formal digest，再封装同时绑定两类 digest 的
+immutable Formal Phase F Record，交给独立 Phase F authority 验证；通过后输出独立的
+Provisional Production Agent Version 与 preparation result。Provisional contract 使用
+`prepared_at/prepared_by`，不得复用 `PublishedAgentVersion` 或声称已发布，并保留 exact Draft
+revision、KSS binding、Phase F record、Workflow Stage 可用性和有效配置。candidate tamper、
+evidence 重复/漂移、authority exception/deny、无可用 Workflow Stage 均失败关闭。本片不修改
+现有 `ProductionAgentPublicationService`，不写 Agent Store/audit，不注册 KSS Reference，不执行
+online smoke、Published Version 写入、Active pointer CAS、HTTP/CLI/Dashboard、production
+composition、配置、SQL、migration、部署或 Git 提交；后续切片再把 preparation 接入唯一正式
+publisher，并按 Reference-first 顺序继续。
+
+[KNOWN | HIGH] TDD-05B 已按冻结边界完成。Control 现在重验 Formal Candidate 的两类 digest，
+解析该候选的 Workflow Stage 配置，把四类互不相同的 exact evidence 封装为同时绑定 formal 与
+Knowledge Release digest 的 immutable Phase F Record，并在独立 authority 明确批准后返回
+`ProvisionalProductionAgentVersion`。篡改候选、重复或漂移 evidence、不可解析 Workflow、
+authority deny/exception 均失败关闭。实现没有持久化副作用，也没有新增 Reference、smoke、
+Published Version、Active CAS、Delivery、配置或部署行为。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05C Reference-first formal publication
+staging。本片新增一个 application-only Control 入口，只接受 TDD-05B
+`FormalProductionAgentPhaseFPreparation` 和注入的 KSS Reference registrar port。入口在任何
+跨服务调用前重验 candidate、Phase F Record 与 preparation 的 exact identity，再以 provisional
+version ID 作为 immutable `published_agent_version` external resource，为 Draft-owned exact
+Space/Base/Release 构造 `execution_or_rollback` Reference 请求。幂等 key 由 Control 根据 exact
+version ID 确定性生成，不接受调用方选择；相同 preparation 重放必须恢复同一 active Reference。
+注册失败不得返回 staging；上游回执的 Scope、Release、external resource、purpose 或 active
+state 漂移必须失败关闭。注册已成功但回执不可验证时保守保留 KSS Reference，视为可对账孤儿，
+不得补偿性注销。本片不新增 KSS HTTP/BFF/production adapter，不写 Agent Store/audit，不执行
+online smoke、`PublishedAgentVersion` 写入、Active pointer CAS、Delivery/Dashboard、production
+composition、配置、SQL、migration、部署或 Git 提交，也不修改现有 publisher。
+
+[KNOWN | HIGH] TDD-05C 已按上述边界完成。Control 以 exact provisional version ID 生成稳定
+幂等 key，并通过注入 registrar port 提交 strict Space/Base/Release、
+`published_agent_version` external resource 和 `execution_or_rollback` purpose。返回的 active
+Reference 必须与请求逐项一致；上游异常映射为稳定错误且不泄漏 detail。相同 preparation
+重放恢复同一 Reference；回执漂移在注册后失败关闭并保守留下可对账孤儿。为防止 Reference
+目标漂移，Phase F Record 同时绑定 provisional version ID 与 validation run ID，stager 在跨服务
+调用前重验该 Record。当前只有 port 合同和本地 fake 证据，没有 KSS HTTP/真实 registrar、
+Agent 持久化、smoke、激活或生产接线。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05D authenticated Reference registration
+transport。本片在 KSS public client API 新增
+`POST /v1/knowledge-base-release-references`。请求必须使用现有 Bearer client authentication 和
+`Idempotency-Key`；authenticated client ID 只来自服务端认证结果，不接受 body/header 自报。
+Body 使用既有 strict `RegisterKnowledgeBaseReleaseReferenceRequest`，只包含 exact
+Space/Base/Release、固定 `published_agent_version` external resource kind、exact external resource
+ID 和固定 `execution_or_rollback` purpose。命令是 idempotent ensure，首次注册和精确重放均返回
+`200` 与同一 active Reference；冲突、Release 不可采用、Scope 漂移、无效 key、认证失败和存储/
+完整性失败映射为稳定、无输入回显的 problem contract。
+
+[FRAME | HIGH] ProofAgent 本片新增独立 guarded registrar adapter，使用 HTTPS origin、
+`GuardedHttpClient` 和专用 client authorization factory；不得复用 Knowledge Operator credential
+或 management client。Adapter 发送 exact JSON 与 Control 生成的 key，strict 解析 KSS wire
+response，再映射为 TDD-05C `RegisteredProductionAgentReleaseReference`。KSS runtime 使用既有
+PostgreSQL Reference repository 接线，canonical OpenAPI 必须包含新 route/schema。验证至少覆盖
+KSS in-memory HTTP、ProofAgent guarded transport、认证/unknown-field/幂等/上游漂移负向合同，
+以及隔离 PostgreSQL 的 ProofAgent → HTTP → KSS application → Reference Ledger 纵向路径。本片
+不新增 SQL/migration、浏览器 BFF/Dashboard、formal publisher consumption、online smoke、Agent
+Store/audit、Published Version、Active pointer CAS、reconciler/deregistration、生产 Secret/egress
+配置、部署或 Git 提交。
+
+[KNOWN | HIGH] TDD-05D 已按上述边界完成。KSS public client API 通过既有 Bearer client
+authentication 和 `Idempotency-Key` 接受 exact Reference registration，authenticated client
+identity 只取服务端认证结果；strict body、Release admissibility、Scope、幂等冲突和持久化失败
+均使用无输入回显的稳定 problem contract。ProofAgent 新增独立 HTTPS guarded registrar，使用
+专用 client authorization factory，strict 解析 KSS wire resource 并映射为 TDD-05C receipt；
+KSS runtime 复用既有 PostgreSQL Reference repository。隔离 PostgreSQL 纵向已证明
+ProofAgent → guarded HTTP → KSS runtime → Reference Ledger 的首次注册与 exact replay 收敛到
+同一 active Reference 和一条审计。canonical OpenAPI 已包含新 route/schema。本片没有新增
+SQL/migration、BFF/Dashboard、publisher consumption、online smoke、Agent Store/audit、Published
+Version、Active CAS、reconciler/deregistration、生产 Secret/egress 配置、部署或 Git 提交。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05E exact online smoke Control。本片新增一个
+application-only Control 入口，只接受 TDD-05D 已完成注册的
+`FormalProductionAgentReferenceStaging` 和非空 smoke question。入口在调用外部 validator 前
+重验 Formal Candidate、Phase F Record、provisional version 与 active KSS Reference 的完整
+identity，并由 Control 构造 strict smoke request，固定绑定 agent、provisional version、
+validation run、两类 candidate digest、exact Space/Base/Release 和 release Reference。validator
+只能返回同一组 identity、运行 outcome、accepted citation count，以及互不相同的 exact trace/
+receipt artifact；仅 `ANSWERED_WITH_CITATIONS` 且至少一条 accepted citation 可形成仍未发布的
+online-smoke qualification。validator exception、unknown/malformed result、identity drift、零引用、
+非引用回答或 trace/receipt 混用均失败关闭，不泄漏上游 detail。
+
+[FRAME | HIGH] 本片用结构性边界保证失败顺序：smoke service 不接受 Phase F preparation 代替
+registered staging，也不注入 Agent Store、Active pointer、audit writer 或 KSS deregistrar。
+因此 smoke 失败或结果不确定时不能写 `PublishedAgentVersion`、不能更新 Active pointer，也不能
+补偿性注销已成功注册的 KSS Reference；该 Reference 保留为可对账的保守孤儿。本片不实现真实
+online runner adapter、Store transaction、activation CAS、formal publisher cutover、HTTP/CLI/
+Dashboard、Delivery、reconciler/deregistration、生产 Secret/egress、配置、SQL、migration、部署或
+Git 提交。
+
+[KNOWN | HIGH] TDD-05E 已按上述边界完成。Control 只从完整、active 的 registered staging
+构造 exact smoke request，并把 agent、provisional version、validation run、两类 candidate
+digest、Space/Base/Release、Reference ID 和规范化 question 一并交给单一 validator port。只有
+identity 完全一致、`ANSWERED_WITH_CITATIONS`、accepted citation count 至少为 1，且 trace/
+receipt exact artifact 互不相同的结果，才能形成不含 publication/activation 声明的 strict
+qualification。非法 staging、空白 question、validator exception、失败 outcome、零引用、结果
+漂移或 evidence 混用均稳定失败关闭且不泄漏上游 detail。service 没有 Store、Active pointer、
+audit writer 或 KSS deregistrar 依赖；失败后已注册 Reference 保留。本片没有真实 runner adapter、
+Published Version、Active CAS、publisher cutover、Delivery、Dashboard、部署或 Git 提交。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05F formal publisher core。本片新增后续唯一
+正式入口的 application-only 目标实现，按既有 Control 服务依次执行 exact Draft/KSS/Profile
+candidate assembly、candidate-bound Phase F、Reference-first staging 和 exact online smoke。Phase F 通过后、
+Reference 注册前，publisher 使用一个短只读 Configuration UoW 读取当前 Active Agent Version，
+冻结 `ActiveAgentPointerExpectation` 后立即关闭事务；Reference 和 smoke 等外部调用期间不得持有
+数据库事务。
+
+[FRAME | HIGH] smoke 通过后，publisher 从 exact provisional version 构造 immutable
+`PublishedAgentVersion`。版本新增单一 strict formal-publication evidence envelope，保留 exact Draft
+revision、Formal Phase F Record、active Release Reference receipt 和 online smoke result，并要求
+version/run/Release/Reference identity 完全一致。最终一个 Configuration UoW 必须同时执行 Draft
+revision check、Active pointer CAS、Published Version/activation 写入和 trace-safe publication audit；
+仅全部成功后 commit。Draft 或 Active pointer 漂移、audit/storage exception 均回滚，不留下部分
+Published/Active/audit 状态；已经注册的 KSS Reference 继续保留，不做补偿性注销。
+
+[FRAME | HIGH] 本片复用既有 PostgreSQL repository/UoW，不新增 SQL 或 migration，也不修改旧
+manifest-based publisher、HTTP/CLI/Dashboard、Delivery、runtime、reconciler/deregistration、生产
+Secret/egress、配置或部署。真实 online runner、公开 formal publication command 与持久化
+Idempotency-Key receipt 留到后续独立切片；因此本片不能被当作可安全重试的网络发布入口或
+Production GO。本片不执行 Git 提交。
+
+[KNOWN | HIGH] TDD-05F 已按上述边界完成并本地验证。新的 formal publisher core 在 Reference
+注册前通过短只读 UoW 冻结 Active expectation，外部 Reference/smoke 调用期间不持有数据库事务，
+并在 smoke 成功后通过一个最终 UoW 原子提交 immutable Published Version、Active pointer CAS 与
+publication audit。Published Version 保留 exact Draft revision、Phase F Record、active Reference
+receipt 和 online smoke result 的 strict evidence envelope。Draft/Active 并发漂移、audit/storage
+失败均不留下部分 Version/Active/audit 状态；已注册 Reference 继续保留。旧 manifest publisher、
+真实 online runner、公开且持久化幂等的正式发布命令和 runtime composition 尚未切换，因此
+TDD-05F 为 `LOCAL_VERIFIED`，Feature 仍为 `PARTIAL_VERIFICATION`。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05G real online smoke runner adapter。本片只
+关闭“如何把 TDD-05E strict request 和已验证 staging 交给现有 governed execution，并形成 exact
+Trace/Receipt/citation result”的缺口。`FormalProductionAgentOnlineSmokeValidator` port 增加同一
+`FormalProductionAgentReferenceStaging` 参数；Control 仍先完成 staging/request 的 exact identity
+校验，runner 也必须在执行前重验 agent、version、run、两类 candidate digest、Space/Base/Release
+和 Reference identity，不引入按 ID 查找 mutable candidate 的全局注册表。
+
+[FRAME | HIGH] runner 从 provisional version 的 immutable `ContractBundle` 在私有临时目录生成
+只读 Agent package，路径校验必须拒绝绝对路径、反斜杠、空段、`.`、`..`、NUL 和 core contract
+shadow。它以 `RunPurpose.VALIDATION`、exact validation run ID、exact resolved KSS binding、冻结的
+Workflow Stage runtime facts 与部署注入的 Institution Authorization 调用现有 governed execution。
+完成的 run 只统计同时具有 `accepted` 状态和非空 citation 的 Evidence Chunk；Trace 与 Receipt
+必须是非空、有限大小的普通文件，并分别写入 immutable artifact store 后 exact read-back。runner
+返回 strict `FormalProductionAgentOnlineSmokeResult`；是否达到 cited-answer Gate 仍由 TDD-05E
+Control 决定。
+
+[FRAME | HIGH] 执行、materialization、artifact 限界或 read-back 异常全部失败关闭，由 Control
+映射为不泄漏内部 detail 的稳定错误。临时 package 与本地 RunStore 在调用结束后清理；已经注册
+的 KSS Reference 不变。失败 run 已写入的 immutable Trace/Receipt 可以作为运行诊断事实，但不是
+publication evidence，也不授权激活。本片不修改 SQL/migration、KSS API、公开 formal publication
+command、持久化 Idempotency-Key receipt、旧 publisher composition、HTTP/CLI/Dashboard、Run
+Executor、reconciler/deregistration、生产配置、部署或 Git 提交。
+
+[KNOWN | HIGH] TDD-05G 已按上述边界完成并本地验证。新增 concrete
+`FormalProductionAgentOnlineSmokeRunner`，它重新验证 strict request 与完整 staging，从 provisional
+`ContractBundle` 安全物化私有只读临时 package，并以 `RunPurpose.VALIDATION`、exact validation
+run ID、exact KSS binding、冻结的 Workflow Stage runtime facts 和注入的 Institution Authorization
+复用既有 governed execution。只有 `accepted` 且 citation 非空的 Evidence Chunk 被计数；非空、
+有限大小的 Trace/Receipt 分别写入 immutable artifact store 并完成 exact read-back。Control 继续
+独占 cited-answer Gate，runner 不获得 publication/activation authority。identity 漂移、无有效引用、
+artifact 回读失败和内部异常均失败关闭；临时 package/RunStore 清理，已注册 KSS Reference 保留。
+本片没有新增 SQL、migration、KSS API、公开幂等发布命令、旧 publisher/runtime 切换、生产上游
+联机证明、部署或 Git 提交，因此 TDD-05G 为 `LOCAL_VERIFIED`，Feature 仍为
+`PARTIAL_VERIFICATION`。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05H durable formal publication command。
+本片新增唯一一个受 `agent.publish` 权限保护的生产配置 API：
+`POST /api/config/agents/{agent_id}/drafts/{draft_id}/formal-publications`。请求必须携带
+`Idempotency-Key`，body 只包含 exact `draft_revision`、四类 `KnowledgeReleaseEvidenceSet` 和
+规范化前的 `smoke_question`；Agent/Draft identity 来自 path，actor 来自可信 OIDC session，
+`ProductionKssBindingProfile` 只由部署注入。strict body 拒绝 caller-selected Profile、Release、
+provisional version、validation run、Reference、Active pointer、actor、publication timestamp 或
+结果字段。
+
+[FRAME | HIGH] Command 以 `(actor subject, Idempotency-Key)` 为作用域，并对 path/body 计算
+canonical SHA-256。任何外部 Phase F、KSS Reference 或 online smoke 调用前，必须在短 PostgreSQL
+事务中持久化 `in_progress` receipt；相同 key/fingerprint 的 terminal replay 返回原 receipt，
+`in_progress` replay 返回同一资源和 `202` 且不得重复调用外部边界，不同 fingerprint 在外部调用前
+返回稳定冲突。Idempotency-Key 不进入公共响应、audit metadata 或异常 detail。Receipt 只保留
+command、Agent/Draft/revision、request digest、状态、时间、成功时的 version/run/Reference identity，
+或失败时的稳定 code；不得保存或返回 raw smoke question、evidence payload、ContractBundle、Secret
+Handle、上游 detail 或 artifact bytes。
+
+[FRAME | HIGH] 成功路径必须在 TDD-05F 的最终 Configuration UoW 中，同时提交 immutable Published
+Version、Active pointer CAS、publication audit 和 `succeeded` command receipt；receipt 写入失败必须
+回滚全部本地最终状态。已准入命令在 publisher 返回稳定失败后，以独立短事务从 `in_progress`
+转换为 `failed`；exact replay 返回同一 failure code，不重复 Phase F/Reference/smoke。若最终 commit
+结果不确定，failure completion 必须先恢复已存在的 terminal receipt，不能把已成功命令降级为失败。
+进程在 terminal receipt 前丢失时保守保留 `in_progress`，本片不自动超时接管或以同一 key 重跑；
+该状态需要后续受信 reconciler。新 key 表示新命令，不能用来覆盖或修改旧 receipt。
+
+[FRAME | HIGH] 本片新增 PostgreSQL command table、repository/UoW seam、strict application command
+和可注入 HTTP 入口。它不把新入口接入 Dashboard，不删除或改写旧 manifest CLI publisher，不切换
+Published Agent runtime/rollback，不增加 background reconciler、lease/takeover、command GET/list/
+cancel、receipt deletion/retention job、KSS API、生产 Secret/egress 配置或部署，也不执行 Git 提交。
+生产 API composition cutover 与真实上游联机仍需后续独立切片；因此本片即使本地通过，也不能称为
+系统级唯一发布入口或 Production GO。
+
+[KNOWN | HIGH] TDD-05H 已按上述边界完成并本地验证。公开命令现在以可信 actor 和
+`agent.publish` 权限接收 strict path/body，先持久化 actor-scoped `in_progress` receipt，再在事务外
+执行 exact formal chain；exact replay、changed-request conflict、process-exit in-progress、稳定失败
+和 terminal non-downgrade 均有合同覆盖。`0022_formal_publish_cmd` 与 Configuration UoW 让成功
+receipt 和 Version/Active/audit 原子提交。真实 PostgreSQL 迁移、仓储、UoW 和并发 9 项通过，
+受影响集 170 项通过，最终全仓 2578 项通过。production concrete composition、stuck-command
+reconciler、旧 publisher/runtime 切换、真实 KSS/model 联机与部署仍未完成，因此 TDD-05H 为
+`LOCAL_VERIFIED`，Feature 仍为 `PARTIAL_VERIFICATION`，没有 Git 提交或 Production GO。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05I production composition cutover。本片只让
+production API 从部署权威装配 TDD-05H 的 durable formal publication command：使用 PostgreSQL
+Configuration UoW、live KSS catalog、deployment-owned `ProductionKssBindingProfile`、独立 Phase F
+authority、专用且版本化的 KSS Reference service-client credential、TDD-05G governed online smoke
+runner、immutable artifact store 和部署注入的 Institution Authorization。Draft 仍独占 exact
+Release 选择；Profile 只提供 binding、credential 和 Admission Scorer identity，不能夹带 Release。
+
+[FRAME | HIGH] `create_app(mode="production")` 必须把 formal publication command 列为强制依赖，
+缺失时在应用启动阶段失败关闭；development 仍允许不注入并由既有 Delivery seam 返回不可用。
+production API 是本片唯一正式发布 composition root。旧 `production-publish-agent` manifest CLI
+及其 `compose_production_agent_publisher` production composition 必须移除，避免绕过 exact Draft、
+durable command receipt 和 Reference-first chain；旧 application core 可暂留作历史兼容测试，但
+不再有 production entry 或导出装配函数。
+
+[FRAME | HIGH] 本片不增加 SQL/migration、command recovery/takeover、GET/list/cancel、Dashboard、
+reconciler/deregistration、Release revocation runtime、真实 KSS/model 联机、production Compose/
+Blue-Green 配置、secret 值、部署或 Git 提交。Composition 测试只证明依赖接线、专用凭据隔离、
+启动失败关闭与唯一入口，不证明外部服务可用、生产发布成功或 Production GO。
+
+[KNOWN | HIGH] TDD-05I 已按冻结边界完成并本地验证。production API 现在装配 PostgreSQL UoW、
+live KSS catalog、deployment Profile、Phase F authority、dedicated versioned Reference client、
+governed online runner 与 immutable artifact store，且 `create_app(mode="production")` 缺 command
+即启动失败。旧 manifest `production-publish-agent` CLI 和
+`compose_production_agent_publisher` 已移除。聚焦 16 项、受影响 180 项和 loopback-capable 全仓
+2354 项均通过；267 个依赖条件 skip 不作为外部依赖证据。production-local 专用 Reference client
+Secret/Grant、真实上游、stuck-command recovery、部署和 Production GO 仍未完成，也没有 Git
+提交。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05J production-local dedicated Reference client。
+本片只补 checked-in production-local 的专用、版本化 Reference client Secret Handle、独立 Vault
+fixture、KSS service-client identity bootstrap，以及一个隔离 PostgreSQL/KSS/ProofAgent registrar
+纵向。KSS API 必须在该 client identity 幂等注册完成后启动；ProofAgent formal composition 使用的
+Reference credential 必须与 operator credential、runtime query credential 使用不同 handle 和本地
+fixture 值。纵向只注册一个 exact、queryable Release 的 `published_agent_version` Reference，并证明
+receipt 中的 `authenticated_client_id` 来自该专用凭据。
+
+[FRAME | HIGH] 当前 `knowledge_client_grants` 只表达 exact-Release Knowledge Query Grant；Reference
+registration 目前以已认证 service-client identity 为授权边界。TDD-05J 不把 Query Grant 误称为
+Reference Grant，也不为专用 Reference client 创建查询权限。纵向必须反证该 client 在没有 exact
+Query Grant 时无法创建 Knowledge Query。action-scoped Reference Grant 若需要，必须由后续独立
+设计和 migration 切片处理，不能隐含进本地部署 fixture。
+
+[FRAME | HIGH] 本片不调用 formal publication endpoint，不创建或激活 Published Agent Version，
+不运行真实模型或完整 online smoke，不新增 KSS 管理 API、Query Grant provisioning、SQL migration、
+reconciler、Dashboard、恢复器、production Vault/egress/TLS 变更，也不启动或修改既有
+`proofagent-production-local` 项目。验证只使用静态 Compose 合同、受控 fake 和独立 PostgreSQL
+测试 schema；不读取 `.env`、secret 值、生产数据或生产日志，不执行部署或 Git 提交。
+
+[KNOWN | HIGH] TDD-05J 已按上述边界完成并本地验证。production-local 现在声明专用、版本化
+Reference client Secret Handle 和独立 Vault fixture；一次性 KSS bootstrap 在 migration 后、API
+启动前幂等注册 `proof-agent-formal-publication-reference` identity。production composition 拒绝
+Reference Handle 与 Operator/runtime Query Handle 复用，并补齐既有本地 Phase F evaluator origin。
+隔离纵向证明该 client 可首次/重放同一 exact active Reference，且在没有 Query Grant 时调用 Query
+稳定返回 `403`。受影响集 593 项通过、13 项依赖条件 skip；PostgreSQL-enabled 全仓 2588 项通过、
+37 项依赖条件 skip、2 项 deselected。没有启动 production-local 全栈、正式发布、真实模型 smoke、
+部署或 Git 提交；Feature 仍为 `PARTIAL_VERIFICATION`。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05K runtime Query client exact-Release
+Grant provisioning core。本片只新增 KSS application-only、secret-free provisioning 接口，
+复用既有 `knowledge_client_grants` PostgreSQL 权威。已注册 runtime client identity、允许
+strategy、服务端预算上限和 effective access scope digest 必须在受信 KSS composition
+时注入 immutable policy；每次调用只接受 Draft 后续传入的 exact Release identity，不接受
+client、credential、预算、strategy 或 Knowledge Space。Space 必须由 KSS 通过 exact Release
+权威反推并返回 secret-free receipt。
+
+[FRAME | HIGH] Grant identity 必须由全部 immutable Grant facts 内容寻址生成。同一事实精确
+重放返回同一 receipt；同一 runtime client 已绑定同一 exact Release 后，改变策略、
+预算或 scope digest 不得原地扩权，必须冲突失败。隔离纵向必须证明 runtime
+credential 只能在 exact Release 和 Grant 预算内创建 Query；越预算、其他 Release 以及
+未获 Grant 的专用 Reference credential 均返回稳定 `403`。
+
+[FRAME | HIGH] 本片不新增 SQL migration、KSS HTTP/管理 API、ProofAgent transport 或 formal
+publisher composition，不改 Compose、Vault、egress/TLS 或 Dashboard，不调用 formal publication
+endpoint，不运行真实模型、不部署且不提交 Git。验证只使用独立 PostgreSQL 测试
+schema、本地 KSS HTTP application 和受控 fixture；不读取 `.env`、secret 值、生产数据或日志。
+
+[KNOWN | HIGH] TDD-05K 已按上述边界完成并本地验证。KSS application-only provisioning core
+只接受 exact `knowledge_base_release_id`，runtime client、strategy、预算和 scope 由 immutable
+policy 注入，Space 由 KSS Release 权威反推。隔离 PostgreSQL/KSS 纵向证明 exact replay、
+policy drift 冲突、预算上限、其他 Release 和 Reference credential 拒绝；最终全仓后端 2588 项
+通过，37 项依赖条件 skip、2 项 deselected。没有 KSS provisioning HTTP、ProofAgent transport、
+formal publisher composition、部署、Git 提交或 Production GO。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05L Query Grant provisioning transport。本片只在
+既有 KSS operator 管理认证和 `knowledge_source.edit` 权限后增加
+`POST /v1/knowledge-query-grants`。strict JSON 请求体只允许 Draft 后续选择的 exact
+`knowledge_base_release_id`；runtime Query credential、Reference credential 或请求字段都不能选择
+client、Space、strategy、预算或 scope。KSS runtime 只有同时注入 TDD-05K immutable policy 和
+operator authentication 时才暴露该入口，否则启动或路由按配置失败关闭。
+
+[FRAME | HIGH] ProofAgent 只新增独立 `KnowledgeQueryGrantProvisioner` port、secret-free strict
+request/receipt 和 guarded HTTPS adapter。Adapter 必须拒绝非 HTTPS origin、redirect、非 200、
+超限或未知响应字段、非 active receipt，以及与请求不一致的 Release；它不拥有或复制 KSS 的
+client、Space、strategy、预算或 scope policy。KSS immutable authority 冲突映射为稳定 `409`，
+receipt integrity failure 映射为稳定 `503`，且错误响应不得回显 bearer token 或伪造输入。
+
+[FRAME | HIGH] 本片更新 canonical KSS OpenAPI 和本地合同测试，但不把 provisioner 接入 formal
+publisher，不新增 SQL/migration、operator audit 表、Secret Handle、Compose/Vault/egress/TLS、
+Dashboard/BFF 或 production 配置，不调用 formal publication endpoint，不运行真实模型、不部署且
+不提交 Git。operator 级逐命令审计仍是命名残余风险；当前 durable Grant row/receipt 只证明授权事实，
+不能替代未来审计证据或 Production GO。
+
+[FRAME | HIGH] 2026-08-30 用户确认继续进入 TDD-05M candidate-bound Query Grant Control staging。
+本片只在已验证 `FormalProductionAgentReferenceStaging` 之后新增 Control stager：从 Formal
+Candidate 读取 exact `knowledge_base_release_id`，调用既有 provider-neutral provisioner，并严格
+复核 active receipt 的 Release 与 Knowledge Space。online smoke 必须显式消费该 staging，不能再
+直接从 Reference staging 进入执行。
+
+[FRAME | HIGH] Grant 成功后若 smoke 或最终 publication 失败，TDD-05M 保留 KSS 中 exact、
+policy-bounded 的 durable Grant，不伪造补偿撤销。该 Grant 不代表 Agent 已发布或激活；ProofAgent
+仍独立授权用户侧运行，KSS 仍在每次 Query 时执行 exact-Release authorization。本片不增加
+Grant revoke/reconciler、operator-command audit migration、新 Secret Handle、production-local
+egress/TLS 配置、真实模型调用、部署或 Git 提交。具体决策见 ADR-0220。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05N production-local immutable Query Grant
+policy/bootstrap。本片只让 KSS API 进程从一个 strict、secret-free 的 deployment value 装配
+TDD-05K `KnowledgeQueryGrantPolicy`，并增加一次性 runtime Query client identity bootstrap。配置
+缺失时继续不暴露 provisioning route；配置存在但 JSON、字段或 policy fact 无效时，必须在进程配置
+阶段失败关闭。checked-in production-local 必须让 policy client 与 bootstrap client 完全一致，并让
+KSS API 等待 runtime 与 Reference 两个独立 identity 注册完成。
+
+[FRAME | HIGH] 隔离纵向只证明 checked-in policy/bootstrap facts 可形成 Reference → operator-protected
+exact-Release Grant staging，并且 runtime credential 获得的 Grant 仍受 exact Release 与 policy budget
+约束。runtime bootstrap 只注册 credential digest，不创建 Grant；Reference/runtime credential 均不能
+认证 operator command。本片复用现有 runtime/operator Secret，不新增 SQL、Secret Handle、egress/TLS
+规则、Dashboard/BFF、真实模型调用、selective revoke/reconciler、operator audit migration、部署或 Git
+提交。具体决策见 ADR-0221。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05O production-local Query authority
+verifier。本片只新增一个显式运行的本地验证入口。调用者必须选择一个已存在、不可变的 exact
+Release；verifier 不允许 `latest`、占位 ID 或自动选择 Release。入口先通过现有 operator Secret
+Handle 创建或精确重放 TDD-05K Grant，再通过独立 runtime client Secret Handle 和现有 KSS runtime
+执行一次 `single_pass` Query。Grant receipt 的 runtime client、exact Release、strategy 和预算必须与
+checked-in deployment facts 一致；Query result 必须保留同一 Release，并处于 Grant 预算以内。
+
+[FRAME | HIGH] verifier 只输出 secret-free 的 Release、Space、Grant、Query、strategy、预算使用量和
+候选数量，不输出 token、Secret Handle、问题文本、Candidate Evidence 内容或上游 detail。缺少 exact
+Release、身份/预算漂移、operator provisioning 失败、runtime credential 失败或 Query 失败都退出非零。
+本片不修改 readiness，不创建 KSS Release、Reference 或 Published Agent，不调用真实外部模型，不增加
+Grant revoke/reconciler、operator-command audit migration、SQL、Dashboard/BFF、生产部署或 Git 提交。
+
+[KNOWN | HIGH] TDD-05O 最终 live 验证保持上述 verifier 边界。操作者先在 verifier 外部通过
+production-local 已装配的 KSS 管理发布 API 创建独立 Base，并发布一个没有冲突 Grant 的 exact
+Release。两次 verifier 均退出 0，第二次精确重放第一次创建的 active Grant，同时创建新的 succeeded
+Query；每次返回 3 个候选。三个历史 Grant 均未修改、撤销或删除。TDD-05O 为
+`LOCAL_VERIFIED`，Feature 仍为 `PARTIAL_VERIFICATION`；该结果不是外部模型、生产部署或
+Product Release Authority 证据。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05P production-local Formal Candidate
+preflight。本片复用既有 `FormalProductionAgentCandidateAssembler`，只接受显式
+`agent_id`、`draft_id` 和 exact `draft_revision`。deployment Profile 仍由 production composition
+注入，KSS Release 仍从 exact Draft 读取。preflight 只返回 secret-free 的 Draft、Release、Profile
+公开标识、catalog revision 和候选摘要；不返回 Secret Handle，不接受 caller-selected Release 或
+Profile，也不创建 formal publication command receipt。
+
+[FRAME | HIGH] preflight 不运行 Phase F，不注册 Reference，不创建或重放 Query Grant，不运行
+online smoke，不创建 Published Agent Version，不修改 Active pointer 或 readiness。缺少 Draft、
+revision 漂移、KSS catalog 不可用或 authoring blocker 必须输出稳定失败 JSON 并退出非零。当前
+production-local Draft `c8191d9e-ee0a-5324-8c6d-e0b88622ab61@12` 仍绑定历史 Release
+`release-a4b70851cb914862000e15c3`；TDD-05O 已证明该 Release 存在历史 Grant 冲突。因此本片最多
+证明候选装配可复核，不声称正式发布可执行，也不修改 Draft binding、生产配置、SQL、Dashboard、
+部署或 Git 状态。
+
+[FRAME | HIGH] 2026-08-31 用户确认继续进入 TDD-05Q exact Draft Memory repair。
+本片只允许对 production-local 中
+`agent_management_insurance_specialist/c8191d9e-ee0a-5324-8c6d-e0b88622ab61@12`
+执行一次显式 CAS 修改：修改前 Tools 必须为 disabled、Memory 必须为 enabled；修改后
+只允许 `capabilities.memory` 从 enabled 形态收敛为 disabled 形态，并由既有
+`AgentConfigurationWorkspace.update_contract` 完成整包校验、revision CAS、原子保存和审计。
+任何 identity/revision 漂移、Tools 已启用、Memory 已禁用、YAML 异常或返回的
+revision/identity 不符都必须失败关闭，不得再写一个 revision。
+
+[KNOWN | HIGH] 首次 live CAS 在整包 Contract 校验阶段失败关闭，Draft 仍为 revision 12，
+contract-update audit 仍为 6。既有校验契约禁止 disabled Memory 保留 `provider`；随后的
+只读 Workspace 检查确认当前 Memory 只含 `enabled=true` 和 `provider`，不含 `scopes`。
+因此本片的最小有效语义变更收敛为：把 `enabled` 原位改为 `false`，同时删除同一
+Memory 映射内的唯一 `provider` 键值行。实现必须保留 Memory 之外的 YAML 原始字节；
+若出现 `scopes`、缺少/重复 provider 或非简单标量 provider，必须拒绝，不自动扩大清理范围。
+
+[FRAME | HIGH] TDD-05Q 只新增一个显式三参数的 production-local 维护入口，不新增 SQL、
+直连数据库更新或通用 Contract 编辑器。入口只输出 secret-free 的 Draft identity、修改前后
+revision 和 Memory/Tools 布尔结果，固定 `publication_authorized=false`。状态变更后只重跑
+TDD-05P read-only preflight；不运行 Phase F、Reference、Query Grant、Query、online smoke、
+Published Version 或 Active pointer 变更。旧 Release 的历史 Grant 冲突仍是后续独立阻断，
+本片不得修复、删除或绕过它。

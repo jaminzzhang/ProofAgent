@@ -2072,8 +2072,8 @@ production-local。
 ### 32.4 状态与下一边界
 
 - [KNOWN | HIGH] TDD-04H 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
-  `PARTIAL_VERIFICATION`。当前 TDD-04H 工作树未形成独立 commit、merge、部署或 Production
-  GO。
+  `PARTIAL_VERIFICATION`。TDD-04H 后与 TDD-05A 按共同证据边界提交为 `5535a19`；没有
+  push、merge、部署或 Production GO。
 - [KNOWN | HIGH] 本片只关闭“操作员对一个已知 due-ready Preparation 做精确过期”的网络
   缺口，不建立自动回收责任，也不把 expired/artifact 状态解释为物理清理完成。
 - [FRAME | HIGH] 若继续保持核心优先和简单分层，下一片应在 continuous execution/expiry
@@ -2136,8 +2136,8 @@ OpenSearch 证据仍属于 04H，不冒充为本片的新依赖证据。
 ### 33.4 状态与下一边界
 
 - [KNOWN | HIGH] TDD-05A 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
-  `PARTIAL_VERIFICATION`。当前工作树同时包含尚未提交的 TDD-04H 与 TDD-05A；没有 commit、
-  merge、部署或 Production GO。
+  `PARTIAL_VERIFICATION`。TDD-04H 与 TDD-05A 已按共同证据边界提交为 `5535a19`；没有
+  push、merge、部署或 Production GO。
 - [KNOWN | HIGH] 本片只关闭“从 exact Draft revision 形成可追溯正式候选”的缺口；现有正式
   publisher 仍可走独立 manifest/environment Release 路径，因此系统级唯一发布入口尚未成立。
 - [FRAME | HIGH] 下一片建议为 TDD-05B candidate-bound Phase F preparation：只让新的正式
@@ -2145,3 +2145,1150 @@ OpenSearch 证据仍属于 04H，不冒充为本片的新依赖证据。
   绑定 `formal_candidate_sha256`，输出未持久化、未激活的 provisional version。不要在同片加入
   Reference registration、online smoke、activation、Delivery/Dashboard 或生产切换；Reference-first
   ordering 和原子激活留给后续切片。
+
+## 34. TDD-05B：候选绑定的 Phase F 准备
+
+### 34.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只新增 application-only、无持久化副作用的 Phase F preparation。Control
+入口接受一个 TDD-05A `FormalProductionAgentCandidate`、Shadow/Capacity/Acceptance/Recovery
+四类 exact evidence 和可信 actor；它先重算 Knowledge Release digest 与 formal candidate
+digest，再解析候选 Contract 的 Workflow Stage 可用性与有效配置。
+
+通过本地校验后，Control 封装 strict immutable Formal Phase F Record。该 Record 同时绑定
+formal candidate digest、Knowledge Release digest、四类 evidence、创建身份与时间；四个
+evidence digest 必须互不相同。只有独立 `FormalProductionAgentPhaseFAuthority` 明确返回批准，
+入口才输出 `FormalProductionAgentPhaseFPreparation`。其中的
+`ProvisionalProductionAgentVersion` 使用 `prepared_at/prepared_by`，保留 exact Draft revision、
+resolved KSS binding、Phase F Record 和 Workflow Stage facts，但不声称 published 或 active。
+
+本片没有修改既有 `ProductionAgentPublicationService`，没有写 Agent Store 或 audit，没有注册
+KSS Reference、执行 online smoke、创建 `PublishedAgentVersion`、更新 Active pointer，也没有
+新增 Delivery、Dashboard、production composition、配置、SQL、migration、依赖或部署。
+
+### 34.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| public contract tracer | 测试无法导入 `FormalProductionAgentPhaseFRecord`，collection 失败 | 新增 strict Phase F Record、Provisional Version 与 preparation contracts |
+| candidate integrity | retained candidate 可在装配后被替换 digest | preparation 前重算两类 digest；任一漂移在 authority 调用前拒绝 |
+| evidence binding | 既有 Release Record 只绑定 Knowledge Release digest | 新 Record 同时绑定 formal/Knowledge Release 两类 digest，并拒绝重复或漂移 evidence |
+| workflow facts | provisional output 可能缺少可执行 Stage 事实 | 从 exact candidate Contract 解析 availability、effective config 和独立 source trace；不可解析则拒绝 |
+| authority boundary | 本地构造 Record 可能被误认为批准 | 只有独立 authority 明确返回 `True` 才返回 preparation；deny 与 exception 使用稳定错误并失败关闭 |
+| lifecycle wording | 复用 Published Version 会提前声称已发布 | 使用独立 Provisional contract 和 preparation metadata，不写 Store、不激活 |
+
+负向合同覆盖 formal digest 篡改、Knowledge Release digest 篡改、重复 evidence、evidence
+漂移、authority deny/exception，以及内容自洽但 Workflow Stage 不可解析的候选。失败路径不会
+调用后续 authority，或在 authority 已被调用的 deny/unavailable 情况下返回任何 preparation；
+异常 detail 不对外泄漏。
+
+### 34.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 本片 focused RED/GREEN 与负向合同 | 18 passed | pure Control/contracts；无外部依赖 |
+| 直接受影响 publication/Workspace/Workflow/contracts | 113 passed | 既有 publisher 与持久化行为未改 |
+| 全仓后端 | 2272 passed、263 dependency-conditioned skips、2 deselected | 退出码 0；本片不需要 PostgreSQL、KSS HTTP、S3 或 OpenSearch |
+| Mypy / Ruff / format | 456 个产品源无类型错误；本片 Ruff 与格式检查通过 | 无新增 ignore 或降低检查 |
+| domain / diff | domain-context、`git diff --check` 通过 | 无 schema、migration、OpenAPI 或 lock 变化 |
+
+首次沙箱内全量运行的 8 个既有 localhost-binding 测试因 `PermissionError` 失败；允许绑定
+`127.0.0.1` 后，最终全量运行取得上述单次退出码 0。该重跑不使用外部网络、生产依赖、
+生产凭据或生产数据。263 个 skip 是既有依赖条件跳过，不是本片通过证据。
+
+### 34.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05B 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。本片改动尚未提交，没有 push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 本片只关闭“正式候选与 Phase F evidence/authority 之间的可追溯准备”缺口。
+  现有正式 publisher 仍接受独立 manifest/environment Release；Provisional Version 也不是
+  可执行或可回滚的 Published Version。
+- [FRAME | HIGH] 下一片建议为 TDD-05C Reference-first formal publication staging：只让新的
+  Control 编排消费本 preparation，为 provisional version 的 exact KSS Release 注册
+  `published_agent_version` Reference，并保留注册成功但后续失败时的可对账孤儿 Reference。
+  本片先不加入 online smoke、Published Version 写入、Active pointer CAS、Delivery/Dashboard
+  或生产切换，以单独验证跨服务失败顺序和幂等身份。
+
+## 35. TDD-05C：Reference-first 正式发布暂存
+
+### 35.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只建立 application-only Reference staging。Control 入口接受一个 TDD-05B
+`FormalProductionAgentPhaseFPreparation`，并依赖注入的
+`FormalProductionAgentReleaseReferenceRegistrar` port。Control 不导入 KSS 服务内部 package，
+不持有 KSS credential 或 transport。
+
+入口在任何 registrar 调用前重验 Formal Candidate digest、Phase F Record digest 和 preparation
+结构。Reference 请求只包含 Draft-owned exact Space/Base/Release、固定
+`external_resource_kind="published_agent_version"`、provisional version ID 和固定
+`purpose="execution_or_rollback"`。幂等 key 为
+`formal-agent-reference:<provisional-version-id>`，由 Control 确定性生成，不接受调用方输入。
+
+返回的 strict active Reference receipt 必须逐项匹配请求。Scope、Release、external resource、
+purpose、kind 或 state 漂移均失败关闭。若 KSS 已完成注册但回执不可验证，Control 不做补偿性
+注销；Reference 保守保留为后续 authenticated reconciler 可处理的安全孤儿。Staging 只保留
+Phase F preparation 与 active Reference，不含 smoke、Published Version、Active pointer 或执行
+权限。
+
+本片不新增 KSS HTTP/BFF/production adapter，不写 Agent Store/audit，不修改现有 publisher，
+也不新增 Delivery、Dashboard、production composition、配置、SQL、migration、依赖或部署。
+
+### 35.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| public contract tracer | 测试无法导入 `ProductionAgentReleaseReferenceRequest`，collection 失败 | 新增 strict request、active receipt、staging contracts 与 registrar port |
+| exact registration | 尚无 Control Reference-first 入口 | 从 preparation 构造 exact request，以确定性 key 调用 registrar，并返回不含发布/激活声明的 staging |
+| external resource integrity | 合法格式的 provisional version ID 漂移不会触发拒绝 | 第二个 RED 证明错误 Reference 可被注册；Phase F Record 随后绑定 provisional version 与 validation run identity |
+| preparation integrity | retained candidate 或 Phase F Record 可能被内部复制后篡改 | 跨服务调用前重验 candidate、record 和 preparation；漂移时 registrar 调用数为零 |
+| registrar failure | 上游异常可能泄漏 detail 或被误当作成功 | 映射为 `reference_registration_unavailable`，不返回 staging，不暴露私有 detail |
+| receipt integrity | 上游可能返回另一 Scope/Release/resource 或非 active 状态 | strict 重建并逐项匹配；失败后保留已注册 Reference，不盲目注销 |
+| replay | 重试可能生成新 key 或新 Reference | 相同 preparation 两次调用使用同一 key，并恢复同一 active Reference |
+
+负向合同还覆盖 invalid external resource、unknown Release selection 字段、validation run ID 漂移、
+kind/purpose 漂移，以及 receipt state 伪装。测试 fake 只模拟 port 行为；它不是 KSS transport、
+KSS PostgreSQL 或生产授权证据。
+
+### 35.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 本片 focused RED/GREEN 与负向合同 | 34 passed | pure Control/contracts；registrar 为本地 fake |
+| 直接受影响 publication/Workspace/Workflow/contracts 与 KSS Reference core | 157 passed | 既有 publisher、KSS application 和持久化行为未改 |
+| 全仓后端 | 2288 passed、263 dependency-conditioned skips、2 deselected | 退出码 0；允许既有 socket-bound tests 绑定 `127.0.0.1` |
+| Mypy / Ruff / format | 457 个产品源无类型错误；全仓 Ruff；本片 Python 文件格式通过 | 无新增 ignore 或降低检查 |
+| domain / diff | domain-context、`git diff --check` 通过 | 无 schema、migration、OpenAPI 或 lock 变化 |
+
+全量运行保留一个既有 Authlib deprecation warning。没有连接外部网络、生产 KSS、生产
+PostgreSQL、生产凭据或生产数据。263 个 skip 是既有依赖条件跳过，不是本片通过证据；本片也
+没有新增需要前端验证的页面或合同。
+
+### 35.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05C 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。TDD-05B 与 TDD-05C 当前均未提交，没有 push、merge、部署或
+  Production GO。
+- [KNOWN | HIGH] 当前证明的是 Reference-first Control ordering 和严格 port 合同，不是 KSS
+  中已存在 durable Reference。没有 concrete transport/composition 时，formal publisher 仍未
+  消费 staging，系统级唯一发布入口也未成立。
+- [FRAME | HIGH] 下一片建议为 TDD-05D authenticated Reference registration transport：只新增
+  KSS 受认证的 exact registration HTTP contract、ProofAgent guarded registrar adapter 和真实
+  KSS application vertical，复用现有 PostgreSQL Reference 原子性。暂不加入 online smoke、
+  Agent Store/Published Version、Active CAS、浏览器 BFF/Dashboard 或生产切换。
+
+## 36. TDD-05D：受认证的 Reference 注册传输
+
+### 36.1 冻结范围与分层
+
+[FRAME | HIGH] 本片只实现 TDD-05C registrar port 的真实跨服务传输。KSS public client API
+新增 `POST /v1/knowledge-base-release-references`，复用既有 Bearer client authentication 与
+`Idempotency-Key`。Body 是 strict `RegisterKnowledgeBaseReleaseReferenceRequest`，不接受
+`authenticated_client_id`；服务端只从认证结果取得 client identity。首次 ensure 与 exact replay
+均返回 `200` 和同一 active `knowledge-base-release-reference.v1` resource。
+
+[FRAME | HIGH] ProofAgent 使用独立 `KnowledgeSourceServiceReleaseReferenceRegistrar`：只接受
+HTTPS origin，经 `GuardedHttpClient` 使用专用 client authorization factory 发出 exact JSON 和
+Control-owned key，strict 解析 KSS wire response 后映射为
+`RegisteredProductionAgentReleaseReference`。它不复用 management/operator credential 或 client。
+KSS production-shaped runtime 使用既有 `PostgresReleaseReferenceRepository`，不新增 schema、
+migration 或依赖。
+
+本片不增加 BFF/Dashboard、formal publisher consumption、online smoke、Agent Store/audit、
+Published Version、Active pointer CAS、deregistration/reconciler、生产 Secret/egress 配置、部署或
+Git 提交。
+
+### 36.2 RED → GREEN 与失败关闭合同
+
+| 阶段 | 实际 RED | GREEN / 保护结果 |
+| --- | --- | --- |
+| KSS HTTP tracer | `create_application()` 不接受 `release_references`，测试 collection 后调用失败 | public client route 委托既有 application；首次与 exact replay 返回同一 Reference 和单审计 |
+| public negative contract | `ReleaseReferenceError` 越过 FastAPI，Pydantic 默认 `422` 回显字段位置 | 认证/key/validation/conflict/not-admissible/storage-integrity 映射为稳定、无输入回显 problem |
+| ProofAgent registrar tracer | concrete module 不存在，测试 collection 为 `ModuleNotFoundError` | 独立 HTTPS guarded adapter 发送 exact request/key，并把 strict KSS resource 映射为本地 receipt |
+| wire integrity | 尚无 concrete response parser | redirect、非 `200`、过大/非法/unknown response，以及 Scope/Release/resource/kind/purpose/state 漂移全部失败关闭 |
+| runtime/OpenAPI | runtime 未组合 Reference application，canonical contract 无 route | runtime 组合既有 PostgreSQL repository；OpenAPI 加入 request/response schema，fingerprint 更新为 `55abbced8899e32e4633fffb44a679aca6fc5f3b2dc14c4797d19f7d0fbaf187` |
+| combined delivery isolation | management validation handler 覆盖 public Reference contract，真实 runtime 返回 `invalid_management_request` | runtime 按 public-client path 分发共享 validation/key handler；Reference 保持 `invalid_knowledge_service_request`，management 合同不变 |
+| real vertical | 只有 in-memory HTTP 与 fake registrar 证据 | ProofAgent → guarded HTTP → KSS runtime → PostgreSQL 首次/重放收敛到同一 active Reference 与一条 audit |
+
+负向合同覆盖缺失/无效 Bearer、空白或非法 key、key 改绑另一 external resource、Release Scope
+漂移、caller-forged client identity、unknown request/response field、upstream status/redirect、响应
+byte bound 和存储/完整性不可用。任何错误都不回显 credential、sentinel body 或内部数据库
+error code；Reference 注册成功也不生成 Published/Active Agent Version。
+
+### 36.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-reference-tdd05d`，只启动 PostgreSQL 17.5，loopback 端口
+为 `55489`。fixture 为每项 KSS 和 ProofAgent PostgreSQL 测试创建随机 schema。没有读取
+`.env`，也没有连接生产凭据、生产数据、生产服务或外部网络。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| KSS HTTP + ProofAgent registrar focused | 27 passed | in-memory KSS HTTP 与 guarded transport 正/负合同 |
+| 直接受影响集 | 161 passed | 含 Reference core、真实 PostgreSQL repository/runtime、OpenAPI、Query HTTP 与 TDD-05C Control |
+| 真实 PostgreSQL Reference/runtime | 39 passed | 含 ProofAgent-to-ledger exact replay 纵向；不是生产部署证明 |
+| 全仓后端 | 2541 passed、37 dependency-conditioned skips、2 deselected | PostgreSQL 测试 fail-if-missing；S3/OpenSearch 等未提供依赖仍按既有声明 skip；退出码 0 |
+| Mypy / Ruff / format | 458 个产品源无类型错误；全仓 Ruff；8 个本片 Python 文件格式通过 | 无新增 ignore 或降低检查 |
+| domain / diff / contract | domain-context、`git diff --check`、canonical OpenAPI exact hash 通过 | migration、依赖和 lock 未变化 |
+
+第一次真实纵向在默认沙箱内因本机 loopback 连接被拒绝，属于执行权限限制，不是产品 RED；
+允许连接刚启动的隔离 PostgreSQL 后原测试为 `1 passed`。完整后端保留一个既有 Authlib
+deprecation warning。37 个 skip 是未提供 S3/OpenSearch 等依赖的既有条件项，不是本片通过
+证据。最终使用精确项目名执行 `down -v --remove-orphans`，再由 `compose ps -a` 空结果确认
+容器、网络和临时卷无残留；未操作其他 Compose 项目或 production-local。
+
+### 36.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05D 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。TDD-05B 至 TDD-05D 当前均未提交，没有 push、merge、部署或
+  Production GO。
+- [KNOWN | HIGH] 当前关闭的是“Reference-first staging 能通过受认证网络形成 durable KSS
+  Reference”的缺口。KSS client identity 仍由 KSS 独立认证，ProofAgent 没有获得生命周期或
+  注销权威。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05E 只建立 registered staging 之后的 exact
+  online smoke Control port 与失败顺序：smoke 失败不得写 Published Version 或 Active pointer，
+  已注册 Reference 保守保留。暂不同时实现 Store transaction、activation CAS、Delivery、
+  Dashboard、reconciler 或生产切换。
+
+## 37. TDD-05E：exact online smoke Control
+
+### 37.1 冻结边界
+
+[FRAME | HIGH] 本片只关闭“active Reference 已注册后，如何执行 exact online smoke 并在失败时
+保持 publication/activation 零写入”的 Control 缺口。输入必须是 TDD-05C/05D 的 strict
+`FormalProductionAgentReferenceStaging`，不能用 Phase F preparation、latest Release 或调用方
+自报成功替代。Control 构造的 request 固定绑定 agent、provisional version、validation run、
+formal/Knowledge Release digest、Space/Base/Release、active Reference ID 和非空 question；validator
+只拥有执行 smoke 并返回结果的能力。
+
+[FRAME | HIGH] 成功结果必须与 request 的 agent/version/run/Reference identity 完全一致，outcome
+为 `ANSWERED_WITH_CITATIONS`，accepted citation count 至少为 1，并提供互不相同的 exact trace
+与 receipt artifact。输出是 `FormalProductionAgentOnlineSmokeQualification`，明确不含
+Published Version、Active Version 或 publication timestamp。本片不注入 Agent Store、Active
+pointer、audit writer 或 KSS deregistrar，不增加真实 runner adapter、formal publisher cutover、
+HTTP/CLI/Dashboard、Delivery、配置、SQL、migration、部署或 Git 提交。
+
+### 37.2 RED → GREEN → REFACTOR
+
+| 阶段 | 证据 | 结果 |
+| --- | --- | --- |
+| RED | 先增加 exact request/result/qualification、Reference-before-smoke、失败保留 Reference、identity drift、非 distinct evidence 和 unknown-field 合同测试 | 测试收集因 `FormalProductionAgentOnlineSmokeQualification` 尚不存在而失败，退出码 2 |
+| GREEN | 增加 3 个 strict immutable contract、单一 `FormalProductionAgentOnlineSmokeValidator` port 和 application-only qualification service | 聚焦文件 43 项通过 |
+| REFACTOR | 增加 inactive Reference 前置拒绝和 result agent identity drift；统一稳定错误，格式化新 Control 模块 | 聚焦文件最终 45 项通过；Ruff、format 和 Mypy 聚焦检查通过 |
+
+实现后的顺序为：
+
+1. 对 staging 进行 strict 重建，并重验 Formal Candidate 与 Phase F Record；
+2. 确认 Reference contract 仍为 active 且与 exact preparation 匹配；
+3. 规范化 question，由 Control 构造 exact smoke request；
+4. 调用唯一 online validator port；
+5. strict 重建结果，拒绝 unknown/malformed、identity drift、失败 outcome、零引用和 evidence 混用；
+6. 只返回仍未发布、未激活的 qualification。
+
+validator exception 映射为 `online_smoke_unavailable`；非法 staging、question、request、结果与失败
+outcome 分别使用稳定 code，均不回显私有 runner detail。service 没有任何 publication、activation
+或 deregistration port，因此失败路径结构上不能写 Published Version/Active pointer，也不能删除
+已注册 Reference。测试中的 registrar ledger 在全部失败与不确定路径后仍保留同一 active
+Reference。
+
+### 37.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05E focused | 45 passed | exact smoke 正向、前置 active Reference、失败/漂移/异常、unknown field 和零副作用合同 |
+| 直接受影响集 | 322 passed、4 skipped | Agent Configuration contracts/store/API、formal candidate/Phase F/Reference/smoke、旧 production publisher/readiness 与 Workflow Stage contracts |
+| 全仓后端 | 2326 passed、263 dependency-conditioned skips、2 deselected、1 warning | 同一完整命令在允许 loopback 的环境退出码 0；无真实 KSS/model online runner |
+| Mypy / Ruff / format | 459 个产品源无类型错误；`proof_agent`、KSS 与 tests 全量 Ruff 通过；4 个本片 Python 文件 format 通过 | 全仓 format baseline 仍有 251 个既有文件待格式化；本片未扩大处理 |
+| lock / domain / diff | `uv lock --check`、domain-context、`git diff --check` 通过 | 无 dependency、lock、SQL 或 migration 变更 |
+
+第一次全仓命令在默认沙箱内有 8 项失败，全部是 socket-bound 测试绑定 `127.0.0.1` 时收到
+`PermissionError: [Errno 1] Operation not permitted`；不是产品断言失败。相同完整命令在允许
+loopback 后通过。263 个 skip 是未提供 PostgreSQL/S3/OpenSearch 等真实依赖的既有条件项；本片
+是 application-only Control，不以这些 skip 证明真实 online smoke。既有 Authlib deprecation
+warning 保留。由于本片没有前端、OpenAPI、依赖或数据库变更，未重复 npm build/test、OpenAPI
+fingerprint 或真实 PostgreSQL Compose 纵向。
+
+全仓 `ruff format --check proof_agent knowledge_source_service tests` 报告 251 个既有文件会被
+重排；本片 4 个变更 Python 文件单独检查通过。为避免把全仓机械格式化混入核心切片，没有修改
+这些无关文件，也不把全仓 format 记为通过。
+
+### 37.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05E 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。TDD-05B 至 TDD-05E 当前均未提交，没有 push、merge、部署或
+  Production GO。
+- [KNOWN | HIGH] 当前只证明 registered staging 后的 exact smoke port、成功 qualification 和
+  失败顺序。没有真实 online runner、Published Version persistence、publication audit、Active
+  pointer CAS、Delivery 或生产 composition。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05F 让唯一 formal publisher 编排已完成的
+  candidate → Phase F → Reference → smoke 链，并在 smoke 前冻结 Active pointer expectation，
+  最后以一个 PostgreSQL transaction 原子写入 immutable Published Version、publication audit 和
+  Active CAS。仍不加入 HTTP/Dashboard、Delivery、reconciler 或生产切换。
+
+## 38. TDD-05F：formal publisher core 与原子激活
+
+### 38.1 冻结边界
+
+[FRAME | HIGH] 本片只关闭“已经分片验证的 exact candidate → Phase F → Reference → smoke
+如何汇入一次不可分割的 Published Version/Active/audit 提交”的 application core 缺口。新的
+`FormalProductionAgentPublisher` 依次调用既有四个 Control 服务，不允许调用者传入独立
+manifest、latest Draft、环境选择的 Release、Active expectation 或上游自报通过结果。
+
+[FRAME | HIGH] Phase F 通过后、首次持久副作用 Reference 注册前，publisher 使用短只读
+Configuration UoW 读取唯一生产 Agent 的 Active pointer expectation 并立即关闭事务。Reference
+注册与 online smoke 期间不得持有数据库事务。smoke 通过后，最终一个 Configuration UoW 必须
+同时执行 exact Draft revision check、Active pointer CAS、immutable Published Version 与 activation
+写入、trace-safe publication audit，并且仅全部成功后 commit。
+
+[FRAME | HIGH] Published Version 新增单一 strict formal evidence envelope，保留 exact Draft
+revision、Formal Phase F Record、active Release Reference receipt 和 exact online smoke result。
+本片复用既有 repository/UoW，不新增 SQL/migration，也不修改旧 manifest publisher、Delivery、
+runtime composition、HTTP/CLI/Dashboard、reconciler/deregistration、生产配置或部署。真实 online
+runner 与持久化幂等的公开正式发布命令继续后置；因此该 core 还不是可安全重试的网络入口。
+
+### 38.2 RED → GREEN → REFACTOR
+
+| 阶段 | 证据 | 结果 |
+| --- | --- | --- |
+| RED | 先增加 publisher tracer，要求 exact evidence、短只读 Active snapshot、Reference/smoke 期间零事务、最终单事务提交 | 测试收集因 `FormalProductionAgentPublicationEvidence` 不存在而失败，退出码 2 |
+| GREEN | 增加 strict evidence envelope、Published Version/AgentPublicationRecord 交叉校验和 application-only publisher | 聚焦测试先达到 46 项通过 |
+| REFACTOR | 增加 Draft/Active 并发漂移、audit 回滚、smoke 失败、外来 Active Agent、unknown-field/evidence drift、formal record CAS 负向合同，并补 PostgreSQL round-trip | 聚焦测试最终 53 项通过；真实 PostgreSQL repository/UoW 12 项通过 |
+
+实现后的关键顺序为：
+
+1. 从 exact Agent/Draft revision 装配候选，并完成 candidate-bound Phase F；
+2. 通过短只读 UoW 冻结 `ActiveAgentPointerExpectation`，验证唯一生产 Agent 约束；
+3. 关闭事务后执行 Reference-first registration 与 exact online smoke；
+4. 构造 strict formal evidence、`PUBLISHED` operation audit、Published Version 和 publication audit；
+5. 在最终一个 UoW 内执行 Draft revision check、Active CAS、Version/activation/audit 写入与 commit；
+6. 对 repository 返回值进行 strict 重建和完全一致性校验，任何异常由 UoW 回滚。
+
+Draft revision 或 Active pointer 在外部调用期间漂移时，最终 CAS 稳定失败且不留下部分
+Version/Active/audit。audit/storage exception 同样回滚最终事务。已经成功注册的 KSS Reference
+有意保留，用于后续可信对账，不做无权威的补偿注销。
+
+### 38.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05F focused | 53 passed | exact evidence、顺序、并发、回滚、失败关闭和无部分写入 |
+| 真实 PostgreSQL repository/UoW | 12 passed | formal evidence JSON round-trip、Draft revision check、Active CAS 与 UoW 原子性 |
+| 直接受影响集 | 373 passed、4 dependency-conditioned skips | Agent contracts/store/workspace、formal chain、旧 publisher/readiness、PostgreSQL repository/UoW |
+| 全仓后端 | 2561 passed、37 dependency-conditioned skips、2 deselected、1 warning | 隔离 PostgreSQL 强制启用；退出码 0；S3/OpenSearch 等未提供依赖仍按既有声明 skip |
+| Mypy / Ruff / format | 460 个产品源无类型错误；全仓 Ruff 通过；6 个本片 Python 文件 format 通过 | 无新增 ignore；未把 251 个既有全仓 formatter 差异混入本片 |
+| lock / domain / diff | `uv lock --check`、domain-context 通过；文档完成后重跑 `git diff --check` | 无 dependency、lock、SQL 或 migration 变更 |
+
+隔离 Compose 项目为 `proofagent-formal-publication-tdd05f`，只启动 PostgreSQL 17.5，loopback
+端口为 `55490`。默认沙箱中的首次数据库命令因 loopback 访问收到 `Operation not permitted`，
+12 项均停在 fixture connection，未进入产品断言；允许连接同一隔离实例后原命令 12 项全部
+通过。完整后端保留一个既有 Authlib deprecation warning。最终对精确项目执行
+`down -v --remove-orphans`，再由 `compose ps -a` 只有表头确认容器、网络与临时卷无残留；未操作
+其他 Compose 项目、生产凭据、生产数据或 production-local。
+
+### 38.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05F 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前工作区还包含此前 TDD-05B 至 TDD-05E 的未提交改动；本片没有
+  commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 当前只证明新的 formal publisher core 能消费 exact qualification 并原子写入
+  Published Version、Active pointer 与 audit。旧 manifest publisher 仍存在，runtime/Delivery
+  没有切换到该 core，因此尚不能称为系统级唯一正式发布入口。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05G 只实现真实 online smoke runner adapter，
+  复用既有 governed execution 路径并返回 exact trace/receipt/citation facts。仍不同时加入公开
+  publication command、幂等 receipt、Dashboard、reconciler 或生产切换；待真实 runner 边界独立
+  验证后，再为正式发布入口设计持久化幂等命令。
+
+## 39. TDD-05G：governed online smoke runner adapter
+
+### 39.1 范围与权威边界
+
+[KNOWN | HIGH] 本片只关闭 TDD-05E validator port 到既有 governed execution 的 concrete adapter。
+Control 把自身已重验的 `FormalProductionAgentReferenceStaging` 与 strict request 一并传入 runner；
+runner 再次验证 Agent、provisional version、validation run、两类 candidate digest、Space/Base/Release
+和 active Reference identity，不通过 mutable latest lookup 或全局候选注册表恢复执行输入。
+
+[KNOWN | HIGH] Runner 从 provisional `ContractBundle` 安全物化私有只读临时 Agent package，拒绝
+路径穿越和 core contract shadow，然后用 `RunPurpose.VALIDATION`、exact run ID、exact resolved KSS
+binding、冻结的 Workflow Stage runtime facts 和部署注入的 Institution Authorization 调用既有
+`execute_published_agent_run` 路径。它只计数同时满足 `accepted` 与非空 citation 的 Evidence Chunk；
+Trace/Receipt 必须是非空、有大小上限的普通文件，并分别写入 immutable artifact store 后 exact
+read-back。是否形成 qualification 仍由 TDD-05E Control 的 cited-answer Gate 决定。
+
+[FRAME | HIGH] 本片没有增加 SQL/migration、KSS API、public Delivery/HTTP/CLI/Dashboard、公开且
+持久化幂等的 formal publication command、旧 manifest publisher/runtime composition 切换、
+reconciler/deregistration、生产 Secret/egress 配置或部署。测试执行边界使用受控 fake，因而证明的是
+concrete production-path adapter 合同，不是真实 KSS/model 上游联机或 Production GO。
+
+### 39.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | Tracer 导入并实例化 `FormalProductionAgentOnlineSmokeRunner`，要求 exact governed validation、citation 计数、immutable Trace/Receipt 与临时目录清理 | 聚焦测试在收集阶段因目标类不存在产生 `ImportError`，退出码 2 |
+| GREEN | 增加 staging-aware validator port、共享 governed smoke runtime、safe ContractBundle materializer 与 concrete runner | 初始聚焦 54 项通过；旧 validator 与 materializer 兼容集 14 项通过 |
+| REFACTOR | 增加无有效 citation、request/staging Release 漂移、artifact exact read-back 失败合同，并移除未消费的运行统计 | 聚焦测试最终 57 项通过；核心受影响集 76 项通过 |
+
+关键失败顺序为：
+
+1. Control 先验证 staging 并构造 strict request；
+2. runner 在任何执行前重验 request/staging/candidate/Phase F exact identity；
+3. ContractBundle 只在私有临时目录按安全路径物化并加载；
+4. governed execution 只以 `VALIDATION` purpose 和 exact run identity 运行；
+5. 本地 Trace/Receipt 通过边界检查后才写 immutable store 并 exact read-back；
+6. runner 返回事实，Control 独立判断 outcome 与 cited count；失败不注销 KSS Reference。
+
+### 39.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05G focused | 57 passed | tracer、strict identity、citation、artifact、cleanup 与稳定失败合同 |
+| 核心兼容集 | 76 passed | formal chain、旧 production validator、materializer、run execution 与 snapshot |
+| 直接受影响集 | 144 passed、15 dependency-conditioned skips | Agent contracts、formal chain、KSS Reference transport/composition、PostgreSQL repository 默认门控 |
+| 全仓后端 | 2338 passed、264 dependency-conditioned skips、2 deselected、1 warning | 同一完整命令在允许 loopback 的环境退出码 0；无真实 KSS/model 上游联机 |
+| Mypy / Ruff / format | 460 个产品源无类型错误；全仓 Ruff 通过；4 个本片 Python 文件 format 通过 | 无新增 ignore |
+| lock / domain / diff | `uv lock --check`、domain-context、`git diff --check` 通过 | 无 dependency、lock、SQL 或 migration 变更 |
+
+默认沙箱首次完整回归有 8 项既有测试因禁止绑定 `127.0.0.1` 返回 `Operation not permitted`；在
+允许 loopback 的环境重跑完全相同命令后全绿。完整套件保留一个既有 Authlib deprecation warning。
+TDD-05G 不改 SQL、repository 或 transaction，因此没有重复启动 TDD-05F 已验证的隔离 PostgreSQL
+Compose，也没有用默认 skip 外推数据库或生产上游证据。无前端、OpenAPI 或依赖变更，故未运行
+Dashboard build、OpenAPI snapshot 或依赖安装。
+
+### 39.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05G 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树尚未形成新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 当前 concrete runner 已可把 exact staging 交给现有受治理执行链并保留可验证
+  Trace/Receipt/citation 事实，但旧 manifest publisher/runtime composition 尚未切换，也没有真实
+  KSS/model 上游环境证据。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05H 只设计并实现公开 formal publication
+  command 与 durable `Idempotency-Key` receipt，使重试能恢复同一最终结果或稳定失败。该切片将涉及
+  新的持久化权威与网络入口，需先冻结 exact request、receipt、并发和失败恢复边界；runtime cutover、
+  Dashboard 和生产部署继续留在后续独立切片。
+
+## 40. TDD-05H：持久化幂等的公开正式发布命令
+
+### 40.1 冻结边界
+
+[KNOWN | HIGH] 本片新增服务端命令
+`POST /api/config/agents/{agent_id}/drafts/{draft_id}/formal-publications`，只允许
+`agent.publish`。路径提供 Agent/Draft identity，strict body 只接受 exact Draft revision、四类
+`KnowledgeReleaseEvidenceSet` 和 online smoke question；操作者来自可信 OIDC 上下文，
+`ProductionKssBindingProfile` 只能由部署注入。调用方不能提供 Profile、Release/Version/Run/
+Reference/Active identity、actor、timestamp 或结果。
+
+[KNOWN | HIGH] 幂等范围固定为 `(actor subject, Idempotency-Key)`，canonical fingerprint 绑定路径与
+strict body。首次请求先在短 PostgreSQL transaction 写入 `in_progress` receipt 并 commit，再执行
+Phase F、KSS Reference 注册与 online smoke。exact replay 返回同一 durable receipt；不同
+fingerprint 在外部调用前返回稳定冲突；进程在终态前退出时保留 `in_progress`，本片不按超时自动
+接管或重跑。
+
+[KNOWN | HIGH] 成功 receipt 与 immutable Published Version、Active CAS、publication audit 在同一个
+最终 Configuration UoW 内完成。失败 receipt 在外部调用结束后的独立短事务完成；如果最终提交结果
+不确定而数据库已保存成功，终态读取返回原成功结果，不能降级为失败。公开 receipt 不包含
+Idempotency-Key、原始问题、Evidence/Bundle、Secret、上游详情或 artifact bytes。
+
+[FRAME | HIGH] 本片不增加 Dashboard、GET/list/cancel、自动恢复器、lease/takeover、删除/保留任务、
+新 KSS API、生产 Secret 配置、真实上游部署或旧 publisher/runtime 的系统级切换。`create_app` 只提供
+可注入 command seam；生产角色 composition 尚未装配 concrete command，所以该网络合同还不是当前
+生产栈的唯一发布入口，也不构成 Production GO。
+
+### 40.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 先增加公开命令 Tracer，要求 success receipt、exact replay 与外部调用只执行一次 | 聚焦测试收集因 `FormalProductionAgentPublicationCommandRequest` 不存在而失败，退出码 2 |
+| GREEN-1 | 增加 strict request/result/receipt、actor-scoped canonical fingerprint、短事务 reservation、稳定失败完成和 publisher 事务内 success completion | formal chain 聚焦文件先达到 58 项通过 |
+| RED-2 | 增加稳定失败 replay，要求保留 online-smoke 的稳定 code | 首次得到 `formal_publication_command_unavailable`，1 failed、62 passed |
+| GREEN-2 | 命令服务显式保留 candidate/Phase F/Reference/smoke/publisher 的稳定错误 code | formal chain 最终 63 项通过 |
+| RED-3 | 增加真实 PostgreSQL reservation/terminal/UoW 合同 | 测试收集因 PostgreSQL command repository 不存在而失败，退出码 2 |
+| GREEN-3 | 增加 `0022_formal_publish_cmd`、repository 与 Configuration UoW 接线 | 真实 PostgreSQL migration/repository/UoW/concurrency 9 项通过 |
+| RED-4 | 增加 public HTTP success/replay/in-progress/failure/权限/strict-body 合同 | 4 项均因 endpoint 尚不存在返回 404 |
+| GREEN-4 | 增加 `agent.publish` 保护的公开 endpoint、稳定状态码和 trace-safe payload | HTTP 聚焦 4 项通过 |
+| REFACTOR | 增加 changed-request、process-exit、terminal non-downgrade、receipt-write rollback、nested private input 和并发同键合同；全仓回归发现并修正 production-local 显式迁移 head | 受影响集 170 项通过；最终全仓 2578 项通过 |
+
+命令执行顺序为：
+
+1. 校验 strict body、actor、Idempotency-Key，并计算 path/body canonical SHA-256；
+2. 以 `(actor subject, key)` 原子预留 durable `in_progress` receipt 并关闭事务；
+3. replay 直接返回现有终态或 `202 in_progress`，fingerprint 不同则在外部调用前拒绝；
+4. 新命令调用既有 exact candidate → Phase F → Reference → governed smoke → formal publisher；
+5. 成功时在最终 UoW 内原子提交 Version、Active CAS、command success receipt 和 audit；
+6. 已知或未知失败只持久化稳定 code，且终态 repository 永不覆盖既有成功或失败。
+
+### 40.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05H formal command focused | 63 passed | success/exact replay、changed request、process exit、稳定失败、原子 rollback、strict input |
+| 真实 PostgreSQL migration/repository/UoW | 9 passed | empty-to-head/repeat migration、并发同键唯一创建者、terminal non-downgrade、未 commit 回滚 |
+| 直接受影响集 | 170 passed、1 warning | Agent contracts/formal chain/Delivery、安全 composition、production roles、PostgreSQL agent/UoW/migration |
+| 全仓后端 | 2578 passed、37 dependency-conditioned skips、2 deselected、1 warning | 强制使用隔离 PostgreSQL；退出码 0；skip 仍是未提供的其他外部依赖 |
+| Mypy / Ruff / format | 367 个产品源无类型错误；全仓 Ruff 通过；15 个本片 Python 文件 format 通过 | 无新增 ignore；保留既有未触及 formatter baseline |
+| lock / domain | `uv lock --check`、domain-context 通过 | 无依赖或 lock 变化 |
+
+隔离 Compose 项目为 `proofagent-formal-command-tdd05h`，只启动 PostgreSQL 17.5，loopback 端口为
+`55491`。默认沙箱首次数据库命令因 loopback 访问收到 `Operation not permitted`，未进入产品
+断言；允许连接同一隔离实例后 migration/repository/UoW 9 项全部通过。首次全仓回归进一步暴露
+`docker-compose.production-local.yml` 的显式 target 仍为 `0021_metadata_workbook_v2`；只把该
+production-like 本地迁移任务更新到新 expand-only head `0022_formal_publish_cmd` 后，目标测试
+20 项和最终全仓均通过。正式 Blue/Green 示例、发布候选 schema 和部署授权未在本片修改。
+最终只对精确项目执行 `down -v --remove-orphans`；随后 `compose ps -a` 仅有表头，确认容器、
+网络和临时卷无残留，未操作其他 Compose 项目或生产数据。
+
+完整套件保留一个既有 Authlib deprecation warning。没有真实 KSS/model online 调用、生产 OIDC、
+Vault、发布候选构建、部署演练、Dashboard 或浏览器验证；这些缺口不能由本地数据库和 fake 上游
+合同外推。
+
+### 40.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05H 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树尚未形成新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 现在已有公开、严格且持久化幂等的正式发布命令合同；成功 receipt 与
+  Version/Active/audit 原子提交，失败和不确定路径可稳定 replay。进程退出后留下的 `in_progress`
+  不会自动超时接管，这是明确的安全保守状态，不是已完成恢复。
+- [KNOWN | HIGH] production role 尚未注入 concrete command，旧 manifest publisher/runtime 仍存在，
+  因此当前只证明 application/Delivery/persistence 闭环，不宣称系统级唯一发布入口或真实上游可用。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05I 只完成 production composition cutover：从
+  部署权威装配 exact Binding Profile、concrete online runner 与新 command，关闭旧正式 publisher
+  的并行入口，并用 composition/negative tests 证明 production API 缺依赖即启动失败。后台
+  reconciler、Dashboard 和真实环境 smoke 仍分别后置。
+
+## 41. TDD-05I：production composition cutover
+
+### 41.1 冻结边界
+
+[KNOWN | HIGH] 本片只把 TDD-05H 的 durable formal publication command 接入 production API
+composition root。装配依赖为 PostgreSQL Configuration UoW、live KSS catalog、deployment-owned
+`ProductionKssBindingProfile`、独立 Phase F authority、专用且版本化的 KSS Reference service-client
+credential、TDD-05G governed online smoke runner、immutable artifact store、model/runtime dependencies
+和可信 Institution Authorization。Draft 继续独占 exact Release 选择；部署 Profile 不接受 Release。
+
+[KNOWN | HIGH] `create_app(mode="production")` 把 formal command 作为启动强制依赖。旧
+`production-publish-agent` manifest CLI 和 `compose_production_agent_publisher` production composition
+被移除，不能再绕过 exact Draft、Reference-first chain 与 durable command receipt。Development
+仍允许不注入 command，调用该 endpoint 时保持既有稳定不可用结果。
+
+[FRAME | HIGH] 本片不增加 SQL/migration、command recovery/takeover、GET/list/cancel、Dashboard、
+reconciler/deregistration、runtime revocation、真实 KSS/model 联机、production Compose/Blue-Green
+配置、secret 值、部署或 Git 提交。当前 checked-in production-local 尚未提供新要求的 dedicated
+Reference client Secret/Grant，因此该环境会在 composition 阶段失败关闭；本片不能被解释为生产
+发布或 Production GO。
+
+### 41.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | production `create_app` 缺 formal command 必须启动失败 | 测试预期 `ValueError`，实际未抛出；1 failed |
+| GREEN-1 | 把 formal command 加入 production exact-composition required set | 单项通过 |
+| RED-2 | 要求 Phase F concrete authority、新 formal command composition、旧 composition/CLI 不可达 | 分别得到 missing method、missing composition helper、旧 symbol 仍存在、旧 CLI 仍解析；4 failed |
+| GREEN-2 | 装配 exact chain、复用 guarded Phase F verifier、移除旧 production entry | 6 项 composition/entry tracer 通过 |
+| REFACTOR | 增加专用 Reference client identity/version 断言、secret version drift 失败关闭和 Release 不来自部署 Profile 的合同 | 最终聚焦 16 项通过；受影响集 180 项通过、13 skips |
+
+生产装配顺序为：
+
+1. 构造 PostgreSQL UoW、runtime shared assets、guarded egress、Vault Secret Provider 与 KSS runtime；
+2. 从部署值构造不含 Release 的 strict Binding Profile；
+3. 以独立 evaluator Secret Handle 装配 Phase F authority；
+4. 以独立、版本化 Reference client Secret Handle 装配 guarded KSS registrar；
+5. 注入 governed smoke runner、artifact store、model/runtime dependencies 与 Institution Authorization；
+6. 形成 formal publisher 和 durable command，并作为 production `create_app` 强制依赖注入。
+
+### 41.3 验证结果与限定
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05I focused | 16 passed、1 existing warning | production required dependency、exact chain、dedicated client/version drift、旧入口移除 |
+| 直接受影响集 | 180 passed、13 dependency-conditioned skips、1 warning | production roles、安全 composition、formal chain、Reference registrar、公开 API 与 CLI |
+| 全仓后端 | 2354 passed、267 dependency-conditioned skips、2 deselected、1 warning | 8 个 socket-bound 用例在 loopback-capable 环境重跑后进入并通过产品断言；退出码 0 |
+| Mypy / Ruff | 367 个产品源无类型错误；全仓 Ruff 通过 | 无新增 ignore |
+| lock / domain / diff | `uv lock --check`、domain-context、`git diff --check` 通过 | 无依赖、lock、SQL 或 migration 变化 |
+
+默认沙箱首次完整回归有 8 项测试在绑定 `127.0.0.1` 时收到 `Operation not permitted`，当时已有
+2346 项通过、267 项依赖条件跳过；它们尚未进入产品断言。允许 loopback 后以完全相同的完整命令
+重跑，最终 2354 项通过。完整套件保留一个既有 Authlib deprecation warning。因本片没有修改
+SQL、repository、transaction 或 migration，未重复启动隔离 PostgreSQL；267 个 skip 不作为外部
+依赖通过证据。
+
+没有连接真实 KSS/model、生产 OIDC/Vault、生产 PostgreSQL/S3 或生产数据，也没有构造真实发布
+候选、调用 formal endpoint、运行 deployment rehearsal、Dashboard 或浏览器验证。专用 Reference
+credential 的测试只使用受控 fake，并证明 handle/version 隔离和失败关闭，不证明真实 Secret 或
+KSS client Grant 存在。
+
+### 41.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05I 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。production API 已成为 durable formal command 的唯一 production
+  composition root；旧 manifest CLI/composition 已移除。当前累计工作树没有新 commit、push、
+  merge、部署或 Production GO。
+- [KNOWN | HIGH] checked-in production-local 配置尚未声明 dedicated Reference client Secret
+  Handle/version，也没有证明 KSS 存在匹配 client identity/Grant。实际启动将按设计失败关闭；不能用
+  fake composition 测试外推生产可用性。
+- [FRAME | HIGH] 下一片若继续保持简单，建议 TDD-05J 只补 production-local dedicated Reference
+  client 配置合同与隔离 KSS client/Grant vertical：证明 API composition 能启动且 registrar 只以该
+  client 注册 exact Reference。仍不执行真实 model smoke、正式 Agent publication、stuck-command
+  recovery、Dashboard、生产部署或 Production GO。
+
+## 42. TDD-05J：production-local dedicated Reference client
+
+### 42.1 冻结边界
+
+[KNOWN | HIGH] 本片只补 checked-in production-local 的专用、版本化 Reference client Secret
+Handle、独立 Vault fixture、KSS service-client identity bootstrap 和隔离注册纵向。KSS migration
+成功后，一次性 bootstrap 必须先幂等注册 client identity，KSS API 才能启动。production formal
+composition 必须拒绝 Reference Handle 与 Knowledge Operator 或 runtime Query Handle 复用。
+
+[KNOWN | HIGH] 当前 `knowledge_client_grants` 只表达 exact-Release Knowledge Query Grant；
+Reference registration 的现有授权边界是已认证 service-client identity。本片不把 Query Grant
+误写成 Reference Grant，也不为专用 Reference client 创建查询权限。纵向必须证明该身份能注册
+exact Reference，但在没有 Query Grant 时无法创建 Knowledge Query。
+
+[FRAME | HIGH] 本片不调用 formal publication endpoint，不创建或激活 Published Agent Version，
+不运行真实模型或完整 online smoke，不新增 KSS 管理 API、Query Grant provisioning、SQL migration、
+reconciler、Dashboard、恢复器或生产部署。验证不读取 `.env`、secret 值、生产数据或生产日志，
+也不启动或修改既有 `proofagent-production-local` 项目。
+
+### 42.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | production-local 必须声明专用 Reference client bootstrap、Secret Handle/version 与 Vault fixture | 聚焦测试读取 Compose 时缺少 `kss-reference-client-bootstrap`，1 failed |
+| GREEN-1 | 增加独立 fixture、Handle locator、一次性 KSS bootstrap 和 KSS API 启动依赖 | 原聚焦测试通过；Compose config 通过 |
+| RED-2 | Reference Handle 复用 runtime Query 或 Operator Handle 时必须启动失败 | 2 个参数化用例均未抛错，2 failed |
+| GREEN-2 | production formal composition 显式拒绝两类 Handle 复用 | 正向装配与 2 个负向用例共 3 项通过 |
+| RED-3 | production-local 必须提供 TDD-05I composition 已要求的 Phase F evaluator endpoint | 配置合同缺少 `PA_KNOWLEDGE_EVALUATION_ENDPOINT`，1 failed |
+| GREEN-3 | 绑定既有本地受管 evaluator origin `https://models.internal:9448` | 聚焦配置合同通过 |
+| REFACTOR | 把 bootstrap 收拢到 KSS 自身模块；增加 secret 不回显、专用 owner receipt、exact replay 和无 Query Grant 的 `403` 保护 | 聚焦 5 项、隔离 vertical 1 项、受影响 593 项通过 |
+
+一次性 bootstrap 只解析部署注入的 PostgreSQL DSN、trace-safe client ID 和受控 secret 输入，调用
+`PostgresKnowledgeAccessControl.register_client`。KSS 只持久化 credential digest；标准输出只包含
+client ID，不包含 credential。相同 identity/credential 可幂等重放，漂移仍由既有 access-control
+冲突合同失败关闭。
+
+### 42.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-reference-tdd05j`，只启动 PostgreSQL 17.5；测试使用显式
+loopback 端口和仓库测试身份。KSS 与 ProofAgent fixtures 为每项 PostgreSQL 测试创建随机 schema。
+没有读取 `.env`，也没有连接生产凭据、生产数据、生产服务或外部网络。验证结束后，只对该项目
+执行 `down --volumes --remove-orphans`；随后 `compose ps --all` 返回空清单。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05J focused | 5 passed、1 existing warning | Compose/Vault/bootstrap、dedicated Handle、secret 不回显、Handle 复用失败关闭 |
+| PostgreSQL/KSS/registrar vertical | 1 passed | exact Reference 首次/重放、专用 authenticated owner、无 Query Grant 时稳定 `403` |
+| 直接受影响集 | 593 passed、13 dependency-conditioned skips、1 warning | KSS contracts、formal chain、Reference registrar、production composition；未提供 S3/OpenSearch |
+| 全仓后端 | 2588 passed、37 dependency-conditioned skips、2 deselected、1 warning | PostgreSQL 测试全部要求执行；未提供的 S3/OpenSearch 等依赖仍按既有声明 skip |
+| Mypy / Ruff / format | 368 个产品源无类型错误；全仓 Ruff；6 个本片 Python 文件 format-clean | 无新增 ignore |
+| lock / Compose / domain / diff | `uv lock --check`、production-local `compose config --quiet`、domain-context、`git diff --check` 通过 | 无依赖、lock、SQL 或 migration 变化 |
+
+第一次 PostgreSQL-enabled 全仓命令把 ProofAgent SQLAlchemy DSN 写成 `postgresql://`，76 个
+fixture 在产品断言前因未安装 `psycopg2` 报错，当时已有 2512 项通过。该结果不计为完整通过。
+把同一隔离数据库的 ProofAgent DSN 更正为项目要求的 `postgresql+psycopg://` 后，原测试集合
+最终 2588 项通过。完整套件只保留一个既有 Authlib deprecation warning。
+
+没有构造正式发布请求，没有启动 production-local 全栈，没有调用真实 KSS/model 上游，也没有
+验证 OIDC、Vault server、TLS gateway、S3 artifact retention、浏览器或发布 Gate。checked-in
+fixture 只证明配置合同和隔离纵向，不能外推生产 Secret、真实 runtime Query Grant 或服务可用性。
+
+### 42.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05J 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。production-local 已有专用 Reference client 的 Secret/identity 配置
+  合同，KSS API 启动依赖该 identity bootstrap，production composition 也会拒绝 Handle 复用。
+  当前累计工作树没有新增 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 专用 Reference client 没有 Query Grant，这是预期的最小权限结果，不是缺少
+  Reference Grant。formal online smoke 仍需要另一个 runtime Query client 的 exact-Release Query
+  Grant；本片没有提供、伪造或绕过该权威。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05K 只设计并实现 runtime Query client 的
+  exact-Release Grant provisioning seam 与隔离 online-query vertical。先证明 Grant 绑定 Draft
+  选择的 exact Release、Space 和预算，且不能扩大或复用 Reference credential；仍不执行正式
+  Agent publication、真实模型 smoke、Dashboard、恢复器或生产部署。
+
+## 43. TDD-05K：runtime Query client exact-Release Grant provisioning core
+
+### 43.1 冻结边界
+
+[FRAME | HIGH] 本片只新增 KSS application-only、secret-free Query Grant provisioning
+core，复用既有 `knowledge_client_grants` PostgreSQL 权威，不新增 migration。受信
+composition 以 immutable policy 注入已注册 runtime client identity、allowed strategies、
+最大 execution budget 和 effective access-scope digest。每次 provisioning 调用只接受
+Draft 后续传入的 exact `knowledge_base_release_id`；不接受 client、credential、Space、
+strategy、budget 或 scope。
+
+[FRAME | HIGH] KSS 必须从 exact Release 权威反推 Space 并返回 strict、secret-free
+receipt。Grant identity 由 policy 与 exact Release 全部事实内容寻址生成；同事实
+精确重放，不同 policy 不得对同一 client/Release 原地扩权。隔离纵向必须
+证明 runtime credential 只能查询获授 exact Release 并且不超过 Grant 预算；
+另一 queryable Release、超预算请求和专用 Reference credential 均必须失败关闭。
+
+[FRAME | HIGH] 本片不新增 KSS HTTP/管理 API、ProofAgent transport、formal publisher
+composition、Compose/Vault/egress/TLS 或 Dashboard，不调用 formal publication endpoint，不运行
+真实模型、不部署且不提交 Git。验证只使用独立 PostgreSQL schema、本地 KSS
+HTTP application 和受控 fixture；不读取 `.env`、secret 值、生产数据或日志。
+
+### 43.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | 现有 runtime 纵向必须经过 application-only Grant provisioning seam，不再直接手工写 Grant | 聚焦测试收集失败：`ModuleNotFoundError: knowledge_source_service.application.query_grants`，1 error |
+| GREEN | 增加 strict request/receipt、内容寻址 Grant ID 和 PostgreSQL receipt；同事实重放、Space 反推、预算/其他 Release/Reference credential 拒绝 | 隔离 PostgreSQL/KSS HTTP 聚焦纵向 1 passed |
+| REFACTOR | 把 client、strategies、budget 和 scope 从 per-call request 收回 immutable policy；per-call 只留 exact Release，增加非法 client/Space/budget 字段拒绝 | 重构后同一隔离纵向 1 passed；Ruff、format 和聚焦 Mypy 通过 |
+
+`KnowledgeQueryGrantPolicy` 只保留 trace-safe identity 和权限上限，不包含 bearer token
+或 Secret Handle。`ProvisionKnowledgeQueryGrantRequest` 只包含 exact Release ID。
+`PostgresKnowledgeAccessControl` 仍只持久化 credential digest 和既有 Grant 表；本片只把
+已写入权威事实返回为 `knowledge-query-grant.v1` receipt，不改表结构。
+
+### 43.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-query-grant-tdd05k`，只启动 PostgreSQL 17.5，
+显式绑定 loopback 端口 `55491`。KSS fixture 为每项 PostgreSQL 测试创建随机
+schema 并在结束时删除；没有连接生产凭据、生产数据、生产服务或外部网络。
+验证后只对该隔离项目执行 `down --volumes --remove-orphans`，随后 `compose ps --all`
+返回空清单；既有 `proofagent-production-local` 项目未启动或修改。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05K focused PostgreSQL/KSS HTTP vertical | 1 passed | exact replay、KSS-derived Space、strict per-call input、不扩权、exact Release、budget 和 Reference client denial |
+| KSS contracts | 411 passed、13 dependency-conditioned skips | 未提供 S3/OpenSearch 等非本片依赖，skip 不作为外部依赖通过证据 |
+| PostgreSQL-enabled 全仓后端 | 2588 passed、37 skipped、2 deselected、1 existing warning | ProofAgent 与 KSS PostgreSQL 测试强制执行；未提供的外部依赖仍按既有条件 skip |
+| Ruff / format / Mypy | 全仓 Ruff 通过；4 个本片 Python 文件 format-clean；467 个产品源无类型错误 | 无新增 ignore |
+| lock / domain / diff | `uv lock --check`、domain-context 和 `git diff --check` 通过 | lock 检查在默认沙箱内因 uv/macOS 系统网络配置原生 panic 未执行完；沙箱外只读重试通过 |
+
+没有运行 production-local 全栈、正式 Agent publication、真实 KSS/model 上游 smoke、
+OIDC/Vault/TLS gateway、S3 artifact retention、Dashboard、浏览器或发布 Gate。新 core 仍没有
+网络 provisioning 入口，也没有被 formal publisher 调用，因此不能证明 production-local
+formal online smoke 已可用。
+
+### 43.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05K 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。本片只完成 KSS application-only Grant core 和隔离查询纵向，
+  当前累计工作树没有新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] 调用方不能提交 client、credential、Space、strategy、budget 或
+  scope；这些事实由受信 policy 锁定。Reference client 没有 Query Grant，也没有被
+  当作 runtime client 复用。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05L 只增加受信的 KSS
+  Query Grant provisioning HTTP transport 和 ProofAgent guarded adapter：传输只携带 Draft 选择的
+  exact Release，并严格复核 secret-free receipt。暂不把它接入 formal publisher，不运行
+  真实模型或生产部署。
+
+## 44. TDD-05L：Query Grant operator transport 与 ProofAgent guarded adapter
+
+### 44.1 冻结边界
+
+[FRAME | HIGH] 本片只在既有 KSS operator 管理认证和 `knowledge_source.edit` 权限后增加
+`POST /v1/knowledge-query-grants`。KSS runtime 只有同时注入 TDD-05K immutable policy 与
+operator authentication 时才暴露该入口；缺 operator authority 时在数据库访问前失败关闭。
+strict 请求只含 `knowledge_base_release_id`，不能提交 client、credential、Space、strategy、预算
+或 scope。runtime Query 与 Reference service-client credential 均不能认证该 operator 命令。
+
+[FRAME | HIGH] ProofAgent 只新增 provider-neutral `KnowledgeQueryGrantProvisioner` port、strict
+secret-free request/receipt 和 guarded HTTPS adapter。Adapter 必须发送 exact Release，拒绝非 HTTPS
+origin、redirect、非 200、超限或未知响应、inactive receipt、重复 strategy 和 Release 漂移。它不
+复制或覆盖 KSS policy，也不接 formal publisher。
+
+[FRAME | HIGH] 本片更新 canonical OpenAPI，但不新增 SQL/migration、operator-command audit store、
+Secret Handle、Compose/Vault/egress/TLS、Dashboard/BFF 或 production 配置，不调用 formal
+publication endpoint，不运行真实模型、不部署且不提交 Git。durable Grant row/receipt 是查询授权
+事实，不是完整 operator 审计证据。
+
+### 44.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 真实 KSS runtime 必须从受信 policy 装配 operator-protected Grant HTTP | `compose_runtime()` 不接受 `query_grant_policy`，聚焦测试 1 failed |
+| GREEN-1 | 增加条件 runtime composition、operator edit 权限、strict request/receipt 与 `409/503` 映射 | 隔离 PostgreSQL/KSS vertical 1 passed；operator exact replay、runtime credential `401`、伪造 policy 字段 `422` |
+| RED-2 | ProofAgent 必须有 provider-neutral request 与 guarded provisioner | 测试收集失败：缺少 `source_service_query_grant_provisioner`，1 error |
+| GREEN-2 | 增加 port、strict receipt 与 HTTPS transport | 成功 wire 合同 1 passed；payload 只有 exact Release |
+| RED-3 | schema 合法但 response Release 漂移必须失败关闭 | 参数组得到 1 failed、3 passed；漂移响应未抛错 |
+| GREEN-3 | Adapter 在 strict validation 后复核 exact Release | adapter 合同 16 passed，覆盖 drift、unknown、inactive、重复 strategy、redirect、错误、响应上限、HTTPS 与 Bearer |
+| RED-4 | canonical OpenAPI 必须公开 Grant transport 且请求 schema 只有 exact Release | 分发合同缺 `/v1/knowledge-query-grants`，1 failed |
+| GREEN-4 | canonical builder 注入 contract-only Grant seam，并更新确定性摘要 | OpenAPI 路径/schema 通过；新 SHA-256 为 `ddac946a73bbbcffb14b271c63302590e7557109a3711c90f79021fd0623a349` |
+| REFACTOR | 真实 vertical 改由 ProofAgent adapter 调用 KSS transport；增加无 operator auth 启动拒绝和 bounded problem 合同 | 纯合同聚焦 25 passed；隔离 PostgreSQL/KSS/ProofAgent vertical 1 passed；Ruff/format/Mypy 通过 |
+
+### 44.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-query-grant-http-tdd05l`，只启动 PostgreSQL 17.5，
+loopback 端口为 `55432`。KSS 与 ProofAgent fixtures 使用独立测试 schema；未读取 `.env`、生产
+凭据、生产数据或生产日志，未连接外部网络。真实纵向为：ProofAgent provisioner port → guarded
+HTTP client → KSS operator transport → immutable Grant policy → PostgreSQL Grant → exact Query。
+验证结束后只对该隔离项目执行 `down --volumes --remove-orphans`；随后 `compose ps --all` 仅返回
+表头，确认无测试容器残留，未启动或修改其他 Compose 项目。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| TDD-05L focused | 25 passed | KSS transport、权限、bounded problem、ProofAgent adapter、canonical OpenAPI 和 runtime fail-closed |
+| PostgreSQL/KSS/ProofAgent vertical | 1 passed | exact replay、strict policy input、operator/runtime/Reference authority、Release/budget Query enforcement |
+| KSS contracts | 418 passed、13 dependency-conditioned skips | 未提供 S3/OpenSearch 等非本片依赖；skip 不作为外部依赖通过证据 |
+| PostgreSQL-enabled 全仓后端 | 2611 passed、37 skipped、2 deselected、1 existing warning | PostgreSQL 测试强制执行；warning 为既有 Authlib deprecation |
+| Ruff / format / Mypy | 全仓 Ruff 通过；12 个本片 Python 文件 format-clean；469 个产品源无类型错误 | 无新增 ignore |
+
+没有启动 production-local 全栈、正式 Agent publication、真实 KSS/model online smoke、生产
+OIDC/Vault/TLS gateway、S3 artifact retention、Dashboard、浏览器或发布 Gate。ProofAgent adapter
+仍未注入 formal publisher；因此本片不能证明正式发布会在 online smoke 前获得 exact Grant，也
+不能把本地回归外推为生产服务可用。
+
+### 44.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05L 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树没有新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] runtime/Reference service-client 不能自授 Grant；ProofAgent adapter 只传 exact
+  Release 并严格验证 receipt。KSS deployment policy 仍独占 client、Space、strategy、预算和 scope。
+- [KNOWN | HIGH] 本片没有独立 operator-command audit store；Grant row/receipt 不能证明终端操作员
+  委托链。formal publisher integration 还必须处理 Grant 已创建但后续 smoke/publication 失败时的
+  保守残留授权语义，不能隐式当作已解决。
+- [FRAME | HIGH] 下一片若继续保持简单，建议 TDD-05M 只新增 candidate-bound Query Grant Control
+  staging：从已验证 Formal Candidate 取 exact Release，调用 provisioner 并复核 receipt，再把 staging
+  作为 online smoke 的显式前置输入。暂不在同片增加撤销/reconciler、operator audit migration、
+  production-local Secret/egress 配置、真实模型调用或部署。
+
+## 45. TDD-05M：candidate-bound Query Grant Control staging
+
+### 45.1 冻结边界
+
+[FRAME | HIGH] 本片只在已验证 `FormalProductionAgentReferenceStaging` 之后、formal online
+smoke 之前增加一个 Control-owned Query Grant staging。Stager 只能从 Formal Candidate 读取 exact
+`knowledge_base_release_id`，调用既有 provider-neutral `KnowledgeQueryGrantProvisioner`，并要求
+strict active receipt 的 Release 与 Knowledge Space 同 Candidate 完全一致。client、Space、strategy、
+预算和 scope 继续由 KSS immutable deployment policy 独占。
+
+[FRAME | HIGH] Online smoke strict contract 升级为
+`formal-production-agent-online-smoke-qualification.v2`，唯一输入为
+`FormalProductionAgentQueryGrantStaging`；旧的 Reference-staging-only 调用形态删除。Formal
+publisher 顺序固定为 Candidate → Phase F → active expectation → Reference → Query Grant → smoke →
+final UoW。production composition 复用既有 KSS operator Secret boundary，不新增凭据或配置字段。
+
+[FRAME | HIGH] Grant 已成功但后续 smoke/publication 失败时，本片保留 KSS 中 exact、
+policy-bounded 的 durable Grant，不伪造补偿撤销。该 Grant 不代表 Agent 已发布、激活或获得用户侧
+Run 权限。本片不新增 selective revoke/reconciler、operator-command audit migration、SQL、
+production-local Query Grant policy/egress/TLS 配置、Dashboard/BFF、真实模型调用、部署或 Git 提交。
+决策见 ADR-0220。
+
+### 45.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | Query Grant staging 必须只从 exact Formal Candidate Release 构造请求并返回严格契约 | 聚焦测试收集失败：缺少 `FormalProductionAgentQueryGrantStaging`，1 error |
+| GREEN-1 | 新增 strict staging contract 与 Control stager，复核 Reference/Candidate/Phase F 和 Grant Release/Space | tracer bullet 1 passed；中间测试曾因 fixture Space 漂移按预期失败关闭，修正 fixture 后通过 |
+| RED-2 | online smoke 不得继续接受 Reference staging | 新接口测试因 `qualify()` 不接受 `query_grant_staging` 得到 1 failed |
+| GREEN-2 | online smoke qualification 升级到 v2，Control 与 concrete runner 只接受 Query Grant staging | 新前置输入测试 1 passed；旧调用形态移除 |
+| RED-3 | formal publisher 必须在 Reference 与 smoke 之间调用 Grant stager | publisher 构造因缺少 `query_grant_stager` 得到 1 failed |
+| GREEN-3 | publisher 和 production composition 注入 guarded provisioner；顺序固定且失败在 smoke/最终写前关闭 | 顺序测试 1 passed；Reference → Query Grant → smoke |
+| REFACTOR | 增加 unavailable、inactive、Release/Space drift、smoke 失败保留 Grant/Reference、production operator Secret composition 证据 | formal focused 72 passed；production composition 11 passed；受影响 141 passed、13 skipped |
+
+### 45.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-query-grant-staging-tdd05m`，只启动 PostgreSQL 17.5，
+loopback 端口为 `55432`。ProofAgent 与 KSS PostgreSQL 测试均启用 fail-if-missing 开关；未读取
+`.env`、生产凭据、生产数据或生产日志，未连接外部网络。验证后只清理该项目的容器、网络和测试
+卷，`compose ps --all` 只返回表头。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| Formal Candidate / Grant staging focused | 72 passed | exact Candidate Release、strict receipt、失败顺序、保守残留 Grant/Reference、无旧 smoke 旁路 |
+| Production composition focused | 11 passed、1 existing warning | guarded provisioner 复用 operator Secret boundary；warning 为既有 Authlib deprecation |
+| 受影响回归 | 141 passed、13 dependency-conditioned skips、1 existing warning | 未启用 PostgreSQL 的首次受影响运行；skip 不作为依赖通过证据 |
+| PostgreSQL-enabled 全仓后端 | 2620 passed、37 skipped、2 deselected、1 existing warning | ProofAgent/KSS PostgreSQL 测试强制执行；其余未提供依赖保持既有条件 skip |
+| Ruff / format / Mypy | 全仓 Ruff 通过；9 个本片 Python 文件 format-clean；470 个产品源无类型错误 | 无新增 ignore |
+| lock / domain / diff | `uv lock --check`、domain-context 和 `git diff --check` 通过 | lock 检查因沙箱 uv cache 权限失败后在获批环境只读重试通过 |
+
+没有启动 production-local 全栈、真实 KSS/model online smoke、生产 OIDC/Vault/TLS gateway、S3
+artifact retention、Dashboard、浏览器或发布 Gate。当前 production-local KSS 尚未注入 TDD-05K
+immutable Query Grant policy，因此本片不能证明完整 formal publication 在该环境可联机执行。
+
+### 45.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05M 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树没有新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] Formal publication 现在只有 Reference → Query Grant → online smoke 单一路径。
+  Grant provisioning 失败或 receipt 漂移不会进入 smoke/最终 UoW；smoke 或最终写失败不会虚构
+  Grant 撤销。
+- [KNOWN | HIGH] Grant row/receipt 仍不是完整 operator-command audit；本片也没有 selective revoke
+  或 reconciler。已创建 Grant 的保守残留授权必须在生产 Gate 中作为显式风险审查。
+- [FRAME | HIGH] 下一片若继续聚焦核心，建议 TDD-05N 只补 production-local immutable Query Grant
+  policy/bootstrap 与隔离 Reference → Grant staging 纵向，证明 checked-in 环境能暴露 operator-protected
+  provisioning 并严格绑定 runtime client/exact Release。仍不运行真实模型、不做 revoke/reconciler、
+  operator audit migration 或部署。
+
+## 46. TDD-05N：production-local immutable Query Grant policy/bootstrap
+
+### 46.1 冻结边界
+
+[FRAME | HIGH] 本片只关闭 checked-in production-local 中两个缺口：KSS API 进程必须从一个 strict、
+secret-free deployment value 读取 TDD-05K `KnowledgeQueryGrantPolicy`；KSS migration 后必须用一次性
+hardened bootstrap 注册现有 runtime Query client credential digest。policy 与 bootstrap 的 client
+identity 必须完全一致，KSS API 等待 runtime 与 dedicated Reference client 两个 bootstrap 成功后
+才能启动。
+
+[FRAME | HIGH] `KSS_QUERY_GRANT_POLICY_JSON` 存在时必须完整通过 frozen Pydantic contract；JSON、
+未知字段、strategy、预算、scope digest 或 client identity 无效时在配置阶段失败关闭。配置完全缺失
+时保留既有「不暴露 Query Grant provisioning route」语义。runtime bootstrap 只调用
+`register_client`，不能创建 Grant；Grant 仍只能由独立 operator-authenticated exact-Release command
+创建。
+
+[FRAME | HIGH] 本片复用既有 runtime 与 operator Secret，不新增 SQL、Secret Handle、egress/TLS
+规则、Dashboard/BFF、selective revoke/reconciler 或 operator-command audit。隔离纵向读取 checked-in
+policy/bootstrap facts，按 Reference → Grant → bounded Query 顺序验证，但不启动 production-local
+全栈、不调用真实模型、不执行 formal publication、部署或 Git 提交。决策见 ADR-0221。
+
+### 46.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | KSS process configuration 必须加载 strict immutable Query Grant policy | 聚焦测试因 `ApiRuntimeConfiguration` 没有 `query_grant_policy` 得到 1 failed |
+| GREEN-1 | 将单一 `KSS_QUERY_GRANT_POLICY_JSON` 解析为 frozen `KnowledgeQueryGrantPolicy`，无配置返回 `None` | tracer bullet 1 passed；malformed JSON 与 unknown field 均返回无输入回显的稳定配置错误 |
+| RED-2 | API process 必须把 typed policy 交给 `compose_runtime` | composition 测试因缺少 `query_grant_policy` 参数得到 1 failed |
+| GREEN-2 | 仅 API role 注入 policy；其他角色保持无 provisioning authority | 两项 policy/configuration focused 测试通过 |
+| RED-3 | production-local 必须有独立 runtime client bootstrap | 测试收集因 `knowledge_source_service.bootstrap.runtime_client` 不存在得到 1 error |
+| GREEN-3 | 新增只注册 credential digest 的一次性 bootstrap，输出不含 bearer token | bootstrap focused 1 passed |
+| RED-4 | checked-in Compose 必须绑定 policy/runtime client 并等待 bootstrap | static contract 因缺少 `kss-runtime-client-bootstrap` 得到 1 failed |
+| GREEN-4 | Compose 复用现有 runtime Secret，注入 secret-free policy，并让 KSS API 等待 runtime/Reference bootstrap | production-local static contract 1 passed |
+| REFACTOR | 隔离纵向改为读取 checked-in policy、调用 runtime bootstrap，并按 Reference → operator Grant → exact Query 验证 | 受影响集 84 passed；KSS contract 422 passed、13 skipped |
+
+### 46.3 验证结果与限定
+
+隔离 Compose 项目为 `proofagent-kss-query-grant-policy-tdd05n`，只启动 PostgreSQL 17.5，loopback
+端口为 `55432`。测试使用仓库测试常量和随机 schema；未读取 `.env`、生产凭据、生产数据或生产日志，
+未连接外部网络。纵向从 checked-in Compose 读取 policy 与 runtime client identity，但没有启动
+`proofagent-production-local` 服务。
+
+验证结束后，仅对该隔离项目执行 `down --volumes`。临时 PostgreSQL 容器和网络已删除，随后
+`compose ps --all` 只返回表头。测试数据可由 fixture 重建；没有操作其他 Compose 项目或
+production-local 数据。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| policy/bootstrap/production-local composition 受影响集 | 84 passed、1 existing warning | 覆盖 strict config、API composition、runtime bootstrap、operator-only provisioning 与 production role 静态合同 |
+| KSS contract | 422 passed、13 dependency-conditioned skips | PostgreSQL 测试强制执行；S3/OpenSearch 未提供，因此对应 skip 不作为依赖通过证据 |
+| PostgreSQL-enabled 全仓后端 | 2624 passed、37 skipped、2 deselected、1 existing warning | ProofAgent/KSS PostgreSQL 测试强制执行；warning 为既有 Authlib deprecation |
+| Ruff / format / Mypy | 全仓 Ruff 通过；6 个本片 Python 文件 format-clean；471 个产品源无类型错误 | 无新增 ignore |
+| Compose config | `docker compose --env-file /dev/null ... config --quiet` 退出 0 | 未设置变量警告来自刻意不读取 secret env；静态渲染不证明服务已启动 |
+| lock / domain / diff | `uv lock --check`、domain-context 和 `git diff --check` 通过 | lock 首次因沙箱 uv cache 权限失败，获批后只读重试通过 |
+
+第一次全仓强制 PostgreSQL 命令把 ProofAgent DSN 误写为 `postgresql://`，SQLAlchemy 因而尝试加载
+未安装的 `psycopg2`，得到 2548 passed、37 skipped、2 deselected 和 76 setup errors。改用项目约定
+的 `postgresql+psycopg://` 后完整重跑并得到上表 GREEN 结果；前一次环境错误不作为代码失败或
+通过证据。
+
+没有启动 production-local 全栈、真实 KSS/model online smoke、formal publication、生产
+OIDC/Vault/TLS gateway、Dashboard、浏览器或发布 Gate。checked-in local scope digest 只标识本地
+harness policy，不证明生产 access-scope enforcement 或 Production GO。
+
+### 46.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05N 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。当前累计工作树没有新 commit、push、merge、部署或 Production GO。
+- [KNOWN | HIGH] checked-in production-local 现在具备匹配的 runtime client identity bootstrap 与
+  immutable policy，KSS API 可据此装配 operator-protected Query Grant provisioning。bootstrap 本身
+  不创建 Grant，runtime/Reference credential 仍不能自授。
+- [KNOWN | HIGH] 隔离纵向证明 Reference → exact Grant → bounded Query 可运行；它没有证明完整
+  formal publication、真实模型质量、生产 Vault/egress/TLS 或最终发布 Gate。
+- [FRAME | HIGH] 下一片若继续聚焦闭环，建议先单独确认 TDD-05O：只扩充 production-local verifier，
+  对已存在的 exact Release 检查 runtime identity、policy、operator provisioning 和 Grant-bounded
+  Query。该动作会启动本地全栈并创建可重放的本地 Grant，因此不在本片隐式执行；仍不加入 revoke、
+  reconciler、operator audit migration 或 Production GO。
+
+## 47. TDD-05O：production-local exact Query authority verifier
+
+### 47.1 冻结边界
+
+[FRAME | HIGH] 本片只增加一个显式的 production-local 验证入口。调用者必须传入一个已存在的
+exact KSS Release；入口不接受占位值，不查询 `latest`，也不自动选择 Release。verifier 先通过
+既有 operator Secret Handle 请求 policy-owned Query Grant，再用独立 runtime client Secret Handle
+执行一次 `single_pass` Query。它严格重验 runtime client、Release、strategy、预算和结果中的
+Release/access-scope identity。
+
+[FRAME | HIGH] 成功输出只包含 secret-free 的 Release、Space、Grant、Query、strategy、候选数量和
+预算使用量。已知输入、Grant transport 或一致性失败只输出稳定 JSON 错误码并退出非零，不回显
+异常正文。入口不启动或停止 Compose，不创建 Release、Reference 或 Published Agent，不修改
+readiness，不增加 SQL、revoke/reconciler、operator-command audit、Dashboard/BFF、部署或 Git 提交。
+
+### 47.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | host verifier 必须拒绝缺失/占位 Release，并按 operator Grant → runtime Query 顺序验证 exact authority | 目标模块与脚本不存在，聚焦集合得到 6 failed |
+| GREEN-1 | 增加 pure verifier、production composition 和单参数 host script；严格复核 client、Release、strategy、预算和 access scope | 初始聚焦 9 passed；Ruff、format 与 shell syntax 通过 |
+| RED-2 | 保留既有 production-local 卷升级时，runtime credential bootstrap 必须继续幂等 | 全栈在 bootstrap 因同一 token 已绑定历史 client identity 而触发 PostgreSQL unique violation |
+| GREEN-2 | checked-in local policy、ProofAgent runtime 与 bootstrap 继续使用既有 `proof-agent-production-local` identity；通用 bootstrap 默认值不变 | 当前检出版本保留旧卷启动成功，bootstrap 退出 0；静态 identity 合同通过 |
+| RED-3 | 已知 Grant 冲突不得输出 Python traceback 或异常正文 | live 409 首次输出完整 traceback；bounded-failure 测试因缺少 `cli()` 得到 1 failed |
+| GREEN-3 | CLI 将已知失败映射为 secret-free schema/error code，并只在 verifier 进程抑制已知 Authlib JOSE 弃用告警 | verifier 8 passed；live 冲突最终只输出一条 `PA_KNOWLEDGE_002` JSON 并退出 1 |
+| REFACTOR | Compose-derived 集成断言改为比较实际 deployment policy identity，不保留通用 client 名称硬编码 | 独立 PostgreSQL exact Grant → Query 聚焦集合 15 passed |
+| LIVE | 由 verifier 外部的既有 KSS 管理发布 API 提供无冲突 exact Release；同一 verifier 重复运行必须精确重放 Grant，同时创建独立 Query | 两次 verifier 均退出 0；Grant ID 相同，Query ID 不同；只读 PostgreSQL 核验为 1 个 target Grant、2 个 succeeded Query |
+
+### 47.3 验证结果与限定
+
+[KNOWN | HIGH] 当前检出版本的 ProofAgent/KSS application images 已在保留既有 production-local
+数据卷的条件下重建并启动；配置未变的长期基础设施容器被 Compose 复用，不是 clean-room 全量
+重建。API、KSS、
+Gateway、OIDC、Vault、PostgreSQL、OpenSearch、私有模型兼容路由、S3 versioning 与 KSS authority
+isolation 通过既有 `production-local-verify.sh`；脚本退出 0。ProofAgent `/readyz` 仍因
+`published_agent=not_ready` 返回预期 HTTP 503，本片没有发布或激活 Agent。
+
+[KNOWN | HIGH] 操作者显式选择了一个已存在、queryable 的本地 smoke Release。operator provisioning
+在 Query 前返回 `409 knowledge_query_grant_conflict`。只读核验表明，当前三个 queryable Release
+均已绑定历史 smoke Grant；这些 Grant 使用历史 ID 与 access-scope digest，不能被新内容寻址 policy
+当作精确重放，也不能原地改写。系统因此正确失败关闭。未删除、停用、撤销或改写任何既有 Grant，
+未创建新 Release，也没有提交 Query。
+
+[KNOWN | HIGH] 为获得独立正向证据，本片在临时 PostgreSQL 17.5 项目和随机 schema 中执行现有
+KSS HTTP/runtime 纵向，证明 deployment policy → operator Grant → exact bounded Query 可运行。
+验证后已删除该临时容器、网络和数据卷；没有操作 production-local 数据。
+
+[KNOWN | HIGH] 随后，操作者在 verifier 外部使用 production-local 已装配的 KSS 管理 catalog
+publication API 创建独立测试 Base `base-query-authority-tdd05o-20260831`，复用同一 Space 下两个
+既有 immutable Source Version，发布 queryable exact Release
+`release-86ecc0652a74b27d0effb1e0`。发布前只读检查确认目标 runtime client/Release 的 Grant 数为
+0。该准备动作不属于 verifier，也没有创建 Reference、Grant 或 Published Agent。当前
+production-local 未装配 Base Preparation 管理端点，因此该动作只提供 Query verifier 所需的本地
+catalog fixture，不是受控 Preparation 发布路径的生产证据。
+
+[KNOWN | HIGH] verifier 第一次运行创建 active Grant
+`query-grant-4936a3b9424d3268f03532b6` 和 succeeded Query
+`knowledge-query-d85b7ea5fca442c2a206172066ced51f`；第二次运行精确重放同一 Grant，并创建
+succeeded Query `knowledge-query-c7240c779c0a4ec9b35e1f612220602b`。两次结果均绑定同一
+Release/Space/runtime client，使用 `single_pass`，各返回 3 个候选，预算使用量为 1 round、0 model
+calls、0 model tokens、3 candidates、0 ms。只读 PostgreSQL 核验确认目标只有 1 个 active Grant、
+2 个独立 succeeded Query；保留数据库总计 4 个 Release 和 4 个 Grant。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| verifier/HTTP/Compose/真实 PostgreSQL 正向聚焦 | 15 passed | 临时随机 schema；受控 projection/model fixture，不是外部真实模型 |
+| 受影响回归 | 100 passed、1 existing warning | 覆盖 production-local、KSS policy/bootstrap、operator transport、PostgreSQL Grant 和 runtime composition |
+| PostgreSQL-enabled 全仓后端 | 2633 passed、37 skipped、2 deselected、1 existing warning | ProofAgent/KSS PostgreSQL 强制执行；未提供的其他外部依赖保持条件 skip |
+| 最终 production-local build/up + baseline | 退出 0 | 当前检出镜像；保留既有卷；`published_agent=not_ready` 为预期 |
+| 显式 exact Release verifier | 退出 1，单条 `PA_KNOWLEDGE_002` JSON | 历史 immutable Grant 冲突；证明负向 fail-closed，不是正向 Query 成功 |
+| 新 exact Release verifier 第一次运行 | 退出 0；1 个 active Grant；1 个 succeeded Query；3 candidates | verifier 外部先准备无冲突 Release；本地 compatibility dependencies，不是外部真实模型 |
+| 同一 exact Release verifier 第二次运行 | 退出 0；复用同一 Grant；新增 1 个 succeeded Query；3 candidates | 证明 immutable Grant 精确重放和 Query identity 隔离 |
+| 最终 verifier 聚焦回归 | 30 passed、1 existing warning | verifier 与 production migration/static contract |
+| live 后 production-local baseline | 退出 0 | `/readyz` 仍只因 `published_agent=not_ready` 返回预期 HTTP 503 |
+| Ruff / format / Mypy / shell syntax | 通过；472 个源无类型错误 | verifier、产品源、聚焦测试与 host script |
+
+### 47.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05O 已完成负向冲突失败关闭、正向 live Grant 创建和第二次 exact replay。
+  本片结论为 `LOCAL_VERIFIED`；Feature 继续为 `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 409 不是可绕过的兼容问题。ADR-0218 要求同一 client/Release 的 policy drift
+  冲突失败；旧 Grant 不能被静默采用、覆盖或扩权。
+- [KNOWN | HIGH] 新 Release、Base、Grant 和两条 Query 是保留卷中的持久化本地验证记录。当前没有
+  selective revoke，本片不删除这些记录，也不修改三个历史 Grant。
+- [FRAME | HIGH] 下一功能切片仍应与 selective revoke/reconciliation、operator audit migration、
+  真实外部上游 smoke 和正式 Agent 发布分开确认。当前 local compatibility 结果不是部署批准或
+  Production GO。
+
+## 48. TDD-05P：production-local Formal Candidate 只读预检
+
+### 48.1 冻结边界
+
+[FRAME | HIGH] 本片只为 production-local 增加一个显式的 Formal Candidate 只读预检入口。调用者
+必须传入 exact `agent_id`、`draft_id` 和正整数 `draft_revision`；Draft 继续选择 Release，production
+composition 继续注入 Binding Profile。预检复用既有候选装配器，只输出 secret-free 的 Draft、
+Release、catalog、Profile 公开标识和两个候选摘要，并固定 `publication_authorized=false`。
+
+[FRAME | HIGH] 预检不预留 formal publication command，不运行 Phase F，不注册 Reference，不创建
+或重放 Query Grant，不运行 online smoke，不创建 Published Agent Version，不修改 Active pointer、
+Draft 或 readiness。已知候选阻断输出稳定 JSON 并退出非零，不回显异常正文。本片不增加 HTTP
+发布入口、SQL、Dashboard、部署配置、Grant reconciliation/revoke、外部模型证据或 Git 提交。
+
+### 48.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | production formal command 必须能只读装配候选，且不得预留命令或进入 Phase F | 聚焦测试因 command service 缺少 `preflight()` 得到 1 failed |
+| RED-2 | production-local 必须提供三参数预检器与 host script | 目标 Python 模块和脚本不存在，聚焦集合合计 8 failed |
+| GREEN-1 | publisher/command service 增加复用同一 deployment Profile 的只读 `preflight()`，`publish()` 也通过该单一候选入口装配 | 只读行为测试证明仅打开 1 个未提交 UoW，Phase F/Reference/Grant/smoke/command/version/audit 均为零 |
+| GREEN-2 | 新增 secret-free verifier、bounded failure JSON 与三参数 host script | success/输入拒绝/identity drift/bounded failure/static script 合同通过 |
+| LIVE | 在保留卷当前 Draft@12 上运行最终镜像 | 稳定返回 `formal_candidate_authoring_blocked` + `memory_must_be_disabled`，退出 1；无 traceback 或私有正文 |
+| REFACTOR | 只在 verifier 进程抑制已知 Authlib 弃用告警，保持 stderr 为单条机器可读 JSON | 最终 live 输出仅包含 failure JSON；测试、Ruff、Mypy 继续通过 |
+
+### 48.3 验证结果与限定
+
+[KNOWN | HIGH] 当前 production-local Draft
+`agent_management_insurance_specialist/c8191d9e-ee0a-5324-8c6d-e0b88622ab61@12`
+实际配置为 Tools disabled、Memory enabled。Formal Candidate 规则要求首期生产 Memory disabled，因此
+预检正确以 `memory_must_be_disabled` 失败关闭。该阻断发生在候选装配阶段，早于已知旧 Release 的
+历史 Query Grant 冲突；本片没有修改 Draft 或绕过规则，也没有生成候选摘要供发布批准。
+
+[KNOWN | HIGH] 预检前后只读 PostgreSQL 计数完全一致：Formal Command `0 → 0`、Agent Version
+`0 → 0`、Active Version `0 → 0`、KSS Reference `0 → 0`、Query Grant `4 → 4`、Knowledge Query
+`19 → 19`。这证明本次 live 运行没有进入 formal command reservation、Reference、Grant、Query 或
+Agent 发布状态变化。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 预检 RED | 9 failed | 缺少 `preflight()`、verifier 与 host script，失败位置符合冻结契约 |
+| 预检聚焦 GREEN | 9 passed、1 existing warning | 覆盖 application-only 只读边界、secret-free 输出、稳定失败和 host script 静态合同 |
+| formal/production 受影响回归 | 172 passed、1 existing warning | 覆盖 formal chain、production composition/API、安全 composition、migration/static contract |
+| 完整默认后端回归 | 2412 passed、267 dependency-conditioned skips、2 deselected、1 existing warning | 未配置的 PostgreSQL/S3/OpenSearch 等集成保持条件 skip；TDD-05O 已有 PostgreSQL-enabled 全仓证据，本片未改 SQL/仓储 |
+| Ruff / format / Mypy / shell syntax / diff | 通过 | Mypy 覆盖 3 个本片 Python 源；无新增 ignore |
+| 最终 production-local build/up + baseline | 退出 0 | 保留既有卷；`published_agent=not_ready` 仍为预期 HTTP 503 |
+| 当前 exact Draft preflight | 退出 1；单条 stable JSON | `memory_must_be_disabled`；未生成候选摘要，不是发布授权 |
+| live 后持久化计数 | 六类计数全部不变 | 没有 command、Reference、Grant、Query、Version 或 Active 写入 |
+
+### 48.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05P 的只读预检能力建议结论为 `LOCAL_VERIFIED`；当前 exact Draft 候选仍为
+  `BLOCKED`，Feature 继续为 `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] production-local 仍未发布或激活 Agent，readiness 继续只因
+  `published_agent=not_ready` 返回预期 503。本片不是 Production GO，也不是 formal publication
+  command approval。
+- [FRAME | HIGH] 下一片若继续，应单独确认是否通过既有 Agent Draft 编辑/CAS 权威只把 Memory
+  改为 disabled、形成新 revision 后重新预检。该状态变更不得隐式沿用本次同意；即使候选装配成功，
+  旧 Release 的历史 Grant 冲突、Phase F、真实模型和全部发布 Gate 仍是独立阻断。
+
+## 49. TDD-05Q：exact Draft Memory repair 与 Candidate 核心闭环
+
+### 49.1 冻结边界
+
+[FRAME | HIGH] 本片只允许对 production-local exact
+`agent_management_insurance_specialist/c8191d9e-ee0a-5324-8c6d-e0b88622ab61@12`
+执行一次 Memory disable CAS。入口必须要求 Tools disabled、Memory enabled，并复用既有
+Workspace 的完整 Contract 校验、revision CAS、原子保存和审计。不新增 SQL、通用
+Contract 编辑器或第二写入路径。
+
+[FRAME | HIGH] 修改后只重跑 TDD-05P read-only preflight。不预留 formal command，不运行
+Phase F、Reference、Query Grant、Query、online smoke、Version、Active pointer 或 readiness
+变更。旧 Release 的历史 Grant 冲突与发布 Gate 不在本片修复范围。
+
+### 49.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 必须有 exact Agent/Draft/revision 三参数入口，只经 Workspace 执行 CAS，且输出 secret-free | 缺少 Python 入口与 host script，13 failed；既有 preflight 合同通过 |
+| GREEN-1 | YAML 节点精确定位 Memory 布尔标量，保留注释、顺序与其余原始字节；严格拒绝 identity/revision/shape 漂移 | 14 passed；Ruff/Mypy/shell syntax 通过 |
+| LIVE-1 | 完整 Contract 校验必须先于写入 | 首次 live 返回 `draft_contract_update_rejected`；Draft 仍为 12，audit 仍为 6 |
+| RED-2 | disabled Memory 不得保留 provider，也不得隐式扩大清理 scopes | 只读确认当前有 provider、无 scopes；新契约 3 failed |
+| GREEN-2 | 同一候选中把 `enabled` 改为 false 并移除唯一 provider 行，Memory 外语义与字节不变 | 聚焦 14 passed；受影响核心 271 passed |
+| REFACTOR | 已 disabled 的干净形态必须先返回稳定 no-op 拒绝，不因 provider 已移除误报 invalid | 最终聚焦 16 passed；live replay 返回 `draft_memory_already_disabled` |
+
+### 49.3 production-local 核心验证
+
+[KNOWN | HIGH] 最终命令只生成 Draft revision `12 → 13`，Tools 保持 disabled，Memory 变为
+disabled，contract-update audit `6 → 7`。对 revision 13 重放失败关闭，未生成
+revision 14。
+
+[KNOWN | HIGH] TDD-05P read-only preflight 随后成功装配 exact Draft@13 与 Release
+`release-a4b70851cb914862000e15c3`。Knowledge Release candidate SHA-256 为
+`569d3eaf5d5d3cebc12e7a164f0ca48a8150757c5b06c521fd6d2943650d6503`，Formal Candidate
+SHA-256 为 `ecd122b4a85e0bf5d0899e07e26e69eda043814880b9b3be59660475dccaf272`，输出仍固定
+`publication_authorized=false`。
+
+[KNOWN | HIGH] 发布/KSS 副作用基线保持：Formal Command `0 → 0`、Agent Version `0 → 0`、
+Active Version `0 → 0`、KSS Reference `0 → 0`、Query Grant `4 → 4`、Knowledge Query
+`19 → 19`。唯一预期持久化变化是 Draft revision 和一条 configuration audit。
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦合同 | 16 passed、1 existing warning | exact CAS、Memory normalization、输出边界、失败关闭、重放 |
+| 受影响核心 | 271 passed、1 existing warning | Workspace CAS/审计、Contract loader、production API、Formal Candidate/preflight |
+| 完整默认后端 | 2427 passed、267 dependency-conditioned skips、2 deselected、1 existing warning | 首次受沙箱 loopback 限制有 8 个非产品失败；允许端口绑定后全量退出 0 |
+| Ruff / format / Mypy / shell syntax / diff | 通过 | 无新增 ignore；入口不回显 Contract/YAML/异常正文 |
+| 最终镜像/API | build 与 health 通过 | 保留现有数据卷；不是生产部署证据 |
+
+### 49.4 状态与下一边界
+
+- [KNOWN | HIGH] TDD-05Q 建议结论为 `LOCAL_VERIFIED`，Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] authoring-level Memory blocker 已解除，但候选装配不是 formal command
+  approval，也不是 Published Version、Active Agent 或 Production GO。
+- [FRAME | HIGH] 下一片不应直接执行完整发布；旧 Release 的历史 Query Grant
+  冲突已知，应先单独设计最小的 Grant conflict 处置/候选更换切片，并继续保留真实
+  上游 smoke 与正式发布授权边界。

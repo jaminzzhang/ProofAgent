@@ -32,6 +32,9 @@ class NeverCalledSessionService:
         raise AssertionError((cookie_token, now))
 
 
+_FORMAL_PUBLICATION_COMMAND = object()
+
+
 def _readiness_probe(
     checks: dict[str, object] | None = None,
 ) -> ProductionReadinessProbe:
@@ -58,6 +61,7 @@ def _production_app(
     *,
     session_service: object | None = None,
     agent_configuration_application: object | None = None,
+    formal_publication_command: object | None = _FORMAL_PUBLICATION_COMMAND,
 ):
     return create_app(
         mode="production",
@@ -86,6 +90,7 @@ def _production_app(
         agent_configuration_workspace=(
             agent_configuration_application or object()
         ),
+        formal_production_agent_publication_command=formal_publication_command,
         knowledge_service_management_client=object(),
         release_registry_repository=object(),
         release_bundle_materializer=object(),
@@ -109,6 +114,13 @@ def test_production_app_fails_closed_without_oidc_session_composition(
             conversations_dir=tmp_path / "conversations",
             agent_configuration_dir=tmp_path / "configuration",
         )
+
+
+def test_production_app_fails_closed_without_formal_publication_command(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="Formal Production Agent publication command"):
+        _production_app(tmp_path, formal_publication_command=None)
 
 
 def test_development_auth_session_projects_the_local_operator(tmp_path: Path) -> None:

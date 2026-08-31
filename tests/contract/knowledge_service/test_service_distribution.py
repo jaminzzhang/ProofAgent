@@ -30,6 +30,9 @@ from knowledge_source_service.application.projection_encoding import (
     DeterministicHashProjectionEncoder,
 )
 from knowledge_source_service.bootstrap import processes
+from knowledge_source_service.bootstrap import reference_client
+from knowledge_source_service.bootstrap import runtime_client
+from knowledge_source_service.contracts.access_control import KnowledgeQueryGrantPolicy
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -85,6 +88,73 @@ def test_service_image_requires_immutable_build_images_and_a_frozen_lock() -> No
     ]
 
 
+def test_reference_client_bootstrap_registers_only_a_digest_bound_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: list[tuple[str, str]] = []
+
+    class Registry:
+        def register_client(self, *, client_id: str, bearer_token: str) -> None:
+            observed.append((client_id, bearer_token))
+
+    monkeypatch.setattr(
+        reference_client.PostgresKnowledgeAccessControl,
+        "from_dsn",
+        lambda dsn: Registry(),
+    )
+
+    reference_client.main(
+        {
+            "KSS_POSTGRES_DSN": "postgresql://knowledge@postgres/knowledge",
+            "KSS_REFERENCE_CLIENT_ID": "proof-agent-formal-publication-reference",
+            "KSS_REFERENCE_CLIENT_BEARER_TOKEN": "reference-secret-token-05j",
+        }
+    )
+
+    output = capsys.readouterr()
+    assert observed == [
+        (
+            "proof-agent-formal-publication-reference",
+            "reference-secret-token-05j",
+        )
+    ]
+    assert "proof-agent-formal-publication-reference" in output.out
+    assert "reference-secret-token-05j" not in output.out
+    assert output.err == ""
+
+
+def test_runtime_client_bootstrap_registers_only_a_digest_bound_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: list[tuple[str, str]] = []
+
+    class Registry:
+        def register_client(self, *, client_id: str, bearer_token: str) -> None:
+            observed.append((client_id, bearer_token))
+
+    monkeypatch.setattr(
+        runtime_client.PostgresKnowledgeAccessControl,
+        "from_dsn",
+        lambda dsn: Registry(),
+    )
+
+    runtime_client.main(
+        {
+            "KSS_POSTGRES_DSN": "postgresql://knowledge@postgres/knowledge",
+            "KSS_RUNTIME_CLIENT_ID": "proof-agent-runtime",
+            "KSS_RUNTIME_CLIENT_BEARER_TOKEN": "runtime-secret-token-05n",
+        }
+    )
+
+    output = capsys.readouterr()
+    assert observed == [("proof-agent-runtime", "runtime-secret-token-05n")]
+    assert "proof-agent-runtime" in output.out
+    assert "runtime-secret-token-05n" not in output.out
+    assert output.err == ""
+
+
 def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
     from knowledge_source_service.openapi_contract import (
         build_openapi_contract_bytes,
@@ -103,6 +173,8 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "/livez",
         "/readyz",
         "/v1/knowledge-queries",
+        "/v1/knowledge-query-grants",
+        "/v1/knowledge-base-release-references",
         "/v1/knowledge-spaces",
         "/v1/knowledge-source-synchronizations",
         "/v1/connection-profiles",
@@ -164,6 +236,27 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "credential",
         "token",
     } & set(deletion_properties)
+    registration_operation = payload["paths"]["/v1/knowledge-base-release-references"]["post"]
+    assert registration_operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RegisterKnowledgeBaseReleaseReferenceRequest"
+    }
+    assert registration_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/KnowledgeBaseReleaseReference"
+    }
+    assert (
+        "authenticated_client_id"
+        not in schemas["RegisterKnowledgeBaseReleaseReferenceRequest"]["properties"]
+    )
+    grant_operation = payload["paths"]["/v1/knowledge-query-grants"]["post"]
+    assert grant_operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ProvisionKnowledgeQueryGrantRequest"
+    }
+    assert grant_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/KnowledgeQueryGrant"
+    }
+    assert set(schemas["ProvisionKnowledgeQueryGrantRequest"]["properties"]) == {
+        "knowledge_base_release_id"
+    }
     publication_operation = payload["paths"][
         "/v1/knowledge-spaces/{knowledge_space_id}/knowledge-bases/{knowledge_base_id}/release-preparations/{preparation_id}:publish"
     ]["post"]
@@ -186,7 +279,7 @@ def test_openapi_contract_is_canonical_and_covers_both_api_surfaces() -> None:
         "$ref": "#/components/schemas/ExpiredReleasePreparation"
     }
     assert hashlib.sha256(contract).hexdigest() == (
-        "cdb847191bc5f3658d4592f420852b1b990c5b7ca550b3138b07e69699b99ca2"
+        "ddac946a73bbbcffb14b271c63302590e7557109a3711c90f79021fd0623a349"
     )
 
 
@@ -338,6 +431,72 @@ def test_runtime_configuration_reads_postgres_dsn_from_hardened_secret_file(
     assert configuration.postgres_dsn == "postgresql://knowledge-service@db/knowledge"
 
 
+def test_runtime_configuration_loads_strict_query_grant_policy() -> None:
+    configuration = ApiRuntimeConfiguration.from_environment(
+        {
+            "KSS_POSTGRES_DSN": "postgresql://knowledge-service@db/knowledge",
+            "KSS_OBJECT_STORE_URI": "s3://knowledge-service-test",
+            "KSS_SEARCH_ENDPOINT": "https://search.invalid.example",
+            "KSS_RELEASE_IDENTITY": "sha256:test-release",
+            "KSS_QUERY_GRANT_POLICY_JSON": json.dumps(
+                {
+                    "client_id": "proof-agent-runtime",
+                    "allowed_strategies": ["single_pass", "agentic"],
+                    "execution_budget": {
+                        "max_rounds": 2,
+                        "max_model_calls": 2,
+                        "max_candidates": 20,
+                        "max_model_tokens": 1000,
+                        "max_duration_ms": 10000,
+                    },
+                    "effective_access_scope_digest": f"sha256:{'c' * 64}",
+                }
+            ),
+        }
+    )
+
+    assert configuration.query_grant_policy is not None
+    assert configuration.query_grant_policy.client_id == "proof-agent-runtime"
+    assert configuration.query_grant_policy.execution_budget.max_candidates == 20
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "{not-json",
+        json.dumps(
+            {
+                "client_id": "proof-agent-runtime",
+                "allowed_strategies": ["single_pass"],
+                "execution_budget": {
+                    "max_rounds": 1,
+                    "max_model_calls": 1,
+                    "max_candidates": 20,
+                    "max_model_tokens": 1000,
+                    "max_duration_ms": 5000,
+                },
+                "effective_access_scope_digest": f"sha256:{'c' * 64}",
+                "forged_policy_field": "forged-policy-sentinel",
+            }
+        ),
+    ),
+)
+def test_runtime_configuration_rejects_invalid_query_grant_policy(payload: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        ApiRuntimeConfiguration.from_environment(
+            {
+                "KSS_POSTGRES_DSN": "postgresql://knowledge-service@db/knowledge",
+                "KSS_OBJECT_STORE_URI": "s3://knowledge-service-test",
+                "KSS_SEARCH_ENDPOINT": "https://search.invalid.example",
+                "KSS_RELEASE_IDENTITY": "sha256:test-release",
+                "KSS_QUERY_GRANT_POLICY_JSON": payload,
+            }
+        )
+
+    assert str(caught.value) == "KSS_QUERY_GRANT_POLICY_JSON is invalid"
+    assert "forged-policy-sentinel" not in str(caught.value)
+
+
 def test_runtime_configuration_rejects_ambiguous_or_weak_secret_files(
     tmp_path: Path,
 ) -> None:
@@ -415,6 +574,18 @@ def test_api_process_wires_release_pinned_hybrid_projection(
         object_store_uri="s3://knowledge-service-test/service-prefix",
         search_endpoint="https://search.invalid.example",
         release_identity="sha256:test-release",
+        query_grant_policy=KnowledgeQueryGrantPolicy(
+            client_id="proof-agent-runtime",
+            allowed_strategies=("single_pass", "agentic"),
+            execution_budget={
+                "max_rounds": 2,
+                "max_model_calls": 2,
+                "max_candidates": 20,
+                "max_model_tokens": 1000,
+                "max_duration_ms": 10000,
+            },
+            effective_access_scope_digest=f"sha256:{'c' * 64}",
+        ),
     )
     observed: dict[str, object] = {}
     fake_artifacts = object()
@@ -467,6 +638,7 @@ def test_api_process_wires_release_pinned_hybrid_projection(
         HttpAgenticRetrievalController,
     )
     assert isinstance(observed["ocr_extractor"], HttpDocumentOcrExtractor)
+    assert observed["query_grant_policy"] is configuration.query_grant_policy
 
 
 def test_non_api_roles_do_not_resolve_the_operator_secret_file() -> None:

@@ -42,6 +42,13 @@ KnowledgeWorkerTaskOutcome = _RemovedKnowledgeWorkerValue
 runner = CliRunner()
 
 
+def test_legacy_manifest_production_publisher_command_is_removed() -> None:
+    result = runner.invoke(app, ["production-publish-agent"])
+
+    assert result.exit_code == 2
+    assert "No such command 'production-publish-agent'" in result.output
+
+
 def test_embedded_knowledge_maintenance_commands_are_removed() -> None:
     result = runner.invoke(
         app,

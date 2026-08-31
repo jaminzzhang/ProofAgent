@@ -15,6 +15,7 @@ from proof_agent.capabilities.persistence.postgres.database import (
     head_revision,
     upgrade_database,
 )
+
 pytestmark = pytest.mark.postgres_integration
 pytest_plugins = ("postgres_fixtures",)
 
@@ -40,6 +41,7 @@ def test_upgrade_empty_database_to_head_and_repeat(postgres_dsn: str) -> None:
         "agent_drafts",
         "agent_versions",
         "agent_version_shared_asset_refs",
+        "formal_agent_publication_commands",
         "audit_events",
         "case_memory_records",
         "configuration_validations",

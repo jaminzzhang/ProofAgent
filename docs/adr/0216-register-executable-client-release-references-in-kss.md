@@ -40,3 +40,37 @@ verifier must return matching trace-safe proof identity before KSS atomically re
 `deregistered`. ProofAgent's verifier adapter, proof issuance, background reconciler,
 network commands, production configuration and emergency revocation remain
 unimplemented, so no production reconciliation flow is claimed.
+
+[KNOWN | HIGH] TDD-05C implements the ProofAgent-side application port and strict
+Reference-first staging contract. Control derives a stable idempotency key from the
+exact provisional version ID, submits the Draft-owned Space/Base/Release for the
+future `published_agent_version`, and requires an exact active receipt. Receipt drift
+or uncertainty fails closed without compensating deregistration, preserving the safe
+orphan rule above. This is port-level local evidence only: the authenticated KSS HTTP
+transport, production adapter, publisher consumption and reconciler remain
+unimplemented.
+
+[KNOWN | HIGH] TDD-05D exposes registration through KSS's public client API and adds
+the concrete ProofAgent guarded registrar. KSS derives client identity only from its
+Bearer authenticator, requires an HTTP idempotency key, accepts no caller-reported
+client identity, and maps conflict, inadmissible Release, Scope, validation, storage
+and integrity failures to stable non-echoing problems. The production-shaped runtime
+composes the existing PostgreSQL Reference repository, and an isolated
+ProofAgent-to-ledger vertical proves exact replay produces one durable active
+Reference and one audit. Deregistration, reconciliation, publisher consumption,
+production credential/egress composition and deployment remain unimplemented.
+
+[KNOWN | HIGH] TDD-05J adds the checked-in production-local contract for the dedicated
+Reference client: a separate versioned Secret Handle and Vault fixture, an idempotent
+KSS service-client identity bootstrap before KSS API startup, and production composition
+rejection when the Reference Handle aliases the operator or runtime Query Handle. The
+isolated PostgreSQL vertical records the dedicated authenticated client on the exact
+Reference and proves the same credential cannot issue a Query without an exact-Release
+Query Grant. The existing `knowledge_client_grants` authority remains Query-specific;
+this slice does not invent a Reference Grant, add a migration, run the production-local
+stack or prove production deployment readiness.
+
+[KNOWN | HIGH] TDD-05K and ADR-0218 add the separate application-only runtime Query
+Grant core. Deployment-owned policy and a Draft-supplied exact Release produce the
+Query-specific receipt; the Reference client remains outside that policy and remains
+unable to Query. No Reference lifecycle behavior or authorization is changed.

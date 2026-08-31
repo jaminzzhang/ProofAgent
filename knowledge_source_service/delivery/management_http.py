@@ -36,6 +36,11 @@ from knowledge_source_service.application.knowledge_releases import (
     KnowledgeReleaseApplication,
     PublishKnowledgeReleaseCommand,
 )
+from knowledge_source_service.application.query_grants import (
+    KnowledgeQueryGrantConflict,
+    KnowledgeQueryGrantProvisioningApplication,
+    KnowledgeQueryGrantProvisioningError,
+)
 from knowledge_source_service.application.json_dataset_intake import (
     JsonDatasetIntakeApplication,
     JsonDatasetIntakeCommand,
@@ -64,6 +69,10 @@ from knowledge_source_service.contracts.base_preparations import (
     ReleasePreparationResource,
     SaveKnowledgeBaseDraftRequest,
     StartReleasePreparationRequest,
+)
+from knowledge_source_service.contracts.access_control import (
+    KnowledgeQueryGrant,
+    ProvisionKnowledgeQueryGrantRequest,
 )
 from knowledge_source_service.domain.base_preparations import BasePreparationError
 from knowledge_source_service.contracts.connection_profiles import (
@@ -283,6 +292,7 @@ def create_management_application(
     connection_profiles: ConnectionProfileApplication | None = None,
     base_preparations: KnowledgeBasePreparationApplication | None = None,
     release_lifecycle: KnowledgeBaseReleaseLifecycleApplication | None = None,
+    query_grants: KnowledgeQueryGrantProvisioningApplication | None = None,
 ) -> FastAPI:
     """Build a storage-opaque management surface over durable service authority."""
 
@@ -898,6 +908,40 @@ def create_management_application(
             media_type="application/problem+json",
         )
 
+    @application.exception_handler(KnowledgeQueryGrantConflict)
+    def handle_query_grant_conflict(
+        _request: Request,
+        _error: KnowledgeQueryGrantConflict,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "type": "urn:knowledge-source-service:problem:knowledge-query-grant-conflict",
+                "title": "Knowledge Query Grant conflict",
+                "status": 409,
+                "code": "knowledge_query_grant_conflict",
+                "detail": "The exact Query Grant conflicts with durable authority.",
+            },
+            media_type="application/problem+json",
+        )
+
+    @application.exception_handler(KnowledgeQueryGrantProvisioningError)
+    def handle_query_grant_unavailable(
+        _request: Request,
+        _error: KnowledgeQueryGrantProvisioningError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "type": "urn:knowledge-source-service:problem:knowledge-query-grant-unavailable",
+                "title": "Knowledge Query Grant unavailable",
+                "status": 503,
+                "code": "knowledge_query_grant_unavailable",
+                "detail": "The exact Query Grant receipt could not be verified.",
+            },
+            media_type="application/problem+json",
+        )
+
     @application.exception_handler(KnowledgeSourceSynchronizationPersistenceConflict)
     def handle_synchronization_persistence_conflict(
         _request: Request,
@@ -1035,6 +1079,18 @@ def create_management_application(
     ) -> KnowledgeSpaceResource:
         catalog.create_space(body.knowledge_space_id)
         return KnowledgeSpaceResource(knowledge_space_id=body.knowledge_space_id)
+
+    if query_grants is not None:
+
+        @application.post(
+            "/v1/knowledge-query-grants",
+            response_model=KnowledgeQueryGrant,
+        )
+        def provision_knowledge_query_grant(
+            body: ProvisionKnowledgeQueryGrantRequest,
+            _operator: KnowledgeOperator = Depends(authenticate_operator),
+        ) -> KnowledgeQueryGrant:
+            return query_grants.provision(body)
 
     @application.get(
         "/v1/knowledge-spaces",

@@ -11,6 +11,9 @@ from proof_agent.capabilities.persistence.postgres.agent_repository import (
 from proof_agent.capabilities.persistence.postgres.audit_repository import (
     PostgresAuditRepository,
 )
+from proof_agent.capabilities.persistence.postgres.formal_publication_command_repository import (
+    PostgresFormalProductionAgentPublicationCommandRepository,
+)
 from proof_agent.capabilities.persistence.postgres.model_repository import (
     PostgresModelAssetRepository,
 )
@@ -44,6 +47,7 @@ class PostgresConfigurationUnitOfWork:
         self._model_credential_cipher = model_credential_cipher
         self.tools: PostgresToolAssetRepository
         self.audit: PostgresAuditRepository
+        self.formal_publication_commands: PostgresFormalProductionAgentPublicationCommandRepository
 
     def __enter__(self) -> "PostgresConfigurationUnitOfWork":
         if self._connection is not None or self._closed:
@@ -66,6 +70,9 @@ class PostgresConfigurationUnitOfWork:
         )
         self.tools = PostgresToolAssetRepository(connection)
         self.audit = PostgresAuditRepository(connection)
+        self.formal_publication_commands = (
+            PostgresFormalProductionAgentPublicationCommandRepository(connection)
+        )
         return self
 
     def __exit__(
