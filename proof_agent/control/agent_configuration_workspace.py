@@ -1456,25 +1456,69 @@ class AgentConfigurationWorkspace:
         *,
         agent_id: str,
         version_id: str,
+        expected_active_version_id: str | None,
         actor: AuditActorFacts,
     ) -> AgentConfigurationRollback:
-        """Atomically point one Agent at an existing immutable Published Version."""
+        """Point one Agent at an available immutable Published Version."""
 
         self._require_agent_scope(agent_id)
         _require_safe_resource_id(version_id, resource="Agent Version")
+        if expected_active_version_id is not None:
+            _require_safe_resource_id(
+                expected_active_version_id,
+                resource="Active Agent Version",
+            )
+        try:
+            with self._unit_of_work_factory() as read_uow:
+                restored = read_uow.agents.get_published(agent_id, version_id)
+                observed_active = read_uow.agents.get_active(agent_id)
+        except PersistenceNotFoundError as exc:
+            raise AgentConfigurationNotFound(
+                code="agent_version_not_found",
+                detail="The requested Published Agent Version was not found.",
+            ) from exc
+        if restored is None:
+            raise AgentConfigurationNotFound(
+                code="agent_version_not_found",
+                detail="The requested Published Agent Version was not found.",
+            )
+        observed_active_version_id = (
+            None if observed_active is None else observed_active.version_id
+        )
+        if observed_active_version_id != expected_active_version_id:
+            raise AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="The Active Agent Version changed; reload before retrying.",
+            )
+        self._require_rollback_knowledge_release_available(restored)
+
         activated_at = _timestamp(self._clock())
         try:
             with self._unit_of_work_factory() as uow:
-                restored = uow.agents.get_published(agent_id, version_id)
-                if restored is None:
+                current_target = uow.agents.get_published(agent_id, version_id)
+                if current_target is None:
                     raise AgentConfigurationNotFound(
                         code="agent_version_not_found",
                         detail="The requested Published Agent Version was not found.",
                     )
+                if current_target != restored:
+                    raise AgentConfigurationConflict(
+                        code="agent_version_conflict",
+                        detail="The Published Agent Version changed during rollback.",
+                    )
                 current = uow.agents.get_active(agent_id)
-                replaced_version_id = (
+                current_active_version_id = (
                     None if current is None else current.version_id
                 )
+                if current_active_version_id != expected_active_version_id:
+                    raise AgentConfigurationConflict(
+                        code="active_agent_version_conflict",
+                        detail=(
+                            "The Active Agent Version changed; "
+                            "reload before retrying."
+                        ),
+                    )
+                replaced_version_id = expected_active_version_id
                 activation = AgentActivationRecord(
                     activation=ActiveAgentVersion(
                         agent_id=agent_id,
@@ -1522,6 +1566,57 @@ class AgentConfigurationWorkspace:
             activation=saved.activation,
             restored=restored,
         )
+
+    def _require_rollback_knowledge_release_available(
+        self,
+        target: PublishedAgentVersion,
+    ) -> None:
+        bindings = target.resolved_knowledge_bindings
+        if bindings is None:
+            return
+        if len(bindings.bindings) != 1:
+            raise AgentConfigurationConflict(
+                code="agent_rollback_knowledge_release_unavailable",
+                detail="The rollback target does not have one exact KSS Release binding.",
+            )
+        try:
+            catalog = self._require_knowledge_release_catalog().workspace()
+        except AgentConfigurationConflict:
+            raise
+        except Exception as exc:
+            raise AgentConfigurationConflict(
+                code="agent_knowledge_catalog_unavailable",
+                detail="The Knowledge Source Service catalog is unavailable.",
+            ) from exc
+        if catalog.readiness.state != "ready":
+            raise AgentConfigurationConflict(
+                code="agent_knowledge_catalog_unavailable",
+                detail="The Knowledge Source Service catalog is unavailable.",
+            )
+
+        release_id = bindings.bindings[0].knowledge_base_release_id
+        reference = (
+            None
+            if target.formal_production_evidence is None
+            else target.formal_production_evidence.release_reference
+        )
+        matches = tuple(
+            release
+            for release in catalog.releases
+            if release.knowledge_base_release_id == release_id
+            and (
+                reference is None
+                or (
+                    release.knowledge_space_id == reference.knowledge_space_id
+                    and release.knowledge_base_id == reference.knowledge_base_id
+                )
+            )
+        )
+        if len(matches) != 1 or matches[0].state not in {"queryable", "deprecated"}:
+            raise AgentConfigurationConflict(
+                code="agent_rollback_knowledge_release_unavailable",
+                detail="The rollback target's exact KSS Release is unavailable.",
+            )
 
     def _require_agent_scope(self, agent_id: str) -> None:
         _require_safe_resource_id(agent_id, resource="Agent")

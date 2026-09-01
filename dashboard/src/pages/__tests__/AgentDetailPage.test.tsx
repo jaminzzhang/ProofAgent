@@ -152,8 +152,8 @@ vi.mock('../../hooks/useConfigVersions', () => ({
   }),
 }))
 
-function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
-  return render(
+function agentDetailView(initialEntry: string) {
+  return (
     <ThemeProvider>
       <LocaleProvider>
         <MemoryRouter initialEntries={[initialEntry]}>
@@ -162,8 +162,12 @@ function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
           </Routes>
         </MemoryRouter>
       </LocaleProvider>
-    </ThemeProvider>,
+    </ThemeProvider>
   )
+}
+
+function renderPage(initialEntry = '/agents/agent-1/drafts/draft-1') {
+  return render(agentDetailView(initialEntry))
 }
 
 function latestSavedAgentYaml(): string {
@@ -2337,7 +2341,7 @@ workflow:
       rollback_from_version_id: 'version-2',
     })
 
-    renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
+    const page = renderPage('/agents/agent-1/drafts/draft-1?tab=versions')
 
     fireEvent.click(screen.getByRole('button', { name: 'Rollback' }))
     const rollbackDialog = screen.getByRole('dialog', { name: 'Confirm rollback' })
@@ -2346,10 +2350,19 @@ workflow:
     expect(within(rollbackDialog).getByText('version-1')).toBeInTheDocument()
     expect(rollbackConfigVersion).not.toHaveBeenCalled()
 
+    mockActiveVersionId = 'version-concurrent'
+    page.rerender(agentDetailView('/agents/agent-1/drafts/draft-1?tab=versions'))
+    expect(within(rollbackDialog).getByText('version-2')).toBeInTheDocument()
+    expect(within(rollbackDialog).queryByText('version-concurrent')).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('button', { name: 'Confirm rollback' }))
 
     await waitFor(() => {
-      expect(rollbackConfigVersion).toHaveBeenCalledWith('agent-1', 'version-1')
+      expect(rollbackConfigVersion).toHaveBeenCalledWith(
+        'agent-1',
+        'version-1',
+        'version-2',
+      )
       expect(refreshVersions).toHaveBeenCalled()
     })
   })

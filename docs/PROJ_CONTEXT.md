@@ -21,6 +21,20 @@
   physically removed. KSS's own Knowledge Worker remains. Former Hybrid-bound
   Published Agent Versions are historical records and no longer replayable or
   usable as rollback targets.
+- `[KNOWN | HIGH]` As of 2026-09-01, TDD-06D/06E harden the existing development
+  Agent Version rollback path. A KSS-bound immutable target must still reference
+  one live `queryable` or `deprecated` Release, and the command must carry the
+  Active pointer confirmed by its caller. Pointer mismatch before or after KSS
+  preflight fails closed without activation or audit. Production continues to
+  advertise `can_rollback=false`; no Production rollback route or real operation
+  is authorized by these local slices.
+- `[COMPUTED | HIGH]` TDD-06F joins that same Workspace to the production
+  `PostgresConfigurationUnitOfWork` in a disposable PostgreSQL 17.5 schema. The
+  success path committed pointer and rollback audit together; two concurrent
+  commands sharing one old expectation produced one winner and one stable conflict;
+  an injected post-append audit failure rolled both changes back. The focused 3
+  cases, affected 15 cases, and complete PostgreSQL-enabled backend suite all passed.
+  This is integration evidence, not a Production command or rollback rehearsal.
 - `[KNOWN | HIGH]` As of 2026-08-20, Agent Configuration Workspace local slices
   cover Draft inventory/read/update, validation, development publication, Agent
   Version pointer rollback, Workflow Stage Configuration save/preview, raw
@@ -745,10 +759,22 @@ Two full builds and two narrowed ordinary builds stalled at external metadata re
 so a full production Dockerfile build remains pending. This does not cover Draft@14,
 DeepSeek, durable ArtifactStore retention, Phase F, publication approval or Production GO.
 
+[KNOWN | HIGH] TDD-06D applies ADR-0234 to the existing Agent Configuration Workspace
+rollback interface. KSS-bound targets now require a live ready Catalog and exactly one
+`queryable` or `deprecated` Release match before any pointer or audit write. Formal
+versions use their retained Space/Base/Release Reference; non-formal versions require an
+unambiguous Release ID. `retired`, `revoked`, missing, ambiguous, unready and catalog
+failure paths return stable conflicts without activation or audit. The immutable target
+is reread before the local CAS transaction proceeds. This is local application-core
+evidence: 16 focused rollback scenarios, 193 affected tests and the complete 2505-test
+default backend passed; Ruff, Mypy over 372 sources, domain-context, lock and diff checks
+also passed. Production rollback remains hidden, and no KSS Query, model, Phase F,
+publication, deployment or Production GO action occurred.
+
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
-| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; TDD-06B fixed-synthetic Control Plane Admission verification; TDD-06C fixed-synthetic governed Run verification through an immutable overlay image and checked-in host entry, with full Dockerfile build pending; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, production Vault/egress/TLS or Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation integration or production cutover) | ADR-0211 through ADR-0233 |
+| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; TDD-06B fixed-synthetic Control Plane Admission verification; TDD-06C fixed-synthetic governed Run verification through an immutable overlay image and checked-in host entry, with full Dockerfile build pending; TDD-06D application-core exact Release rollback preflight; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, production rollback endpoint/drill, production Vault/egress/TLS or Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation notification or production cutover) | ADR-0211 through ADR-0234 |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 | `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |

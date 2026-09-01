@@ -133,6 +133,7 @@ export function AgentDetailPage() {
   const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
   const [selectedRunDetailId, setSelectedRunDetailId] = useState<string | null>(null)
   const [rollbackTargetVersionId, setRollbackTargetVersionId] = useState<string | null>(null)
+  const [rollbackExpectedActiveVersionId, setRollbackExpectedActiveVersionId] = useState<string | null>(null)
 
   useEffect(() => {
     if (draft) {
@@ -579,10 +580,11 @@ export function AgentDetailPage() {
     if (!agentId) return
     if (!versionId) return
     await runAction(`rollback-${versionId}`, async () => {
-      await rollbackConfigVersion(agentId, versionId)
+      await rollbackConfigVersion(agentId, versionId, rollbackExpectedActiveVersionId)
       setStatus(t('agentDetail.activeVersionSet').replace('{version}', versionId))
       refreshVersions()
       setRollbackTargetVersionId(null)
+      setRollbackExpectedActiveVersionId(null)
     })
   }
 
@@ -1034,7 +1036,10 @@ export function AgentDetailPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setRollbackTargetVersionId(version.version_id)}
+                        onClick={() => {
+                          setRollbackExpectedActiveVersionId(activeVersionId)
+                          setRollbackTargetVersionId(version.version_id)
+                        }}
                         disabled={busy === `rollback-${version.version_id}`}
                         className="shrink-0"
                       >
@@ -1086,7 +1091,10 @@ export function AgentDetailPage() {
       <Dialog
         open={rollbackTargetVersionId !== null}
         onOpenChange={(open) => {
-          if (!open && !busy?.startsWith('rollback-')) setRollbackTargetVersionId(null)
+          if (!open && !busy?.startsWith('rollback-')) {
+            setRollbackTargetVersionId(null)
+            setRollbackExpectedActiveVersionId(null)
+          }
         }}
       >
         <DialogContent>
@@ -1102,7 +1110,7 @@ export function AgentDetailPage() {
                 {t('agentDetail.rollbackCurrentVersion')}
               </dt>
               <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">
-                {activeVersionId ?? t('agentDetail.noActiveVersion')}
+                {rollbackExpectedActiveVersionId ?? t('agentDetail.noActiveVersion')}
               </dd>
             </div>
             <div className="border border-[var(--border)] bg-[var(--bg-base)] p-3">
@@ -1118,7 +1126,10 @@ export function AgentDetailPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => setRollbackTargetVersionId(null)}
+              onClick={() => {
+                setRollbackTargetVersionId(null)
+                setRollbackExpectedActiveVersionId(null)
+              }}
               disabled={Boolean(busy?.startsWith('rollback-'))}
             >
               {t('agentDetail.rollbackCancel')}

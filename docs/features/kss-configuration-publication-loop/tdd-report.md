@@ -4002,3 +4002,165 @@ Candidate 标识/内容、citation 正文、分数、阈值、credential、provi
 - [BOUNDARY | HIGH] checked-in host 入口已在独立 immutable overlay image 中通过，但完整 production
   Dockerfile build 仍需在外部 metadata 恢复后补证。当前证据不覆盖真实 KSS Query、Draft@14、
   DeepSeek、durable ArtifactStore、Phase F、formal publication、release Gate 或 Production GO。
+
+## 62. TDD-06D：Release 状态与回滚失败关闭
+
+### 62.1 冻结边界
+
+[FRAME | HIGH] 本片只加固既有 `AgentConfigurationWorkspace.rollback_version()`。目标版本
+无 KSS binding 时保持旧 pointer 行为；存在 KSS binding 时，必须在任何 activation/audit
+写入前通过 live ready Catalog 重验。
+
+[BOUNDARY | HIGH] `queryable/deprecated` 可回滚；`retired/revoked`、missing、ambiguous、Catalog
+不可用或读取异常失败关闭。本片不增加 production HTTP/capability、KSS Query、model
+调用、ArtifactStore、Grant/Reference 变更、Phase F、publication、schema 或部署。
+
+### 62.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | 目标 KSS Release 为 `retired/revoked` | 2 个用例均因旧实现未抛错而失败 |
+| GREEN | 在写前读取 live Catalog，拒绝非可执行 Release | 原 RED 2 个用例通过 |
+| REFACTOR | 允许 `queryable/deprecated`；补 exact formal Reference、missing/ambiguous/unready/exception 与目标重读 | 16 个 rollback 场景和 67 个 Workspace 用例通过 |
+
+### 62.3 当前验证
+
+| 检查 | 结果 | 限定 |
+| --- | --- | --- |
+| 聚焦回滚 | 16 passed | 包含允许态、拒绝态、精确身份、Catalog 故障、pointer CAS 和原子失败 |
+| Workspace 回归 | 67 passed | 无 Draft/publication/configuration 回归 |
+| 受影响回归 | 193 passed、14 dependency-conditioned skips、1 existing warning | Workspace、Delivery rollback route、production composition、持久化 ports 与 PostgreSQL 条件测试 |
+| 完整默认后端 | 2505 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 首次沙箱运行因 8 个既有 loopback socket 用例被拒绝而得到 2497 passed/8 failed；允许本机回环后同命令全通过 |
+| 静态检查 | Ruff 通过；Mypy 372 sources 通过；domain-context、`uv lock --check`、diff 通过 | 没有修改 Dashboard/Operator Chat，因此本窄切片不重跑前端构建 |
+
+### 62.4 状态
+
+- [KNOWN | HIGH] ADR-0234 与 TDD-06D application-core 建议结论为 `LOCAL_VERIFIED`；Feature
+  继续为 `PARTIAL_VERIFICATION`。production rollback endpoint、真实 PostgreSQL/KSS 回滚演练和
+  cross-service rollback lease 仍未实现或验证。
+- [BOUNDARY | HIGH] Catalog 预检与本地 pointer 提交不是分布式事务。KSS active Reference
+  阻止普通退役；若 emergency revocation 在预检后竞态，后续 exact KSS Query 仍必须失败关闭。
+
+## 63. TDD-06E：回滚确认新鲜度
+
+### 63.1 冻结边界
+
+[FRAME | HIGH] 本片只让既有 rollback command 绑定调用方确认时看到的 Active pointer。
+`expected_active_version_id` 为必填 nullable 字段：字符串表示 exact expected pointer，JSON
+`null` 明确表示预期当前无 Active Version；缺失字段无权执行。
+
+[BOUNDARY | HIGH] Workspace 在 KSS Catalog 预检前和写 Unit of Work 内各比较一次 pointer，
+并将同一 caller expectation 用于 activation CAS 与 `rollback_from_version_id`。本片不增加
+幂等收据、Production rollback route/capability、跨服务 lease、真实依赖调用、发布或部署。
+
+### 63.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | Workspace public contract 不接受 caller expectation | stale-confirmation 用例因 unexpected keyword 失败 |
+| GREEN-1 | 首次 target/pointer 读取后，在 KSS 调用前拒绝 stale expectation | stale-confirmation 用例通过，Catalog calls 为 0 |
+| RED-2 | KSS 预检后 pointer 并发漂移仍会被旧逻辑采用 | write-time drift 用例因未抛 conflict 失败 |
+| GREEN-2 | 写 UoW 重读 pointer，漂移时无 activation/audit | Workspace rollback 18 passed |
+| RED-3 | development HTTP 接受空 body、拒绝预期字段；Dashboard 仍发送空 body，且重渲染会静默采用新 pointer | API 2 failed；Dashboard request 2 failed；dialog rerender 1 failed |
+| REFACTOR | HTTP 必填 nullable expectation；Dashboard 打开确认框时冻结 target/Active expectation；显式 `null` 有合同测试 | API rollback 11 passed；Dashboard focused 84 passed |
+
+### 63.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| Workspace rollback | 18 passed | stale initial pointer、KSS 后漂移、无 Active、Release-state 与既有原子失败 |
+| development API rollback | 11 passed | 必填、显式 `null`、unknown field、权限、稳定错误与纵向切换 |
+| Workspace + API 受影响回归 | 162 passed、4 dependency-conditioned skips | 无其他 Agent Configuration 行为回归 |
+| Dashboard 聚焦 | 84 passed | client body 与显式确认交互 |
+| 完整默认后端 | 2509 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 沙箱首轮仅 8 项 loopback bind 被禁止；允许本机回环后同命令全通过 |
+| 前端整体 | Dashboard 225 passed；Operator Chat 35 passed；TypeScript 与两套 production build 通过 | Chat build 保留既有 600.22 kB chunk warning |
+| 静态与一致性 | Ruff、Mypy 372 sources、domain-context、`uv lock --check`、diff 通过 | 没有新增依赖或 migration |
+
+### 63.4 状态
+
+- [KNOWN | HIGH] ADR-0235 与 TDD-06E 本地实现建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] response-loss retry 不视为幂等重放：旧 expectation 会冲突，调用方必须重载
+  Active Version 后重新确认。
+- [BOUNDARY | HIGH] Production 继续返回 `can_rollback=false`；没有新增 Production endpoint，
+  也没有执行真实 rollback、KSS Query、model/ArtifactStore 调用、Grant/Reference 变更、Phase F、
+  publication、activation、部署或 Production GO。
+
+## 64. TDD-06F：PostgreSQL 回滚事务纵向验证
+
+### 64.1 冻结边界
+
+[FRAME | HIGH] 本片只把既有 `AgentConfigurationWorkspace.rollback_version()` 接到生产使用的
+`PostgresConfigurationUnitOfWork`，验证 caller expectation、PostgreSQL pointer CAS 与 audit
+原子性是否在同一纵向路径成立。KSS Catalog 为固定内存边界；PostgreSQL 使用仓库自带的 17.5
+disposable test service 和每测试独立 schema。
+
+[BOUNDARY | HIGH] 本片只新增集成测试和证据文档，不修改生产代码、SQL、migration、Production
+HTTP/capability 或权限。测试数据完全虚构；不连接生产数据库，不调用真实 KSS、model 或
+ArtifactStore，不创建 Grant/Reference，不进入 Phase F、publication、deployment 或线上 rollback。
+
+### 64.2 验证场景
+
+| Given | When | Then |
+| --- | --- | --- |
+| 两个 immutable KSS-bound Versions，较新版本为 Active | Workspace 使用 caller-confirmed pointer 回滚到旧版本 | Active pointer 与一条 rollback audit 同事务提交；两个 Versions 均保留 |
+| 两个命令在 KSS 预检前均看到同一旧 Active pointer | 两个真实 PostgreSQL 写事务竞争同一 target/expectation | 仅一个成功；另一个返回 `active_agent_version_conflict`；只有一条 audit |
+| pointer 更新和 audit append 已进入同一 UoW | audit wrapper 在 append 后注入应用异常 | PostgreSQL 回滚 pointer 与 audit；immutable Versions 不变 |
+
+### 64.3 Verification-first 记录
+
+[KNOWN | HIGH] 本片关闭的是跨层证据缺口，不是已观察到的生产行为缺陷。第一条可收集、可执行的
+真实 PostgreSQL 纵向测试即通过，因此没有可诚实报告的行为 RED，也没有为了制造 RED 修改生产
+接口。测试文件最初的 import collection 修正不是业务失败证据，不计入 RED/GREEN。
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| BASELINE | Repository 已分别覆盖 pointer CAS，Configuration UoW 已分别覆盖跨 repository transaction；缺少 Workspace 纵向证据 | 当前源码与既有 PostgreSQL tests |
+| TRACER | Workspace 成功回滚通过真实 PostgreSQL pointer/audit transaction | 1 passed，无生产代码变化 |
+| EXTEND | 补并发单赢家与 append 后异常回滚 | 聚焦 3 passed |
+| REGRESSION | 合并验证 Workspace、Agent Repository 与 Configuration UoW | 15 passed |
+
+### 64.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| PostgreSQL 聚焦纵向 | 3 passed | 成功提交、并发 CAS 单赢家、audit 后异常原子回滚 |
+| PostgreSQL 受影响回归 | 15 passed | 新 Workspace 测试、Agent Repository、Configuration UoW |
+| 完整 PostgreSQL-enabled 后端 | 2747 passed、37 dependency-conditioned skips、2 deselected、1 existing warning | `PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1`；真实 PostgreSQL 用例不得 skip |
+| 静态与一致性 | Ruff、Mypy 372 sources、domain-context、`uv lock --check`、diff 通过 | 无生产代码、依赖、SQL 或 migration 变化 |
+| disposable dependency cleanup | postgres service/container/anonymous data volume 已删除 | 启动前已存在的 orphan container 未处理 |
+
+### 64.5 命令与修改文件
+
+[KNOWN | HIGH] 关键命令如下；`<disposable-local-postgres>` 代表本机测试 DSN，未写入文档或 Git：
+
+```text
+docker compose -f docker-compose.hybrid-test.yml up -d --wait postgres
+PROOF_AGENT_TEST_POSTGRES_DSN=<disposable-local-postgres> PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1 .venv/bin/pytest -q tests/test_postgres_agent_configuration_workspace.py
+PROOF_AGENT_TEST_POSTGRES_DSN=<disposable-local-postgres> PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1 .venv/bin/pytest -q tests/test_postgres_agent_configuration_workspace.py tests/test_postgres_agent_repository.py tests/test_postgres_configuration_uow.py
+PROOF_AGENT_TEST_POSTGRES_DSN=<disposable-local-postgres> PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1 .venv/bin/pytest -q tests/
+.venv/bin/ruff check proof_agent tests
+.venv/bin/mypy proof_agent
+python3 scripts/check-domain-contexts.py
+uv lock --check
+git diff --check
+docker compose -f docker-compose.hybrid-test.yml rm -s -f -v postgres
+```
+
+[KNOWN | HIGH] TDD-06F 仅新增或更新以下路径；生产代码保持不变：
+
+- `tests/test_postgres_agent_configuration_workspace.py`
+- `docs/PROJ_CONTEXT.md`
+- `docs/development-progress.md`
+- `docs/features/kss-configuration-publication-loop/feature_context.md`
+- `docs/features/kss-configuration-publication-loop/scope-plan.md`
+- `docs/features/kss-configuration-publication-loop/tdd-report.md`
+
+### 64.6 状态
+
+- [KNOWN | HIGH] TDD-06F PostgreSQL 纵向证据建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 证据证明同一 PostgreSQL authority 内的 pointer CAS 与 audit 原子性，不证明
+  KSS preflight 与本地提交是分布式事务，也不建立 cross-service rollback lease。
+- [BOUNDARY | HIGH] Production 继续返回 `can_rollback=false`；没有 Production endpoint、真实 KSS
+  依赖演练、线上 rollback、Phase F、publication、deployment、release Gate 或 Production GO。

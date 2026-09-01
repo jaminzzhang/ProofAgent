@@ -15,6 +15,80 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-09-01 PostgreSQL rollback transaction vertical verification (TDD-06F)
+
+- [KNOWN | HIGH] TDD-06F adds a PostgreSQL integration test boundary around the
+  existing `AgentConfigurationWorkspace.rollback_version()` and the production
+  `PostgresConfigurationUnitOfWork`. It uses only fictional Agent/Version facts, a
+  fixed in-memory ready KSS Catalog, and one isolated disposable PostgreSQL schema.
+- [KNOWN | HIGH] This was a verification-first slice. The first valid vertical
+  success test passed without a production-code change; the evidence gap was the
+  missing combined test, not an observed rollback defect. The slice did not create
+  an artificial RED or add another rollback/repository abstraction.
+- [COMPUTED | HIGH] Three focused cases passed against PostgreSQL 17.5: pointer and
+  audit committed together while both Published Versions remained immutable; two
+  commands sharing one caller expectation produced one winner, one
+  `active_agent_version_conflict`, and one audit; an injected failure after audit
+  append rolled pointer and audit back together. The affected PostgreSQL Workspace,
+  Agent Repository, and Configuration UoW set passed 15 tests.
+- [COMPUTED | HIGH] The complete PostgreSQL-enabled backend suite passed 2747 tests
+  with 37 dependency-conditioned skips, 2 deselections, and 1 existing Authlib
+  warning. Ruff, mypy over 372 product sources, domain-context, lock-file, and diff
+  checks passed. The test container and anonymous data volume were removed; an
+  unrelated pre-existing orphan container was left untouched.
+- [BOUNDARY | HIGH] Production still advertises `can_rollback=false`. This slice
+  did not call a real KSS, model, or ArtifactStore; change a Grant/Reference; enter
+  Phase F; publish a Version; expose a Production command; deploy; execute an online
+  rollback; establish a cross-service transaction/lease; or grant Production GO.
+
+## 2026-09-01 Caller-bound rollback confirmation freshness (TDD-06E)
+
+- [KNOWN | HIGH] ADR-0235 makes `expected_active_version_id` a required part of
+  the existing rollback command. `None` is an explicit no-active expectation;
+  omission is invalid. The Workspace compares the caller-confirmed value before
+  the KSS Catalog preflight and again in the write Unit of Work, then uses the
+  same value for `rollback_from_version_id` and pointer compare-and-swap.
+- [KNOWN | HIGH] The development rollback HTTP request now requires the expected
+  pointer, and Agent Detail sends the Active Version displayed in its confirmation
+  dialog. Production configuration remains unchanged with `can_rollback=false`.
+- [COMPUTED | HIGH] RED evidence covered the missing Workspace parameter, pointer
+  drift after KSS preflight, omitted/unknown development request fields, and the
+  old empty Dashboard body plus dialog-rerender pointer adoption. GREEN/REFACTOR
+  passed 18 Workspace rollback cases, 11 API rollback cases, and 84 focused
+  Dashboard cases; the confirmation now freezes both target and expected pointer.
+- [COMPUTED | HIGH] Full local verification passed 2509 backend tests with 272
+  dependency-conditioned skips, 2 deselections, and 1 existing Authlib warning;
+  the sandbox-only first run failed 8 existing loopback-bind cases, and the same
+  command passed when local loopback was allowed. Dashboard passed 225 tests,
+  Operator Chat passed 35, TypeScript and both production builds passed. Ruff,
+  mypy over 372 product sources, domain-context, lock-file, and diff checks passed.
+- [BOUNDARY | HIGH] This is local development evidence only. The slice did not
+  call KSS, a model, or ArtifactStore; create or change a Grant/Reference; enter
+  Phase F; publish or activate a new Version; expose Production rollback; deploy;
+  execute a real rollback; or grant Production GO.
+
+## 2026-09-01 Release-state rollback fail-closed core (TDD-06D)
+
+- [KNOWN | HIGH] ADR-0234 keeps the existing
+  `AgentConfigurationWorkspace.rollback_version()` application interface and adds one
+  live KSS Catalog preflight before any active-pointer or audit write. `queryable` and
+  `deprecated` exact Releases remain eligible; `retired`, `revoked`, missing,
+  ambiguous or unavailable catalog facts fail closed with stable conflict codes.
+- [KNOWN | HIGH] Formal Published Agent Versions resolve the retained
+  Space/Base/Release Reference. A non-formal KSS-bound version is accepted only when
+  its immutable Release ID has one catalog match. The target is read before the remote
+  check and reread before the local write; drift creates no activation or audit.
+- [COMPUTED | HIGH] RED reproduced the missing guard for both `retired` and `revoked`
+  targets: the old implementation did not raise. GREEN/REFACTOR pass 16 rollback
+  scenarios and all 67 Agent Configuration Workspace tests. The affected set passed
+  193 tests with 14 conditioned skips; the complete backend passed 2505 with 272
+  conditioned skips and 2 deselected after enabling required loopback sockets. Ruff,
+  Mypy over 372 sources, domain-context, lock and diff checks passed.
+- [BOUNDARY | HIGH] This is an application-core guard, not a production rollback
+  endpoint or distributed transaction. It calls no KSS Query, external model or
+  ArtifactStore; creates no Grant, Reference, Phase F, Version or publication state;
+  and does not establish a release Gate or Production GO.
+
 ## 2026-09-01 fixed-synthetic governed Run verification (TDD-06C)
 
 - [KNOWN | HIGH] ADR-0233 adds a zero-argument production-local verifier that advances

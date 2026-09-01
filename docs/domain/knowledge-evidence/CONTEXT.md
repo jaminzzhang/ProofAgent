@@ -256,6 +256,14 @@ _Avoid_: Agent Release, mutable active pointer, Knowledge Source Version, deploy
 A still-queryable Release that is blocked from new Agent Draft bindings and new formal Agent publication. Existing Published Agent Versions remain pinned and may continue running or be selected for rollback until ordinary retirement becomes eligible.
 _Avoid_: Retired Release, automatic Agent upgrade, query failure, Recommended Release pointer
 
+**Agent Version Rollback Release Revalidation**:
+The ProofAgent application preflight that reads one immutable rollback target, resolves its exact KSS Release from a live ready catalog, permits only `queryable` or `deprecated`, and then rereads the same target before atomically changing the Active Agent Version pointer and audit. Formal versions resolve the retained Space/Base/Release Reference; non-formal KSS versions require one unambiguous Release-ID match. Failure creates no activation or fallback, while query-time KSS authorization remains the authority for a later emergency-revocation race.
+_Avoid_: Publication-time state trust, latest Release selection, distributed transaction claim, local knowledge fallback, production rollback HTTP
+
+**Agent Version Rollback Confirmation Freshness**:
+The ProofAgent command rule that binds one rollback attempt to the exact Active Agent Version pointer shown to its caller. The caller supplies that expected pointer, including explicit `null` for no Active Version; ProofAgent compares it before KSS Release preflight and again in the write Unit of Work, then uses it for both pointer compare-and-swap and `rollback_from_version_id`. Pointer drift fails with a stable conflict and no activation or audit; a lost-response retry must reload rather than being treated as idempotent.
+_Avoid_: Target-only confirmation, adopting a newer pointer, omitted expectation, automatic retry, production rollback authorization
+
 **Retired Knowledge Base Release**:
 A non-queryable Release reached through an explicit ordinary-lifecycle command only after authoritative reference checks report no executable client reference and retention requirements are satisfied. Retirement does not delete artifacts; it only makes separately authorized deletion eligible.
 _Avoid_: Deprecated Release, emergency containment, automatic cleanup, physical deletion

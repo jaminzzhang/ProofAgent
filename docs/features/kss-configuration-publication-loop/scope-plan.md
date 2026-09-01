@@ -940,3 +940,67 @@ Service 不创建 KSS Query；本片不调用 DeepSeek，不读取 Draft@14 Cand
 也不创建 Grant、Reference、Formal Command、Version 或 Active pointer。通过结果只证明一条
 fixed-synthetic production-local governed Run，不是 exact Candidate 外部验证、formal online-smoke
 qualification、release Gate 或 Production GO。具体决策见 ADR-0233。
+
+## 18. TDD-06D：Release 状态与回滚失败关闭
+
+[FRAME | HIGH] 2026-09-01 用户确认提交 TDD-06B/06C 后启动本窄切片。本片只
+加固既有 `AgentConfigurationWorkspace.rollback_version()`：当目标 immutable Published Agent
+Version 绑定 KSS 时，必须在 active pointer 和 audit 写入前重验 live Catalog。
+
+[FRAME | HIGH] Catalog 必须 ready，exact Release 必须唯一。正式版本使用已保留
+Reference 的 Space/Base/Release 三元组；非正式 KSS 版本只在 Release ID 全 catalog
+唯一时可继续。`queryable` 与 `deprecated` 允许回滚；`retired`、`revoked`、缺失、
+歧义、Catalog 不可用或读取异常均返回稳定 conflict，且不产生 activation 或 audit。
+
+[FRAME | HIGH] RED 先证明 `retired/revoked` 目标会被旧实现错误激活；GREEN 只增加
+Release 预检与写前目标一致性重读；REFACTOR 再补 `queryable/deprecated`、精确正式
+身份、missing/ambiguous/unready/exception 和无 KSS binding 的回归。聚焦 Workspace public method，
+不新建平行 rollback service。
+
+[BOUNDARY | HIGH] 本片不开放 production rollback HTTP/capability，不调用 KSS Query、
+DeepSeek 或 ArtifactStore，不创建/注销 Grant 或 Reference，不进入 Phase F，不新建或发布
+Agent Version，不执行 formal publication activation，不新增 reconciler、schema、部署或
+Production GO。具体决策见
+ADR-0234。
+
+## 19. TDD-06E：回滚确认新鲜度
+
+[FRAME | HIGH] TDD-06D 已在 Workspace 内完成 exact Release 状态预检，但现有回滚命令只
+提交 target version，未绑定 Operator 确认时看到的 active pointer。本片只关闭这一并发缺口：
+`AgentConfigurationWorkspace.rollback_version()` 增加必填
+`expected_active_version_id`，`None` 表示显式预期当前无 active version。
+
+[FRAME | HIGH] Workspace 首次读取 immutable target 时同时读 active pointer。调用方预期已
+过期时，必须在 KSS Catalog 调用前返回 `active_agent_version_conflict`。Release 预检通过后，
+写 UoW 再次读取 target 和 pointer；任一漂移均不产生 activation/audit。最终 CAS expectation 与
+`rollback_from_version_id` 都必须使用调用方确认值。
+
+[FRAME | HIGH] 现有 development rollback HTTP body 同步要求该字段，Dashboard 在打开确认框时
+冻结并提交当时显示的 active version；后续页面重渲染不能替换该 expectation。缺失字段返回
+422，显式 `null` 代表无 active pointer。本片不
+修改 Production configuration router，`can_rollback` 继续为 `false`。
+
+[BOUNDARY | HIGH] 本片不开放 Production rollback endpoint，不修改权限映射，不调用真实
+KSS Query、model 或 ArtifactStore，不创建 Grant/Reference，不进入 Phase F，不发布 Version、
+部署、执行真实回滚或授予 Production GO。具体决策见 ADR-0235。
+
+## 20. TDD-06F：PostgreSQL 回滚事务纵向验证
+
+[FRAME | HIGH] 本片复用 TDD-06D/06E 的 `AgentConfigurationWorkspace.rollback_version()`，
+并将其接到生产使用的 `PostgresConfigurationUnitOfWork`。验证对象是既有三层合同的组合：
+Workspace caller expectation、PostgreSQL Active pointer CAS，以及 pointer/audit 同事务提交。
+不增加第二套 rollback service、repository 或 SQL。
+
+[FRAME | HIGH] 测试只使用 disposable PostgreSQL schema、完全虚构的 Agent/Version facts 和
+固定内存 KSS Catalog。主路径必须保留两个 immutable Published Versions，仅把 Active pointer
+切回目标版本，并写入一条 `agent.version.rolled_back` audit。两个共享同一旧 expectation 的
+并发命令必须只有一个成功；失败命令不得产生第二条 audit。
+
+[FRAME | HIGH] 在真实 PostgreSQL 事务中，若 audit append 后的应用边界失败，pointer 与 audit
+必须一起回滚，两个 Published Versions 保持不变。该故障通过 Unit of Work 的测试专用 audit
+wrapper 注入，不修改生产 adapter，也不把测试替身当成 PostgreSQL 权威。
+
+[BOUNDARY | HIGH] 本片不开放 Production HTTP/capability，不调用真实 KSS、model、ArtifactStore
+或生产数据库，不创建/注销 Grant 或 Reference，不进入 Phase F，不发布新版本，不部署，不执行
+线上 rollback，也不建立跨 KSS/ProofAgent 的分布式事务或 lease。若 disposable PostgreSQL
+不可用，只能记录环境缺口，不能把 skipped 用例称为通过。

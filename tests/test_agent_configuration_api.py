@@ -411,7 +411,7 @@ def test_agent_config_rollback_requires_agent_publish_permission() -> None:
 
     response = TestClient(application, raise_server_exceptions=False).post(
         "/api/config/agents/agent_alpha/versions/version_1/rollback",
-        json={},
+        json={"expected_active_version_id": "version_2"},
     )
 
     assert response.status_code == 403
@@ -1669,7 +1669,7 @@ def test_rollback_route_delegates_to_workspace_without_concrete_store() -> None:
 
     response = TestClient(application, raise_server_exceptions=False).post(
         "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
-        json={},
+        json={"expected_active_version_id": "version_route_2"},
     )
 
     assert response.status_code == 200
@@ -1677,6 +1677,10 @@ def test_rollback_route_delegates_to_workspace_without_concrete_store() -> None:
     assert response.json()["rollback_from_version_id"] == "version_route_2"
     assert workspace.rollback_calls[0]["agent_id"] == "agent_alpha"
     assert workspace.rollback_calls[0]["version_id"] == "version_route_1"
+    assert (
+        workspace.rollback_calls[0]["expected_active_version_id"]
+        == "version_route_2"
+    )
     assert isinstance(workspace.rollback_calls[0]["actor"], AuditActorFacts)
     route_source = getsource(rollback_config_version)
     assert "LocalAgentConfigurationStore" not in route_source
@@ -1694,11 +1698,46 @@ def test_rollback_route_rejects_unknown_request_fields_before_workspace() -> Non
 
     response = TestClient(application, raise_server_exceptions=False).post(
         "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
-        json={"unexpected": True},
+        json={
+            "expected_active_version_id": "version_route_2",
+            "unexpected": True,
+        },
     )
 
     assert response.status_code == 422
     assert workspace.rollback_calls == []
+
+
+def test_rollback_route_requires_the_callers_expected_active_pointer() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
+        json={},
+    )
+
+    assert response.status_code == 422
+    assert workspace.rollback_calls == []
+
+
+def test_rollback_route_accepts_an_explicit_no_active_pointer_expectation() -> None:
+    workspace = _RecordingValidationWorkspace()
+    application = FastAPI()
+    application.state.operator_identity_provider = LocalOperatorIdentityProvider()
+    application.state.agent_configuration_workspace = workspace
+    application.include_router(configuration_router, prefix="/api")
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
+        json={"expected_active_version_id": None},
+    )
+
+    assert response.status_code == 200
+    assert workspace.rollback_calls[0]["expected_active_version_id"] is None
 
 
 def test_contract_routes_delegate_to_workspace_without_concrete_store() -> None:
@@ -2626,7 +2665,7 @@ def test_rollback_route_maps_workspace_errors_to_stable_details(
 
     response = TestClient(application, raise_server_exceptions=False).post(
         "/api/config/agents/agent_alpha/versions/version_route_1/rollback",
-        json={},
+        json={"expected_active_version_id": "version_route_2"},
     )
 
     assert response.status_code == expected_status
@@ -3069,7 +3108,7 @@ def test_rollback_switches_active_version(tmp_path: Path) -> None:
 
     rollback = client.post(
         f"/api/config/agents/{draft['agent_id']}/versions/{version_one}/rollback",
-        json={},
+        json={"expected_active_version_id": version_two},
     )
 
     assert rollback.status_code == 200

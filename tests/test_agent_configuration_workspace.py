@@ -15,11 +15,19 @@ from proof_agent.contracts import (
     AgentValidationRecord,
     AuditActorFacts,
     AuditMetadataRecord,
+    ConfigurationOperation,
+    ConfigurationOperationAudit,
     ContractBundle,
     DraftKnowledgeReleaseBindingCandidate,
     DraftAgent,
+    ExactArtifactRef,
+    FormalProductionAgentOnlineSmokeResult,
+    FormalProductionAgentPhaseFRecord,
+    FormalProductionAgentPublicationEvidence,
     ProductionSecretHandle,
     PublishedAgentVersion,
+    ReceiptOutcome,
+    RegisteredProductionAgentReleaseReference,
     ResolvedKnowledgeBindingSet,
     ResolvedKnowledgeSourceServiceBinding,
     SecretPurpose,
@@ -256,6 +264,43 @@ class UnitOfWorkFactory:
         )
         self.units.append(unit)
         return unit
+
+
+class MutatingPublishedVersionFactory(UnitOfWorkFactory):
+    def __init__(
+        self,
+        records: tuple[AgentDraftRecord, ...],
+        *,
+        target: PublishedAgentVersion,
+    ) -> None:
+        super().__init__(records)
+        self._target = target
+
+    def __call__(self) -> InMemoryConfigurationUnitOfWork:
+        if self.units:
+            key = (self._target.agent_id, self._target.version_id)
+            self.agents.published[key] = self._target.model_copy(
+                update={"display_name": "mutated immutable target"}
+            )
+        return super().__call__()
+
+
+class MutatingActivePointerFactory(UnitOfWorkFactory):
+    def __init__(
+        self,
+        records: tuple[AgentDraftRecord, ...],
+        *,
+        target: PublishedAgentVersion,
+        replacement: ActiveAgentVersion,
+    ) -> None:
+        super().__init__(records)
+        self._target = target
+        self._replacement = replacement
+
+    def __call__(self) -> InMemoryConfigurationUnitOfWork:
+        if self.units:
+            self.agents.active[self._target.agent_id] = self._replacement
+        return super().__call__()
 
 
 class RecordingValidationExecutor:
@@ -654,6 +699,114 @@ def _kss_bindings() -> ResolvedKnowledgeBindingSet:
                 admission_scorer_revision="insurance-evidence-admission.v3",
             ),
         )
+    )
+
+
+def _rollback_release_catalog(
+    *,
+    release_state: str = "queryable",
+    readiness: str = "ready",
+) -> KnowledgeServiceManagementWorkspace:
+    return KnowledgeServiceManagementWorkspace(
+        readiness=KnowledgeServiceReadinessProjection(
+            state=readiness,
+            revision="kss-rollback-2026-09-01",
+            blockers=() if readiness == "ready" else ("catalog",),
+        ),
+        spaces=(),
+        sources=(),
+        bases=(),
+        source_versions=(),
+        releases=(
+            KnowledgeServiceReleaseProjection(
+                knowledge_space_id="insurance",
+                knowledge_base_id="insurance-guidance",
+                knowledge_base_version_id="insurance-guidance-v3",
+                knowledge_base_release_id="release-insurance-2026-08-18",
+                source_version_count=3,
+                state=release_state,
+            ),
+        ),
+    )
+
+
+def _formal_rollback_version(
+    *,
+    agent_id: str,
+    draft_id: str,
+    version_id: str,
+) -> PublishedAgentVersion:
+    validation_run_id = f"run_{version_id}"
+
+    def artifact(kind: str, character: str) -> ExactArtifactRef:
+        return ExactArtifactRef(
+            artifact_uri=f"s3://proof-agent/formal-publication/{kind}.json",
+            version_id=f"opaque-{kind}",
+            sha256=character * 64,
+            size_bytes=128,
+            media_type="application/json",
+        )
+
+    phase_f_record = FormalProductionAgentPhaseFRecord(
+        record_id="019ba001-1111-7000-8000-000000000841",
+        provisional_version_id=version_id,
+        validation_run_id=validation_run_id,
+        formal_candidate_sha256="1" * 64,
+        knowledge_release_candidate_sha256="2" * 64,
+        evidence={
+            "shadow": artifact("shadow", "3"),
+            "capacity": artifact("capacity", "4"),
+            "acceptance": artifact("acceptance", "5"),
+            "recovery": artifact("recovery", "6"),
+        },
+        created_at="2026-08-19T04:30:00Z",
+        created_by="operator-1",
+        record_sha256="7" * 64,
+    )
+    reference = RegisteredProductionAgentReleaseReference(
+        knowledge_space_id="insurance",
+        knowledge_base_id="insurance-guidance",
+        knowledge_base_release_id="release-insurance-2026-08-18",
+        external_resource_id=version_id,
+        release_reference_id="019ba001-1111-7000-8000-000000000842",
+        authenticated_client_id="proof-agent-production",
+        registered_at=datetime(2026, 8, 19, 4, 40, tzinfo=UTC),
+    )
+    smoke_result = FormalProductionAgentOnlineSmokeResult(
+        agent_id=agent_id,
+        provisional_version_id=version_id,
+        validation_run_id=validation_run_id,
+        release_reference_id=reference.release_reference_id,
+        outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+        accepted_citation_count=1,
+        trace_ref=artifact("trace", "8"),
+        receipt_ref=artifact("receipt", "9"),
+    )
+    return PublishedAgentVersion(
+        agent_id=agent_id,
+        version_id=version_id,
+        source_draft_id=draft_id,
+        validation_run_id=validation_run_id,
+        display_name=f"{agent_id} display",
+        purpose=f"{agent_id} purpose",
+        contract_bundle=_template_bundle(agent_id),
+        published_at="2026-08-19T05:00:00Z",
+        published_by="operator-1",
+        operation_audit=(
+            ConfigurationOperationAudit(
+                operation_id="019ba001-1111-7000-8000-000000000843",
+                operation=ConfigurationOperation.PUBLISHED,
+                actor="operator-1",
+                created_at="2026-08-19T05:00:00Z",
+            ),
+        ),
+        resolved_knowledge_bindings=_kss_bindings(),
+        formal_production_evidence=FormalProductionAgentPublicationEvidence(
+            source_draft_revision=14,
+            phase_f_record=phase_f_record,
+            release_reference=reference,
+            online_smoke_result=smoke_result,
+        ),
     )
 
 
@@ -1309,7 +1462,10 @@ def test_workspace_publication_atomically_activates_the_current_validated_draft(
     assert factory.units[-1].committed is True
 
 
-def test_workspace_rollback_atomically_switches_pointer_and_audits_target() -> None:
+@pytest.mark.parametrize("release_state", ("queryable", "deprecated"))
+def test_workspace_rollback_atomically_switches_pointer_and_audits_target(
+    release_state: str,
+) -> None:
     current = _draft(
         "agent_alpha",
         "019ba001-1111-7000-8000-000000000831",
@@ -1340,9 +1496,13 @@ def test_workspace_rollback_atomically_switches_pointer_and_audits_target() -> N
         activated_at="2026-08-19T06:00:00Z",
         activated_by="operator-1",
     )
+    catalog = StaticKnowledgeReleaseCatalog(
+        _rollback_release_catalog(release_state=release_state)
+    )
     workspace = AgentConfigurationWorkspace(
         unit_of_work_factory=factory,
         template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
         scope=AgentConfigurationScope.MULTI_AGENT,
         clock=lambda: datetime(2026, 8, 19, 7, tzinfo=UTC),
     )
@@ -1350,6 +1510,7 @@ def test_workspace_rollback_atomically_switches_pointer_and_audits_target() -> N
     result = workspace.rollback_version(
         agent_id=current.draft.agent_id,
         version_id=version_one.version_id,
+        expected_active_version_id=version_two.version_id,
         actor=_actor(),
     )
 
@@ -1370,6 +1531,369 @@ def test_workspace_rollback_atomically_switches_pointer_and_audits_target() -> N
     assert event.target_id == version_one.version_id
     assert event.metadata["replaced_active_version_id"] == version_two.version_id
     assert factory.units[-1].committed is True
+    assert catalog.calls == 1
+
+
+@pytest.mark.parametrize("release_state", ("retired", "revoked"))
+def test_workspace_rollback_rejects_an_unavailable_kss_release_before_writes(
+    release_state: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000837",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    previous = ActiveAgentVersion(
+        agent_id=target.agent_id,
+        version_id="version_before",
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    factory.agents.active[target.agent_id] = previous
+    catalog = StaticKnowledgeReleaseCatalog(
+        _rollback_release_catalog(release_state=release_state)
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=previous.version_id,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_rollback_knowledge_release_unavailable"
+    assert factory.agents.get_active(target.agent_id) == previous
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+    assert catalog.calls == 1
+
+
+def test_workspace_rollback_rejects_a_stale_confirmed_pointer_before_catalog() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000846",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    previous = ActiveAgentVersion(
+        agent_id=target.agent_id,
+        version_id="version_before",
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    factory.agents.active[target.agent_id] = previous
+    catalog = StaticKnowledgeReleaseCatalog(_rollback_release_catalog())
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id="version_stale",
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "active_agent_version_conflict"
+    assert factory.agents.get_active(target.agent_id) == previous
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+    assert catalog.calls == 0
+
+
+def test_workspace_rollback_rejects_pointer_drift_after_release_preflight() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000847",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    previous = ActiveAgentVersion(
+        agent_id=target.agent_id,
+        version_id="version_before",
+        activated_at="2026-08-19T06:00:00Z",
+        activated_by="operator-1",
+    )
+    concurrent = ActiveAgentVersion(
+        agent_id=target.agent_id,
+        version_id="version_concurrent",
+        activated_at="2026-08-19T06:30:00Z",
+        activated_by="operator-2",
+    )
+    factory = MutatingActivePointerFactory(
+        (current,),
+        target=target,
+        replacement=concurrent,
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    factory.agents.active[target.agent_id] = previous
+    catalog = StaticKnowledgeReleaseCatalog(_rollback_release_catalog())
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=previous.version_id,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "active_agent_version_conflict"
+    assert factory.agents.get_active(target.agent_id) == concurrent
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+    assert catalog.calls == 1
+
+
+def test_workspace_rollback_requires_a_ready_kss_catalog() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000838",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    catalog = StaticKnowledgeReleaseCatalog(
+        _rollback_release_catalog(readiness="unavailable")
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=None,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_knowledge_catalog_unavailable"
+    assert factory.agents.get_active(target.agent_id) is None
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+
+
+@pytest.mark.parametrize("catalog_case", ("missing", "ambiguous"))
+def test_workspace_rollback_requires_one_exact_kss_release_match(
+    catalog_case: str,
+) -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000839",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    projection = _rollback_release_catalog()
+    releases = ()
+    if catalog_case == "ambiguous":
+        releases = (
+            projection.releases[0],
+            projection.releases[0].model_copy(
+                update={"knowledge_base_id": "another-insurance-base"}
+            ),
+        )
+    catalog = StaticKnowledgeReleaseCatalog(
+        projection.model_copy(update={"releases": releases})
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=None,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_rollback_knowledge_release_unavailable"
+    assert factory.agents.get_active(target.agent_id) is None
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+
+
+def test_workspace_rollback_uses_formal_reference_scope_to_resolve_release() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000844",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _formal_rollback_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    projection = _rollback_release_catalog(release_state="deprecated")
+    catalog = StaticKnowledgeReleaseCatalog(
+        projection.model_copy(
+            update={
+                "releases": (
+                    projection.releases[0],
+                    projection.releases[0].model_copy(
+                        update={"knowledge_base_id": "another-insurance-base"}
+                    ),
+                )
+            }
+        )
+    )
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=catalog,
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    result = workspace.rollback_version(
+        agent_id=target.agent_id,
+        version_id=target.version_id,
+        expected_active_version_id=None,
+        actor=_actor(),
+    )
+
+    assert result.restored == target
+    assert result.activation.version_id == target.version_id
+    assert factory.audit.events[-1].event_type == "agent.version.rolled_back"
+    assert catalog.calls == 1
+
+
+def test_workspace_rollback_rechecks_the_immutable_target_before_writes() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000845",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    factory = MutatingPublishedVersionFactory((current,), target=target)
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=StaticKnowledgeReleaseCatalog(
+            _rollback_release_catalog()
+        ),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=None,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_version_conflict"
+    assert factory.agents.get_active(target.agent_id) is None
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
+
+
+def test_workspace_rollback_maps_a_kss_catalog_failure_without_detail_leakage() -> None:
+    current = _draft(
+        "agent_alpha",
+        "019ba001-1111-7000-8000-000000000840",
+        updated_at="2026-08-19T04:00:00Z",
+    )
+    factory = UnitOfWorkFactory((current,))
+    target = _published_version(
+        agent_id=current.draft.agent_id,
+        draft_id=current.draft.draft_id,
+        version_id="version_target",
+        published_at="2026-08-19T05:00:00Z",
+        resolved_knowledge_bindings=_kss_bindings(),
+    )
+    factory.agents.published[(target.agent_id, target.version_id)] = target
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory,
+        template_bundle=_template_bundle(),
+        knowledge_release_catalog=FailingKnowledgeReleaseCatalog(),
+        scope=AgentConfigurationScope.MULTI_AGENT,
+    )
+
+    with pytest.raises(AgentConfigurationConflict) as conflict:
+        workspace.rollback_version(
+            agent_id=target.agent_id,
+            version_id=target.version_id,
+            expected_active_version_id=None,
+            actor=_actor(),
+        )
+
+    assert conflict.value.code == "agent_knowledge_catalog_unavailable"
+    assert conflict.value.detail == "The Knowledge Source Service catalog is unavailable."
+    assert "sensitive" not in conflict.value.detail
+    assert factory.agents.get_active(target.agent_id) is None
+    assert factory.agents.activations == []
+    assert factory.audit.events == []
 
 
 @pytest.mark.parametrize("initial_pointer", (None, "version_target"))
@@ -1406,6 +1930,7 @@ def test_workspace_rollback_preserves_empty_and_already_active_pointer_compatibi
     result = workspace.rollback_version(
         agent_id=target.agent_id,
         version_id=target.version_id,
+        expected_active_version_id=initial_pointer,
         actor=_actor(),
     )
 
@@ -1440,6 +1965,7 @@ def test_workspace_rollback_rejects_a_version_outside_the_agent() -> None:
         workspace.rollback_version(
             agent_id=current.draft.agent_id,
             version_id=other.version_id,
+            expected_active_version_id=None,
             actor=_actor(),
         )
 
@@ -1479,6 +2005,7 @@ def test_workspace_rollback_rejects_an_active_pointer_conflict() -> None:
         workspace.rollback_version(
             agent_id=version.agent_id,
             version_id=version.version_id,
+            expected_active_version_id="version_before",
             actor=_actor(),
         )
 
@@ -1527,6 +2054,7 @@ def test_workspace_rollback_rolls_back_when_atomic_persistence_fails(
         workspace.rollback_version(
             agent_id=target.agent_id,
             version_id=target.version_id,
+            expected_active_version_id=previous.version_id,
             actor=_actor(),
         )
 
@@ -2289,6 +2817,11 @@ class StaticKnowledgeReleaseCatalog:
     def workspace(self) -> KnowledgeServiceManagementWorkspace:
         self.calls += 1
         return self.projection
+
+
+class FailingKnowledgeReleaseCatalog:
+    def workspace(self) -> KnowledgeServiceManagementWorkspace:
+        raise RuntimeError("sensitive upstream catalog failure")
 
 
 def _knowledge_release_candidate() -> DraftKnowledgeReleaseBindingCandidate:

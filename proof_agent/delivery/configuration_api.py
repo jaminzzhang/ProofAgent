@@ -216,6 +216,8 @@ class RollbackRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    expected_active_version_id: str | None
+
 
 class ModelCredentialReferenceRequest(BaseModel):
     """Secret-safe model credential reference."""
@@ -1373,11 +1375,11 @@ def rollback_config_version(
     """Switch the Active Agent Version pointer to a previous version."""
 
     _require_operator(identity, OperatorPermission.AGENT_PUBLISH)
-    del request
     try:
         result = _get_agent_configuration_workspace(app_request).rollback_version(
             agent_id=agent_id,
             version_id=version_id,
+            expected_active_version_id=request.expected_active_version_id,
             actor=_workspace_audit_actor(identity),
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:

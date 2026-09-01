@@ -648,13 +648,16 @@ export function fetchConfigVersions(agentId: string): Promise<ConfigVersionsResp
 export function rollbackConfigVersion(
   agentId: string,
   versionId: string,
+  expectedActiveVersionId: string | null,
 ): Promise<ActiveAgentVersion> {
   return fetchJson<ActiveAgentVersion>(
     `${BASE}/config/agents/${agentId}/versions/${versionId}/rollback`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        expected_active_version_id: expectedActiveVersionId,
+      }),
     },
   )
 }

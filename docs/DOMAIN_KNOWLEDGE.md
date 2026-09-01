@@ -25,6 +25,10 @@ not a second glossary.
 - `docs/adr/0210-make-kss-the-only-executable-knowledge-authority.md` — current
   execution authority. It supersedes executable Hybrid, package-local and shared
   knowledge binding paths in ProofAgent.
+- `docs/adr/0234-revalidate-exact-kss-release-before-agent-version-rollback.md` —
+  current Agent Version rollback Release-state preflight and failure boundary.
+- `docs/adr/0235-bind-agent-version-rollback-to-the-confirmed-active-pointer.md` —
+  caller-confirmed Active pointer and rollback concurrency boundary.
 
 ## High-risk implementation scenes
 

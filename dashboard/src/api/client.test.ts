@@ -651,7 +651,7 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
   await publishConfigDraft('enterprise_qa', 'draft_1', {
     validation_run_id: 'run_1',
   })
-  await rollbackConfigVersion('enterprise_qa', 'version_1')
+  await rollbackConfigVersion('enterprise_qa', 'version_1', 'version_2')
 
   expect(fetchMock.mock.calls[0][0]).toBe(
     '/api/config/agents/enterprise_qa/drafts/draft_1/validate',
@@ -667,6 +667,9 @@ test('validate publish and rollback use configuration lifecycle endpoints', asyn
   expect(fetchMock.mock.calls[2][0]).toBe(
     '/api/config/agents/enterprise_qa/versions/version_1/rollback',
   )
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+    expected_active_version_id: 'version_2',
+  })
 })
 
 test('fetchValidationCapture reads the validation capture projection for a run', async () => {
