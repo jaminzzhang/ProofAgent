@@ -155,6 +155,14 @@ class ProductionKnowledgeReleaseBindingUpdateRequest(BaseModel):
     knowledge_base_release_id: KnowledgeServiceIdentifier
 
 
+class ProductionAgentRollbackRequest(BaseModel):
+    """Caller-confirmed Active pointer for one production rollback command."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_active_version_id: str | None
+
+
 @agent_router.post("/{agent_id}/drafts/{draft_id}/formal-publications")
 def publish_formal_production_agent(
     agent_id: str,
@@ -312,7 +320,7 @@ def create_production_agent(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response.status_code = 200 if result.replayed else 201
-    return _draft_payload(result.record)
+    return _draft_payload(result.record, request=request, identity=identity)
 
 
 @agent_router.get("/{agent_id}/drafts/{draft_id}")
@@ -333,7 +341,7 @@ def get_production_agent_draft(
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
         raise _configuration_exception(exc) from exc
-    return _draft_payload(record)
+    return _draft_payload(record, request=request, identity=identity)
 
 
 @agent_router.patch("/{agent_id}/drafts/{draft_id}")
@@ -358,7 +366,7 @@ def update_production_agent_draft(
         raise _configuration_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _draft_payload(record)
+    return _draft_payload(record, request=request, identity=identity)
 
 
 @agent_router.get("/{agent_id}/drafts/{draft_id}/contract")
@@ -775,6 +783,42 @@ def list_production_agent_versions(
     }
 
 
+@agent_router.post("/{agent_id}/versions/{version_id}/rollback")
+def rollback_production_agent_version(
+    agent_id: str,
+    version_id: str,
+    body: ProductionAgentRollbackRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Switch the Active pointer only through the governed production Workspace."""
+
+    require_operator_permission(identity, Permission.AGENT_PUBLISH)
+    if not _production_agent_rollback_enabled(request):
+        raise HTTPException(
+            status_code=503,
+            detail="production_agent_rollback_unavailable",
+        )
+    try:
+        result = _application(request).rollback_version(
+            agent_id=agent_id,
+            version_id=version_id,
+            expected_active_version_id=body.expected_active_version_id,
+            actor=_audit_actor(request, identity),
+        )
+        payload = cast(dict[str, Any], result.activation.model_dump(mode="json"))
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _production_agent_rollback_exception(exc) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="production_agent_rollback_failed",
+        ) from exc
+    return payload
+
+
 def _application(request: Request) -> Any:
     application = getattr(
         request.app.state,
@@ -787,6 +831,13 @@ def _application(request: Request) -> Any:
             detail="production_agent_configuration_unavailable",
         )
     return application
+
+
+def _production_agent_rollback_enabled(request: Request) -> bool:
+    return (
+        getattr(request.app.state, "production_agent_rollback_enabled", False)
+        is True
+    )
 
 
 def _formal_publication_command(request: Request) -> Any:
@@ -841,7 +892,12 @@ def _audit_actor(
     )
 
 
-def _draft_payload(record: AgentDraftRecord) -> dict[str, Any]:
+def _draft_payload(
+    record: AgentDraftRecord,
+    *,
+    request: Request,
+    identity: OperatorIdentityContext,
+) -> dict[str, Any]:
     payload = record.draft.model_dump(
         mode="json",
         exclude={"contract_bundle", "knowledge_release_binding_candidate"},
@@ -875,7 +931,10 @@ def _draft_payload(record: AgentDraftRecord) -> dict[str, Any]:
         "actions": {
             "can_validate": False,
             "can_publish": False,
-            "can_rollback": False,
+            "can_rollback": (
+                _production_agent_rollback_enabled(request)
+                and Permission.AGENT_PUBLISH in identity.permissions
+            ),
         },
     }
     return payload
@@ -917,6 +976,14 @@ def _configuration_exception(
 ) -> HTTPException:
     status_code = 409 if isinstance(error, AgentConfigurationConflict) else 404
     return HTTPException(status_code=status_code, detail=error.code)
+
+
+def _production_agent_rollback_exception(
+    error: AgentConfigurationConflict | AgentConfigurationNotFound,
+) -> HTTPException:
+    if error.code == "agent_knowledge_catalog_unavailable":
+        return HTTPException(status_code=503, detail=error.code)
+    return _configuration_exception(error)
 
 
 def _knowledge_binding_exception(error: AgentConfigurationConflict) -> HTTPException:

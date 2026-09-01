@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from proof_agent.observability.api.app import create_app
 from proof_agent.contracts import (
+    ActiveAgentVersion,
     AgentDraftRecord,
     ContractBundle,
     DraftAgent,
@@ -62,6 +63,7 @@ def _production_app(
     session_service: object | None = None,
     agent_configuration_application: object | None = None,
     formal_publication_command: object | None = _FORMAL_PUBLICATION_COMMAND,
+    production_agent_rollback_enabled: bool = False,
 ):
     return create_app(
         mode="production",
@@ -90,6 +92,7 @@ def _production_app(
         agent_configuration_workspace=(
             agent_configuration_application or object()
         ),
+        production_agent_rollback_enabled=production_agent_rollback_enabled,
         formal_production_agent_publication_command=formal_publication_command,
         knowledge_service_management_client=object(),
         release_registry_repository=object(),
@@ -179,6 +182,10 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
         ("/api/config/agents/{agent_id}/drafts/{draft_id}", "PATCH"),
         ("/api/config/agents/{agent_id}/drafts/{draft_id}/contract", "GET"),
         ("/api/config/agents/{agent_id}/versions", "GET"),
+        (
+            "/api/config/agents/{agent_id}/versions/{version_id}/rollback",
+            "POST",
+        ),
     }
     actual_production_agent_routes = {
         (route.path, method)
@@ -189,9 +196,10 @@ def test_production_app_installs_oidc_routes_and_no_cors_middleware(
     assert expected_production_agent_routes <= actual_production_agent_routes
     assert not any(
         route.path.startswith("/api/config/agents")
-        and ({"validate", "publish", "rollback"} & set(route.path.split("/")))
+        and ({"validate", "publish"} & set(route.path.split("/")))
         for route in application.routes
     )
+    assert application.state.production_agent_rollback_enabled is False
     assert not any(
         route.path
         in {
@@ -253,6 +261,48 @@ def test_production_agent_create_runs_behind_session_csrf_and_oidc_identity(
     )
 
 
+def test_production_agent_rollback_runs_behind_session_csrf_and_oidc_identity(
+    tmp_path: Path,
+) -> None:
+    session_service = _AuthenticatedSessionService()
+    agent_application = _RecordingAgentApplication()
+    application = _production_app(
+        tmp_path,
+        session_service=session_service,
+        agent_configuration_application=agent_application,
+        production_agent_rollback_enabled=True,
+    )
+    client = TestClient(application, base_url="https://proof-agent.example.com")
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback"
+    )
+    payload = {
+        "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+    }
+
+    assert client.post(route, json=payload).status_code == 401
+    client.cookies.set(SESSION_COOKIE_NAME, "valid-cookie")
+    assert client.post(route, json=payload).status_code == 403
+    response = client.post(
+        route,
+        headers={
+            "Origin": "https://proof-agent.example.com",
+            "X-CSRF-Token": "c" * 64,
+        },
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version_id"] == "019ba001-1111-7000-8000-000000000901"
+    call = agent_application.calls[0]
+    assert call["expected_active_version_id"] == (
+        "019ba001-1111-7000-8000-000000000902"
+    )
+    assert call["actor"].subject == "operator-1"
+    assert call["actor"].session_id == "019ba001-1111-7000-8000-000000000401"
+
+
 class _AuthenticatedSessionService:
     def resolve_session(self, cookie_token: str, *, now: datetime) -> SessionResolution:
         del now
@@ -275,6 +325,7 @@ class _AuthenticatedSessionService:
                 effective_permissions=(
                     Permission.AGENT_VIEW.value,
                     Permission.AGENT_EDIT.value,
+                    Permission.AGENT_PUBLISH.value,
                 ),
             ),
             cookie_token="valid-cookie",
@@ -308,6 +359,22 @@ class _RecordingAgentApplication:
                 ),
             )
         )
+
+    def rollback_version(self, **kwargs: Any) -> object:
+        self.calls.append(kwargs)
+        return type(
+            "RollbackResult",
+            (),
+            {
+                "activation": ActiveAgentVersion(
+                    agent_id=kwargs["agent_id"],
+                    version_id=kwargs["version_id"],
+                    activated_at="2026-09-01T14:00:00Z",
+                    activated_by=kwargs["actor"].subject,
+                    rollback_from_version_id=kwargs["expected_active_version_id"],
+                )
+            },
+        )()
 
 
 def test_production_readiness_is_sanitized_and_fails_closed(tmp_path: Path) -> None:

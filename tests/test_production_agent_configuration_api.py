@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from proof_agent.contracts import (
+    ActiveAgentVersion,
     AgentDraftRecord,
     AuditActorFacts,
     ContractBundle,
@@ -378,12 +379,47 @@ class RecordingApplication:
         self.calls.append({"agent_id": agent_id, "operation": "versions"})
         return AgentConfigurationVersions(versions=(), active_version_id=None)
 
+    def rollback_version(
+        self,
+        *,
+        agent_id: str,
+        version_id: str,
+        expected_active_version_id: str | None,
+        actor: AuditActorFacts,
+    ) -> object:
+        self.calls.append(
+            {
+                "agent_id": agent_id,
+                "version_id": version_id,
+                "expected_active_version_id": expected_active_version_id,
+                "actor": actor,
+                "operation": "rollback",
+            }
+        )
+        return type(
+            "RollbackResult",
+            (),
+            {
+                "activation": ActiveAgentVersion(
+                    agent_id=agent_id,
+                    version_id=version_id,
+                    activated_at="2026-09-01T14:00:00Z",
+                    activated_by=actor.subject,
+                    rollback_from_version_id=expected_active_version_id,
+                )
+            },
+        )()
 
-def _application() -> tuple[FastAPI, RecordingApplication]:
+
+def _application(
+    *,
+    rollback_enabled: bool = False,
+) -> tuple[FastAPI, RecordingApplication]:
     application = FastAPI()
     service = RecordingApplication()
     application.state.proof_agent_mode = "development"
     application.state.agent_configuration_workspace = service
+    application.state.production_agent_rollback_enabled = rollback_enabled
     application.include_router(router, prefix="/api")
     return application, service
 
@@ -649,6 +685,27 @@ def test_create_production_agent_uses_server_owned_contract_and_returns_revision
             ),
         }
     ]
+
+
+def test_production_draft_projects_rollback_capability_from_gate_and_permission() -> None:
+    application, _ = _application(rollback_enabled=True)
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/"
+        "drafts/019ba001-1111-7000-8000-000000000701"
+    )
+
+    enabled = TestClient(application).get(route)
+
+    assert enabled.status_code == 200
+    assert enabled.json()["capabilities"]["actions"]["can_rollback"] is True
+
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("agent.view")})
+    )
+    denied = TestClient(application).get(route)
+
+    assert denied.status_code == 200
+    assert denied.json()["capabilities"]["actions"]["can_rollback"] is False
 
 
 def test_formal_publication_command_returns_trace_safe_success_and_replay_status() -> None:
@@ -948,6 +1005,195 @@ def test_read_production_draft_contract_and_versions_after_creation() -> None:
         "get",
         "versions",
     ]
+
+
+def test_production_rollback_calls_existing_workspace_when_explicitly_enabled() -> None:
+    application, service = _application(rollback_enabled=True)
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback"
+    )
+
+    response = TestClient(application).post(
+        route,
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "agent_id": "agent_management_insurance_specialist",
+        "version_id": "019ba001-1111-7000-8000-000000000901",
+        "activated_at": "2026-09-01T14:00:00Z",
+        "activated_by": "local-user",
+        "rollback_from_version_id": "019ba001-1111-7000-8000-000000000902",
+    }
+    assert service.calls == [
+        {
+            "agent_id": "agent_management_insurance_specialist",
+            "version_id": "019ba001-1111-7000-8000-000000000901",
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902",
+            "actor": AuditActorFacts(
+                subject="local-user",
+                identity_provider="enterprise-oidc",
+                session_id="development-session",
+                permissions=tuple(
+                    sorted(permission.value for permission in _all_permissions())
+                ),
+            ),
+            "operation": "rollback",
+        }
+    ]
+
+
+def test_production_rollback_gate_defaults_closed_without_workspace_call() -> None:
+    application, service = _application()
+
+    response = TestClient(application).post(
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback",
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "production_agent_rollback_unavailable"}
+    assert service.calls == []
+
+
+def test_production_rollback_requires_publish_before_revealing_gate_state() -> None:
+    application, service = _application(rollback_enabled=True)
+    application.state.operator_identity_provider = _StaticIdentityProvider(
+        frozenset({_permission("agent.view")})
+    )
+
+    response = TestClient(application).post(
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback",
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == 403
+    assert service.calls == []
+
+
+def test_production_rollback_requires_strict_nullable_pointer_expectation() -> None:
+    application, service = _application(rollback_enabled=True)
+    client = TestClient(application)
+    route = (
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback"
+    )
+
+    missing = client.post(route, json={})
+    unknown = client.post(
+        route,
+        json={"expected_active_version_id": None, "retry": True},
+    )
+    explicit_none = client.post(
+        route,
+        json={"expected_active_version_id": None},
+    )
+
+    assert missing.status_code == 422
+    assert unknown.status_code == 422
+    assert explicit_none.status_code == 200
+    assert service.calls[-1]["expected_active_version_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (
+            AgentConfigurationNotFound(
+                code="agent_version_not_found",
+                detail="private version detail",
+            ),
+            404,
+            "agent_version_not_found",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="agent_rollback_knowledge_release_unavailable",
+                detail="private release detail",
+            ),
+            409,
+            "agent_rollback_knowledge_release_unavailable",
+        ),
+        (
+            AgentConfigurationConflict(
+                code="active_agent_version_conflict",
+                detail="private pointer detail",
+            ),
+            409,
+            "active_agent_version_conflict",
+        ),
+    ],
+)
+def test_production_rollback_maps_stable_domain_failures(
+    error: Exception,
+    status_code: int,
+    detail: str,
+) -> None:
+    application, _ = _application(rollback_enabled=True)
+    application.state.agent_configuration_workspace = _FailingRollbackApplication(error)
+
+    response = TestClient(application).post(
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback",
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == status_code
+    assert response.json() == {"detail": detail}
+    assert "private" not in response.text
+
+
+def test_production_rollback_maps_catalog_unavailable_without_detail_leak() -> None:
+    application, _ = _application(rollback_enabled=True)
+    application.state.agent_configuration_workspace = _FailingRollbackApplication(
+        AgentConfigurationConflict(
+            code="agent_knowledge_catalog_unavailable",
+            detail="private KSS endpoint failed",
+        )
+    )
+
+    response = TestClient(application).post(
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback",
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "agent_knowledge_catalog_unavailable"}
+    assert "private KSS endpoint" not in response.text
+
+
+def test_production_rollback_hides_unexpected_internal_failure() -> None:
+    application, _ = _application(rollback_enabled=True)
+    application.state.agent_configuration_workspace = _FailingRollbackApplication(
+        OSError("internal-path:/private/rollback-failure")
+    )
+
+    response = TestClient(application, raise_server_exceptions=False).post(
+        "/api/config/agents/agent_management_insurance_specialist/versions/"
+        "019ba001-1111-7000-8000-000000000901/rollback",
+        json={
+            "expected_active_version_id": "019ba001-1111-7000-8000-000000000902"
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "production_agent_rollback_failed"}
+    assert "/private" not in response.text
 
 
 def test_update_production_draft_requires_and_returns_next_revision() -> None:
@@ -2036,6 +2282,16 @@ class _ConflictApplication(RecordingApplication):
             code="agent_draft_not_found",
             detail="Not found.",
         )
+
+
+class _FailingRollbackApplication(RecordingApplication):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    def rollback_version(self, **kwargs: Any) -> object:
+        del kwargs
+        raise self._error
 
 
 class _FailingContractApplication(RecordingApplication):

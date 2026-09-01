@@ -385,6 +385,7 @@ def create_production_api_application(
             production_readiness_probe=readiness,
             production_configuration_uow_factory=publication_uow,
             agent_configuration_workspace=agent_configuration_workspace,
+            production_agent_rollback_enabled=False,
             formal_production_agent_publication_command=formal_publication_command,
             knowledge_service_management_client=knowledge_service_management,
             release_registry_repository=persistence.releases,

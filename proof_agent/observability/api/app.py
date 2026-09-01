@@ -112,6 +112,7 @@ def create_app(
     production_readiness_probe: Callable[[], object] | None = None,
     production_configuration_uow_factory: object | None = None,
     agent_configuration_workspace: object | None = None,
+    production_agent_rollback_enabled: bool = False,
     formal_production_agent_publication_command: object | None = None,
     knowledge_service_management_client: object | None = None,
     release_registry_repository: object | None = None,
@@ -207,6 +208,9 @@ def create_app(
     application.state.production_readiness_probe = production_readiness_probe
     application.state.production_configuration_uow_factory = production_configuration_uow_factory
     application.state.agent_configuration_workspace = agent_configuration_workspace
+    application.state.production_agent_rollback_enabled = (
+        production_agent_rollback_enabled
+    )
     application.state.formal_production_agent_publication_command = (
         formal_production_agent_publication_command
     )

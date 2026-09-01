@@ -1004,3 +1004,29 @@ wrapper 注入，不修改生产 adapter，也不把测试替身当成 PostgreSQ
 或生产数据库，不创建/注销 Grant 或 Reference，不进入 Phase F，不发布新版本，不部署，不执行
 线上 rollback，也不建立跨 KSS/ProofAgent 的分布式事务或 lease。若 disposable PostgreSQL
 不可用，只能记录环境缺口，不能把 skipped 用例称为通过。
+
+## 21. TDD-06G：Production 回滚准入合同与能力门控
+
+[FRAME | HIGH] 本片只在既有 Production Agent Configuration router 上增加
+`POST /config/agents/{agent_id}/versions/{version_id}/rollback`。请求体严格要求
+`expected_active_version_id`，字符串表示调用方确认的 exact Active pointer，JSON `null`
+明确表示预期当前无 Active Version；缺失字段和未知字段均返回 422。Delivery 只负责 HTTP、
+`agent.publish` 权限、稳定错误映射和审计 actor 投影，实际状态变化仍只调用现有
+`AgentConfigurationWorkspace.rollback_version()`。
+
+[FRAME | HIGH] Production composition 新增 server-owned rollback capability gate，默认值为
+`false`。门控关闭时，路由返回稳定的 `production_agent_rollback_unavailable`，不得调用
+Workspace；Draft capability 继续投影 `can_rollback=false`。只有门控显式开启且当前 Operator
+持有 `agent.publish` 时，capability 才可为 `true`，路由才可进入 Workspace。现有 Production
+OIDC session 与 same-origin CSRF middleware 继续覆盖该 POST 命令。
+
+[FRAME | HIGH] Workspace 的 `agent_version_not_found` 映射 404；pointer、target 或 Release
+冲突映射 409；`agent_knowledge_catalog_unavailable` 映射 503；未知内部异常只返回
+`production_agent_rollback_failed`，不得泄露 exception detail。response-loss retry 继续依赖
+caller-confirmed pointer 失败关闭：旧 expectation 返回 conflict，调用方必须重载后重新确认，
+本片不新增第二套幂等收据。
+
+[BOUNDARY | HIGH] 本片不会在真实 Production composition 中开启 rollback gate，不修改角色映射、
+Dashboard、SQL、migration 或 KSS 服务，也不连接真实 PostgreSQL/KSS、执行线上 rollback、创建或
+注销 Grant/Reference、进入 Phase F、发布、部署或授予 Production GO。cross-service rollback
+lease、真实依赖演练与正式启用属于后续独立切片。具体决策见 ADR-0236。

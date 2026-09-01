@@ -4164,3 +4164,102 @@ docker compose -f docker-compose.hybrid-test.yml rm -s -f -v postgres
   KSS preflight 与本地提交是分布式事务，也不建立 cross-service rollback lease。
 - [BOUNDARY | HIGH] Production 继续返回 `can_rollback=false`；没有 Production endpoint、真实 KSS
   依赖演练、线上 rollback、Phase F、publication、deployment、release Gate 或 Production GO。
+
+## 65. TDD-06G：Production 回滚准入合同与能力门控
+
+### 65.1 冻结边界
+
+[FRAME | HIGH] 本片只在既有 Production Agent Configuration router 上注册严格 rollback POST，
+继续调用同一个 `AgentConfigurationWorkspace.rollback_version()`。Delivery 负责必填 nullable
+caller expectation、`agent.publish`、OIDC actor、稳定 HTTP 错误与 Active pointer 响应；不新建
+rollback service、repository、幂等收据或写入权威。
+
+[FRAME | HIGH] `production_agent_rollback_enabled` 同时控制命令准入和 Draft
+`can_rollback` 投影。应用工厂默认 `false`，真实 Production API composition 显式传入 `false`。
+门控关闭时，命令在 Workspace 前返回 `production_agent_rollback_unavailable`。只有测试专用显式
+开启且 Operator 持有 `agent.publish` 时，本片测试才允许进入 Workspace fake。
+
+[BOUNDARY | HIGH] 本片不启用真实 Production gate，不修改角色映射、Dashboard、SQL 或
+migration，不连接真实 PostgreSQL/KSS，不执行线上 rollback，不调用 model/ArtifactStore，不创建或
+注销 Grant/Reference，不进入 Phase F、publication、deployment、release Gate 或 Production GO。
+具体决策见 ADR-0236。
+
+### 65.2 验证场景
+
+| Given | When | Then |
+| --- | --- | --- |
+| 测试 composition 显式开启 gate，Operator 持有 `agent.publish` | POST exact target 与 caller-confirmed pointer | 只调用既有 Workspace，返回新的 Active pointer |
+| gate 关闭或 Operator 缺少 `agent.publish` | 提交相同命令 | 分别返回稳定 503 或 403；Workspace calls 为 0 |
+| body 缺失 expectation、包含 unknown field 或显式 `null` | Pydantic 校验请求 | 前两者 422；`null` 作为明确无 Active expectation 进入 Workspace |
+| Workspace 返回 missing、pointer/Release conflict 或 Catalog unavailable | Delivery 映射异常 | 分别得到 404、409 或 503，响应不包含内部 detail |
+| Workspace 抛出未知内部异常 | Production route 关闭失败 | 返回 JSON 500 `production_agent_rollback_failed`，不泄露异常正文 |
+| Production app 显式开启测试 gate | 无 session、缺 CSRF、完整 OIDC/CSRF 依次提交 | 401、403、200；成功 actor 绑定 session subject/id |
+
+### 65.3 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | Production rollback POST 尚不存在 | tracer 返回 404，而预期为 200 |
+| GREEN-1 | 增加 strict request、`agent.publish`、default-closed gate 和 Workspace delegation | tracer 1 passed |
+| RED-2 | 测试 gate 开启且有权限时，Draft capability 仍固定为 false | capability 用例 1 failed |
+| GREEN-2 | capability 由同一 gate 与当前 identity permission 共同投影 | 两条核心行为 2 passed |
+| RED-3 | `agent_knowledge_catalog_unavailable` 被通用 conflict 映射为 409 | 依赖失败用例 1 failed |
+| GREEN-3 | rollback 专用映射将 Catalog unavailable 稳定映射为 503 | 用例 1 passed |
+| RED-4 | 未知内部异常返回非 JSON `Internal Server Error` | stable failure 用例 1 failed |
+| GREEN-4 | 未知异常收敛到 content-free JSON 500 | 用例 1 passed |
+| RED-5 | 真实 Production factory 未显式传入 false gate | composition 用例因缺少 captured key 失败 |
+| REFACTOR | 真实 composition 显式 false；补 gate、permission、strict body、错误矩阵与 OIDC/CSRF 纵向 | rollback-focused 10 passed；安全组合 3 passed |
+
+### 65.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| Production rollback HTTP/capability | 10 passed | success delegation、default gate、permission、required nullable、404/409/503/500 与脱敏 |
+| Production OIDC/CSRF composition | 3 passed | 包含新 rollback 纵向及既有 create/router 安全基线 |
+| 受影响 Production 回归 | 95 passed、1 existing warning | Agent Configuration API、application security、production roles/service/publication projection |
+| 完整默认后端 | 2520 passed、275 dependency-conditioned skips、2 deselected、1 existing warning | 本片不要求 PostgreSQL 集成测试执行；未连接真实依赖 |
+| 静态检查 | Ruff 通过；Mypy 372 sources 通过 | 无依赖、SQL、migration 或前端代码变化 |
+
+### 65.5 命令与修改文件
+
+[KNOWN | HIGH] 关键验证命令如下：
+
+```text
+.venv/bin/pytest -q tests/test_production_agent_configuration_api.py -k "production_rollback or rollback_capability"
+.venv/bin/pytest -q tests/test_application_security_composition.py::test_production_agent_rollback_runs_behind_session_csrf_and_oidc_identity tests/test_application_security_composition.py::test_production_agent_create_runs_behind_session_csrf_and_oidc_identity tests/test_application_security_composition.py::test_production_app_installs_oidc_routes_and_no_cors_middleware
+.venv/bin/pytest -q tests/test_production_agent_configuration_api.py tests/test_application_security_composition.py tests/test_production_roles.py tests/test_production_agent_configuration_service.py tests/test_production_agent_publication_configuration.py
+.venv/bin/pytest -q tests/
+.venv/bin/ruff check proof_agent tests
+.venv/bin/mypy proof_agent
+python3 scripts/check-domain-contexts.py
+uv lock --check
+git diff --check
+```
+
+[KNOWN | HIGH] TDD-06G 新增或更新以下路径：
+
+- `proof_agent/delivery/production_agent_configuration.py`
+- `proof_agent/observability/api/app.py`
+- `proof_agent/bootstrap/production_roles.py`
+- `tests/test_production_agent_configuration_api.py`
+- `tests/test_application_security_composition.py`
+- `tests/test_production_roles.py`
+- `docs/adr/0236-gate-production-agent-version-rollback-at-composition.md`
+- `docs/DOMAIN_KNOWLEDGE.md`
+- `docs/PROJ_CONTEXT.md`
+- `docs/development-progress.md`
+- `docs/domain/knowledge-evidence/CONTEXT.md`
+- `docs/domain/knowledge-evidence/decisions.md`
+- `docs/features/kss-configuration-publication-loop/feature_context.md`
+- `docs/features/kss-configuration-publication-loop/scope-plan.md`
+- `docs/features/kss-configuration-publication-loop/tdd-report.md`
+
+### 65.6 状态
+
+- [KNOWN | HIGH] ADR-0236 与 TDD-06G 默认关闭的 Production rollback admission contract
+  建议结论为 `LOCAL_VERIFIED`；Feature 继续为 `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] Route registration、HTTP 200 fake、OIDC/CSRF 测试和完整后端通过均不表示真实
+  Production 已启用。真实 composition 明确传入 `production_agent_rollback_enabled=False`，因此
+  `can_rollback=false` 且命令不会进入 Workspace。
+- [BOUNDARY | HIGH] 真实 PostgreSQL + KSS dependency rehearsal、gate 启用、线上 rollback、
+  cross-service lease、Phase F、publication、deployment、release Gate 与 Production GO 仍未覆盖。

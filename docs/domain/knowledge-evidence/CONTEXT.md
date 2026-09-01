@@ -264,6 +264,10 @@ _Avoid_: Publication-time state trust, latest Release selection, distributed tra
 The ProofAgent command rule that binds one rollback attempt to the exact Active Agent Version pointer shown to its caller. The caller supplies that expected pointer, including explicit `null` for no Active Version; ProofAgent compares it before KSS Release preflight and again in the write Unit of Work, then uses it for both pointer compare-and-swap and `rollback_from_version_id`. Pointer drift fails with a stable conflict and no activation or audit; a lost-response retry must reload rather than being treated as idempotent.
 _Avoid_: Target-only confirmation, adopting a newer pointer, omitted expectation, automatic retry, production rollback authorization
 
+**Production Agent Rollback Admission Gate**:
+The server-owned boolean capability boundary shared by the Production Agent rollback HTTP command and the Draft action projection. It defaults to disabled in application construction and is passed as `false` explicitly by the real Production API composition. The command requires `agent.publish`, OIDC session authentication, same-origin CSRF, and the caller-confirmed Active pointer before it can enter the existing Agent Configuration Workspace. Route registration alone does not authorize or enable a Production rollback.
+_Avoid_: Development-router mounting, browser-owned capability, permission-only enablement, route-exists-means-enabled, implicit Production activation
+
 **Retired Knowledge Base Release**:
 A non-queryable Release reached through an explicit ordinary-lifecycle command only after authoritative reference checks report no executable client reference and retention requirements are satisfied. Retirement does not delete artifacts; it only makes separately authorized deletion eligible.
 _Avoid_: Deprecated Release, emergency containment, automatic cleanup, physical deletion

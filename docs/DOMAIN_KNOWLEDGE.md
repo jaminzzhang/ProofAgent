@@ -29,6 +29,8 @@ not a second glossary.
   current Agent Version rollback Release-state preflight and failure boundary.
 - `docs/adr/0235-bind-agent-version-rollback-to-the-confirmed-active-pointer.md` —
   caller-confirmed Active pointer and rollback concurrency boundary.
+- `docs/adr/0236-gate-production-agent-version-rollback-at-composition.md` —
+  default-closed Production rollback HTTP and capability admission boundary.
 
 ## High-risk implementation scenes
 

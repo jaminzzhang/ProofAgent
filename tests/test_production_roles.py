@@ -445,6 +445,7 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         production_roles.ProductionAgentPublicationConfigurationProjector,
     )
     assert captured["formal_production_agent_publication_command"] is formal_publication_command
+    assert captured["production_agent_rollback_enabled"] is False
     assert (
         application.state.formal_production_agent_candidate_external_smoke_runner
         is formal_candidate_external_smoke_runner

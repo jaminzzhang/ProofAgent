@@ -15,6 +15,33 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-09-01 Production rollback admission contract (TDD-06G)
+
+- [KNOWN | HIGH] ADR-0236 registers one strict Production Agent Version rollback
+  POST on the existing Production configuration router. The body requires
+  `expected_active_version_id`, including explicit JSON `null` for a confirmed
+  no-Active state. Delivery requires `agent.publish`, projects the authenticated
+  actor, and calls only the existing `AgentConfigurationWorkspace.rollback_version()`.
+- [KNOWN | HIGH] One composition-owned `production_agent_rollback_enabled` gate
+  controls command admission and the Draft `can_rollback` projection. `create_app`
+  defaults it to `false`, and the real Production API composition passes `false`
+  explicitly. Disabled admission returns `production_agent_rollback_unavailable`
+  without a Workspace call.
+- [COMPUTED | HIGH] RED evidence covered the missing Production route, a capability
+  that stayed false under an enabled test gate, KSS Catalog unavailability mapped as
+  409 instead of 503, an unstructured internal 500, and the real composition omitting
+  an explicit false gate. The focused rollback contract passed 10 cases; three
+  Production app security checks passed, including OIDC session and same-origin CSRF
+  around the enabled test command.
+- [COMPUTED | HIGH] The affected Production Agent/API/composition set passed 95 tests
+  with one existing Authlib warning. The complete default backend passed 2520 tests,
+  with 275 dependency-conditioned skips, 2 deselections, and the same warning. Ruff
+  and mypy over 372 product sources passed.
+- [BOUNDARY | HIGH] The real Production gate remains false. This slice did not change
+  role mappings or Dashboard code; call real PostgreSQL, KSS, a model, or ArtifactStore;
+  execute a rollback; create or deregister a Grant/Reference; enter Phase F; publish;
+  deploy; establish a cross-service lease; or grant Production GO.
+
 ## 2026-09-01 PostgreSQL rollback transaction vertical verification (TDD-06F)
 
 - [KNOWN | HIGH] TDD-06F adds a PostgreSQL integration test boundary around the
