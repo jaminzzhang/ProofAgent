@@ -148,6 +148,14 @@ _Avoid_: Exception message, root-cause claim, raw score, Candidate Evidence summ
 A production-local compatibility check that binds the deployment-owned Admission Scorer through the normal production runtime and scores one fixed synthetic Candidate. It verifies Scorer identity, versioned Secret Handle resolution, guarded egress, and the exact response contract without calling KSS, an Agent answer model, artifact storage, or publication authority. A pass does not classify a real Candidate failure or qualify a Published Agent.
 _Avoid_: Real Candidate replay, Evidence quality assessment, threshold calibration, external model smoke, publication Gate
 
+**Synthetic Control Plane Admission Verification**:
+A production-local compatibility check that keeps one fixed Candidate Result in memory at the KSS service boundary, then sends it through the public Knowledge Retrieval Service, deterministic Policy, deployment-owned Admission Scorer, and Evidence Evaluation. It proves one fixed synthetic Candidate can be accepted by the current path without creating a KSS Query, calling an answer model, storing an artifact, or entering publication authority.
+_Avoid_: Real KSS Query, Draft Candidate diagnosis, complete Agent Run, cited-answer proof, Phase F authorization
+
+**Synthetic Governed Run Verification**:
+A production-local compatibility check that sends one fixed in-memory Candidate through the public governed Agent Run entry using the production runtime binding and deterministic planner, reviewer, and answer providers. Success requires one Accepted Evidence item, one citation, a cited answer, and ephemeral trace/receipt files that are deleted after verification. It creates no KSS Query, external answer-model call, durable artifact, or publication authority.
+_Avoid_: Real Candidate replay, durable validation artifact, external cited-answer evidence, formal online smoke, release Gate
+
 **Remote Citation Link Allowlist**:
 The protocol and domain validation policy that determines whether an external remote Knowledge Source citation URL may be rendered as a clickable Dashboard or customer-facing link. A citation that fails validation remains visible as non-clickable source text.
 _Avoid_: Arbitrary external link, javascript URL, secret-bearing URL

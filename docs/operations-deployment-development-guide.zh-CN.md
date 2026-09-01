@@ -172,6 +172,39 @@ identity/revision 和显式 false authority flags；失败输出不包含 except
 response。该命令不是 external model smoke、Phase F、publication approval、release Gate 或
 Production GO。
 
+如需继续检查固定 Candidate 能否通过当前 Control Plane Admission 路径，运行：
+
+```bash
+./scripts/production-local-verify-control-plane-admission.sh
+```
+
+该命令同样不接受参数。它只在 KSS service 端口返回固定内存 Candidate Result，随后执行公开
+Knowledge Retrieval Service、deterministic Policy、deployment-owned Scorer 和 Evidence
+Evaluation。成功必须得到明确的 policy allow、Evidence Validation passed 和 accepted count 1；
+策略拒绝或分数低于固定阈值均失败关闭。
+
+输出不包含 question、Candidate 标识/内容、分数、阈值、citation、credential、endpoint 或 raw
+response。该命令不创建 KSS Query，不调用 DeepSeek，不写 Artifact Store，也不进入 Phase F 或
+formal publication。通过结果只是 fixed-synthetic production-local 证据，不是完整 Agent Run、引用
+回答、release Gate 或 Production GO。
+
+如需继续检查固定 Candidate 能否通过完整受管 Run 并形成引用回答，运行：
+
+```bash
+./scripts/production-local-verify-governed-run.sh
+```
+
+该命令仍不接受参数。它复用 production runtime binding、query factory、Admission Scorer、
+Controlled ReAct、Evidence Evaluation 和公开 Agent Run 入口；只有 KSS service 端口返回固定
+内存 Candidate Result。planner、reviewer 和 answer provider 均为 checked-in deterministic
+fixture。成功必须得到 `answered_with_citations`、1 份 Accepted Evidence 和 1 条 citation。
+
+trace 和 receipt 只写入临时目录，并在命令结束后删除；它们不会进入 Artifact Store。命令不创建
+KSS Query，不调用 DeepSeek，不进入 Phase F 或 formal publication。输出不含 question、Candidate
+标识/内容、citation 正文、分数、阈值、credential、provider response 或 artifact path。失败只输出
+固定 envelope；已分类失败可附一个 allowlist stage。通过结果不是 Draft@14 external smoke、formal
+online-smoke qualification、release Gate 或 Production GO。
+
 在运行正式发布命令前，可以对一个 exact Draft revision 执行只读候选预检：
 
 ```bash

@@ -9,11 +9,14 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from proof_agent.contracts import (
+    EnforcementPoint,
+    PolicyRule,
     ProductionSecretHandle,
     ResolvedKnowledgeBindingSet,
     ResolvedKnowledgeSourceServiceBinding,
     SecretPurpose,
 )
+from proof_agent.control.policy.engine import PolicyEngine
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +206,131 @@ def test_production_local_scorer_identity_and_endpoint_are_deployment_owned() ->
         "PROOF_AGENT_KSS_ADMISSION_SCORER_REVISION: "
         "insurance-evidence-admission.local-compatibility.v1" in compose
     )
+
+
+def test_control_plane_synthetic_verifier_admits_one_candidate() -> None:
+    verifier = _verifier()
+    scorer = _AdmissionScorer()
+
+    result = verifier.verify_production_local_control_plane_admission(
+        runtime=_Runtime(scorer),
+        binding=_binding(),
+    )
+
+    assert len(scorer.calls) == 1
+    assert result == {
+        "schema_version": "production-local-control-plane-admission-verification.v1",
+        "evidence_class": "local_synthetic_dependency_validation_only",
+        "status": "passed",
+        "scorer_id": SCORER_ID,
+        "scorer_revision": SCORER_REVISION,
+        "policy_decision": "allow",
+        "policy_rule_id": "default.allow",
+        "evidence_validation_status": "passed",
+        "accepted_evidence_count": 1,
+        "candidate_count": 1,
+        "question_sha256": hashlib.sha256(SYNTHETIC_QUESTION.encode("utf-8")).hexdigest(),
+        "candidate_set_sha256": hashlib.sha256(SYNTHETIC_CANDIDATE_ID.encode("utf-8")).hexdigest(),
+        "kss_query_created": False,
+        "external_model_called": False,
+        "phase_f_authorized": False,
+        "publication_authorized": False,
+    }
+    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True).casefold()
+    for forbidden in (
+        SYNTHETIC_QUESTION.casefold(),
+        SYNTHETIC_CANDIDATE_ID.casefold(),
+        '"admission_score":',
+        '"min_score":',
+        '"credential":',
+        '"authorization":',
+    ):
+        assert forbidden not in serialized
+
+
+def test_control_plane_synthetic_verifier_fails_closed_below_threshold() -> None:
+    verifier = _verifier()
+
+    with pytest.raises(RuntimeError, match="Admission decision"):
+        verifier.verify_production_local_control_plane_admission(
+            runtime=_Runtime(_AdmissionScorer(scores={SYNTHETIC_CANDIDATE_ID: 0.4})),
+            binding=_binding(),
+        )
+
+
+def test_control_plane_synthetic_verifier_rejects_boolean_score() -> None:
+    verifier = _verifier()
+
+    with pytest.raises(RuntimeError, match="invalid synthetic score"):
+        verifier.verify_production_local_control_plane_admission(
+            runtime=_Runtime(_AdmissionScorer(scores={SYNTHETIC_CANDIDATE_ID: True})),
+            binding=_binding(),
+        )
+
+
+def test_control_plane_synthetic_verifier_stops_on_policy_denial() -> None:
+    verifier = _verifier()
+    scorer = _AdmissionScorer()
+    policy = PolicyEngine(
+        (
+            PolicyRule(
+                rule_id="deny-synthetic-retrieval",
+                enforcement_point=EnforcementPoint.BEFORE_RETRIEVAL,
+                condition={},
+                decision={"on_match": "deny"},
+                reason_template="Synthetic retrieval denied for verification.",
+            ),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="retrieval policy"):
+        verifier.verify_production_local_control_plane_admission(
+            runtime=_Runtime(scorer),
+            binding=_binding(),
+            policy=policy,
+        )
+
+    assert scorer.calls == []
+
+
+def test_control_plane_synthetic_verifier_cli_hides_failure_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    verifier = _verifier()
+    secret_sentinel = "private-admission-trace-must-not-appear"
+
+    def fail() -> None:
+        raise RuntimeError(secret_sentinel)
+
+    monkeypatch.setattr(verifier, "control_plane_main", fail)
+
+    assert verifier.control_plane_cli() == 1
+
+    output = capsys.readouterr()
+    assert json.loads(output.err) == {
+        "schema_version": ("production-local-control-plane-admission-verification-failure.v1"),
+        "status": "failed",
+        "error_code": "control_plane_admission_verification_failed",
+    }
+    assert secret_sentinel not in output.err
+    assert output.out == ""
+
+
+def test_control_plane_synthetic_verifier_host_entry_accepts_no_data_arguments() -> None:
+    script = (
+        PROJECT_ROOT / "scripts" / "production-local-verify-control-plane-admission.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'if [ "$#" -ne 0 ]' in script
+    assert "verify_control_plane_admission.py" in script
+    for forbidden in (
+        "PROOF_AGENT_KSS_RELEASE_ID=",
+        "PROOF_AGENT_EXTERNAL_SMOKE_AGENT_ID=",
+        "PROOF_AGENT_QA_MODEL_CONNECTION_ID=",
+        "PROOF_AGENT_QA_QUESTION=",
+    ):
+        assert forbidden not in script
 
 
 def _binding() -> ResolvedKnowledgeSourceServiceBinding:

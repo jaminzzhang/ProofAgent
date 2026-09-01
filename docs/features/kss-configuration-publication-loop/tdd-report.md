@@ -3915,3 +3915,90 @@ Formal Command、Version 或 Active pointer，也不能进入 Phase F。
 - [BOUNDARY | HIGH] 该结果不能判断 Draft@14 的 Candidate 质量、阈值或 policy root cause，不能
   追溯分类 TDD-05Y，也不是 positive external KSS/model cited-answer evidence、formal online-smoke
   qualification、publication approval、release Gate 或 Production GO。
+
+## 60. TDD-06B：fixed-synthetic Control Plane Admission verification
+
+### 60.1 冻结边界
+
+[FRAME | HIGH] 本片复用 TDD-06A 的固定 synthetic question/Candidate 和 production runtime
+binding，只在 KSS service 端口使用内存结果。验证主体是公开
+`KnowledgeRetrievalService.retrieve()`、默认 deterministic Policy、部署装配的 Admission Scorer
+以及 Evidence Evaluation，不进入完整 Agent Run。
+
+[BOUNDARY | HIGH] verifier 不创建 KSS Query，不调用 DeepSeek，不持久化 artifact，不进入 Phase F
+或 formal publication。成功输出仅包含 identity、摘要、计数、策略和校验状态；输入正文、Candidate
+标识/内容、分数、阈值、citation、credential 和 provider detail 均不输出。
+
+### 60.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | Control Plane verifier、独立 CLI 和零参数 host 入口尚不存在 | 5 个目标失败，既有 10 项保持通过 |
+| GREEN | 固定 Candidate 经真实 Policy → retrieval → bound Scorer → Evidence Evaluation，成功 accepted count 为 1 | 初始聚焦集合 15 passed |
+| REFACTOR | exact Candidate-set guard、bounded trace、低分拒绝、布尔分值拒绝、policy deny 短路、失败脱敏和共用 production composition | 最终聚焦集合 16 passed；Ruff、Mypy 与 shell syntax 通过 |
+
+### 60.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦行为 | 16 passed | 包含低分、布尔分值、policy deny、CLI 脱敏和零参数合同 |
+| 受影响回归 | 45 passed | runtime、KSS client、policy、Agent package execution |
+| 完整默认后端 | 2490 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 没有新增依赖或 migration |
+| 静态检查 | Ruff 通过；Mypy 374 sources 通过；shell syntax 通过 | verifier 保持独立 deployment helper |
+| production-local build/baseline | image `4a78f9e64024f51bf7e70392c9849ee7fd6b8766e64b41a21eca4bdf101e6fd6`；baseline 通过 | schema `0024`；`/readyz` 仍只因 `published_agent=not_ready` 返回预期 503 |
+| fixed synthetic Control Plane live verifier | policy `default.allow`、Evidence Validation `passed`、accepted count 1 | 使用本地 compatibility Scorer；KSS 端口为固定内存 Candidate Result |
+| 副作用只读核对 | KSS Query=22；Formal Command=0 | 未调用 DeepSeek、Artifact Store 或 formal endpoint |
+
+### 60.4 状态
+
+- [KNOWN | HIGH] ADR-0232 与 TDD-06B 建议结论为 `LOCAL_VERIFIED`；Feature 继续为
+  `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] production-local compatibility Scorer 已在当前公开 Control Plane retrieval-policy
+  与 Evidence Evaluation 路径中接纳一个固定 synthetic Candidate。
+- [BOUNDARY | HIGH] 该结果不覆盖真实 KSS Query、Draft@14 Candidate、answer model、citation、完整
+  Run、Phase F 或 formal publication，不是 positive cited-answer evidence、release Gate 或
+  Production GO。
+
+## 61. TDD-06C：fixed-synthetic governed Run verification
+
+### 61.1 冻结边界
+
+[FRAME | HIGH] 本片复用固定 synthetic question/Candidate 与 production runtime binding，调用公开
+`execute_agent_package_run()`。仅 KSS service 端口使用固定内存结果；query factory、Admission
+Scorer、Controlled ReAct、Evidence Evaluation、deterministic model、citation 和 governance
+receipt 均走当前运行路径。
+
+[BOUNDARY | HIGH] verifier 不创建 KSS Query，不调用 DeepSeek，不写 ArtifactStore，不进入 Phase F
+或 formal publication。trace/receipt 只存在于临时目录，验证后删除。成功输出不含输入正文、
+Candidate 标识/内容、citation 正文、分数、阈值、credential、provider response 或 artifact path。
+
+### 61.2 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED | governed Run verifier 与零参数 host 入口尚不存在 | 初始聚焦 4 failed，均为目标文件缺失 |
+| GREEN | 固定 Candidate 经公开 Agent Run 入口生成 1 份 Accepted Evidence 和 1 条 citation；低分路径拒答 | 初始聚焦 4 passed |
+| REFACTOR | 增加 content-free allowlist stage、只读容器 fixture 修复、临时审计合同与失败脱敏 | 两次定向 RED 均先失败；最终聚焦 6 passed |
+
+### 61.3 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 聚焦行为 | 6 passed | cited answer、低分失败关闭、临时审计、通用失败脱敏、allowlist stage 与零参数合同 |
+| 受影响回归 | 104 passed | Agent package execution、production runtime、Admission Scorer 与 Controlled ReAct |
+| 完整默认后端 | 2496 passed、272 dependency-conditioned skips、2 deselected、1 existing warning | 没有新增依赖或 migration |
+| 静态检查 | Ruff 通过；CI 口径 Mypy 372 sources 通过；verifier 单文件 Mypy 与 shell syntax 通过 | 扩大到既有 deployment helper 的非 CI Mypy 口径仍有 4 项历史问题，与本片无关 |
+| production-local baseline | immutable overlay image `5614b7398ee396d8d37ab153400a5055649932070f5ce83b5cc00a32870f3436` baseline 通过 | API、model-plane、Run Executor 使用同一 digest；schema `0024`；`/readyz` 仍只因 `published_agent=not_ready` 返回预期 503 |
+| fixed synthetic governed Run | checked-in 零参数 host 入口运行通过；outcome `answered_with_citations`、Accepted Evidence=1、citation=1 | overlay 仅在既有 baselined image 上复制最终 verifier；未使用 `/tmp` 注入 |
+| 副作用只读核对 | KSS Query=22；Formal Command=0 | 未调用 DeepSeek、真实 KSS Query、ArtifactStore 或 formal endpoint |
+| 完整镜像重建 | 未完成 | 两次完整构建及两次窄化普通构建均停在外部基础镜像 metadata 解析，已中止；独立 overlay 不能替代完整 Dockerfile build |
+
+### 61.4 状态
+
+- [KNOWN | HIGH] ADR-0233 与 TDD-06C 的代码、核心行为和 production-local 运行依赖建议结论为
+  `LOCAL_VERIFIED`；Feature 继续为 `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 当前 governed Run 路径已让一个固定 synthetic Candidate 形成 1 份 Accepted
+  Evidence、1 条 citation 和 cited answer；临时 trace/receipt 已验证存在并在退出后删除。
+- [BOUNDARY | HIGH] checked-in host 入口已在独立 immutable overlay image 中通过，但完整 production
+  Dockerfile build 仍需在外部 metadata 恢复后补证。当前证据不覆盖真实 KSS Query、Draft@14、
+  DeepSeek、durable ArtifactStore、Phase F、formal publication、release Gate 或 Production GO。

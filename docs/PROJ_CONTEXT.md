@@ -720,10 +720,35 @@ the fixed synthetic live verifier. Query remains 22 and Formal Command remains 0
 does not identify the earlier Draft@14 Admission root cause or establish positive
 external cited-answer evidence, publication approval or Production GO.
 
+[KNOWN | HIGH] TDD-06B applies ADR-0232 and adds a second zero-argument
+production-local verifier. It keeps one fixed Candidate Result in memory at the KSS
+service boundary, then exercises the public Knowledge Retrieval Service, deterministic
+Policy, deployment-owned compatibility Scorer and Evidence Evaluation. The focused set
+passed 16 tests, the affected set passed 45 and the complete backend passed 2490 with
+272 conditioned skips and 2 deselected. Rebuilt image
+`4a78f9e64024f51bf7e70392c9849ee7fd6b8766e64b41a21eca4bdf101e6fd6` passed baseline;
+the live verifier returned `default.allow`, Evidence Validation `passed` and accepted
+count 1. Query remains 22 and Formal Command remains 0. This is fixed-synthetic local
+evidence only; it does not cover a real KSS Query, Draft@14, DeepSeek, a complete Agent
+Run, Phase F, publication approval or Production GO.
+
+[KNOWN | HIGH] TDD-06C applies ADR-0233 and advances the same fixed synthetic Candidate
+through the public governed Agent Run entry. The final focused set passed 6 tests, the
+affected set passed 104 and the complete backend passed 2496 with 272 conditioned skips
+and 2 deselected. Because external base-image metadata remained unavailable, an
+independent immutable overlay copied only the final verifier onto the previously
+baselined image. API, model-plane and Run Executor all used overlay image
+`5614b7398ee396d8d37ab153400a5055649932070f5ce83b5cc00a32870f3436`; the full baseline
+and checked-in zero-argument host entry passed with `answered_with_citations`, one
+Accepted Evidence item and one citation. Query remains 22 and Formal Command remains 0.
+Two full builds and two narrowed ordinary builds stalled at external metadata resolution,
+so a full production Dockerfile build remains pending. This does not cover Draft@14,
+DeepSeek, durable ArtifactStore retention, Phase F, publication approval or Production GO.
+
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
-| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, production Vault/egress/TLS or Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation integration or production cutover) | ADR-0211 through ADR-0231 |
+| `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; TDD-06B fixed-synthetic Control Plane Admission verification; TDD-06C fixed-synthetic governed Run verification through an immutable overlay image and checked-in host entry, with full Dockerfile build pending; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, production Vault/egress/TLS or Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation integration or production cutover) | ADR-0211 through ADR-0233 |
 | `production-agent-lifecycle` | `PARTIAL_VERIFICATION` | `docs/features/production-agent-lifecycle/` | ADR-0124 and `docs/superpowers/plans/2026-07-11-proofagent-s5-sole-agent-migration-plan.md` |
 | `product-release-authority` | `VERIFIED_LOCAL` | `docs/features/product-release-authority/` | ADR-0132 and ADR-0208 |
 | `agent-configuration-workspace` | `VERIFIED_LOCAL` | `docs/features/agent-configuration-workspace/` | ADR-0009、ADR-0011 与 2026-08-18 架构评审 Phase 3 |

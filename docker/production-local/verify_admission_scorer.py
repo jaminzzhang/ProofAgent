@@ -7,17 +7,18 @@ or enter publication authority.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 import hashlib
 import json
 import math
 import os
 import sys
-from typing import Any
+from typing import Any, Literal
 import warnings
 
 from proof_agent.contracts import (
+    TraceEventType,
     ProductionSecretHandle,
     ResolvedKnowledgeBindingSet,
     ResolvedKnowledgeSourceServiceBinding,
@@ -28,6 +29,11 @@ from proof_agent.contracts.knowledge_candidates import (
     KnowledgeCandidateResult,
 )
 from proof_agent.contracts.ports.secret_provider import SecretProvider
+from proof_agent.control.knowledge.retrieval_service import (
+    KnowledgeRetrievalRequest,
+    KnowledgeRetrievalService,
+)
+from proof_agent.control.policy.engine import PolicyEngine
 
 
 _SYNTHETIC_BINDING_ID = "synthetic-admission-binding-v1"
@@ -36,6 +42,7 @@ _SYNTHETIC_QUERY_ID = "synthetic-admission-query-v1"
 _SYNTHETIC_CANDIDATE_ID = "synthetic-admission-candidate-1"
 _SYNTHETIC_QUESTION = "What synthetic evidence should this verifier score?"
 _SYNTHETIC_CONTENT = "Candidate Evidence contains only synthetic validation data."
+_SYNTHETIC_MIN_SCORE = 0.5
 
 
 def verify_production_local_admission_scorer(
@@ -84,7 +91,91 @@ def verify_production_local_admission_scorer(
     }
 
 
+def verify_production_local_control_plane_admission(
+    *,
+    runtime: Any,
+    binding: ResolvedKnowledgeSourceServiceBinding,
+    policy: PolicyEngine | None = None,
+) -> dict[str, object]:
+    """Admit one fixed Candidate through the public Control Plane retrieval seam."""
+
+    dependencies = runtime.bind_for_run(ResolvedKnowledgeBindingSet(bindings=(binding,)))
+    scorer = dependencies.admission_scorer
+    if (
+        scorer.scorer_id != binding.admission_scorer_id
+        or scorer.scorer_revision != binding.admission_scorer_revision
+    ):
+        raise RuntimeError("production-local scorer identity changed")
+
+    query = _synthetic_query()
+    candidate_result = _synthetic_result()
+    candidate_service = _SyntheticCandidateService(query, candidate_result)
+    trace = _BoundedTraceCapture()
+    service = KnowledgeRetrievalService(
+        trace=trace,
+        policy=policy or PolicyEngine(()),
+        knowledge_candidate_service=candidate_service,
+        knowledge_candidate_admission_scorer=_ExactSyntheticAdmissionScorer(scorer),
+    )
+    retrieval = service.retrieve(
+        KnowledgeRetrievalRequest(
+            question=query.question,
+            strategy="single_step",
+            top_k=1,
+            min_score=_SYNTHETIC_MIN_SCORE,
+            knowledge_candidate_query=query,
+        )
+    )
+
+    policy_event = trace.single_policy_event()
+    if policy_event["decision"] != "allow":
+        raise RuntimeError("synthetic retrieval policy denied")
+    if candidate_service.query_count != 1 or retrieval.candidate_result != candidate_result:
+        raise RuntimeError("Control Plane did not consume the exact synthetic Candidate result")
+
+    evidence_status = retrieval.evidence_result.status.value
+    accepted_count = retrieval.evidence_result.metadata.get("accepted_count")
+    if evidence_status != "passed" or accepted_count != 1 or len(retrieval.evidence) != 1:
+        raise RuntimeError("Admission decision did not accept the exact synthetic Candidate")
+
+    candidate_ids = tuple(
+        candidate.candidate_evidence_id
+        for group in candidate_result.evidence_groups
+        for candidate in group.candidate_evidence
+    )
+    return {
+        "schema_version": "production-local-control-plane-admission-verification.v1",
+        "evidence_class": "local_synthetic_dependency_validation_only",
+        "status": "passed",
+        "scorer_id": scorer.scorer_id,
+        "scorer_revision": scorer.scorer_revision,
+        "policy_decision": policy_event["decision"],
+        "policy_rule_id": policy_event["policy_rule_id"],
+        "evidence_validation_status": evidence_status,
+        "accepted_evidence_count": accepted_count,
+        "candidate_count": len(candidate_ids),
+        "question_sha256": _sha256(_SYNTHETIC_QUESTION),
+        "candidate_set_sha256": _sha256("\n".join(sorted(candidate_ids))),
+        "kss_query_created": False,
+        "external_model_called": False,
+        "phase_f_authorized": False,
+        "publication_authorized": False,
+    }
+
+
 def main() -> None:
+    result = _run_in_production_composition(verify_production_local_admission_scorer)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def control_plane_main() -> None:
+    result = _run_in_production_composition(verify_production_local_control_plane_admission)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def _run_in_production_composition(
+    verifier: Callable[..., dict[str, object]],
+) -> dict[str, object]:
     from authlib.deprecate import (  # type: ignore[import-untyped]
         AuthlibDeprecationWarning,
     )
@@ -118,11 +209,10 @@ def main() -> None:
             http_client=guarded,
             secret_provider=secret_provider,
         )
-        result = verify_production_local_admission_scorer(
+        return verifier(
             runtime=runtime,
             binding=_synthetic_binding(values, secret_provider=secret_provider),
         )
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
     finally:
         persistence.close()
 
@@ -148,6 +238,105 @@ def cli() -> int:
         )
         return 1
     return 0
+
+
+def control_plane_cli() -> int:
+    """Run the Control Plane check with one bounded public failure projection."""
+
+    try:
+        control_plane_main()
+    except Exception:
+        print(
+            json.dumps(
+                {
+                    "schema_version": (
+                        "production-local-control-plane-admission-verification-failure.v1"
+                    ),
+                    "status": "failed",
+                    "error_code": "control_plane_admission_verification_failed",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+    return 0
+
+
+class _SyntheticCandidateService:
+    """Return one fixed Candidate Result without creating a KSS Query."""
+
+    def __init__(
+        self,
+        query: KnowledgeCandidateQuery,
+        result: KnowledgeCandidateResult,
+    ) -> None:
+        self._query = query
+        self._result = result
+        self.query_count = 0
+
+    def query(self, request: KnowledgeCandidateQuery) -> KnowledgeCandidateResult:
+        if request != self._query:
+            raise RuntimeError("Control Plane changed the exact synthetic Candidate Query")
+        self.query_count += 1
+        return self._result
+
+
+class _ExactSyntheticAdmissionScorer:
+    """Keep the bound scorer exact at the fixed synthetic Candidate boundary."""
+
+    def __init__(self, scorer: Any) -> None:
+        self._scorer = scorer
+        self.scorer_id = scorer.scorer_id
+        self.scorer_revision = scorer.scorer_revision
+
+    def score_candidates(
+        self,
+        *,
+        query: KnowledgeCandidateQuery,
+        result: KnowledgeCandidateResult,
+    ) -> Mapping[str, float]:
+        scores: Mapping[str, float] = self._scorer.score_candidates(
+            query=query,
+            result=result,
+        )
+        if set(scores) != {_SYNTHETIC_CANDIDATE_ID}:
+            raise RuntimeError("Admission Scorer did not score the exact synthetic candidate set")
+        if any(not _valid_score(score) for score in scores.values()):
+            raise RuntimeError("Admission Scorer returned an invalid synthetic score")
+        return scores
+
+
+class _BoundedTraceCapture:
+    """Retain only the policy summary needed by this local verifier."""
+
+    def __init__(self) -> None:
+        self._policy_events: list[dict[str, str]] = []
+
+    def emit(
+        self,
+        event_type: TraceEventType | str,
+        *,
+        status: Literal["ok", "blocked", "waiting", "error"],
+        payload: Mapping[str, Any],
+    ) -> None:
+        event_value = event_type.value if isinstance(event_type, TraceEventType) else event_type
+        if event_value != "policy_decision":
+            return
+        self._policy_events.append(
+            {
+                "status": status,
+                "decision": str(payload.get("decision", "")),
+                "policy_rule_id": str(payload.get("policy_rule_id", "")),
+            }
+        )
+
+    def single_policy_event(self) -> dict[str, str]:
+        if len(self._policy_events) != 1:
+            raise RuntimeError("Control Plane did not emit one bounded retrieval policy decision")
+        return self._policy_events[0]
 
 
 def _synthetic_binding(

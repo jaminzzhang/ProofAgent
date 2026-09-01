@@ -902,3 +902,41 @@ model，不写 artifact，也不创建 Query、Grant、Reference、Formal Comman
 pointer。通过结果只能证明 production-local compatibility Scorer composition；不能判断 Draft@14
 Candidate 质量、阈值或 policy root cause，也不是 external model evidence、Phase F、publication
 approval、release Gate 或 Production GO。具体决策见 ADR-0231。
+
+## 16. TDD-06B：fixed-synthetic Control Plane Admission verification
+
+[FRAME | HIGH] 本片在 TDD-06A 的固定合成输入上再前进一层，但不扩大到真实 KSS 或 Agent Run。
+入口通过 production runtime binding 取得部署装配的 Admission Scorer，只在
+`KnowledgeCandidateService` 端口放置固定内存 Candidate Result，再调用公开的
+`KnowledgeRetrievalService.retrieve()`。`PolicyEngine`、Candidate 投影、Scorer 和 Evidence
+Evaluation 均复用生产代码。
+
+[FRAME | HIGH] question、Candidate、strategy、单 Candidate 预算和 `min_score` 全部固定，调用者不能
+覆盖。成功必须同时满足 Scorer identity/revision 精确匹配、策略明确允许、Candidate 集合不漂移、
+Evidence Evaluation 通过且 accepted count 恰为 1。策略拒绝、分数低于阈值、Scorer 或 Candidate
+漂移均失败关闭。公开结果不得包含输入正文、Candidate 标识/内容、分数、阈值、citation、credential、
+endpoint、raw response 或 exception。
+
+[BOUNDARY | HIGH] 固定内存 Candidate Service 不创建 KSS Query；本片不调用 DeepSeek，不读写
+Artifact Store，不进入 Phase F，也不创建 Grant、Reference、Formal Command、Version 或 Active
+pointer。通过结果只证明一条 fixed-synthetic production-local Control Plane Admission 路径，不能
+判断 Draft@14、真实 Candidate 质量、引用回答、正式发布、release Gate 或 Production GO。具体决策
+见 ADR-0232。
+
+## 17. TDD-06C：fixed-synthetic governed Run verification
+
+[FRAME | HIGH] 本片继续使用 TDD-06A/06B 的固定 synthetic question/Candidate 和 production
+runtime binding，只把验证入口推进到公开 `execute_agent_package_run()`。KSS service 端口仍返回
+固定内存 Candidate；query factory、Admission Scorer、Controlled ReAct、Evidence Evaluation、
+deterministic planner/reviewer/answer、citation 和 governance receipt 均复用当前运行代码。
+
+[FRAME | HIGH] verifier 为零参数入口。question、Candidate、Release、strategy、budget、Scorer
+identity 和 deterministic model fixture 全部固定；调用者不能覆盖。成功必须得到
+`ANSWERED_WITH_CITATIONS`、1 份 Accepted Evidence、1 条 citation，并在临时目录中同时生成 trace
+和 receipt。低于 threshold、identity/fixture 漂移、临时审计缺失或 outcome/count 漂移均失败关闭。
+
+[BOUNDARY | HIGH] 临时 trace/receipt 在运行结束后删除，不写 ArtifactStore。固定内存 Candidate
+Service 不创建 KSS Query；本片不调用 DeepSeek，不读取 Draft@14 Candidate，不进入 Phase F，
+也不创建 Grant、Reference、Formal Command、Version 或 Active pointer。通过结果只证明一条
+fixed-synthetic production-local governed Run，不是 exact Candidate 外部验证、formal online-smoke
+qualification、release Gate 或 Production GO。具体决策见 ADR-0233。

@@ -15,6 +15,58 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-09-01 fixed-synthetic governed Run verification (TDD-06C)
+
+- [KNOWN | HIGH] ADR-0233 adds a zero-argument production-local verifier that advances
+  the fixed synthetic Candidate through the public `execute_agent_package_run()` entry.
+  Only the KSS service port is in memory; production runtime binding, query factory,
+  Admission Scorer, Controlled ReAct, Evidence Evaluation, citation and receipt remain
+  on the current execution path.
+- [KNOWN | HIGH] The production-local run returned `answered_with_citations`, one
+  Accepted Evidence item and one citation. Trace and receipt existed only in a temporary
+  directory and were removed after verification. A low score fails closed; public
+  failures contain only a stable envelope and allowlisted stage.
+- [COMPUTED | HIGH] Initial RED produced 4 expected missing-entry failures. Two later
+  focused RED tests caught missing stage projection and a read-only-container audit-path
+  mismatch. The final focused set passed 6 tests, the affected set passed 104, and the
+  complete backend passed 2496 with 272 conditioned skips, 2 deselected and one existing
+  Authlib warning. Ruff, CI-scope Mypy, verifier Mypy and shell syntax passed.
+- [KNOWN | HIGH] Independent immutable overlay image
+  `5614b7398ee396d8d37ab153400a5055649932070f5ce83b5cc00a32870f3436` copied only the
+  final verifier onto the previously baselined image. API, model-plane and Run Executor
+  used that exact digest; the full baseline and checked-in zero-argument host entry
+  passed. KSS Query remains 22, Formal Command remains 0 and `/readyz` remains the
+  expected 503 only because `published_agent=not_ready`.
+- [BOUNDARY | HIGH] Two full builds and two narrowed ordinary builds stalled at external
+  base-image metadata resolution and were stopped. TDD-06C core behavior and immutable
+  overlay host entry are `LOCAL_VERIFIED`, but the full production Dockerfile build is
+  pending. This evidence does not cover a real KSS Query, Draft@14, DeepSeek, durable
+  ArtifactStore, Phase F or formal publication and does not establish external
+  cited-answer evidence, a release Gate or Production GO.
+
+## 2026-09-01 fixed-synthetic Control Plane Admission verification (TDD-06B)
+
+- [KNOWN | HIGH] ADR-0232 adds a second zero-argument production-local verifier. It
+  places one fixed in-memory Candidate Result only at the KSS service boundary, then
+  executes the public Knowledge Retrieval Service, deterministic Policy, deployment-owned
+  Admission Scorer and Evidence Evaluation.
+- [KNOWN | HIGH] The live verifier returned policy `default.allow`, Evidence Validation
+  `passed` and accepted count 1. Policy denial stops before scoring; a score below the
+  fixed threshold fails closed. Public output excludes the question, Candidate identity/
+  content, score, threshold, citation, credential, endpoint and raw response.
+- [COMPUTED | HIGH] RED produced 5 expected target failures while 10 prior checks stayed
+  green. The final focused set passed 16 tests, the affected set passed 45, and the
+  complete backend passed 2490 with 272 conditioned skips, 2 deselected and one existing
+  Authlib warning. Ruff passed and Mypy passed 374 source files.
+- [KNOWN | HIGH] Rebuilt production-local image
+  `4a78f9e64024f51bf7e70392c9849ee7fd6b8766e64b41a21eca4bdf101e6fd6` passed the
+  baseline. KSS Query count remains 22 and Formal Command count remains 0; `/readyz`
+  remains the expected 503 only because `published_agent=not_ready`.
+- [FRAME | HIGH] TDD-06B is `LOCAL_VERIFIED`; the Feature remains
+  `PARTIAL_VERIFICATION`. It did not call a real KSS Query, DeepSeek, Artifact Store,
+  Phase F or formal publication and does not establish positive cited-answer evidence,
+  a release Gate or Production GO.
+
 ## 2026-09-01 fixed-synthetic production-local Admission Scorer verification (TDD-06A)
 
 - [KNOWN | HIGH] ADR-0231 adds one zero-argument production-local verifier. It binds the
