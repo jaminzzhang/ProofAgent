@@ -4263,3 +4263,96 @@ git diff --check
   `can_rollback=false` 且命令不会进入 Workspace。
 - [BOUNDARY | HIGH] 真实 PostgreSQL + KSS dependency rehearsal、gate 启用、线上 rollback、
   cross-service lease、Phase F、publication、deployment、release Gate 与 Production GO 仍未覆盖。
+
+## 66. TDD-06H：隔离真实依赖回滚演练
+
+### 66.1 冻结边界
+
+[FRAME | HIGH] 本片只验证既有纵向组合，不增加 Production 业务实现：Production rollback POST、
+OIDC session、same-origin CSRF、`agent.publish`、Agent Configuration Workspace、真实
+`KnowledgeSourceServiceManagementClient`、KSS runtime/Catalog/lifecycle PostgreSQL 与 ProofAgent
+`PostgresConfigurationUnitOfWork`。两个服务使用同一个 disposable PostgreSQL 容器中的独立随机
+schema，测试数据完全虚构。
+
+[FRAME | HIGH] `production_agent_rollback_enabled=True` 只存在于测试 composition。真实
+`create_production_api_application()` 继续显式传入 `false`。零参数入口使用精确 Compose project、
+`--env-file /dev/null` 和 PostgreSQL required flags；退出时只删除该项目的容器、网络和可重建状态。
+
+[BOUNDARY | HIGH] KSS management HTTP 使用进程内 TestClient，KSS artifact store 为内存实现；
+本片不证明 TLS、Vault、真实 egress、多进程部署或 cross-service lease。没有读取 `.env`、复用既有
+production-local 数据、调用 KSS Query/model/外部 ArtifactStore、创建 Grant/Reference、进入
+Phase F、publication、deployment、Release Gate 或 Production GO。具体决策见 ADR-0237。
+
+### 66.2 验证场景
+
+| Given | When | Then |
+| --- | --- | --- |
+| 两个 immutable Agent Versions 绑定真实 KSS PostgreSQL 中的 queryable Release | 认证 Operator 通过 Production POST 提交 caller-confirmed pointer | KSS management HTTP 完成 ready/catalog 读取；ProofAgent pointer 与一条 rollback audit 同事务提交 |
+| 同类 Release 通过真实 KSS lifecycle 进入 retired | 提交相同 Production POST | 返回 409 `agent_rollback_knowledge_release_unavailable`；Active pointer 保持原值且无 rollback audit |
+| 零参数 verifier 启动独立 PostgreSQL 项目 | 核心测试成功或失败退出 | 数据库用例不得 skip；只清理 `proofagent-rollback-rehearsal-tdd` 项目 |
+
+### 66.3 RED → GREEN → REFACTOR
+
+[KNOWN | HIGH] 核心纵向用于关闭组合证据缺口。修正一次嵌套测试 fixture 的 collection 接线后，
+现有生产实现首次到达业务行为即通过 2 个场景，因此如实记录为 verification-first，不制造业务
+RED。可重复运维入口采用正常 RED/GREEN。
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| COLLECTION | 嵌套目录无法导入顶层 `postgres_fixtures` | collection error；改为测试文件内独立 ProofAgent schema fixture，不计业务 RED |
+| TRACER | queryable Release 串联 Production POST、真实 KSS HTTP 与双 PostgreSQL authority | 首次业务执行 2 passed |
+| RED | 零参数隔离演练入口尚不存在 | 合同测试因目标脚本不存在而 1 failed |
+| GREEN | 新增精确 Compose project、`/dev/null` env、required PG tests 与 cleanup trap | 入口合同 1 passed；脚本端到端 2 passed |
+| REFACTOR | 补 retired 失败关闭、KSS GET 观测、pointer/audit 与清理断言 | 受影响 153 passed；完整 PG-enabled 2761 passed |
+
+### 66.4 验证结果
+
+| 检查 | 最终结果 | 限定 |
+| --- | --- | --- |
+| 零参数真实依赖演练 | 2 passed | queryable 成功与 retired 失败关闭；新 PG 用例强制执行 |
+| verifier 隔离合同 | 1 passed | exact project、`/dev/null`、required flags、cleanup 和无 Production compose/gate 字样 |
+| 受影响非数据库回归 | 153 passed、1 existing warning | Workspace、Production API/security/roles 与 verifier contract |
+| 完整 PostgreSQL-enabled 后端 | 2761 passed、37 dependency-conditioned skips、2 deselected、1 existing warning | ProofAgent/KSS PostgreSQL 用例强制执行；未提供 S3/OpenSearch 等可选依赖 |
+| 静态与一致性 | Ruff、Mypy 473 sources、domain-context、`uv lock --check`、Bash syntax、diff 通过 | 无生产代码、依赖、SQL 或 migration 变化 |
+| disposable dependency cleanup | Compose `ps --all` 空 | 仅 `proofagent-rollback-rehearsal-tdd` 容器、网络与可重建状态被删除 |
+
+### 66.5 命令与修改文件
+
+[KNOWN | HIGH] 关键验证命令如下；测试 DSN 使用仓库公开的 test-only 常量，未读取 `.env`：
+
+```text
+.venv/bin/pytest -q tests/test_production_local_agent_rollback_rehearsal.py
+./scripts/verify-production-agent-rollback-rehearsal.sh
+.venv/bin/pytest -q tests/test_production_local_agent_rollback_rehearsal.py tests/test_agent_configuration_workspace.py tests/test_production_agent_configuration_api.py tests/test_application_security_composition.py tests/test_production_roles.py
+PROOF_AGENT_TEST_POSTGRES_DSN=<disposable-local-postgres> KSS_TEST_POSTGRES_DSN=<same-disposable-local-postgres> PROOF_AGENT_REQUIRE_POSTGRES_TESTS=1 KSS_REQUIRE_POSTGRES_TESTS=1 .venv/bin/pytest -q tests/
+.venv/bin/ruff check proof_agent knowledge_source_service tests
+.venv/bin/mypy proof_agent knowledge_source_service
+python3 scripts/check-domain-contexts.py
+uv lock --check
+git diff --check
+```
+
+[KNOWN | HIGH] TDD-06H 新增或更新以下路径；生产代码、SQL 和 migration 保持不变：
+
+- `scripts/verify-production-agent-rollback-rehearsal.sh`
+- `tests/contract/knowledge_service/test_production_agent_rollback_real_dependencies.py`
+- `tests/test_production_local_agent_rollback_rehearsal.py`
+- `docs/adr/0237-rehearse-production-agent-rollback-with-isolated-real-dependencies.md`
+- `docs/DOMAIN_KNOWLEDGE.md`
+- `docs/PROJ_CONTEXT.md`
+- `docs/development-progress.md`
+- `docs/domain/knowledge-evidence/CONTEXT.md`
+- `docs/domain/knowledge-evidence/decisions.md`
+- `docs/features/kss-configuration-publication-loop/feature_context.md`
+- `docs/features/kss-configuration-publication-loop/scope-plan.md`
+- `docs/features/kss-configuration-publication-loop/tdd-report.md`
+
+### 66.6 状态
+
+- [KNOWN | HIGH] ADR-0237 与 TDD-06H 隔离真实依赖 rollback rehearsal 建议结论为
+  `LOCAL_VERIFIED`；Feature 继续为 `PARTIAL_VERIFICATION`。
+- [KNOWN | HIGH] 证据证明已覆盖的本地 KSS HTTP/PostgreSQL 与 ProofAgent Production POST/
+  PostgreSQL 组合，不证明真实部署网络、TLS/Vault/egress 或 preflight 后生命周期竞争。
+- [BOUNDARY | HIGH] 真实 Production gate 仍为 false；没有线上 rollback、KSS Query、model、
+  external ArtifactStore、Grant/Reference、Phase F、publication、deployment、Release Gate 或
+  Production GO。

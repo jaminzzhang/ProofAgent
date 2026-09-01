@@ -1030,3 +1030,23 @@ caller-confirmed pointer 失败关闭：旧 expectation 返回 conflict，调用
 Dashboard、SQL、migration 或 KSS 服务，也不连接真实 PostgreSQL/KSS、执行线上 rollback、创建或
 注销 Grant/Reference、进入 Phase F、发布、部署或授予 Production GO。cross-service rollback
 lease、真实依赖演练与正式启用属于后续独立切片。具体决策见 ADR-0236。
+
+## 22. TDD-06H：隔离真实依赖回滚演练
+
+[FRAME | HIGH] 本片只关闭 TDD-06F/06G 之间的组合证据缺口：从既有 Production rollback POST
+进入 OIDC session、same-origin CSRF、`agent.publish`、同一个 Agent Configuration Workspace，
+通过真实 `KnowledgeSourceServiceManagementClient` 读取 KSS management HTTP Catalog，并在真实
+ProofAgent PostgreSQL Unit of Work 中提交 Active pointer 与 audit。不增加第二套业务实现。
+
+[FRAME | HIGH] 验证入口只启动 `docker-compose.hybrid-test.yml` 的 PostgreSQL 服务，并使用精确
+Compose project 名与 `--env-file /dev/null`。每个用例分别创建 ProofAgent 与 KSS 随机 schema；KSS
+运行真实 runtime、PostgreSQL Catalog 和 Release lifecycle。一个 `queryable` Release 必须允许
+回滚；同一 Release 经真实 lifecycle 进入 `retired` 后，POST 必须返回稳定 409，pointer 与 audit
+保持不变。数据库用例必须强制执行，不能将 skip 记为通过。
+
+[BOUNDARY | HIGH] rollback gate 只在测试 composition 中开启；真实 Production composition 继续
+显式为 `false`。KSS HTTP 使用进程内 TestClient，artifact store 使用内存实现；本片不证明 TLS、
+Vault、真实 egress、多进程拓扑、cross-service lease 或 preflight 后的生命周期竞争。它不读取
+`.env`，不操作既有 `proofagent-production-local` 数据，不调用 KSS Query、model 或外部
+ArtifactStore，不创建 Grant/Reference，不进入 Phase F、publication、deployment、Release Gate
+或 Production GO。具体决策见 ADR-0237。

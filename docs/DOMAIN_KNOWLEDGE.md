@@ -31,6 +31,8 @@ not a second glossary.
   caller-confirmed Active pointer and rollback concurrency boundary.
 - `docs/adr/0236-gate-production-agent-version-rollback-at-composition.md` —
   default-closed Production rollback HTTP and capability admission boundary.
+- `docs/adr/0237-rehearse-production-agent-rollback-with-isolated-real-dependencies.md` —
+  isolated real KSS/PostgreSQL rollback rehearsal and Production boundary.
 
 ## High-risk implementation scenes
 

@@ -268,6 +268,10 @@ _Avoid_: Target-only confirmation, adopting a newer pointer, omitted expectation
 The server-owned boolean capability boundary shared by the Production Agent rollback HTTP command and the Draft action projection. It defaults to disabled in application construction and is passed as `false` explicitly by the real Production API composition. The command requires `agent.publish`, OIDC session authentication, same-origin CSRF, and the caller-confirmed Active pointer before it can enter the existing Agent Configuration Workspace. Route registration alone does not authorize or enable a Production rollback.
 _Avoid_: Development-router mounting, browser-owned capability, permission-only enablement, route-exists-means-enabled, implicit Production activation
 
+**Isolated Production Agent Rollback Rehearsal**:
+A disposable local verification that joins the Production rollback HTTP and security boundary to the existing Workspace, a real ProofAgent PostgreSQL transaction, a real KSS management HTTP client, and a separate real KSS PostgreSQL Catalog. The rollback gate is enabled only in the test composition; the checked-in Production composition remains disabled. A successful rehearsal proves only the covered local dependency path and cleanup, not deployed topology or Production authorization.
+_Avoid_: Existing production-local data mutation, real gate activation, online rollback, deployment rehearsal, Production GO
+
 **Retired Knowledge Base Release**:
 A non-queryable Release reached through an explicit ordinary-lifecycle command only after authoritative reference checks report no executable client reference and retention requirements are satisfied. Retirement does not delete artifacts; it only makes separately authorized deletion eligible.
 _Avoid_: Deprecated Release, emergency containment, automatic cleanup, physical deletion

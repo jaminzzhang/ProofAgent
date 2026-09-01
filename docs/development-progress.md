@@ -15,6 +15,28 @@ shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 
+## 2026-09-01 Isolated real-dependency rollback rehearsal (TDD-06H)
+
+- [KNOWN | HIGH] ADR-0237 adds a zero-argument verification entry that uses an exact
+  disposable Compose project and `--env-file /dev/null`. Each test creates separate
+  random PostgreSQL schemas for ProofAgent and KSS; no existing production-local data
+  is read or changed.
+- [COMPUTED | HIGH] The Production rollback POST ran through OIDC session,
+  same-origin CSRF, `agent.publish`, the existing Workspace, a real KSS management
+  HTTP client and real PostgreSQL authorities. A queryable Release committed one
+  pointer/audit pair; a Release retired through the real KSS lifecycle returned the
+  stable 409 and left both unchanged. The zero-argument entry passed 2 cases and its
+  exact Compose project was empty after cleanup.
+- [COMPUTED | HIGH] The non-database affected set passed 153 tests with one existing
+  Authlib warning. The complete PostgreSQL-enabled backend passed 2761 tests, with 37
+  dependency-conditioned skips, 2 deselections and the same warning. The new
+  PostgreSQL tests were required and did not skip.
+- [BOUNDARY | HIGH] The gate was true only in test composition. Real Production still
+  passes `production_agent_rollback_enabled=False`. KSS used an in-process HTTP test
+  transport and memory artifact storage; this is not deployed TLS/Vault/egress,
+  multi-process topology, cross-service lease, online rollback, Release Gate evidence
+  or Production GO.
+
 ## 2026-09-01 Production rollback admission contract (TDD-06G)
 
 - [KNOWN | HIGH] ADR-0236 registers one strict Production Agent Version rollback
