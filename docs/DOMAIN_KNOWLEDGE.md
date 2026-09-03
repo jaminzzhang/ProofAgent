@@ -33,6 +33,8 @@ not a second glossary.
   default-closed Production rollback HTTP and capability admission boundary.
 - `docs/adr/0237-rehearse-production-agent-rollback-with-isolated-real-dependencies.md` —
   isolated real KSS/PostgreSQL rollback rehearsal and Production boundary.
+- `docs/adr/0238-probe-the-deployed-production-agent-rollback-gate-while-closed.md` —
+  production-local TLS/OIDC/CSRF gate-closed probe and credential boundary.
 
 ## High-risk implementation scenes
 

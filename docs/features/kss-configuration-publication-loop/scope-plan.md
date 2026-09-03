@@ -1050,3 +1050,41 @@ Vault、真实 egress、多进程拓扑、cross-service lease 或 preflight 后�
 `.env`，不操作既有 `proofagent-production-local` 数据，不调用 KSS Query、model 或外部
 ArtifactStore，不创建 Grant/Reference，不进入 Phase F、publication、deployment、Release Gate
 或 Production GO。具体决策见 ADR-0237。
+
+## 23. TDD-06I：production-local 部署回滚关闭门禁探针
+
+| 项 | 内容 |
+| --- | --- |
+| 准入结论 | `TDD_INPUT_READY` |
+| 执行状态 | `PARTIAL_VERIFICATION`：production-local 已构建并通过完整基线；真实 TLS Gateway 无认证探针返回预期 `401`。缺少 Operator 提供的私有 session 文件，认证态 `403/503` 未执行 |
+| 一句话目标 | 在保留的 production-local TLS Gateway、OIDC session、same-origin CSRF 和 Production API 进程上，证明真实组合仍以稳定 `503` 关闭 Agent Version rollback |
+| 公开接口 | `POST /api/config/agents/{agent_id}/versions/{version_id}/rollback` 与 `GET /api/auth/session` |
+| 运行前置 | production-local 基线验证已通过；Operator 从已认证 OIDC session 提供一份私有 session JSON 文件，且当前权限包含 `agent.publish` |
+| 未决 P1 | 无 |
+
+[FRAME | HIGH] 本片只增加一个显式执行的 production-local 失败关闭验证入口。入口
+接收一个 session JSON 文件路径，不接收 cookie 命令行值。文件不得是 symlink，且不得
+授予 group/other 权限。验证器复用既有 `StableOriginClient`、production-local CA 和私有
+session-file 检查模式；不实现 password grant、浏览器登录或第二套 HTTP transport。
+
+[FRAME | HIGH] 验证器使用固定虚构 Agent/Version ID 和同一份严格请求体，按以下顺序
+执行三个探针。每次请求均经过 `https://proof-agent.localhost:8443`，不直连 API
+容器。
+
+| Given | When | Then |
+| --- | --- | --- |
+| 无 session cookie | 提交 rollback POST | 返回 `401`，未进入 CSRF、权限或 Workspace |
+| 有效 session，但无 Origin/CSRF | 提交同一 rollback POST | 返回 `403`，未进入 rollback gate 或 Workspace |
+| session 包含 `agent.publish`，并使用 stable Origin 与 `/api/auth/session` 当前 CSRF token | 提交同一 rollback POST | 返回 `503` 和精确 JSON `{"detail":"production_agent_rollback_unavailable"}` |
+| session 文件缺失、是 symlink、权限过宽、cookie 不合法，或 session 不含 `agent.publish` | 启动验证器 | 在最终 POST 前失败；输出只含稳定、无凭据诊断 |
+
+[FRAME | HIGH] RED 先锁定检查入口、私有 session 文件和 `401 → 403 → 503` 请求序列；
+GREEN 只组合既有 HTTPS transport 与严格响应检查；REFACTOR 补齐响应大小、JSON 结构、
+cookie 轮换和诊断脱敏边界。ADR-0236 的既有 unit test 继续证明门禁关闭时
+`service.calls == []`；本片的部署探针只证明真实 Gateway/API 返回。
+
+[BOUNDARY | HIGH] 本片不修改 `production_agent_rollback_enabled=False`，不增加或覆盖
+Compose 配置，不读取 `.env` 内容，不获取、输出或记录 password/cookie/CSRF，不使用真实
+Agent/Version ID。它不执行成功 rollback，不读写 Agent/KSS 业务状态，不调用 KSS Query、
+model 或 ArtifactStore，不进入 Phase F、publication、deployment、Release Gate 或 Production GO。
+门禁开启后的真实部署成功回滚是后续独立授权切片。具体决策见 ADR-0238。

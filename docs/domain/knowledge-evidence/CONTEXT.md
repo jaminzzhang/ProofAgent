@@ -272,6 +272,10 @@ _Avoid_: Development-router mounting, browser-owned capability, permission-only 
 A disposable local verification that joins the Production rollback HTTP and security boundary to the existing Workspace, a real ProofAgent PostgreSQL transaction, a real KSS management HTTP client, and a separate real KSS PostgreSQL Catalog. The rollback gate is enabled only in the test composition; the checked-in Production composition remains disabled. A successful rehearsal proves only the covered local dependency path and cleanup, not deployed topology or Production authorization.
 _Avoid_: Existing production-local data mutation, real gate activation, online rollback, deployment rehearsal, Production GO
 
+**Deployed Production Agent Rollback Gate-Closed Probe**:
+An explicit production-local verification that sends one fixed fictional rollback request through the retained TLS Gateway and Production API in three admission states: unauthenticated, authenticated without same-origin CSRF, and authenticated with `agent.publish` plus current CSRF. The last state must return the exact default-closed `503` response. Its private session input is operator-supplied and never printed or persisted as evidence. The probe verifies deployed admission while the gate is closed; it neither enables the gate nor proves a successful deployed rollback.
+_Avoid_: Credential acquisition, command-line cookie, direct container call, gate activation, business-data rehearsal, Production GO
+
 **Retired Knowledge Base Release**:
 A non-queryable Release reached through an explicit ordinary-lifecycle command only after authoritative reference checks report no executable client reference and retention requirements are satisfied. Retirement does not delete artifacts; it only makes separately authorized deletion eligible.
 _Avoid_: Deprecated Release, emergency containment, automatic cleanup, physical deletion

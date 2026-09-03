@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-09-01
+Updated: 2026-09-02
 
 ## Current decision
 
@@ -14,6 +14,35 @@ approved scorer revision, exact grant and versioned secret, real dependency read
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
+
+## 2026-09-02 Deployed rollback gate-closed probe (TDD-06I)
+
+- [KNOWN | HIGH] ADR-0238 adds one explicit production-local host entry. It accepts
+  only a private `0600` session JSON file path, rejects symlinks and group/other
+  permissions, reuses the bounded TLS client, follows a rotated session cookie, and
+  never prints the cookie or current CSRF token.
+- [COMPUTED | HIGH] One fixed fictional rollback request now covers the deployed
+  admission contract in three states: unauthenticated `401`, authenticated without
+  same-origin CSRF `403`, and authenticated with `agent.publish` plus current CSRF
+  returning the exact `503 production_agent_rollback_unavailable`. Seven focused tests
+  and 109 affected tests passed with one existing Authlib warning.
+- [COMPUTED | HIGH] The restricted full-backend run passed 2520 tests, skipped 277
+  dependency-conditioned tests, deselected 2, and reported 8 socket-permission failures.
+  All 45 tests in the four loopback-dependent files then passed outside the restricted
+  sandbox. Ruff, Mypy over 474 sources, lock, domain-context, shell syntax and diff
+  checks passed.
+- [COMPUTED | HIGH] The current production-local image built successfully. The baseline
+  passed TLS API/KSS, Dashboard, OIDC, model-plane, OpenSearch, both migration ledgers,
+  KSS PostgreSQL authority isolation and both versioned buckets. Readiness returned the
+  expected fail-closed `503` only because `published_agent=not_ready`. A fixed fictional
+  unauthenticated rollback POST then returned `401 authentication_required` through the
+  real TLS Gateway.
+- [BOUNDARY | HIGH] No Operator-controlled private session file was supplied, so the
+  authenticated `403/503` states and the complete checked-in verifier were not run
+  against the Gateway/API. The real gate remains `false`; no successful rollback,
+  Agent/KSS business-state access, KSS Query, model, ArtifactStore write, Phase F,
+  publication, Release Gate or Production GO occurred. TDD-06I remains
+  `PARTIAL_VERIFICATION`.
 
 ## 2026-09-01 Isolated real-dependency rollback rehearsal (TDD-06H)
 

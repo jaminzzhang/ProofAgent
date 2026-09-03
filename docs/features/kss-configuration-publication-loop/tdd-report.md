@@ -4356,3 +4356,99 @@ git diff --check
 - [BOUNDARY | HIGH] 真实 Production gate 仍为 false；没有线上 rollback、KSS Query、model、
   external ArtifactStore、Grant/Reference、Phase F、publication、deployment、Release Gate 或
   Production GO。
+
+## 67. TDD-06I：production-local 部署回滚关闭门禁探针
+
+### 67.1 冻结边界
+
+[FRAME | HIGH] 本片只实现 ADR-0238 的部署失败关闭探针。公开 host 入口只接收
+一个私有 session JSON 文件路径。文件必须是 regular file，不得是 symlink，且不得授予
+group/other 权限。JSON 只接受 `session_cookie`；cookie 值不进入命令行、日志或验证结果。
+
+[FRAME | HIGH] 验证器复用 `StableOriginClient`、production-local CA 和当前
+`/api/auth/session` 投影。它使用固定虚构 Agent/Version ID 与同一份严格请求体，
+不直连 API 容器，不实现第二套 HTTP 或登录协议。
+
+[BOUNDARY | HIGH] 本片不修改 Production composition、Compose、权限映射、SQL、migration
+或业务实现。它不读取 `.env` 内容，不获取身份凭据，不启用门禁，不执行成功
+rollback，也不进入 KSS Query、model、ArtifactStore、Phase F、publication、deployment、
+Release Gate 或 Production GO。
+
+### 67.2 验证场景
+
+| Given | When | Then |
+| --- | --- | --- |
+| 私有 session 文件与虚构 rollback 请求 | 无 Cookie POST | 精确返回 `401` |
+| 同一 session 与请求 | 有 Cookie，无 Origin/CSRF POST | 精确返回 `403` |
+| session 包含 `agent.publish` | 使用 stable Origin、当前 CSRF 和轮换后 Cookie POST | 精确返回 `503` 与 `{"detail":"production_agent_rollback_unavailable"}` |
+| session 文件是 symlink 或权限过宽 | 启动验证器 | HTTPS 请求前以稳定错误失败 |
+| session 不含 `agent.publish` | 读取 `/api/auth/session` | rollback POST 前以稳定错误失败 |
+| 内部异常包含敏感哨兵文本 | CLI 投影失败 | 只输出 allowlisted schema/error/reason，不输出原异常 |
+
+### 67.3 RED → GREEN → REFACTOR
+
+| 阶段 | 行为 | 证据 |
+| --- | --- | --- |
+| RED-1 | 部署门禁探针模块不存在 | tracer 因 `ModuleNotFoundError` 失败，1 failed |
+| GREEN-1 | 最小实现私有 session 读取、cookie 轮换和 `401 → 403 → 503` | tracer 1 passed |
+| RED-2 | production-local host 入口不存在 | 合同测试因 `FileNotFoundError` 失败，1 failed |
+| GREEN-2 | 新增单 session-file 参数 shell 入口与脱敏 CLI | 入口与 tracer 分别 1 passed |
+| REFACTOR | 补齐 symlink/权限、permission、精确响应和 CLI 脱敏；保留既有 transport | 聚焦 7 passed；受影响 109 passed |
+
+### 67.4 验证结果
+
+| 检查 | 结果 | 限定 |
+| --- | --- | --- |
+| TDD-06I 聚焦行为 | 7 passed | 三段 admission、轮换 Cookie、私有文件、permission、精确 503 与 CLI 脱敏 |
+| 受影响回归 | 109 passed、1 existing warning | 新 verifier、Compose driver、Production API/security/roles |
+| 完整默认后端 | 2520 passed、277 dependency-conditioned skips、2 deselected、8 socket-permission failures、1 existing warning | 失败均为受限沙箱拒绝 `127.0.0.1` bind；非 06I 行为失败 |
+| loopback 复验 | 45 passed | 对应 4 个文件在沙箱外全部通过 |
+| 静态与一致性 | Ruff、Mypy 474 sources、lock、domain-context、shell syntax、diff 通过 | 无依赖、Production code、SQL、migration 或 Compose 变化 |
+| production-local 基线 | `PASS` | 当前镜像构建成功；TLS API/KSS、Dashboard、OIDC、model-plane、OpenSearch、两套 migration ledger、KSS PostgreSQL authority isolation 和两个 versioned bucket 通过 |
+| 部署无认证探针 | `PASS` | 固定虚构 rollback POST 经真实 TLS Gateway 返回 `401 authentication_required` |
+| 部署认证态探针 | `NOT_RUN` | 未提供 Operator-controlled private session file；`403/503` 未执行，不使用或伪造凭据 |
+
+### 67.5 命令与修改文件
+
+[KNOWN | HIGH] 关键验证命令如下：
+
+```text
+.venv/bin/pytest -q tests/test_production_local_agent_rollback_gate_probe.py
+.venv/bin/pytest -q tests/test_production_local_agent_rollback_gate_probe.py tests/test_docker_compose_deployment_driver.py tests/test_production_agent_configuration_api.py tests/test_application_security_composition.py tests/test_production_roles.py
+.venv/bin/pytest -q tests/
+.venv/bin/pytest -q tests/test_mcp_discovery.py tests/test_remote_verify_gateway.py tests/test_remote_verify_gateway_regression_1.py tests/test_tool_gateway.py
+./scripts/production-local-up.sh
+./scripts/production-local-verify.sh
+curl --cacert docker/production-local/runtime/tls/ca.crt ... /api/config/agents/agent_rollback_gate_probe/versions/version_rollback_gate_target/rollback
+.venv/bin/ruff check proof_agent knowledge_source_service scripts tests
+.venv/bin/mypy proof_agent knowledge_source_service scripts/deployment/agent_rollback_gate_probe.py
+uv lock --check
+python3 scripts/check-domain-contexts.py
+sh -n scripts/production-local-verify-agent-rollback-gate.sh
+git diff --check
+```
+
+[KNOWN | HIGH] TDD-06I 新增或更新以下路径：
+
+- `scripts/deployment/agent_rollback_gate_probe.py`
+- `scripts/production-local-verify-agent-rollback-gate.sh`
+- `tests/test_production_local_agent_rollback_gate_probe.py`
+- `docs/adr/0238-probe-the-deployed-production-agent-rollback-gate-while-closed.md`
+- `docs/DOMAIN_KNOWLEDGE.md`
+- `docs/PROJ_CONTEXT.md`
+- `docs/development-progress.md`
+- `docs/domain/knowledge-evidence/CONTEXT.md`
+- `docs/domain/knowledge-evidence/decisions.md`
+- `docs/features/kss-configuration-publication-loop/feature_context.md`
+- `docs/features/kss-configuration-publication-loop/scope-plan.md`
+- `docs/features/kss-configuration-publication-loop/tdd-report.md`
+
+### 67.6 状态
+
+- [COMPUTED | HIGH] TDD-06I 的实现、合同、安全边界与受影响回归已通过本地验证。
+- [COMPUTED | HIGH] production-local 当前镜像、完整基线与无认证 `401` 探针已通过。
+- [BOUNDARY | HIGH] 真实 production-local Gateway/API 认证态 `403/503` 探针未执行，
+  因此建议结论仍为 `PARTIAL_VERIFICATION`，不是 `LOCAL_VERIFIED`、Production GO 或回滚授权。
+- [BOUNDARY | HIGH] `production_agent_rollback_enabled=False` 保持不变。后续只能在
+  Operator 提供当前私有 session 文件后执行一次关闭门禁探针；门禁开启和成功
+  rollback 仍需另行 Scope 与精确授权。
