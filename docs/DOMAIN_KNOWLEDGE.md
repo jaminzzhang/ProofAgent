@@ -35,6 +35,8 @@ not a second glossary.
   isolated real KSS/PostgreSQL rollback rehearsal and Production boundary.
 - `docs/adr/0238-probe-the-deployed-production-agent-rollback-gate-while-closed.md` —
   production-local TLS/OIDC/CSRF gate-closed probe and credential boundary.
+- `docs/adr/0239-extract-kss-into-an-independently-released-project.md` — physical
+  project, source/build ownership and external-artifact integration boundary.
 
 ## High-risk implementation scenes
 

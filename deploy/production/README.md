@@ -9,7 +9,6 @@
 - `deployment-compatibility-manifest.json` — ignored, environment-specific candidate input;
 - `Dockerfile` and `Dockerfile.dockerignore` — same-image API/Executor/Worker/static build;
 - `slot/compose.yaml` and `slot/slot.env.example` — one `blue` or `green` product slot plus a non-restarting explicit migration profile;
-- `knowledge/compose.yaml` and `knowledge/knowledge.env.example` — the independently released KSS API, Query Executor, Knowledge Worker, Scheduler and migration roles;
 - `gateway/compose.yaml` — stable Gateway outside both slots;
 - `gateway/nginx.conf` — safe checked-in template whose `proof-agent.invalid` host must be rendered to the exact DCM-bound stable host;
 - `gateway/active-upstreams.conf` — controller-owned atomic routing generation, initially pointing to blue.
@@ -30,7 +29,10 @@ proof-agent deployment validate-compatibility \
   --at 2026-07-25T12:00:00Z
 ```
 
-[KNOWN | HIGH] Candidate Binding v2 must identify both products. Generate the exact KSS contract artifacts from the candidate distribution, hash the emitted bytes, and bind those digests as `knowledge_source_service.openapi_contract` and `knowledge_source_service.migration_set`:
+[FRAME | HIGH] Candidate Binding v2 must identify both products. Obtain the exact KSS
+contract artifacts from the independently reviewed KSS candidate, hash the emitted bytes,
+and bind those digests as `knowledge_source_service.openapi_contract` and
+`knowledge_source_service.migration_set`:
 
 ```bash
 knowledge-source-service openapi-contract
@@ -53,18 +55,9 @@ docker buildx build \
 
 The build result must then be addressed by its registry digest; a mutable local tag is not an admissible Compose value.
 
-Build KSS from its independent lock and immutable build images:
-
-```bash
-docker buildx build \
-  --file services/knowledge-source-service/Dockerfile \
-  --build-arg UV_IMAGE="$KSS_UV_IMAGE" \
-  --build-arg RUNTIME_IMAGE="$KSS_RUNTIME_IMAGE" \
-  --tag proofagent-knowledge-source-service:candidate \
-  --load .
-```
-
-`KSS_UV_IMAGE` and `KSS_RUNTIME_IMAGE` must be `name@sha256:...` references. The resulting KSS image must also be promoted and deployed by registry digest.
+KSS source, lock, Dockerfile, five-role deployment definition and build evidence are
+owned by the independent KSS project. ProofAgent must not rebuild KSS from this source
+tree. The supplied KSS OCI identity must be promoted and deployed by registry digest.
 
 Before starting a slot, create the external `proofagent-blue` and `proofagent-green` networks, external Vault/TLS secrets, candidate-local slot env file and exact config files. Validate rendering before mutation:
 
@@ -73,13 +66,10 @@ docker compose -f deploy/production/slot/compose.yaml config --quiet
 docker compose -f deploy/production/gateway/compose.yaml config --quiet
 ```
 
-Render the independent KSS deployment with its immutable image, credential-free env file, external Secret names, private CA and external network before mutation:
-
-```bash
-docker compose -f deploy/production/knowledge/compose.yaml config --quiet
-```
-
-Run the KSS `migration` profile before starting its four online roles. KSS has an independent deployment lifecycle; do not add its roles to a ProofAgent Blue/Green slot merely to make them start together.
+Render and operate the KSS five-role deployment from the independently reviewed KSS
+project. Its migration profile must complete before its four online roles start. KSS has
+an independent deployment lifecycle; do not add its source or roles to a ProofAgent
+Blue/Green slot merely to release them together.
 
 Run the candidate migration job as a distinct step before starting any candidate service. `PROOF_AGENT_RELEASE_SCHEMA` must equal the Alembic head packaged in that exact image:
 

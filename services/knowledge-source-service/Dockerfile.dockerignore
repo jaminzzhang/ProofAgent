@@ -1,7 +1,0 @@
-**
-!services/
-!services/knowledge-source-service/
-!services/knowledge-source-service/pyproject.toml
-!services/knowledge-source-service/uv.lock
-!knowledge_source_service/
-!knowledge_source_service/**

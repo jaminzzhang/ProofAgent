@@ -39,11 +39,18 @@ evidence.
 
 ## Start
 
-From the repository root:
+Before starting the integration stack, obtain a KSS image built and reviewed by the
+independent KSS project. Set `KSS_IMAGE` to its immutable OCI digest. A mutable tag,
+missing value or malformed digest stops the script before preparation or Compose starts:
 
 ```bash
+export KSS_IMAGE='registry.example/knowledge-source-service@sha256:<64-lowercase-hex>'
 ./scripts/production-local-up.sh
 ```
+
+[LIMIT | HIGH] ProofAgent does not build KSS from this source tree. Supplying
+`KSS_IMAGE` only selects a black-box dependency for the local integration stack; it is
+not KSS release approval or Production GO.
 
 The prepare step creates `.env.production-local`, including a separate random KSS
 database credential, a model-credential keyring, a local CA, and a short-lived

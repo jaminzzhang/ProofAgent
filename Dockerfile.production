@@ -25,7 +25,7 @@ COPY examples examples
 COPY alembic.ini ./
 COPY deploy deploy
 COPY docker/production-local /opt/proof-agent-local
-RUN uv pip install --system --no-cache ".[dashboard,hybrid,ingestion,openai,production,security,tree]" \
+RUN uv pip install --system --no-cache ".[dashboard,ingestion,openai,production,security,tree]" \
     && addgroup --system --gid 10001 proofagent \
     && adduser --system --uid 10001 --ingroup proofagent --home /var/lib/proof-agent proofagent \
     && install -d -o proofagent -g proofagent -m 0700 \

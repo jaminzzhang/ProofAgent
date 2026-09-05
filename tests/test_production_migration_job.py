@@ -61,7 +61,7 @@ def test_local_production_uses_the_same_locked_expand_only_migration_contract() 
     ]
 
 
-def test_local_production_runs_all_knowledge_source_service_roles() -> None:
+def test_local_production_runs_all_roles_from_one_external_kss_image() -> None:
     services = yaml.safe_load(LOCAL_PRODUCTION_COMPOSE.read_text(encoding="utf-8"))["services"]
     role_services = {
         "kss-api": "api",
@@ -72,21 +72,10 @@ def test_local_production_runs_all_knowledge_source_service_roles() -> None:
     }
 
     images = {services[name]["image"] for name in role_services}
-    assert images == {"proofagent-knowledge-source-service:production-local"}
-    assert services["kss-api"]["build"] == {
-        "context": ".",
-        "dockerfile": "services/knowledge-source-service/Dockerfile",
-        "args": {
-            "UV_IMAGE": (
-                "ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:"
-                "e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58"
-            ),
-            "RUNTIME_IMAGE": (
-                "python:3.12-slim@sha256:"
-                "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
-            ),
-        },
+    assert images == {
+        "${KSS_IMAGE:?set an externally built immutable KSS name@sha256 image reference}"
     }
+    assert all("build" not in services[name] for name in role_services)
     for service_name, role in role_services.items():
         service = services[service_name]
         assert service["command"] == [role]
@@ -364,11 +353,6 @@ def test_local_production_wires_versioned_kss_runtime_credentials() -> None:
     )
     assert "KSS_RUNTIME_CLIENT_BEARER_TOKEN" not in kss_api_environment
 
-    bootstrap_script = (
-        PROJECT_ROOT / "knowledge_source_service" / "bootstrap" / "runtime_client.py"
-    ).read_text(encoding="utf-8")
-    assert "register_client" in bootstrap_script
-    assert "grant_release_query" not in bootstrap_script
     assert (
         services["security-bootstrap"]["environment"]["PROOF_AGENT_MODEL_EGRESS_CIDRS"]
         == "${PROOF_AGENT_MODEL_EGRESS_CIDRS:-}"
@@ -424,12 +408,6 @@ def test_local_production_wires_a_dedicated_reference_registration_client() -> N
         services["kss-api"]["depends_on"]["kss-reference-client-bootstrap"]["condition"]
         == "service_completed_successfully"
     )
-
-    bootstrap_script = (
-        PROJECT_ROOT / "knowledge_source_service" / "bootstrap" / "reference_client.py"
-    ).read_text(encoding="utf-8")
-    assert "register_client" in bootstrap_script
-    assert "grant_release_query" not in bootstrap_script
 
     prepare = (PROJECT_ROOT / "scripts/production-local-prepare.sh").read_text(encoding="utf-8")
     assert "ensure_random_secret KSS_REFERENCE_CLIENT_BEARER_TOKEN" in prepare

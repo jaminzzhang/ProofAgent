@@ -1,6 +1,6 @@
 # Development Progress
 
-Updated: 2026-09-02
+Updated: 2026-09-03
 
 ## Current decision
 
@@ -12,6 +12,14 @@ repositories, CLI and Dashboard paths are deleted. Old Hybrid-bound Agent Versio
 cannot replay or roll back. Formal production release remains **NO-GO** until an
 approved scorer revision, exact grant and versioned secret, real dependency readiness,
 shadow/pilot/recovery evidence and all Product Release Authority Gates pass.
+
+[KNOWN | HIGH] ADR-0239 now separates physical product ownership as well: KSS source,
+migrations, distribution, internal contract tests and formal five-role Compose were
+extracted to the independent local project `/Users/jamin/Dev/mz-projects/KSS` and removed
+from ProofAgent. ProofAgent production-local Compose consumes only an explicit external
+immutable `KSS_IMAGE`; guarded clients, Candidate Binding, Admission and final answer
+authority remain here. This is a local repository migration, not a production data
+migration, deployment, release or cutover.
 
 [FRAME | HIGH] ADR 0153 formally defers runtime Case Memory from the initial private pilot. The production Agent remains memory-disabled and PostgreSQL conversation context remains non-evidence. Existing Case Memory contracts, schema and repositories are dormant infrastructure, not an advertised release capability.
 

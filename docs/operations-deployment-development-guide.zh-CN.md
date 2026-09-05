@@ -77,7 +77,7 @@ uv run --extra dev proof-agent run \
 | Admission | `proof_agent/control/knowledge/retrieval_service.py` | retrieval/run tests |
 | API | `proof_agent/delivery/` | API/security tests |
 | Dashboard KSS 管理 | `dashboard/src/` | page tests + production build |
-| 独立 KSS | `services/knowledge-source-service/` | KSS contract suite |
+| 独立 KSS | 独立 KSS 项目（本机默认同级 `../KSS`） | 在 KSS 项目运行其 contract suite |
 
 ## 5. 提交前验证
 
@@ -119,9 +119,15 @@ ProofAgent 已删除 `hybrid-migrate`、`knowledge-worker` 和旧 `knowledge` �
 本地类生产栈：
 
 ```bash
+export KSS_IMAGE='registry.example.invalid/knowledge-source-service@sha256:<64-lowercase-hex>'
 ./scripts/production-local-up.sh
 ./scripts/production-local-verify.sh
 ```
+
+`KSS_IMAGE` 必须来自独立 KSS 项目的已构建候选，并使用 `name@sha256` 精确引用；
+摘要必须是 64 位小写十六进制字符。
+ProofAgent 本地栈只把它作为黑盒集成依赖，不从本仓库构建 KSS；缺失、可变 tag 或非法
+digest 会在启动前失败关闭。
 
 ProofAgent 入口为 `https://proof-agent.localhost:8443`，KSS readiness 为
 `https://proof-agent.localhost:8444/readyz`。Dashboard 通过同源

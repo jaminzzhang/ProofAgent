@@ -122,6 +122,12 @@ repository and CLI paths have been removed. KSS's independent Knowledge Worker i
 unchanged. Old Hybrid-bound Agent Versions are not replay or rollback targets; see
 `docs/deployment/kss-authority-cutover.md`.
 
+[KNOWN | HIGH] KSS implementation, migrations, distribution, internal tests and image
+build are owned by a separate project. This repository must not import or package KSS.
+For production-local integration, build/review KSS in its own project and pass the exact
+external `name@sha256` reference as `KSS_IMAGE`; missing or mutable input is a start
+failure, not a reason to restore an embedded implementation.
+
 Production evaluation and operations adapters use the `private-http` entry point over an allowlisted HTTPS origin and pinned private-network resolution. Configure the driver selectors and verifier separately:
 
 ```bash

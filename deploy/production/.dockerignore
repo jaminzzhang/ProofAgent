@@ -23,4 +23,3 @@ docs
 deploy/production/deployment-compatibility-manifest.json
 deploy/production/compatibility-input.json
 docker-compose.yml
-docker-compose.hybrid-test.yml

@@ -75,6 +75,12 @@ Key boundaries:
 - `proof_agent/observability/`: trace, receipt, RunStore and read APIs;
 - `proof_agent/release/`: immutable release contracts and fail-closed release verifier.
 
+[KNOWN | HIGH] KSS source, migrations, distribution, internal tests and image build are
+owned by a separate project. ProofAgent retains only guarded HTTPS clients, exact KSS
+artifact/binding contracts, Evidence Admission and answer governance. The local
+production integration stack can start an explicitly supplied external KSS image, but
+it cannot build KSS from this repository.
+
 There is no active `proof_agent/runtime/` compatibility package. LangGraph and LangChain are not production dependencies.
 
 ## Initial-production closure

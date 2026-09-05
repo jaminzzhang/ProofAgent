@@ -164,6 +164,12 @@ provider fallback. The old ProofAgent Hybrid worker, provider, API and persisten
 paths are removed; historical Agent Versions using them are not valid rollback or
 replay targets.
 
+[FRAME | HIGH] KSS also has separate source and release ownership. ProofAgent must not
+import the KSS implementation, package its migrations, or build its image. Integration
+uses guarded HTTPS plus exact OCI, distribution, OpenAPI and migration identities. A
+local Compose harness may run an external KSS image for black-box verification without
+becoming the KSS release owner.
+
 Shadow suite v2 contains only question references and binding references. A trusted live driver executes both bindings and the control path verifies active pointers did not change. Sealed Acceptance receives aggregate facts only from an independent evaluator and verifies the canonical attestation digest, evaluator/key identity, signature, candidate, suite and Gate Profile before applying deterministic gates.
 
 The built-in production adapter uses allowlisted HTTPS, validated and pinned private CIDRs, disabled proxy/redirect/retry behavior and bounded responses. Evaluation drivers, operations telemetry, release evidence authority and the acceptance signature verifier are independently selected entry points.
