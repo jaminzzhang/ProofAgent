@@ -1,0 +1,4 @@
+{"event_type": "retrieval_result", "status": "ok", "payload": {"source_refs": ["synthetic-policy"]}}
+{"event_type": "evidence_evaluation", "status": "ok", "payload": {"metadata": {"accepted_count": 0}, "accepted_sources": []}}
+{"event_type": "policy_decision", "status": "ok"}
+{"event_type": "final_output", "status": "ok", "payload": {"outcome": "REFUSED_NO_EVIDENCE"}}

@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from proof_agent.contracts._base import FrozenModel, freeze_value
+from proof_agent.contracts._base import FrozenModel, StrictFrozenModel, freeze_value
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.insurance_rules import InsuranceEvidenceSlotRequirement
+from proof_agent.contracts.evaluation_quality import (
+    EvaluationCaseQuality,
+    EvaluationQualityMetrics,
+    EvaluationQualityTarget,
+)
 
 
 class EvaluationExecutionSurface(str, Enum):
@@ -387,7 +392,7 @@ class EvaluationResponseAssertions(FrozenModel):
     language: Literal["en", "zh"] | None = None
 
 
-class EvaluationCaseExpected(FrozenModel):
+class EvaluationCaseExpected(StrictFrozenModel):
     outcome: ReceiptOutcome
     required_citation_refs: tuple[str, ...] = Field(default_factory=tuple)
     required_tool_contract_ids: tuple[str, ...] = Field(default_factory=tuple)
@@ -433,7 +438,7 @@ class EvaluationQuestionMatch(FrozenModel):
     intent_signature: str | None = None
 
 
-class EvaluationCase(FrozenModel):
+class EvaluationCase(StrictFrozenModel):
     case_id: str
     question: str
     intent_type: str
@@ -444,6 +449,26 @@ class EvaluationCase(FrozenModel):
     required_for_release: bool = True
     question_match: EvaluationQuestionMatch = Field(default_factory=EvaluationQuestionMatch)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    quality_target: EvaluationQualityTarget | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_quality_target(self) -> Self:
+        if self.quality_target is None:
+            return self
+        refusal = self.quality_target == EvaluationQualityTarget.REFUSAL_APPROPRIATENESS
+        resolution = (
+            EvaluationExpectedResolution.REFUSE_NO_EVIDENCE
+            if refusal
+            else EvaluationExpectedResolution.ANSWER_WITH_CITATIONS
+        )
+        outcome = (
+            ReceiptOutcome.REFUSED_NO_EVIDENCE
+            if refusal
+            else ReceiptOutcome.ANSWERED_WITH_CITATIONS
+        )
+        if self.expected_resolution != resolution or self.expected.outcome != outcome:
+            raise ValueError("quality_target conflicts with expected resolution/outcome")
+        return self
 
     @field_validator("metadata", mode="after")
     @classmethod
@@ -648,6 +673,8 @@ class EvaluationCaseResult(FrozenModel):
     artifact_sufficiency: EvaluationArtifactSufficiencyStatus | None = None
     primary_failure_owner: EvaluationFailureOwner | None = None
     warnings: tuple[str, ...] = Field(default_factory=tuple)
+    quality: EvaluationCaseQuality | None = None
+    quality_cohort_included: bool | None = Field(default=None, strict=True)
 
 
 class EvaluationScenarioResult(FrozenModel):
@@ -700,6 +727,7 @@ class EvaluationAnalysisSummary(FrozenModel):
     agent: dict[str, Any] = Field(default_factory=dict)
     artifact_dir: Path | None = None
     judge_mode: Literal["none"] = "none"
+    quality_metrics: EvaluationQualityMetrics | None = None
 
     @field_validator("behavior_metrics", mode="after")
     @classmethod

@@ -1,0 +1,76 @@
+suite_id: p0-1b-synthetic
+manifest_id: fixed-artifacts
+version: '1'
+subjects:
+- case_ref:
+    case_id: answer-unmeasured
+  artifacts:
+    trace_ref: answer.jsonl
+    trace_sha256: d526d40d1a2e7401084df3aa85ccf6ecf2448827613f955fb8248d1810865d18
+    receipt_ref: answer-receipt.md
+    receipt_sha256: 21d86a13f5bf9ad4ba52c68823c1b5dde6e9b22d7228c149f9c248ac1ef2354d
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: answer-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966
+- case_ref:
+    case_id: refusal-matched
+  artifacts:
+    trace_ref: refusal.jsonl
+    trace_sha256: d51fc322e482066d43ab1d980e210e317c8aae3a46aaf6088ce2b6e002ed5e63
+    receipt_ref: refusal-receipt.md
+    receipt_sha256: 5edd8e4edf021f373a67d2153a3a00730a6d521d37bcde1cc0efcb3884e9c7ff
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: refusal-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966
+- case_ref:
+    case_id: refusal-wrong-outcome
+  artifacts:
+    trace_ref: answer.jsonl
+    trace_sha256: d526d40d1a2e7401084df3aa85ccf6ecf2448827613f955fb8248d1810865d18
+    receipt_ref: answer-receipt.md
+    receipt_sha256: 21d86a13f5bf9ad4ba52c68823c1b5dde6e9b22d7228c149f9c248ac1ef2354d
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: answer-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966
+- case_ref:
+    case_id: task-unmeasured
+  artifacts:
+    trace_ref: answer.jsonl
+    trace_sha256: d526d40d1a2e7401084df3aa85ccf6ecf2448827613f955fb8248d1810865d18
+    receipt_ref: answer-receipt.md
+    receipt_sha256: 21d86a13f5bf9ad4ba52c68823c1b5dde6e9b22d7228c149f9c248ac1ef2354d
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: answer-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966
+- case_ref:
+    case_id: unclassified-legacy
+  artifacts:
+    trace_ref: refusal.jsonl
+    trace_sha256: d51fc322e482066d43ab1d980e210e317c8aae3a46aaf6088ce2b6e002ed5e63
+    receipt_ref: refusal-receipt.md
+    receipt_sha256: 5edd8e4edf021f373a67d2153a3a00730a6d521d37bcde1cc0efcb3884e9c7ff
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: refusal-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966
+- case_ref:
+    case_id: optional-refusal
+  artifacts:
+    trace_ref: refusal.jsonl
+    trace_sha256: d51fc322e482066d43ab1d980e210e317c8aae3a46aaf6088ce2b6e002ed5e63
+    receipt_ref: refusal-receipt.md
+    receipt_sha256: 5edd8e4edf021f373a67d2153a3a00730a6d521d37bcde1cc0efcb3884e9c7ff
+  projections:
+    evaluated_response:
+      audience: operator
+      ref: refusal-response.txt
+      sha256: 3a4e24f2fd75290268095ec5673e9ebbac5693d02d1a614727e6358a77a23966

@@ -41,8 +41,16 @@ The pass/fail result for an Evaluation Scenario, requiring every scenario step t
 _Avoid_: Last-run-only success, step-count-weighted pass rate, transcript-level impression
 
 **Governed Resolution Rate**:
-The top-level Agent evaluation metric: the share of Evaluation Cases that reach the correct governed resolution and satisfy required business, evidence, policy, tool, trace, receipt, and redaction assertions.
+The governance metric: the share of required Evaluation Cases that match the expected outcome and pass the implemented required deterministic Gates. Diagnostic semantic Gates do not establish answer correctness or task completion.
 _Avoid_: Answer accuracy, chatbot helpfulness score, ungoverned pass rate
+
+**Verified Quality Target**:
+An independently reported answer-correctness, refusal-appropriateness or task-completion cohort. Quality judgments first require verified, complete artifact snapshots. Analyzer V1 can match a curated refusal decision but has no positive answer-semantic or task-completion verifier.
+_Avoid_: GRR alias, tool-call success, universal refusal correctness, production readiness
+
+**Quality Assessment Coverage**:
+The share of required standalone cases in one target cohort with a proved pass or failure. Unevaluated cases stay in the denominator; unknown target cases are counted separately. Empty cohorts have null rates. Optional cases and scenario steps expose their exclusion from cohort statistics.
+_Avoid_: Evaluated-only success denominator, silently omitted missing cases, scenario step weighting
 
 **Capability Coverage**:
 The functional completion metric for an Active Agent Evaluation Target, calculated by grouping Evaluation Cases and Scenarios by exercised capability path and reporting which user-facing capability paths pass their required gates.

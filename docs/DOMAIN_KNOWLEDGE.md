@@ -12,6 +12,9 @@ not a second glossary.
 - `docs/domain/workflow-control/CONTEXT.md` — workflow and Control Plane
   authority.
 - `docs/domain/tools-models-memory/CONTEXT.md` — external capability boundaries.
+- `docs/domain/evaluation/CONTEXT.md` and `docs/domain/evaluation/decisions.md` — evaluation targets,
+  governed resolution, verified quality and release evidence boundaries;
+  `docs/adr/0240-separate-verified-quality-from-governed-resolution.md` records P0-1B.
 
 ## Knowledge Source Service design authority
 

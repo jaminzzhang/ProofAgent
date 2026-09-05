@@ -187,6 +187,14 @@ from proof_agent.contracts.knowledge_release import (
     RegisteredProductionAgentReleaseReference,
 )
 from proof_agent.contracts.evidence import EvidenceChunk, EvidenceContribution, EvidenceStatus
+from proof_agent.contracts.evaluation_quality import (
+    EvaluationCaseQuality,
+    EvaluationQualityCohort,
+    EvaluationQualityMetrics,
+    EvaluationQualityReason,
+    EvaluationQualityStatus,
+    EvaluationQualityTarget,
+)
 from proof_agent.contracts.evaluation import (
     EvaluationAnalysisSummary,
     EvaluationAnalysisRecord,
@@ -595,6 +603,12 @@ __all__ = [
     "EvaluationArtifactRef",
     "EvaluationAnalysisRecord",
     "EvaluationAnalysisSummary",
+    "EvaluationCaseQuality",
+    "EvaluationQualityCohort",
+    "EvaluationQualityMetrics",
+    "EvaluationQualityReason",
+    "EvaluationQualityStatus",
+    "EvaluationQualityTarget",
     "EvaluationArtifactSummary",
     "EvaluationArtifactSufficiencyStatus",
     "EvaluationCampaignCapabilityCoverage",

@@ -19,6 +19,51 @@ uv run --extra dev proof-agent run \
 
 The package uses deterministic planner, reviewer and answer providers. It requires no API key.
 
+Run the offline kernel quality baseline separately from the formal evaluation campaign:
+
+```bash
+uv run --extra dev python scripts/check-agent-kernel-baseline.py \
+  --output-dir /tmp/proofagent-kernel-baseline
+```
+
+[KNOWN | HIGH] This command drives the existing Control Plane with fixed synthetic
+model and KSS boundaries. It checks numeric validation, compound retrieval coverage,
+intent rewrites, admitted structured facts in answer input, and 30-turn constraint
+retention. It reads no environment files and needs no service credentials. Exit `0`
+means all five local probes passed; `1` means a capability gap, invalid observation or
+source change was detected; `2` means the measurement infrastructure failed. Inspect
+`kernel_baseline.md` and `kernel_baseline.json` in the output directory. The report is
+diagnostic evidence, not answer accuracy, formal campaign readiness or Production GO.
+Current results and slice acceptance are in
+`docs/features/agent-kernel-quality/tdd-report.md`.
+
+[KNOWN | HIGH] The existing Evaluation Analyzer now also writes
+`evaluation_quality.json` (`evaluation-quality-report.v1`), with typed metrics
+(`evaluation-quality.v1`), case/scenario quality reasons and explicit cohort
+membership. The same results appear in `evaluation_report.md`,
+`evaluation_analysis_receipt.md`, and existing case JSONL rows. An optional
+`quality_target` on a suite case accepts `answer_correctness`,
+`refusal_appropriateness`, or `task_completion`. Task classification is explicit;
+legacy answer/refusal labels must have consistent expected resolution/outcome.
+Unknown case or expected-assertion fields and contradictory explicit labels fail
+validation. Correct misspellings instead of relying on ignored configuration.
+
+Only required standalone cases enter the three quality denominators. Missing or
+unverified artifacts remain `not_evaluated`; unclassified required cases have a
+separate count. `verified_success_rate` is passed / total and
+`assessment_coverage_rate` is (passed + failed) / total; empty rates are null.
+When unmeasured cases exist, this is not an accuracy estimate. In this version,
+answer semantics and task completion have no positive verifier. Refusal success
+only means the curated refusal decision matched, with verified complete artifacts,
+passing required Gates and no pending semantic assertions. GRR, Gate Profiles,
+Release Decision and `judge_mode=none` retain their governance meaning.
+
+Artifact parsing and observed hashes share one byte snapshot. Missing or malformed
+per-case artifacts fail that governance case while the rest of the analysis
+continues; raw read errors are not copied to reports. Historical results without
+quality fields stay unmeasured. Reproducible inputs and the complete acceptance
+record are in `docs/features/agent-kernel-quality/tdd-p0-1b.md`.
+
 ## 2. Supported package
 
 `examples/agent_management_insurance_specialist/` is the only public package. Its main files are:

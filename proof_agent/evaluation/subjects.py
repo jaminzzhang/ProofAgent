@@ -10,7 +10,9 @@ from proof_agent.contracts import EvaluationSubjectManifest
 from proof_agent.evaluation.errors import EvaluationInputError
 
 
-def load_evaluation_subject_manifest(path: Path | str) -> EvaluationSubjectManifest:
+def load_evaluation_subject_manifest(
+    path: Path | str, *, require_artifact_files: bool = True
+) -> EvaluationSubjectManifest:
     """Load an Evaluation Subject Manifest from YAML."""
 
     manifest_path = Path(path)
@@ -19,7 +21,8 @@ def load_evaluation_subject_manifest(path: Path | str) -> EvaluationSubjectManif
         raise EvaluationInputError("Evaluation subject manifest YAML must be a mapping.")
     normalized = _normalize_manifest(raw, base_dir=manifest_path.parent)
     manifest = EvaluationSubjectManifest.model_validate(normalized)
-    _validate_local_artifact_refs_exist(manifest)
+    if require_artifact_files:
+        _validate_local_artifact_refs_exist(manifest)
     return manifest
 
 
@@ -117,7 +120,9 @@ def _normalize_direct_artifact_ref(value: Mapping[str, Any], *, base_dir: Path) 
 def _normalize_projection(value: Mapping[str, Any], *, base_dir: Path) -> dict[str, Any]:
     normalized = {str(key): item for key, item in value.items()}
     if normalized.get("text") is not None and normalized.get("sensitivity") != "local_only":
-        raise EvaluationInputError("inline response text is allowed only with sensitivity: local_only")
+        raise EvaluationInputError(
+            "inline response text is allowed only with sensitivity: local_only"
+        )
     ref = normalized.get("ref")
     if ref is not None:
         normalized["ref"] = _resolve_local_path(ref, base_dir=base_dir)

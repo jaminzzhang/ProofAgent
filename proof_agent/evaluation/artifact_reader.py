@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,15 +30,30 @@ class EvaluationArtifacts:
     run_meta: Mapping[str, Any] | None
     actual_outcome: ReceiptOutcome | None
     receipt_outcome: ReceiptOutcome | None
+    trace_final_outcome: ReceiptOutcome | None
+    trace_sha256: str
+    receipt_sha256: str
+    response_sha256: str
+    run_meta_sha256: str | None
 
 
 def read_evaluation_artifacts(subject: EvaluationSubject) -> EvaluationArtifacts:
     """Read completed-run artifacts referenced by an Evaluation Subject."""
 
-    trace_events = _read_trace(subject.trace.ref)
-    receipt_markdown = subject.receipt.ref.read_text(encoding="utf-8")
-    response_text = _read_response_projection(subject)
-    run_meta = _read_run_meta(subject.run_meta.ref) if subject.run_meta is not None else None
+    # Parse and verify the same byte snapshots; never reopen files for hashing.
+    trace_bytes = subject.trace.ref.read_bytes()
+    receipt_bytes = subject.receipt.ref.read_bytes()
+    response_bytes = _read_response_projection(subject)
+    run_meta_bytes = subject.run_meta.ref.read_bytes() if subject.run_meta is not None else None
+    trace_events = _parse_trace(trace_bytes.decode("utf-8"), subject.trace.ref)
+    receipt_markdown = receipt_bytes.decode("utf-8")
+    response_text = response_bytes.decode("utf-8")
+    run_meta = (
+        _parse_run_meta(run_meta_bytes.decode("utf-8")) if run_meta_bytes is not None else None
+    )
+    final_event = next(
+        (event for event in reversed(trace_events) if event.event_type == "final_output"), None
+    )
     return EvaluationArtifacts(
         trace_events=trace_events,
         receipt_markdown=receipt_markdown,
@@ -45,12 +61,21 @@ def read_evaluation_artifacts(subject: EvaluationSubject) -> EvaluationArtifacts
         run_meta=run_meta,
         actual_outcome=_actual_outcome(trace_events, run_meta),
         receipt_outcome=_receipt_outcome(receipt_markdown),
+        trace_final_outcome=(
+            _receipt_outcome_value(final_event.payload.get("outcome")) if final_event else None
+        ),
+        trace_sha256=hashlib.sha256(trace_bytes).hexdigest(),
+        receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        response_sha256=hashlib.sha256(response_bytes).hexdigest(),
+        run_meta_sha256=hashlib.sha256(run_meta_bytes).hexdigest()
+        if run_meta_bytes is not None
+        else None,
     )
 
 
-def _read_trace(path: Path) -> tuple[EvaluationTraceEvent, ...]:
+def _parse_trace(text: str, path: Path) -> tuple[EvaluationTraceEvent, ...]:
     events: list[EvaluationTraceEvent] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -78,19 +103,19 @@ def _read_trace(path: Path) -> tuple[EvaluationTraceEvent, ...]:
     return tuple(events)
 
 
-def _read_run_meta(path: Path) -> Mapping[str, Any]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def _parse_run_meta(text: str) -> Mapping[str, Any]:
+    raw = json.loads(text)
     if not isinstance(raw, dict):
         raise EvaluationInputError("run_meta artifact must be a JSON object.")
     return raw
 
 
-def _read_response_projection(subject: EvaluationSubject) -> str:
+def _read_response_projection(subject: EvaluationSubject) -> bytes:
     projection = subject.response_projection
     if projection.ref is not None:
-        return projection.ref.read_text(encoding="utf-8")
+        return projection.ref.read_bytes()
     if projection.text is not None:
-        return projection.text
+        return projection.text.encode("utf-8")
     raise EvaluationInputError("Evaluation response projection must provide ref or text.")
 
 

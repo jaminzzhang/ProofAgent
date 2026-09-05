@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import json
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -35,6 +35,10 @@ from proof_agent.evaluation.gates import evaluate_case_gates
 from proof_agent.evaluation.node_results import extract_evaluation_node_results
 from proof_agent.evaluation.subjects import load_evaluation_subject_manifest
 from proof_agent.evaluation.suites import load_evaluation_suite
+from proof_agent.evaluation.quality import assess_case_quality, summarize_quality
+
+
+_ARTIFACT_READ_ERRORS = (OSError, UnicodeError, EvaluationInputError, json.JSONDecodeError)
 
 
 def analyze_evaluation(
@@ -47,7 +51,7 @@ def analyze_evaluation(
 
     suite = load_evaluation_suite(suite_path)
     gate_profile = get_gate_profile(suite.gate_profile_id)
-    manifest = load_evaluation_subject_manifest(subjects_path)
+    manifest = load_evaluation_subject_manifest(subjects_path, require_artifact_files=False)
     if manifest.suite_id != suite.suite_id:
         raise EvaluationInputError(
             f"subject manifest suite_id {manifest.suite_id} does not match suite {suite.suite_id}"
@@ -121,6 +125,7 @@ def analyze_evaluation(
         ),
         warnings=warnings,
         behavior_metrics=_behavior_metrics(required_pairs),
+        quality_metrics=summarize_quality(required_pairs),
         agent=dict(manifest.agent),
         artifact_dir=artifact_dir,
     )
@@ -342,7 +347,11 @@ def _scenario_approval_linkage_status(
         if subject is None:
             missing_refs.extend(expected)
             continue
-        artifacts = read_evaluation_artifacts(subject)
+        try:
+            artifacts = read_evaluation_artifacts(subject)
+        except _ARTIFACT_READ_ERRORS:
+            missing_refs.extend(expected)
+            continue
         observed = {
             event.event_id
             for event in artifacts.trace_events
@@ -365,7 +374,10 @@ def _scenario_approval_linkage_status(
 
 
 def _trace_context_admission_includes(subject: EvaluationSubject, turn_id: str) -> bool:
-    artifacts = read_evaluation_artifacts(subject)
+    try:
+        artifacts = read_evaluation_artifacts(subject)
+    except _ARTIFACT_READ_ERRORS:
+        return False
     for event in artifacts.trace_events:
         if event.event_type != "context_admission":
             continue
@@ -418,6 +430,9 @@ def _analyze_case(
     scenario_id: str | None = None,
     scenario_step_id: str | None = None,
 ) -> EvaluationCaseResult:
+    included_in_cohort = (
+        case.required_for_release and scenario_id is None and scenario_step_id is None
+    )
     if subject is None:
         gate = EvaluationGateResult(
             gate=EvaluationGateName.SUBJECT_MAPPING,
@@ -425,7 +440,7 @@ def _analyze_case(
             reason="required case did not have an explicit evaluation subject",
             failure_owner=EvaluationFailureOwner.LABEL_OR_CURATION_ISSUE,
         )
-        return EvaluationCaseResult(
+        result = EvaluationCaseResult(
             case_id=case.case_id,
             scenario_id=scenario_id,
             scenario_step_id=scenario_step_id,
@@ -435,12 +450,44 @@ def _analyze_case(
             gates=(gate,),
             primary_failure_owner=EvaluationFailureOwner.LABEL_OR_CURATION_ISSUE,
         )
+        return result.model_copy(
+            update={
+                "quality": assess_case_quality(case, result),
+                "quality_cohort_included": included_in_cohort,
+            }
+        )
 
-    artifacts = read_evaluation_artifacts(subject)
-    gates = evaluate_case_gates(case, subject, artifacts)
-    node_results = extract_evaluation_node_results(artifacts)
+    try:
+        artifacts = read_evaluation_artifacts(subject)
+        gates = evaluate_case_gates(case, subject, artifacts)
+        node_results = extract_evaluation_node_results(artifacts)
+    except _ARTIFACT_READ_ERRORS:
+        result = EvaluationCaseResult(
+            case_id=case.case_id,
+            scenario_id=scenario_id,
+            scenario_step_id=scenario_step_id,
+            status=EvaluationGateStatus.FAILED,
+            expected_outcome=case.expected.outcome,
+            artifact_sufficiency=EvaluationArtifactSufficiencyStatus.INSUFFICIENT,
+            primary_failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
+            gates=(
+                EvaluationGateResult(
+                    gate=EvaluationGateName.ARTIFACT_SUFFICIENCY,
+                    status=EvaluationGateStatus.FAILED,
+                    reason="evaluation_artifacts_unreadable",
+                    sufficiency=EvaluationArtifactSufficiencyStatus.INSUFFICIENT,
+                    failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
+                ),
+            ),
+        )
+        return result.model_copy(
+            update={
+                "quality": assess_case_quality(case, result),
+                "quality_cohort_included": included_in_cohort,
+            }
+        )
     status = _case_status(gates)
-    return EvaluationCaseResult(
+    result = EvaluationCaseResult(
         case_id=case.case_id,
         scenario_id=scenario_id,
         scenario_step_id=scenario_step_id,
@@ -450,16 +497,28 @@ def _analyze_case(
         subject_present=True,
         gates=gates,
         node_results=node_results,
-        trace=_artifact_summary(subject.trace),
-        receipt=_artifact_summary(subject.receipt),
-        run_meta=_artifact_summary(subject.run_meta) if subject.run_meta is not None else None,
-        response_projection=_response_projection_summary(subject, artifacts.response_text),
+        trace=_artifact_summary(subject.trace, artifacts.trace_sha256),
+        receipt=_artifact_summary(subject.receipt, artifacts.receipt_sha256),
+        run_meta=(
+            _artifact_summary(subject.run_meta, artifacts.run_meta_sha256)
+            if subject.run_meta is not None
+            else None
+        ),
+        response_projection=_response_projection_summary(
+            subject, artifacts.response_text, artifacts.response_sha256
+        ),
         artifact_sufficiency=_artifact_sufficiency(gates),
         primary_failure_owner=(
             _primary_failure_owner(gates, node_results)
             if status == EvaluationGateStatus.FAILED
             else None
         ),
+    )
+    return result.model_copy(
+        update={
+            "quality": assess_case_quality(case, result, artifacts=artifacts),
+            "quality_cohort_included": included_in_cohort,
+        }
     )
 
 
@@ -515,8 +574,7 @@ def _behavior_metrics(
     bfsp_cases = tuple(
         (case, result)
         for case, result in required_pairs
-        if case.expected.expected_business_flow_skill_pack_recommendation_type
-        is not None
+        if case.expected.expected_business_flow_skill_pack_recommendation_type is not None
     )
     if bfsp_cases:
         metrics["bfsp_recommendation_accuracy"] = _rate(
@@ -529,9 +587,7 @@ def _behavior_metrics(
             len(bfsp_cases),
         )
     clarification_cases = tuple(
-        (case, result)
-        for case, result in required_pairs
-        if case.expected.forbid_clarification
+        (case, result) for case, result in required_pairs if case.expected.forbid_clarification
     )
     if clarification_cases:
         metrics["inappropriate_clarification_rate"] = _rate(
@@ -633,10 +689,7 @@ def _gate_failed_with_reason(
     for gate in result.gates:
         if gate.gate != gate_name:
             continue
-        return (
-            gate.status == EvaluationGateStatus.FAILED
-            and reason_fragment in gate.reason
-        )
+        return gate.status == EvaluationGateStatus.FAILED and reason_fragment in gate.reason
     return False
 
 
@@ -705,33 +758,28 @@ def _rate(numerator: int, denominator: int) -> float:
     return numerator / denominator
 
 
-def _artifact_summary(ref: EvaluationArtifactRef) -> EvaluationArtifactSummary:
+def _artifact_summary(
+    ref: EvaluationArtifactRef, observed_sha256: str | None
+) -> EvaluationArtifactSummary:
     return EvaluationArtifactSummary(
         ref=ref.ref,
         declared_sha256=ref.sha256,
-        observed_sha256=_file_sha256(ref.ref) if ref.ref.exists() else None,
+        observed_sha256=observed_sha256,
     )
 
 
 def _response_projection_summary(
     subject: EvaluationSubject,
     response_text: str,
+    observed_sha256: str,
 ) -> EvaluationResponseProjectionSummary:
     projection = subject.response_projection
     return EvaluationResponseProjectionSummary(
         audience=projection.audience,
         ref=projection.ref,
         declared_sha256=projection.sha256,
-        observed_text_sha256=hashlib.sha256(response_text.encode("utf-8")).hexdigest(),
+        observed_text_sha256=observed_sha256,
         text_length=len(response_text),
         source="file" if projection.ref is not None else "inline",
         sensitivity=projection.sensitivity,
     )
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

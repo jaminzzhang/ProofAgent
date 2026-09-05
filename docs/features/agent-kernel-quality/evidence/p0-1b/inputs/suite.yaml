@@ -1,0 +1,68 @@
+suite_id: p0-1b-synthetic
+version: '1'
+name: P0-1B measurement acceptance
+cases:
+- case_id: answer-unmeasured
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: answer_with_citations
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: ANSWERED_WITH_CITATIONS
+- case_id: refusal-matched
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: refuse_no_evidence
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: REFUSED_NO_EVIDENCE
+- case_id: refusal-wrong-outcome
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: refuse_no_evidence
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: REFUSED_NO_EVIDENCE
+- case_id: refusal-missing-subject
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: refuse_no_evidence
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: REFUSED_NO_EVIDENCE
+- case_id: task-unmeasured
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: answer_with_citations
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: ANSWERED_WITH_CITATIONS
+  quality_target: task_completion
+- case_id: unclassified-legacy
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: ask_clarification
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: true
+  expected:
+    outcome: REFUSED_NO_EVIDENCE
+- case_id: optional-refusal
+  question: Synthetic offline evaluation case.
+  intent_type: guidance
+  expected_resolution: refuse_no_evidence
+  risk_class: synthetic
+  capability_path: retrieval_only
+  required_for_release: false
+  expected:
+    outcome: REFUSED_NO_EVIDENCE

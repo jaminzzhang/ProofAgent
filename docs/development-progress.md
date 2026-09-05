@@ -1,8 +1,26 @@
 # Development Progress
 
-Updated: 2026-09-03
+Updated: 2026-09-05
 
 ## Current decision
+
+[COMPUTED | HIGH] Agent kernel quality P0-1B now reports separate answer, refusal
+and task quality cohorts, including unevaluated and unclassified required cases.
+It verifies the same artifact bytes it parses, requires explicit Trace completion
+for quality, and records optional/scenario exclusion in each report. All 49 new
+tests passed within 329 affected regression passes (one existing skip), with Ruff
+and Mypy over 376 source files passing. Independent Review closed two P1 issues
+and one P2 reporting issue: `NO_BLOCKING_FINDINGS`. Answer semantics and task
+completion still lack positive verifiers; the five kernel probes remain
+`needs_review`. See `docs/features/agent-kernel-quality/tdd-p0-1b.md`. Next: P0-2
+task requirements and completion conditions. This is local implementation evidence.
+
+[COMPUTED | HIGH] Agent kernel quality P0-1A now provides five repeatable offline
+diagnostic probes, explicit nonzero failure exits and source fingerprints. The
+measurement slice passed 23 focused tests and the affected 280-test regression set
+(one pre-existing skipped fixture). All five capability probes remain `needs_review`;
+the current gaps are measured, not fixed. See
+`docs/features/agent-kernel-quality/tdd-report.md` for acceptance and next slices.
 
 [KNOWN | HIGH] ADR-0210 makes KSS the only executable knowledge authority. A
 knowledge-enabled Published Agent Version owns one exact KSS binding and ProofAgent

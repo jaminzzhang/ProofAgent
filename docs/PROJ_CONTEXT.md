@@ -2,6 +2,19 @@
 
 ## Current implementation facts
 
+- `[COMPUTED | HIGH]` As of 2026-09-05, Agent kernel quality P0-1B separately
+  reports answer correctness, curated refusal decision matching, task completion,
+  and not-evaluated counts. Required standalone denominators retain missing cases;
+  every detail records cohort membership. Artifact parsing and hashes use one byte
+  snapshot, and quality requires the last Trace completion outcome itself. The
+  slice passed 49 new tests within 329 affected passes (one existing skip). GRR and
+  release authority are unchanged; answer/task positive verifiers remain absent.
+  Acceptance: `docs/features/agent-kernel-quality/tdd-p0-1b.md`; next slice: P0-2.
+- `[COMPUTED | HIGH]` As of 2026-09-05, Agent kernel quality P0-1A adds an offline
+  diagnostic baseline through existing Control Plane entry points. Its measurement
+  infrastructure is locally verified; all five measured capability requirements
+  remain `needs_review`. This is not a kernel defect fix or Production readiness.
+  Scope, roadmap and acceptance: `docs/features/agent-kernel-quality/`.
 - `[KNOWN | HIGH]` The active Python product package is `proof_agent`; its main
   runtime composition enters through `proof_agent/bootstrap/composition.py`.
 - `[KNOWN | HIGH]` As of 2026-09-03, KSS source, migrations, distribution, internal
@@ -805,6 +818,7 @@ deployment or Production GO action occurred.
 
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
+| `agent-kernel-quality` | `PARTIAL_VERIFICATION` | `docs/features/agent-kernel-quality/` (P0-1A baseline and P0-1B quality measurement locally verified; five capability gaps remain; next P0-2) | 2026-09-05 user-authorized roadmap; ADR-0240 |
 | `kss-project-isolation` | `PARTIAL_VERIFICATION` | `docs/features/kss-project-isolation/` | ADR-0239 |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
 | `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; TDD-06B fixed-synthetic Control Plane Admission verification; TDD-06C fixed-synthetic governed Run verification through an immutable overlay image and checked-in host entry, with full Dockerfile build pending; TDD-06D exact Release rollback preflight; TDD-06E caller-confirmed pointer freshness; TDD-06F PostgreSQL rollback atomicity; TDD-06G default-closed Production rollback admission contract; TDD-06H isolated real KSS/PostgreSQL rollback rehearsal; TDD-06I private-session deployed gate-closed probe implementation with the live probe pending; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, Production rollback gate activation or gate-enabled deployed rollback drill, production Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation notification or production cutover) | ADR-0211 through ADR-0238 |

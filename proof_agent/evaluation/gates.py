@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from proof_agent.contracts import (
-    EvaluationArtifactRef,
     EvaluationArtifactSufficiencyStatus,
     EvaluationCase,
     EvaluationFailureOwner,
@@ -30,7 +28,7 @@ def evaluate_case_gates(
 
     return (
         _subject_mapping_gate(case, subject),
-        _artifact_sufficiency_gate(subject),
+        _artifact_sufficiency_gate(subject, artifacts),
         _outcome_gate(case, artifacts),
         _audit_artifact_gate(artifacts),
         _control_envelope_coverage_gate(case, artifacts),
@@ -59,27 +57,27 @@ def _subject_mapping_gate(case: EvaluationCase, subject: EvaluationSubject) -> E
     )
 
 
-def _artifact_sufficiency_gate(subject: EvaluationSubject) -> EvaluationGateResult:
-    refs = [subject.trace, subject.receipt]
+def _artifact_sufficiency_gate(
+    subject: EvaluationSubject, artifacts: EvaluationArtifacts
+) -> EvaluationGateResult:
+    refs: list[tuple[Path, str | None, str | None]] = [
+        (subject.trace.ref, subject.trace.sha256, artifacts.trace_sha256),
+        (subject.receipt.ref, subject.receipt.sha256, artifacts.receipt_sha256),
+    ]
     if subject.run_meta is not None:
-        refs.append(subject.run_meta)
+        refs.append((subject.run_meta.ref, subject.run_meta.sha256, artifacts.run_meta_sha256))
     if subject.response_projection.ref is not None:
         refs.append(
-            EvaluationArtifactRef(
-                ref=subject.response_projection.ref, sha256=subject.response_projection.sha256
+            (
+                subject.response_projection.ref,
+                subject.response_projection.sha256,
+                artifacts.response_sha256,
             )
         )
-    missing = [str(ref.ref) for ref in refs if not ref.ref.exists()]
-    if missing:
-        return _gate(
-            EvaluationGateName.ARTIFACT_SUFFICIENCY,
-            EvaluationGateStatus.FAILED,
-            "missing artifact refs: " + ", ".join(missing),
-            sufficiency=EvaluationArtifactSufficiencyStatus.INSUFFICIENT,
-            failure_owner=EvaluationFailureOwner.AUDIT_FAILURE,
-        )
     mismatched = [
-        str(ref.ref) for ref in refs if ref.sha256 is not None and _sha256(ref.ref) != ref.sha256
+        str(path)
+        for path, declared, observed in refs
+        if declared is not None and observed != declared
     ]
     if mismatched:
         return _gate(
@@ -91,7 +89,7 @@ def _artifact_sufficiency_gate(subject: EvaluationSubject) -> EvaluationGateResu
         )
     sufficiency = (
         EvaluationArtifactSufficiencyStatus.SUFFICIENT
-        if all(ref.sha256 is not None for ref in refs)
+        if all(declared is not None for _, declared, _ in refs)
         else EvaluationArtifactSufficiencyStatus.LOCAL_ONLY
     )
     return _gate(
@@ -832,14 +830,6 @@ def _string_items(value: Any) -> set[str]:
     if isinstance(value, list | tuple):
         return {item for item in value if isinstance(item, str)}
     return set()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _outcome_value(outcome: ReceiptOutcome | None) -> str:
