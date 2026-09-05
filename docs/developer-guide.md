@@ -35,7 +35,35 @@ source change was detected; `2` means the measurement infrastructure failed. Ins
 `kernel_baseline.md` and `kernel_baseline.json` in the output directory. The report is
 diagnostic evidence, not answer accuracy, formal campaign readiness or Production GO.
 Current results and slice acceptance are in
+`docs/features/agent-kernel-quality/tdd-p0-2.md`; the original measurement record is
 `docs/features/agent-kernel-quality/tdd-report.md`.
+
+[KNOWN | HIGH] Controlled ReAct now freezes the first validated intent and gates
+finalization on its `required=true` retrieval queries. Query identity trims only
+outer whitespace and deduplicates exact matches. Completion needs same-run,
+digest-bound retrieval truth with the actual executed query and Accepted Evidence
+whose nonblank source/citation references are available in the answer context.
+Counts, model completion claims and tool success cannot satisfy this gate.
+
+Premature final or duplicate/unrelated retrieval proposals advance to an unattempted
+required query through the existing Review, Policy and KSS binding path. Failed
+queries stay incomplete while other requirements continue; no remaining progress
+or an exhausted observation budget produces a stable refusal. If the last allowed
+observation completes the required set, final answer generation is permitted.
+Explicit refusal/clarification and unresolved business/retrieval subgoals still
+block finalization. A denied tool is never executed; governed alternative retrieval
+may still answer. Resume validates original proof before any new observation,
+without changing snapshot fields or re-running Intent Resolution.
+
+Applicable runs emit `task_completion_evaluated` with `stage_id=plan` and
+`retrieval-task-completion.v1` payloads. The final plan stage includes the same
+coverage projection for answers, refusals, clarification and policy/scope denial.
+Payloads contain stable reasons, requirement hashes, counts and bound truth refs;
+they contain no new raw query or answer content. Calls without required queries
+retain the original event sequence and report `not_applicable`. Approval-wait
+snapshots retain their existing format; pre-pause progress is in plan events.
+Coverage is necessary for finalization, not semantic answer or business-task
+verification. ADR-0241 and `tdd-p0-2.md` define the exact local acceptance boundary.
 
 [KNOWN | HIGH] The existing Evaluation Analyzer now also writes
 `evaluation_quality.json` (`evaluation-quality-report.v1`), with typed metrics

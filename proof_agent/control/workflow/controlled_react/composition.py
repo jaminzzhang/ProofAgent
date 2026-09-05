@@ -908,6 +908,16 @@ def _context_summary(
     *,
     workflow_stage_context: Mapping[str, Any] | None = None,
 ) -> str:
+    if (
+        state.effective_react_action_set
+        and ReActActionType.GENERATE_FINAL_ANSWER not in state.effective_react_action_set
+    ):
+        summary = (
+            "allowed_next_actions="
+            + ",".join(sorted(action.value for action in state.effective_react_action_set))
+            + f"; observation_count={len(state.observation_records)}"
+        )
+        return _append_stage_context(summary, workflow_stage_context)
     accepted_count = sum(
         observation.accepted_evidence_count for observation in state.observation_records
     )

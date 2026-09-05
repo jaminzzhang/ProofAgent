@@ -11,6 +11,9 @@ not a second glossary.
 - `docs/domain/knowledge-evidence/decisions.md` — decision index for this domain.
 - `docs/domain/workflow-control/CONTEXT.md` — workflow and Control Plane
   authority.
+- `docs/adr/0241-gate-final-answers-on-required-retrieval-evidence.md` — frozen
+  required queries, bound retrieval proofs, finalization and recovery constraints;
+  P0-2 acceptance is in `docs/features/agent-kernel-quality/tdd-p0-2.md`.
 - `docs/domain/tools-models-memory/CONTEXT.md` — external capability boundaries.
 - `docs/domain/evaluation/CONTEXT.md` and `docs/domain/evaluation/decisions.md` — evaluation targets,
   governed resolution, verified quality and release evidence boundaries;

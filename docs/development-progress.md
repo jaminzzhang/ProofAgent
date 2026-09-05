@@ -1,8 +1,21 @@
 # Development Progress
 
-Updated: 2026-09-05
+Updated: 2026-09-06
 
 ## Current decision
+
+[COMPUTED | HIGH] Agent kernel quality P0-2 now prevents finalization until every
+required intent query has same-run, bound, citable Accepted Evidence. Explicit
+refusal/clarification, policy/scope rejection and approval-denial alternatives
+retain their control semantics. Resumed execution validates original proofs before
+any further tool or retrieval observation. The slice passed 55 new tests within
+482 affected passes (three existing skips), Ruff, Mypy over 377 source files and
+independent Review: `NO_BLOCKING_FINDINGS`. Compound retrieval and required rewrite
+probes pass; numeric validation, structured-fact input and long-conversation
+constraints remain `needs_review`. See
+`docs/features/agent-kernel-quality/tdd-p0-2.md`. Next: P0-3 structured evidence
+through Admission to answer input. This is local evidence, not overall task
+verification or Production GO.
 
 [COMPUTED | HIGH] Agent kernel quality P0-1B now reports separate answer, refusal
 and task quality cohorts, including unevaluated and unclassified required cases.
@@ -11,15 +24,16 @@ for quality, and records optional/scenario exclusion in each report. All 49 new
 tests passed within 329 affected regression passes (one existing skip), with Ruff
 and Mypy over 376 source files passing. Independent Review closed two P1 issues
 and one P2 reporting issue: `NO_BLOCKING_FINDINGS`. Answer semantics and task
-completion still lack positive verifiers; the five kernel probes remain
-`needs_review`. See `docs/features/agent-kernel-quality/tdd-p0-1b.md`. Next: P0-2
-task requirements and completion conditions. This is local implementation evidence.
+completion still lack positive verifiers. At the P0-1B checkpoint, all five kernel
+probes were `needs_review`; P0-2's current results are recorded above. See
+`docs/features/agent-kernel-quality/tdd-p0-1b.md`. P0-1A/P0-1B were committed in
+`4cf7c73` before starting P0-2.
 
 [COMPUTED | HIGH] Agent kernel quality P0-1A now provides five repeatable offline
 diagnostic probes, explicit nonzero failure exits and source fingerprints. The
 measurement slice passed 23 focused tests and the affected 280-test regression set
-(one pre-existing skipped fixture). All five capability probes remain `needs_review`;
-the current gaps are measured, not fixed. See
+(one pre-existing skipped fixture). Its historical baseline recorded five
+`needs_review` probes; that slice measured the gaps without fixing them. See
 `docs/features/agent-kernel-quality/tdd-report.md` for acceptance and next slices.
 
 [KNOWN | HIGH] ADR-0210 makes KSS the only executable knowledge authority. A

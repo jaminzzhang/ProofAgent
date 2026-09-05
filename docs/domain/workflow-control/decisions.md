@@ -4,6 +4,12 @@ Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `reac
 
 ## Ambiguity Resolutions
 
+- [KNOWN | HIGH] [ADR-0241](../../adr/0241-gate-final-answers-on-required-retrieval-evidence.md)
+  defines P0-2's required retrieval completion gate. The frozen intent and bound
+  observation truth are authority; the versioned completion projection is audit
+  output. Query coverage is necessary for finalization and does not prove semantic
+  answer correctness or overall task completion. Existing policy, clarification
+  and governed approval-denial alternative paths remain authoritative.
 - "Workflow" could mean business flow, runtime graph mechanics, or a hard-coded orchestrator branch. Resolved: use **Workflow Template** for the governed flow shape, and keep runtime mechanics separate.
 - "Workflow graph editing" could mean configuring registered template stages, editing LangGraph nodes, or freely rewriting the runtime graph. Resolved: use **Workflow Template Stage Configuration** for editable stage settings that compile back to the Agent Contract without changing Harness semantics.
 - "`ReActWorkflowNodes` rename" could be bundled with the schema cutover, treated as a runtime graph rename, or handled as execution seam cleanup. Resolved: defer it out of Slice 1, then handle it through the **ReAct Stage Behavior Consolidation Slice** by moving Control Plane stage work behind **ReAct Enterprise QA Workflow Execution** instead of renaming every LangGraph node.

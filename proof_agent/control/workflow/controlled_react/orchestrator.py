@@ -64,6 +64,15 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
     verify_controlled_react_snapshot_binding,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts._base import freeze_value
+from proof_agent.control.workflow.controlled_react.task_completion import (
+    RetrievalTaskCompletion,
+    assess_retrieval_completion,
+    required_retrievals,
+    pending_retrieval_action,
+    completion_projection,
+    incomplete_refusal,
+)
 
 
 @dataclass(frozen=True)
@@ -148,12 +157,20 @@ class ControlledReActOrchestrator:
             if action.action_type is ReActActionType.REFUSE:
                 return self._refuse_plan_budget_exhausted(request, action, state=state)
             if action.action_type is ReActActionType.ASK_CLARIFICATION:
-                return self._ask_clarification(request, action, state=state)
+                return _with_task_completion(
+                    self._ask_clarification(request, action, state=state),
+                    self._task_completion(state),
+                    reason="clarification_required",
+                )
             if action.action_type is ReActActionType.GENERATE_FINAL_ANSWER:
                 if _final_answer_blocked_by_denied_tool(state):
                     answer = _tool_approval_denied_answer(state, action)
                     return _workflow_result_from_answer(state, answer, action)
                 answer_context = self._answer_evidence_context(state)
+                completion = self._task_completion(state, answer_context=answer_context)
+                if completion is not None and not completion.complete:
+                    action = incomplete_refusal(action, reason="requirements_unsatisfied")
+                    return self._refuse_plan_budget_exhausted(request, action, state=state)
                 answer = self._ports.answer_synthesis.synthesize(
                     state,
                     action,
@@ -166,15 +183,20 @@ class ControlledReActOrchestrator:
                     answer,
                 )
                 memory_write = self._write_memory(state, answer)
-                return _workflow_result_from_answer(
+                result = _workflow_result_from_answer(
                     state,
                     answer,
                     action,
                     memory_write_result=memory_write,
                 )
+                return _with_task_completion(result, completion)
             if action.action_type is ReActActionType.PLAN_RETRIEVAL:
                 if self._review_denies(state, action):
-                    return self._deny_retrieval_review(request, action, state=state)
+                    return _with_task_completion(
+                        self._deny_retrieval_review(request, action, state=state),
+                        self._task_completion(state),
+                        reason="review_denied",
+                    )
                 state = self._observe_knowledge(state, action)
                 state, action = self._plan_next_action(
                     state,
@@ -183,11 +205,19 @@ class ControlledReActOrchestrator:
                 continue
             if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
                 if _tool_scope_violation(state, action):
-                    return self._deny_tool_scope_violation(request, action, state=state)
+                    return _with_task_completion(
+                        self._deny_tool_scope_violation(request, action, state=state),
+                        self._task_completion(state),
+                        reason="tool_scope_denied",
+                    )
                 state, action = self._bind_tool_proposal(state, action)
                 policy_decision = self._policy_decision(state, action)
                 if policy_decision is PolicyDecisionType.DENY:
-                    return self._deny_tool_policy(request, action, state=state)
+                    return _with_task_completion(
+                        self._deny_tool_policy(request, action, state=state),
+                        self._task_completion(state),
+                        reason="policy_denied",
+                    )
                 if policy_decision is PolicyDecisionType.ALLOW:
                     state = self._observe_tool(state, action)
                     state, action = self._plan_next_action(
@@ -205,12 +235,30 @@ class ControlledReActOrchestrator:
         *,
         state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
-        if action.parameters.get("refusal_reason") == "observation_no_progress":
-            message = "Unable to answer because no governed evidence met admission requirements."
-        elif action.parameters.get("refusal_reason") == "business_flow_admission_failed":
+        completion = self._task_completion(state)
+        reason = action.parameters.get("refusal_reason")
+        reason = reason if isinstance(reason, str) else None
+        if reason == "business_flow_admission_failed":
             message = (
                 "Unable to continue because the Business Flow Skill Pack route was not admitted."
             )
+        elif reason == "policy_denied":
+            message = "Unable to continue because policy denied the request."
+        elif reason == "unresolved_subgoals":
+            message = "Unable to finalize because retrieval observations still contain unresolved subgoals."
+        elif completion is not None and reason not in {
+            "requirements_unsatisfied",
+            "plan_budget_exhausted",
+            "observation_no_progress",
+        }:
+            reason = "planner_refused"
+            message = "Unable to continue because the planner declined the request."
+        elif completion is not None and not completion.complete:
+            message = f"Unable to complete the request: {completion.unmet_count} required retrieval requirement(s) lack verified evidence."
+            if reason == "plan_budget_exhausted":
+                message += " The plan budget was exhausted."
+        elif reason == "observation_no_progress":
+            message = "Unable to answer because no governed evidence met admission requirements."
         else:
             message = "Unable to continue gathering evidence within the plan budget."
         answer = AnswerSynthesisResult(
@@ -220,7 +268,7 @@ class ControlledReActOrchestrator:
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
         )
         memory_write = self._write_memory(state, answer)
-        return WorkflowTemplateExecutionResult(
+        result = WorkflowTemplateExecutionResult(
             run_id=request.run_id,
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
@@ -236,6 +284,7 @@ class ControlledReActOrchestrator:
             intent_resolution=state.intent_resolution,
             reasoning_summary=answer.reasoning_summary,
         )
+        return _with_task_completion(result, completion, reason=str(reason) if reason else None)
 
     def _ask_clarification(
         self,
@@ -453,6 +502,8 @@ class ControlledReActOrchestrator:
                 "controlled ReAct resume approval identity does not match pending action",
                 "Discard the stale approval checkpoint and restart the run.",
             )
+        # Validate the original requirement proofs before any resumed observation.
+        self._task_completion(state)
         if not request.approved:
             planning_state = self._observe_tool_approval_denial(state, action, request)
             planning_state, next_action = self._plan_next_action(
@@ -652,8 +703,10 @@ class ControlledReActOrchestrator:
                 )
             state = state.model_copy(
                 update={
-                    "intent_resolution": intent_result.intent_resolution.model_dump(
-                        mode="json",
+                    "intent_resolution": freeze_value(
+                        intent_result.intent_resolution.model_dump(
+                            mode="json",
+                        )
                     ),
                     "stage_llm_interactions": (
                         state.stage_llm_interactions + stage_llm_interactions
@@ -785,10 +838,20 @@ class ControlledReActOrchestrator:
         *,
         max_plan_rounds: int,
     ) -> ControlledReActRunState:
-        eligible_actions, _convergence_signal = _eligible_actions_for_state(
+        completion = self._task_completion(state)
+        eligible_actions, convergence_signal = _eligible_actions_for_state(
             state,
             max_plan_rounds=max_plan_rounds,
+            task_completion=completion,
         )
+        if completion is not None:
+            self._emit_trace(
+                "task_completion_evaluated",
+                payload={
+                    "stage_id": "plan",
+                    **completion_projection(completion, reason=convergence_signal),
+                },
+            )
         scope = None
         tool_scope_projections = tuple(state.tool_proposal_scope_trace_projections)
         if self._ports.tool_proposal_scope is not None:
@@ -1013,12 +1076,42 @@ class ControlledReActOrchestrator:
         *,
         max_plan_rounds: int,
     ) -> ReActActionProposal:
+        completion = self._task_completion(state)
         eligible_actions, convergence_signal = _eligible_actions_for_state(
             state,
             max_plan_rounds=max_plan_rounds,
+            task_completion=completion,
         )
         if state.effective_react_action_set:
-            eligible_actions = frozenset(state.effective_react_action_set)
+            eligible_actions = eligible_actions.intersection(state.effective_react_action_set)
+        if completion is not None and action.action_type in {
+            ReActActionType.REFUSE,
+            ReActActionType.ASK_CLARIFICATION,
+        }:
+            return action
+        if (
+            completion is not None
+            and completion.pending
+            and ReActActionType.PLAN_RETRIEVAL in eligible_actions
+            and (
+                action.action_type is ReActActionType.GENERATE_FINAL_ANSWER
+                or (
+                    action.action_type is ReActActionType.PLAN_RETRIEVAL
+                    and not any(
+                        action.parameters.get("query") == item.query for item in completion.pending
+                    )
+                )
+            )
+        ):
+            action = pending_retrieval_action(
+                action, completion.pending[0], plan_round=state.plan_round
+            )
+        if completion is not None and convergence_signal in {
+            "plan_budget_exhausted",
+            "requirements_unsatisfied",
+            "unresolved_subgoals",
+        }:
+            return incomplete_refusal(action, reason=convergence_signal)
         constrained, _rewrite = constrain_action(
             action,
             eligible_actions,
@@ -1037,12 +1130,51 @@ class ControlledReActOrchestrator:
             )
         return constrained
 
+    def _task_completion(
+        self, state: ControlledReActRunState, *, answer_context: AnswerEvidenceContext | None = None
+    ) -> RetrievalTaskCompletion | None:
+        requirements = required_retrievals(state.intent_resolution)
+        if not requirements:
+            return None
+        context = answer_context or self._answer_evidence_context(state)
+        return assess_retrieval_completion(
+            run_id=state.run_id,
+            requirements=requirements,
+            records=state.observation_records,
+            truths=context.observation_truth,
+        )
+
 
 def _eligible_actions_for_state(
     state: ControlledReActRunState,
     *,
     max_plan_rounds: int,
+    task_completion: RetrievalTaskCompletion | None = None,
 ) -> tuple[frozenset[ReActActionType], str | None]:
+    if task_completion is not None:
+        terminal_actions = {ReActActionType.ASK_CLARIFICATION, ReActActionType.REFUSE}
+        if task_completion.complete:
+            if any(
+                subgoal != "tool_approval_denied"
+                for record in state.observation_records
+                for subgoal in record.unresolved_subgoals
+            ):
+                return frozenset(terminal_actions), "unresolved_subgoals"
+            return frozenset(
+                terminal_actions | {ReActActionType.GENERATE_FINAL_ANSWER}
+            ), "required_retrieval_complete"
+        if state.plan_round >= max_plan_rounds:
+            return frozenset(terminal_actions), "plan_budget_exhausted"
+        if not task_completion.pending:
+            return frozenset(terminal_actions), "requirements_unsatisfied"
+        return frozenset(
+            {
+                ReActActionType.PLAN_RETRIEVAL,
+                ReActActionType.PROPOSE_TOOL_CALL,
+                ReActActionType.ASK_CLARIFICATION,
+                ReActActionType.REFUSE,
+            }
+        ), "required_retrieval_pending"
     return compute_eligible_action_set(
         plan_rounds=state.plan_round,
         max_plan_rounds=max_plan_rounds,
@@ -1052,6 +1184,30 @@ def _eligible_actions_for_state(
         ],
         observations=_observation_payloads(state),
     )
+
+
+def _with_task_completion(
+    result: WorkflowTemplateExecutionResult,
+    completion: RetrievalTaskCompletion | None,
+    *,
+    reason: str | None = None,
+) -> WorkflowTemplateExecutionResult:
+    stages = list(result.stage_results)
+    for index in range(len(stages) - 1, -1, -1):
+        stage = stages[index]
+        if stage.stage_id == "plan":
+            stages[index] = stage.model_copy(
+                update={
+                    "summary": freeze_value(
+                        {
+                            **stage.summary,
+                            "task_completion": completion_projection(completion, reason=reason),
+                        }
+                    )
+                }
+            )
+            break
+    return result.model_copy(update={"stage_results": tuple(stages)})
 
 
 def _tool_scope_violation(

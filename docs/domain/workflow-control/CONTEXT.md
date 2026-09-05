@@ -4,6 +4,24 @@ Workflow Control contains the language for governed execution: Workflow Template
 
 ## Language
 
+**Required Retrieval Requirement**:
+A fixed query requirement derived from the first validated Intent Resolution's
+`required=true` items. Identity trims outer whitespace and deduplicates exact
+queries; the frozen original intent survives snapshot recovery.
+_Avoid_: Planner progress claim, mutable summary goal, semantically equivalent query
+
+**Retrieval Completion Proof**:
+Same-run, digest-bound Retrieval Observation Truth whose actual executed query
+matches a required query and contains Accepted Evidence with usable source and
+citation references in the final answer context.
+_Avoid_: Accepted count, candidate hit, successful tool result, proposed query
+
+**Required Retrieval Completion Gate**:
+The Control Plane condition preventing finalization while required retrieval
+proofs are missing. It preserves refusal, clarification and unresolved business
+constraints; it does not verify answer semantics or overall business-task success.
+_Avoid_: General task completion verifier, answer correctness score, release approval
+
 **Workflow Template Execution**:
 The governed execution of one selected Workflow Template during a run, including Control Envelope stage semantics without owning Runtime Plane mechanics.
 _Avoid_: Runtime graph execution, template-specific node class, orchestrator branch
