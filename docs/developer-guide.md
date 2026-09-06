@@ -33,7 +33,7 @@ uv run --extra dev python scripts/check-agent-kernel-baseline.py \
 ```
 
 [KNOWN | HIGH] This command drives the existing Control Plane with fixed synthetic
-model and KSS boundaries. It checks numeric validation, compound retrieval coverage,
+model and Dify HTTP boundaries. It checks numeric validation, compound retrieval coverage,
 intent rewrites, admitted structured facts in answer input, and 30-turn constraint
 retention. It reads no environment files and needs no service credentials. Exit `0`
 means all five local probes passed; `1` means a capability gap, invalid observation or
@@ -41,8 +41,17 @@ source change was detected; `2` means the measurement infrastructure failed. Ins
 `kernel_baseline.md` and `kernel_baseline.json` in the output directory. The report is
 diagnostic evidence, not answer accuracy, formal campaign readiness or Production GO.
 Current results and slice acceptance are in
-`docs/features/agent-kernel-quality/tdd-p0-2.md`; the original measurement record is
+`docs/features/agent-kernel-quality/tdd-p0-4.md`; the original measurement record is
 `docs/features/agent-kernel-quality/tdd-report.md`.
+
+[KNOWN | HIGH] Final-answer validation includes bounded numeric and explicit-assertion
+consistency against cited Accepted Evidence. Keep source subjects, conditions, negations
+and units; for typed fields use `record_id field is value unit`, one fact per sentence.
+Only standalone quantity tokens are normalized; typed non-numeric values are literal.
+Correct free paraphrases may be conservatively rejected; unrecognized language is
+counted as unassessed. One policy-governed repair rechecks every validator; remaining
+failure refuses delivery. Scope and limits: ADR-0244 and
+`docs/features/agent-kernel-quality/scope-p0-4.md`.
 
 [KNOWN | HIGH] Controlled ReAct now freezes the first validated intent and gates
 finalization on its `required=true` retrieval queries. Query identity trims only

@@ -21,6 +21,11 @@ not a second glossary.
 
 ## Active external Knowledge boundary
 
+- `docs/adr/0244-validate-bounded-answer-facts-before-admission.md` defines
+  cited-evidence numeric/explicit-assertion consistency and the existing one-repair boundary.
+  P0-4 scope and limits: `docs/features/agent-kernel-quality/scope-p0-4.md`;
+  acceptance: `docs/features/agent-kernel-quality/tdd-p0-4.md`.
+
 - `docs/adr/0243-preserve-typed-external-evidence-through-answer-input.md` defines
   typed records, explicit Dify content format, source identity and answer projection.
   P0-3 acceptance: `docs/features/agent-kernel-quality/tdd-p0-3.md`.

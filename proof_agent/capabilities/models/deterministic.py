@@ -84,7 +84,15 @@ def _evidence_text_from_request(request: ModelRequest) -> str:
     marker = "Evidence:\n"
     start = user_message.find(marker)
     if start == -1:
-        return ""
+        try:
+            payload = json.loads(user_message)
+        except ValueError:
+            return ""
+        return (
+            _render_evidence_records(payload.get("accepted_evidence", []))
+            if isinstance(payload, dict)
+            else ""
+        )
     start += len(marker)
     end = user_message.find("\n\nAllowed citation refs:", start)
     if end == -1:
@@ -95,8 +103,32 @@ def _evidence_text_from_request(request: ModelRequest) -> str:
     except ValueError:
         return content
     if isinstance(records, list):
-        return "\n\n".join(item["content"] for item in records if isinstance(item, dict) and isinstance(item.get("content"), str))
+        return _render_evidence_records(records)
     return content
+
+
+def _render_evidence_records(records: list[object]) -> str:
+    texts: list[str] = []
+    for item in records:
+        if not isinstance(item, dict) or not isinstance(item.get("content"), str):
+            continue
+        typed = item.get("structured_data")
+        if isinstance(typed, dict):
+            for field in typed.get("fields", []):
+                value = field["value"]
+                rendered = (
+                    "null"
+                    if value is None
+                    else str(value).lower()
+                    if isinstance(value, bool)
+                    else str(value)
+                )
+                texts.append(
+                    f"{typed['record_id']} {field['field']} is {rendered} {field.get('unit') or ''}."
+                )
+        else:
+            texts.append(item["content"])
+    return "\n\n".join(texts)
 
 
 def _first_evidence_sentence(evidence_text: str) -> str:
@@ -115,6 +147,8 @@ def _first_evidence_sentence(evidence_text: str) -> str:
 
 
 def _paraphrase_evidence_sentence(sentence: str) -> str:
+    if re.search(r"\d", sentence):
+        return f"Based on the accepted evidence, {sentence}"
     reimbursement = re.match(
         r"^(?P<subject>.+?)\s+are reimbursed up to\s+(?P<limit>.+?)\s+when\s+(?P<condition>.+?)\.$",
         sentence,
@@ -126,7 +160,7 @@ def _paraphrase_evidence_sentence(sentence: str) -> str:
             f"{subject} reimbursement is capped at {reimbursement.group('limit')} "
             f"when {reimbursement.group('condition')}."
         )
-    return f"Based on the accepted evidence, {sentence[0].lower()}{sentence[1:]}"
+    return f"Based on the accepted evidence, {sentence}"
 
 
 def _user_visible_final_answer_message(answer: str) -> str:

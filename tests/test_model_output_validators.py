@@ -88,6 +88,7 @@ def test_structured_final_answer_citations_are_validated_without_parsing_message
         "safety": "passed",
         "citations": "passed",
         "final_answer_adequacy": "passed",
+        "answer_facts": "failed",  # Legal citations do not support the assertion in message.
     }
 
 

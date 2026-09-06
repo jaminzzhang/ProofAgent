@@ -10,6 +10,18 @@ Updated: 2026-09-06
 
 ## Current decision
 
+[COMPUTED | HIGH] P0-4 now validates source-near numeric facts and explicit assertions
+against cited Accepted Evidence, then reuses one policy-governed repair and all final
+answer gates. Typed strings, booleans, nulls and identities retain their distinctions.
+Backend: 2564 passed; fact-specific: 65 passed; independent Review:
+`NO_BLOCKING_FINDINGS`. Numeric, compound, rewrite and typed-fact probes pass.
+Unrecognized language and general semantic accuracy remain unverified; the long-context
+probe still fails. Next: P1-1, not started. Scope and evidence:
+`docs/features/agent-kernel-quality/tdd-p0-4.md`. Overall status remains
+`PARTIAL_VERIFICATION`; local evidence is not Production GO.
+
+## Prior slice evidence
+
 [COMPUTED | HIGH] P0-3 now preserves typed external records, exact decimal strings,
 units and source bindings in both initial and repair answer input. Explicit Dify
 structured content cannot fall back to text or bypass admission; restored evidence
@@ -17,9 +29,7 @@ retains its original content-bound identity. Backend 2499, Dashboard 226 and Cha
 tests passed; independent Review found no remaining blockers. The structured-fact
 probe now passes alongside compound/rewrite probes; numeric-answer validation and
 long-context constraints remain open. See `docs/features/agent-kernel-quality/tdd-p0-3.md`.
-Next: P0-4 answer validation and bounded repair. Local evidence is not Production GO.
-
-## Prior slice evidence
+P0-4's subsequent evidence is above. Local evidence is not Production GO.
 
 [COMPUTED | HIGH] Agent kernel quality P0-2 now prevents finalization until every
 required intent query has same-run, bound, citable Accepted Evidence. Explicit

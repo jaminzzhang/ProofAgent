@@ -1,5 +1,22 @@
 # P0-1A：可重复执行的内核能力缺口基线
 
+## 当前交付树（2026-09-06，P0-4 v1）
+
+[KNOWN | HIGH] 下方 P0-1A 计划保留历史测量定义；当前外部知识入口为 Dify，旧 KSS 指标 ID 仅用于基线对照。当前切片的输入、分支、边界和验收见 [scope-p0-4.md](scope-p0-4.md)，执行证据见 [tdd-p0-4.md](tdd-p0-4.md)。
+
+```text
+P0-2 required-query [本地已验证] → P0-3 typed Accepted Evidence [本地已验证]
+  P0-4 / FACT_CHECK [本次已验证：A1/A2，有界事实一致性]
+    通过 → P0-4 / ADMIT [本次已验证：A3/A4]
+    失败 → P0-4 / REPAIR [本次已验证：A3，最多一次逻辑修复]
+      修复通过 → ADMIT；仍失败 → 拒绝；策略预算拒绝 → POLICY_DENIED
+P1-1 长对话任务状态 [待执行]
+```
+
+[COMPUTED | HIGH] 数值、复合查询、改写、结构化事实四项固定探针通过；长对话约束仍为 `needs_review`。根目标保留 `PARTIAL_VERIFICATION`，不能由 P0-4 局部验证推导通用语义正确率或生产准入。
+
+## P0-1A 历史计划
+
 [FRAME | HIGH] 准入结论：`TDD_INPUT_READY`。用户已授权顺序交付；本切片仅建立本地离线诊断基线。最高风险 P1：错误的通过判定掩盖内核缺陷。
 
 ## 范围与依据
