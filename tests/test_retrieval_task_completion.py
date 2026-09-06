@@ -132,6 +132,7 @@ class _Knowledge:
     def __init__(self, modes=None):
         self.modes = modes or {}
         self.queries = []
+        self.evidence_by_query = {}
 
     def observe(self, state, action, identity):
         query = action.parameters["query"]
@@ -157,6 +158,9 @@ class _Knowledge:
                 ),
             )
         )
+        if query in self.evidence_by_query:
+            chunks = (self.evidence_by_query[query],)
+            source, citation = chunks[0].source, chunks[0].citation
         truth = RetrievalObservationTruth(
             truth_ref=identity.truth_ref,
             observation_id=identity.observation_id,
@@ -605,7 +609,7 @@ def test_tool_policy_denial_still_prevents_execution():
     assert _projection(result)["reason"] == "policy_denied"
 
 
-def _pause_with_partial_retrieval(tmp_path):
+def _pause_with_partial_retrieval(tmp_path, *, typed=False):
     intent, tool = _Intent(), _Tool()
     snapshots = FileControlledReActSnapshotStore(tmp_path)
     truths = FileObservationTruthStore(tmp_path)
@@ -617,14 +621,32 @@ def _pause_with_partial_retrieval(tmp_path):
         observation_truth_store=truths,
     )
     planner.plan = _tool_after_first_query
+    if typed:
+        import json
+        from hashlib import sha256
+        from proof_agent.contracts.structured_evidence import parse_structured_evidence
+        content = json.dumps({
+            "schema_version": "proofagent-structured-evidence.v1", "record_id": "alpha",
+            "fields": [{"field": "summary", "value_type": "string", "value": FACT_A},
+                       {"field": "limit", "value_type": "decimal", "value": "100.00", "unit": "CNY"}],
+        })
+        digest = sha256(content.encode()).hexdigest()
+        source = "external://policies/datasets/policy-dataset/documents/alpha"
+        knowledge.evidence_by_query[QUERY_A] = EvidenceChunk(
+            source=source, citation=f"{source}#segment=s1&sha256={digest}",
+            content=content, status=EvidenceStatus.ACCEPTED, admission_score=1.0,
+            binding_id="policies", source_id="policy-dataset", document_id="alpha", chunk_id="s1",
+            source_version_id=f"sha256:{digest}", structured_data=parse_structured_evidence(content),
+        )
     result = _start(orchestrator, budget=3)
     assert result.outcome is ReceiptOutcome.WAITING_FOR_APPROVAL
     assert result.approval_pause and knowledge.queries == [QUERY_A]
     return result.approval_pause, intent, tool, answer, snapshots, truths
 
 
-def test_file_snapshot_resume_preserves_original_requirements_and_truth(tmp_path):
-    pause, intent, tool, _, snapshots, _ = _pause_with_partial_retrieval(tmp_path)
+@pytest.mark.parametrize("typed", [False, True])
+def test_file_snapshot_resume_preserves_original_requirements_and_truth(tmp_path, typed):
+    pause, intent, tool, _, snapshots, _ = _pause_with_partial_retrieval(tmp_path, typed=typed)
     snapshot = snapshots.load(pause.checkpoint_ref)
     first_ref = snapshot.state.observation_records[0].truth_ref
     # A fresh orchestrator and file adapters model restart, not an in-memory resume.
@@ -649,6 +671,11 @@ def test_file_snapshot_resume_preserves_original_requirements_and_truth(tmp_path
     assert first_ref in _projection(result)["proofs"][0]["truth_refs"]
     assert answer.contexts[0].observation_truth[0].truth_ref == first_ref
     assert "task_completion" not in snapshot.state.model_dump(warnings=False)
+    if typed:
+        chunk = answer.contexts[0].observation_truth[0].accepted_evidence[0]
+        assert chunk.structured_data.fields[1].value == "100.00"
+        assert chunk.structured_data.fields[1].value_type == "decimal"
+        assert chunk.structured_data.fields[1].unit == "CNY"
 
 
 @pytest.mark.parametrize("corruption", ["missing", "replaced"])

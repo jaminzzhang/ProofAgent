@@ -75,7 +75,7 @@ class KnowledgeRetrievalResult:
 
 
 class KnowledgeRetrievalService:
-    """Consume KSS candidates, then apply ProofAgent-owned Evidence Admission."""
+    """Consume external candidates, then apply ProofAgent-owned Evidence Admission."""
 
     def __init__(
         self,
@@ -257,6 +257,10 @@ class KnowledgeRetrievalService:
             if result.binding_id != binding.binding_id or result.query != request.question:
                 raise ProofAgentError("PA_KNOWLEDGE_002", "External Knowledge result scope mismatch.",
                                       "Retrieve again using the frozen binding and exact question.")
+            if any((candidate.structured_data is not None) != (binding.content_format == "structured_json")
+                   for candidate in result.candidates):
+                raise ProofAgentError("PA_KNOWLEDGE_002", "External Knowledge result format differs from its frozen binding.",
+                                      "Retrieve source records in the configured content format.")
             observed_at = datetime.now(timezone.utc).isoformat()
             for candidate in result.candidates[:min(binding.retrieval.top_k, request.top_k)]:
                 # The configured relevance/provenance gate does not prove semantic or numeric claims.
@@ -273,6 +277,7 @@ class KnowledgeRetrievalService:
                     document_id=candidate.document_id, chunk_id=candidate.chunk_id,
                     provider_native_score=candidate.native_score,
                     admission_score=1.0 if admitted else None, citation=citation,
+                    structured_data=candidate.structured_data,
                     metadata={"admission_policy": binding.admission_policy,
                               "consistency": binding.consistency, "observed_at": observed_at,
                               "content_sha256": candidate.content_sha256},

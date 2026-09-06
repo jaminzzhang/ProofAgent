@@ -16,6 +16,7 @@ from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
 from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.structured_evidence import parse_structured_evidence
 
 
 class DifyKnowledgeProvider:
@@ -112,7 +113,7 @@ class DifyKnowledgeProvider:
                 or len(data["records"]) > 100
             ):
                 raise ValueError("mismatched response")
-            candidates = tuple(_candidate(row) for row in data["records"])
+            candidates = tuple(_candidate(row, binding=binding) for row in data["records"])
             if len({(c.document_id, c.chunk_id) for c in candidates}) != len(candidates):
                 raise ValueError("duplicate candidate identity")
             return ExternalKnowledgeResult(
@@ -124,10 +125,12 @@ class DifyKnowledgeProvider:
             raise _error("response_invalid") from None
 
 
-def _candidate(row: dict[str, Any]) -> ExternalKnowledgeCandidate:
+def _candidate(row: dict[str, Any], *, binding: ExternalKnowledgeBinding) -> ExternalKnowledgeCandidate:
     segment = row["segment"]
     content = segment["content"]
     answer = segment.get("answer")
+    if binding.content_format == "structured_json" and answer not in (None, ""):
+        raise ValueError("Structured records cannot be mixed with Q&A answers")
     if answer is not None:
         if not isinstance(answer, str):
             raise ValueError("invalid answer")
@@ -146,6 +149,7 @@ def _candidate(row: dict[str, Any]) -> ExternalKnowledgeCandidate:
         content_sha256=sha256(content.encode()).hexdigest(),
         native_score=row["score"],
         available=enabled and segment.get("status") == "completed",
+        structured_data=(parse_structured_evidence(content) if binding.content_format == "structured_json" else None),
     )
 
 

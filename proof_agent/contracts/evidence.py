@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
+from hashlib import sha256
 from typing import Any, Literal
 
 from pydantic import Field, StrictBool, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.structured_evidence import StructuredEvidenceRecord, parse_structured_evidence
 
 
 class EvidenceStatus(str, Enum):
@@ -50,6 +52,21 @@ class EvidenceChunk(FrozenModel):
     citation: str | None = None
     metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
     contributions: tuple[EvidenceContribution, ...] = Field(default_factory=tuple)
+    structured_data: StructuredEvidenceRecord | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def validate_structured_source(self) -> EvidenceChunk:
+        if self.structured_data is not None:
+            digest = sha256(self.content.encode()).hexdigest()
+            if (
+                parse_structured_evidence(self.content) != self.structured_data
+                or not all((self.source, self.binding_id, self.source_id, self.document_id, self.chunk_id))
+                or self.source != f"external://{self.binding_id}/datasets/{self.source_id}/documents/{self.document_id}"
+                or self.source_version_id != f"sha256:{digest}"
+                or self.citation != f"{self.source}#segment={self.chunk_id}&sha256={digest}"
+            ):
+                raise ValueError("Structured evidence content or provenance does not match")
+        return self
 
     @field_validator("metadata", mode="after")
     @classmethod

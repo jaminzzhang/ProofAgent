@@ -89,7 +89,14 @@ def _evidence_text_from_request(request: ModelRequest) -> str:
     end = user_message.find("\n\nAllowed citation refs:", start)
     if end == -1:
         end = len(user_message)
-    return user_message[start:end].strip()
+    content = user_message[start:end].strip()
+    try:
+        records = json.loads(content)
+    except ValueError:
+        return content
+    if isinstance(records, list):
+        return "\n\n".join(item["content"] for item in records if isinstance(item, dict) and isinstance(item.get("content"), str))
+    return content
 
 
 def _first_evidence_sentence(evidence_text: str) -> str:

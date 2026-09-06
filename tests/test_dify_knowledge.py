@@ -263,13 +263,19 @@ def test_invalid_question_has_no_effect(question):
     assert not http.requests
 
 
-def test_external_configuration_round_trip_validation_and_publication(tmp_path):
+@pytest.mark.parametrize("content_format", ["text", "structured_json"])
+def test_external_configuration_round_trip_validation_and_publication(tmp_path, content_format):
     from fastapi.testclient import TestClient
     from proof_agent.observability.api.app import create_app
 
     class QueryHttp(Http):
         def request(self, method, url, **kwargs):
             self.payload = response_payload(json.loads(kwargs["body"])["query"])
+            if content_format == "structured_json":
+                self.payload["records"][0]["segment"]["content"] = json.dumps({
+                    "schema_version": "proofagent-structured-evidence.v1", "record_id": "policy-2025",
+                    "fields": [{"field": "limit", "value_type": "decimal", "value": "100.00", "unit": "CNY"}],
+                })
             return super().request(method, url, **kwargs)
 
     http = QueryHttp()
@@ -294,9 +300,10 @@ def test_external_configuration_round_trip_validation_and_publication(tmp_path):
     draft = imported.json()
     base = f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}"
     initial = client.get(base + "/external-knowledge").json()
+    configuration = {**binding_payload(), "content_format": content_format}
     saved = client.patch(
         base + "/external-knowledge",
-        json={"expected_revision": initial["revision"], "bindings": [binding_payload()]},
+        json={"expected_revision": initial["revision"], "bindings": [configuration]},
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["bindings"][0]["dataset_id"] == DATASET
@@ -330,7 +337,8 @@ def test_external_configuration_round_trip_validation_and_publication(tmp_path):
 
 
 @pytest.mark.parametrize("case", ["empty", "low_score", "disabled", "unknown_status", "denied"])
-def test_unadmitted_dify_results_cannot_complete_required_retrieval(tmp_path, case):
+@pytest.mark.parametrize("content_format", ["text", "structured_json"])
+def test_unadmitted_dify_results_cannot_complete_required_retrieval(tmp_path, case, content_format):
     from pathlib import Path
     import yaml
     from proof_agent.bootstrap.composition import compose_harness_invocation
@@ -342,7 +350,7 @@ def test_unadmitted_dify_results_cannot_complete_required_retrieval(tmp_path, ca
 
     fixture = Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3")
     payload = yaml.safe_load((fixture / "agent.yaml").read_text())
-    payload["knowledge_bindings"] = [binding_payload()]
+    payload["knowledge_bindings"] = [{**binding_payload(), "content_format": content_format}]
     policy = yaml.safe_load((fixture / "policy.yaml").read_text())
     if case == "denied":
         policy["rules"].insert(
@@ -364,6 +372,11 @@ def test_unadmitted_dify_results_cannot_complete_required_retrieval(tmp_path, ca
     class QueryHttp(Http):
         def request(self, method, url, **kwargs):
             self.payload = response_payload(json.loads(kwargs["body"])["query"])
+            if content_format == "structured_json":
+                self.payload["records"][0]["segment"]["content"] = json.dumps({
+                    "schema_version": "proofagent-structured-evidence.v1", "record_id": "policy-2025",
+                    "fields": [{"field": "limit", "value_type": "decimal", "value": "100.00", "unit": "CNY"}],
+                })
             if case == "empty":
                 self.payload["records"] = []
             if case == "low_score":
@@ -456,7 +469,7 @@ def test_guarded_adapter_never_follows_redirect_or_retries():
     assert transport.calls[0][1]["max_response_bytes"] == 1024 * 1024
 
 
-@pytest.mark.parametrize("change", ["endpoint", "dataset_id", "threshold", "handle", "missing"])
+@pytest.mark.parametrize("change", ["endpoint", "dataset_id", "threshold", "handle", "missing", "content_format"])
 def test_published_binding_drift_fails_before_http(tmp_path, change):
     from pathlib import Path
     from proof_agent.bootstrap.loader import load_agent_manifest
@@ -476,6 +489,8 @@ def test_published_binding_drift_fails_before_http(tmp_path, change):
         altered["retrieval"] = {"score_threshold": 0.8}
     if change == "handle":
         altered["credential_ref"]["handle_id"] = "OTHER"
+    if change == "content_format":
+        altered["content_format"] = "structured_json"
     manifest = load_agent_manifest(path).model_copy(update={"knowledge_bindings": (binding,)})
     frozen = () if change == "missing" else (ExternalKnowledgeBinding.model_validate(altered),)
     http = Http()

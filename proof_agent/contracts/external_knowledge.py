@@ -8,6 +8,7 @@ from pydantic import Field, StrictStr, field_validator, model_validator
 
 from proof_agent.contracts._base import StrictFrozenModel
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
+from proof_agent.contracts.structured_evidence import StructuredEvidenceRecord, parse_structured_evidence
 
 
 Identifier = Annotated[StrictStr, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -33,6 +34,7 @@ class ExternalKnowledgeBinding(StrictFrozenModel):
     provider: Literal["dify"]
     endpoint: StrictStr = Field(max_length=2048)
     dataset_id: DatasetIdentifier
+    content_format: Literal["text", "structured_json"] = Field(default="text", exclude_if=lambda value: value == "text")
     credential_ref: ProductionSecretHandle
     retrieval: DifyRetrievalSettings = Field(default_factory=DifyRetrievalSettings)
     consistency: Literal["mutable_remote"] = "mutable_remote"
@@ -85,6 +87,7 @@ class ExternalKnowledgeCandidate(StrictFrozenModel):
     content_sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
     native_score: Score
     available: bool = Field(strict=True)
+    structured_data: StructuredEvidenceRecord | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def verify_content(self) -> Self:
@@ -93,6 +96,8 @@ class ExternalKnowledgeCandidate(StrictFrozenModel):
             or sha256(self.content.encode()).hexdigest() != self.content_sha256
         ):
             raise ValueError("External candidate content identity is invalid")
+        if self.structured_data is not None and parse_structured_evidence(self.content) != self.structured_data:
+            raise ValueError("External structured record differs from its source content")
         return self
 
 

@@ -10,6 +10,10 @@ Knowledge And Evidence contains the language for Knowledge Sources, Agent bindin
 
 ## Language
 
+**Typed External Evidence Record**:
+A bounded `proofagent-structured-evidence.v1` record with unique typed fields. Decimal strings, integers, booleans, nulls, units and source identities remain distinct through Candidate admission, bound Observation Truth, first answer input and output-format repair. A Dify binding must explicitly select `structured_json`; ordinary text is not extracted into typed facts automatically. Typed records are source data and cannot grant admission, expand scope or prove answer correctness. See ADR-0243 and `docs/features/agent-kernel-quality/tdd-p0-3.md`.
+_Avoid_: Provider-native structured-query claim, float conversion, source override, independent numeric-answer proof
+
 **Local Index Reingestion Required**:
 The visible Source Draft condition set when a local index ingestion-configuration change could affect generated index artifacts. Existing published snapshots remain usable, but a replacement candidate snapshot cannot be published until required document revisions have been reingested successfully.
 _Avoid_: Silent old-artifact reuse, immediate published-snapshot mutation, routing-only configuration change

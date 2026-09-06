@@ -2071,6 +2071,19 @@ workflow:
     expect(refreshDraft).toHaveBeenCalledTimes(1)
   })
 
+  it('requires an explicit content format selection for typed Dify records', async () => {
+    enableProductionKnowledgeEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    const field = await screen.findByLabelText('Segment content format')
+    expect(field).toHaveValue('text')
+    fireEvent.change(field, { target: { value: 'structured_json' } })
+    expect(screen.getByText(/Each segment must contain one complete/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
+    await waitFor(() => expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-1', 'draft-1', {
+      expected_revision: 4, bindings: [{ ...difyBinding, content_format: 'structured_json' }],
+    }))
+  })
+
   it('preserves unsaved settings on conflict until explicitly reloaded', async () => {
     enableProductionKnowledgeEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')

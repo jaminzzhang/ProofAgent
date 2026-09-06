@@ -1478,6 +1478,7 @@ export interface ExternalKnowledgeBinding {
   provider: 'dify'
   endpoint: string
   dataset_id: string
+  content_format?: 'text' | 'structured_json'
   credential_ref: { protocol_id: string; handle_id: string; purpose: 'knowledge_credential'; version_id: string }
   retrieval: { search_method: 'semantic_search' | 'full_text_search' | 'keyword_search'; top_k: number; score_threshold: number }
   consistency?: 'mutable_remote'

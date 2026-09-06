@@ -1,5 +1,18 @@
 # Project Context
 
+## Current Agent kernel P0-3 — 2026-09-06
+
+[COMPUTED | HIGH] P0-3 preserves explicitly typed Dify records through admission,
+source-bound Observation Truth, initial/repair answer requests and file recovery.
+Frozen bindings select text or structured JSON; invalid types, content/source
+tampering and provider format drift fail closed. Full backend: 2499 passed,
+108 skipped, 2 deselected; Dashboard: 226 passed; Chat: 35 passed. Independent
+Review: `NO_BLOCKING_FINDINGS`. Three synthetic probes pass; numeric-answer and
+long-conversation constraints remain `needs_review`. Overall status remains
+`PARTIAL_VERIFICATION`, with P0-4 next. Scope and evidence:
+`docs/features/agent-kernel-quality/scope-p0-3.md`, `tdd-p0-3.md`, ADR-0243.
+This does not enable external-provider formal production publication.
+
 ## Current external Knowledge cutover — 2026-09-06
 
 [KNOWN | HIGH] ADR-0242 replaces KSS runtime association with external Knowledge bindings.
@@ -26,7 +39,7 @@ they describe the then-current runtime or earlier local deployments.
   blockers. Compound retrieval and required rewrite probes now pass; numeric
   validation, structured facts and long-context constraints remain `needs_review`.
   Snapshot fields, overall task-quality and production authority are unchanged.
-  Acceptance: `docs/features/agent-kernel-quality/tdd-p0-2.md`; next slice: P0-3.
+  Historical acceptance: `docs/features/agent-kernel-quality/tdd-p0-2.md`; P0-3 status is above.
 - `[COMPUTED | HIGH]` As of 2026-09-05, Agent kernel quality P0-1B separately
   reports answer correctness, curated refusal decision matching, task completion,
   and not-evaluated counts. Required standalone denominators retain missing cases;
@@ -849,7 +862,7 @@ deployment or Production GO action occurred.
 
 | Feature ID | Status | Evidence directory | Governing design |
 | --- | --- | --- | --- |
-| `agent-kernel-quality` | `PARTIAL_VERIFICATION` | `docs/features/agent-kernel-quality/` (P0-1A/P0-1B and P0-2 required retrieval gate locally verified; compound/rewrite probes pass, three gaps remain; next P0-3) | 2026-09-06 acceptance; ADR-0240/0241 |
+| `agent-kernel-quality` | `PARTIAL_VERIFICATION` | `docs/features/agent-kernel-quality/` (P0-1A/P0-1B, P0-2 and P0-3 locally verified; compound/rewrite/typed-fact probes pass; numeric and long-context gaps remain; next P0-4) | 2026-09-06 acceptance; ADR-0240/0241/0243 |
 | `kss-project-isolation` | `PARTIAL_VERIFICATION` | `docs/features/kss-project-isolation/` | ADR-0239 |
 | `knowledge-source-service` | `PARTIAL_VERIFICATION` | `docs/features/knowledge-source-service/` | ADR-0210 and `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` |
 | `kss-configuration-publication-loop` | `PARTIAL_VERIFICATION` | `docs/features/kss-configuration-publication-loop/` (TDD-01A/01B local wiring; TDD-02A through 02G Preparation core; TDD-03A through 03F Reference/lifecycle core; TDD-04A through 04H management BFF; TDD-05A through 05U exact Candidate/formal publication vertical, Draft repair, versioned Grant authority, fenced recovery, Candidate checkpoint and actor-owned receipt read; TDD-05V exact Candidate external-dependency probe; TDD-05W exact Draft Contract audit-path normalization followed by one authorized probe whose KSS Query succeeded but post-KSS stage failed without artifacts; TDD-05X secret-free probe stage diagnostics; TDD-05Y current ArtifactStore validation retention cutover and explicit external-egress gate; TDD-05Z bounded Evidence Admission reason diagnostics; TDD-06A fixed-synthetic production-local Admission Scorer verification; TDD-06B fixed-synthetic Control Plane Admission verification; TDD-06C fixed-synthetic governed Run verification through an immutable overlay image and checked-in host entry, with full Dockerfile build pending; TDD-06D exact Release rollback preflight; TDD-06E caller-confirmed pointer freshness; TDD-06F PostgreSQL rollback atomicity; TDD-06G default-closed Production rollback admission contract; TDD-06H isolated real KSS/PostgreSQL rollback rehearsal; TDD-06I private-session deployed gate-closed probe implementation with the live probe pending; no Dashboard Profile/Base Preparation page, continuous Preparation process role, automatic expiry scheduler or deregistration/lifecycle command BFF, terminal-operator KSS audit delegation, background reconciler, Query Grant selective revoke/reconciliation or cross-operator command audit/listing, positive external KSS/model cited-answer evidence, Production rollback gate activation or gate-enabled deployed rollback drill, production Release-deletion retention adapter/physical deletion, affected-reference detail/notification, runtime revocation notification or production cutover) | ADR-0211 through ADR-0238 |

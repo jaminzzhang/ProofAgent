@@ -10,6 +10,17 @@ Updated: 2026-09-06
 
 ## Current decision
 
+[COMPUTED | HIGH] P0-3 now preserves typed external records, exact decimal strings,
+units and source bindings in both initial and repair answer input. Explicit Dify
+structured content cannot fall back to text or bypass admission; restored evidence
+retains its original content-bound identity. Backend 2499, Dashboard 226 and Chat 35
+tests passed; independent Review found no remaining blockers. The structured-fact
+probe now passes alongside compound/rewrite probes; numeric-answer validation and
+long-context constraints remain open. See `docs/features/agent-kernel-quality/tdd-p0-3.md`.
+Next: P0-4 answer validation and bounded repair. Local evidence is not Production GO.
+
+## Prior slice evidence
+
 [COMPUTED | HIGH] Agent kernel quality P0-2 now prevents finalization until every
 required intent query has same-run, bound, citable Accepted Evidence. Explicit
 refusal/clarification, policy/scope rejection and approval-denial alternatives
@@ -19,8 +30,8 @@ any further tool or retrieval observation. The slice passed 55 new tests within
 independent Review: `NO_BLOCKING_FINDINGS`. Compound retrieval and required rewrite
 probes pass; numeric validation, structured-fact input and long-conversation
 constraints remain `needs_review`. See
-`docs/features/agent-kernel-quality/tdd-p0-2.md`. Next: P0-3 structured evidence
-through Admission to answer input. This is local evidence, not overall task
+`docs/features/agent-kernel-quality/tdd-p0-2.md`. P0-3's subsequent evidence is above.
+This is local evidence, not overall task
 verification or Production GO.
 
 [COMPUTED | HIGH] Agent kernel quality P0-1B now reports separate answer, refusal

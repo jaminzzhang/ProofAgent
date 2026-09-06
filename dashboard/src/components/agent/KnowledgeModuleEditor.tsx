@@ -72,6 +72,12 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSa
           onChange={event => change(index, { endpoint: event.target.value })} /></label>
         <label>Dataset ID<input className={inputClass} required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" value={binding.dataset_id}
           onChange={event => change(index, { dataset_id: event.target.value })} /></label>
+        <label>{t('externalKnowledge.contentFormat')}<select className={inputClass} value={binding.content_format ?? 'text'}
+          onChange={event => change(index, { content_format: event.target.value as ExternalKnowledgeBinding['content_format'] })}>
+          <option value="text">{t('externalKnowledge.textContent')}</option>
+          <option value="structured_json">{t('externalKnowledge.structuredContent')}</option>
+        </select></label>
+        {binding.content_format === 'structured_json' && <p className="text-sm md:col-span-2">{t('externalKnowledge.structuredHelp')}</p>}
         <label>{t('externalKnowledge.protocol')}<select className={inputClass} value={binding.credential_ref.protocol_id}
           onChange={event => change(index, { credential_ref: { ...binding.credential_ref, protocol_id: event.target.value, version_id: event.target.value === 'local-environment-v1' ? 'env' : '' } })}>
           {mode === 'development' && <option value="local-environment-v1">Local environment</option>}

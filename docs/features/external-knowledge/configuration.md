@@ -68,6 +68,34 @@ Dataset ID 只是示例，必须替换。Service API 地址从 Dify 复制，不
 - 引用为 `external://<binding>/datasets/<dataset>/documents/<document>#segment=<segment>&sha256=<content>`。真实内容、文档/分段身份、摘要、观测时间与实际 query 进入现有 bound Observation Truth，继续受原有引用检查和 required-query 完成门控约束。
 - Dataset 可变化；相同分段的新内容具有新的内容摘要。审批恢复重用已绑定的旧观测。回滚 Agent 版本只恢复连接配置，不回滚 Dify 数据。
 
+## 结构化分段（P0-3）
+
+[KNOWN | HIGH] 普通绑定默认采用 `content_format: text`。若需要保留金额、计数、日期等字段的类型，在 Dashboard 的“分段内容格式”中选择“类型化 JSON 记录”，或在对应 YAML 绑定中设置 `content_format: structured_json`。该设置随配置验证和版本冻结；运行时格式漂移会被拒绝。
+
+这是一项 **ProofAgent 内容约定**，不表示 Dify 原生提供类型化数据库查询。Dify 每个返回分段的 `content` 必须是一条完整记录，例如：
+
+```json
+{
+  "schema_version": "proofagent-structured-evidence.v1",
+  "record_id": "claims-2025",
+  "fields": [
+    {"field": "claim_total", "value_type": "decimal", "value": "12345.6700", "unit": "CNY"},
+    {"field": "year", "value_type": "integer", "value": 2025},
+    {"field": "approved", "value_type": "boolean", "value": false},
+    {"field": "expiry", "value_type": "null", "value": null}
+  ]
+}
+```
+
+- `schema_version` 必须明确提供，记录与字段不接受未知属性；`record_id`、字段名和可选 `unit` 为非空、有界字符串。字段名区分大小写且不得重复。
+- 一条记录包含 1–64 个字段。支持 `string`、`integer`、`decimal`、`boolean`、`date`、`datetime`、`null`；不进行隐式转换。`null` 与未提供的字段不同，不补默认值。
+- Decimal 使用最长 128 个字符的普通十进制字符串，不接受 JSON 浮点数、科学计数法、NaN 或 Infinity；保留符号、小数精度和末尾零。Integer 最多 128 位十进制数字。String 最长 4096 个字符。Date 使用 `YYYY-MM-DD`，datetime 必须有时区。
+- 每段内容最多 100,000 个字符，仍受既有 1 MiB HTTP 响应限制。不要添加 Markdown 围栏、说明前后缀或将一条 JSON 记录切为多个检索分段。需在 Dify 中确认实际分段内容；此模式不接受非空 Q&A `answer` 混合数据。
+- 普通文本不会自动抽取为结构化事实；格式损坏、重复 JSON 键、类型错配和模式不一致均拒绝，不降级为文本。来源、Dataset、文档、分段和内容摘要取自受控检索链路，记录不能自行覆盖这些身份或授予准入。
+- 首次答案和格式修复逐条接收同一来源映射。相同字段名在不同记录中独立保留，不覆盖、不做聚合或单位换算；恢复使用原有已绑定观测。类型与引用保真不代表答案的金额、比较或推导已通过语义核验。
+
+本地验收见 [P0-3 记录](../agent-kernel-quality/tdd-p0-3.md)。真实 Dify 分段配置、召回质量和生产发布仍需独立验证。
+
 ## KSS 退役与验收边界
 
 [KNOWN | HIGH] 默认 API、Executor、就绪检查与本地部署拓扑不再要求 KSS、KSS_IMAGE、KSS 数据库、OpenSearch 或 KSS 模型服务。旧 KSS 绑定可供历史契约解释，但不能新装配、入队、执行或回滚激活。旧配置不会自动转换为 Dify；需新建外部绑定并重新验证。

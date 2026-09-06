@@ -7,7 +7,7 @@
 | P0-1A | 可执行缺口基线 | 重现数值校验、复合任务、改写、结构化结果、历史约束五类断点 | 测量器正反例；全部探针实际运行；缺陷使独立命令失败；无跳过 |
 | P0-1B | 质量评估口径 | 分开正确回答、合理拒答、任务完成与未评估 | 分母、缺失样本、语义未评估、空样本、错误结果不能提升质量指标 |
 | P0-2 | 必需检索完成条件 | 固定 required 查询、已绑定准入证据与完成门控；未完成继续执行 | 两个来源的复合任务不会首个结果即结束；预算耗尽、拒绝与恢复可解释；不等同于业务任务整体完成 |
-| P0-3 | 证据到答案 | 改写真正到达 KSS；结构化结果经 Admission 到答案 | 原始约束保留、精确 Release、必需查询覆盖、类型与数值保真 |
+| P0-3 | 证据到答案 | 改写真正到达外部知识库；结构化结果经 Admission 到答案 | 原始约束保留、冻结绑定与观测摘要、必需查询覆盖、类型与数值保真 |
 | P0-4 | 答案验证与修复 | 语义和关键数值校验、有界修复 | 错答不能因引用合法而通过；修复成功/失败/超预算分支 |
 | P1-1 | 长对话任务状态 | 持久化目标和约束、有内容的压缩 | 30/100 轮、纠正与撤销、重启后恢复；记忆不成为证据 |
 | P1-2 | 多工具与产物 | 查询、计算、报告的完成闭环 | 依赖顺序、失败传播、产物可验证、取消及预算 |
@@ -15,8 +15,10 @@
 | P1-4 | Skill 与领域解耦 | 扩展契约、资源边界、第二领域参考 | 无内核改动接入领域；Skill 不扩大权限 |
 | P2 | 效率与真实依赖 | 延迟、成本、真实服务和部署证据 | 固定版本与样本的对比；完整发布 Gates |
 
-[KNOWN | HIGH] Control Plane、KSS Candidate Evidence 边界及当前生产工具限制遵循 `AGENTS-COMMON.md`。新增基线复用现有内核入口及 `evaluation/exploratory_probes.py`；不建立另一套 Agent 执行器。
+[KNOWN | HIGH] Control Plane、外部 Candidate Evidence 边界及当前生产工具限制遵循 `AGENTS-COMMON.md`。ADR-0242 已取代旧 KSS-only 计划。新增基线复用现有内核入口及 `evaluation/exploratory_probes.py`；不建立另一套 Agent 执行器。
 
 [KNOWN | HIGH] P0-1A 和 P0-1B 已完成各自本地验收，并提交为 `4cf7c73`。P0-1A 的范围与结果见 [scope-plan.md](scope-plan.md)、[tdd-report.md](tdd-report.md)；P0-1B 见 [scope-p0-1b.md](scope-p0-1b.md)、[tdd-p0-1b.md](tdd-p0-1b.md)。
 
-[COMPUTED | HIGH] P0-2 已于 2026-09-06 完成本地验收，范围与证据见 [scope-p0-2.md](scope-p0-2.md)、[tdd-p0-2.md](tdd-p0-2.md)。复合检索和 required 改写到达 KSS 两项固定探针通过；数值校验、结构化事实与长对话约束仍为 `needs_review`。整体状态仍是 `PARTIAL_VERIFICATION`。下一切片为 P0-3：补齐结构化事实经 Admission 进入答案，以及类型、数值和来源引用保真。
+[COMPUTED | HIGH] P0-2 已于 2026-09-06 完成本地验收，历史范围与证据见 [scope-p0-2.md](scope-p0-2.md)、[tdd-p0-2.md](tdd-p0-2.md)。
+
+[COMPUTED | HIGH] P0-3 已完成本地验收：显式结构化 Dify 分段经准入进入初次/修复答案请求，保持字段类型、精确数值、单位、来源和恢复引用。后端 2499 项、Dashboard 226 项、Chat 35 项通过，独立 Review 为 `NO_BLOCKING_FINDINGS`。复合检索、改写与结构化事实三项固定探针通过，数值答案核验与长对话约束仍为 `needs_review`。整体状态保留 `PARTIAL_VERIFICATION`。下一切片为 P0-4：答案语义与关键数值校验、有界修复。见 [范围](scope-p0-3.md)、[验收](tdd-p0-3.md)。

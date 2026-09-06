@@ -1,0 +1,1 @@
+{"schema_version":"proofagent-structured-evidence.v1","record_id":"claims-2025","fields":[{"field":"claim_total","value_type":"decimal","value":"12345.67","unit":"CNY"},{"field":"year","value_type":"integer","value":2025}]}

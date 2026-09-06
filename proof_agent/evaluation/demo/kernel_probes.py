@@ -95,10 +95,9 @@ class SyntheticDifyHttp:
         self.queries.append(query)
         content = FACT_B if query == QUERY_B else FACT_A
         if self.structured:
-            # Dify supplies text; typed fact/slot authority still needs a separate kernel slice.
-            content += " claim_total=12345.67"
+            content = (FIXTURES / "kernel_baseline/structured_record.json").read_text()
         payload = {"query": {"content": query}, "records": [{"score": 0.95, "segment": {
-            "id": "segment_b" if query == QUERY_B else "segment_a", "document_id": "policy",
+            "id": "segment_b" if query == QUERY_B else "segment_a", "document_id": "source-table-1" if self.structured else "policy",
             "enabled": True, "status": "completed", "content": content,
         }}]}
         return GuardedHttpResponse(200, {"content-type": "application/json"}, json.dumps(payload).encode())
@@ -110,6 +109,7 @@ class RetrievalObservation:
     answer_inputs: tuple[str, ...]
     admitted_evidence: tuple[EvidenceChunk, ...] = ()
     final_answer_sources: tuple[str, ...] = ()
+    answer_requests: tuple[ModelRequest, ...] = ()
 
     def contains_answer_fact(self, fact: str) -> bool:
         return bool(self.answer_inputs) and _contains_complete_fact(self.answer_inputs[-1], fact)
@@ -141,6 +141,7 @@ def exercise_retrieval(
     binding = ExternalKnowledgeBinding(
         binding_id="baseline-dify", provider="dify", endpoint="https://dify.example/v1",
         dataset_id="c42e2a6e-40b3-4330-96f8-f1e4d768e8c9",
+        content_format="structured_json" if structured else "text",
         credential_ref=ProductionSecretHandle(protocol_id="local-environment-v1",
             handle_id="BASELINE_DIFY_KEY", purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL, version_id="env"),
     )
@@ -218,6 +219,7 @@ def exercise_retrieval(
             for request in answer_provider.requests
         ),
         admitted_evidence=result.evidence,
+        answer_requests=tuple(answer_provider.requests),
         final_answer_sources=(
             answer_provider.requests[-1].evidence_sources if answer_provider.requests else ()
         ),
@@ -309,9 +311,11 @@ def structured_fact_probe() -> dict[str, bool]:
     question = "What is the claim total for the requested year?"
     observation = exercise_retrieval(question=question, queries=(question,), structured=True)
     return {
-        "structured_amount_reaches_answer": observation.contains_admitted_fact(
-            "12345.67",
-            source_id="source-table-1",
+        "structured_amount_reaches_answer": observation.contains_admitted_fact("12345.67") and any(
+            chunk.document_id == "source-table-1" and chunk.structured_data is not None
+            and any(field.field == "claim_total" and field.value_type == "decimal" and field.value == "12345.67"
+                    for field in chunk.structured_data.fields)
+            for chunk in observation.admitted_evidence
         )
     }
 
