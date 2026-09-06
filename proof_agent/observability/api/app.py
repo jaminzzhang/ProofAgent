@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.run_queue_api import router as run_queue_router
 from proof_agent.delivery.configuration_api import router as configuration_router
+from proof_agent.delivery.external_knowledge_configuration import router as external_knowledge_router
 from proof_agent.delivery.agent_configuration_validation import (
     LocalAgentConfigurationValidationAdapter,
 )
@@ -174,14 +175,6 @@ def create_app(
                     "Agent Configuration Workspace",
                     agent_configuration_workspace,
                 ),
-                (
-                    "Formal Production Agent publication command",
-                    formal_production_agent_publication_command,
-                ),
-                (
-                    "Knowledge Source Service management client",
-                    knowledge_service_management_client,
-                ),
                 ("PostgreSQL Release Registry", release_registry_repository),
                 ("release bundle verified cache", release_bundle_materializer),
                 ("release bundle attestation verifier", release_bundle_attestation_verifier),
@@ -296,6 +289,8 @@ def create_app(
                 validation_executor=LocalAgentConfigurationValidationAdapter(
                     configuration_store=configuration_store,
                     run_store=store,
+                    guarded_http_client=guarded_http_client,
+                    secret_provider=secret_provider,
                 ),
                 publication_validator=LocalAgentConfigurationPublicationAdapter(
                     configuration_store=configuration_store,
@@ -328,7 +323,10 @@ def create_app(
     application.include_router(auth_router, prefix="/api")
     application.include_router(security_router, prefix="/api")
     application.include_router(release_bundle_router, prefix="/api")
-    application.include_router(knowledge_service_management_router, prefix="/api")
+    if knowledge_service_management_client is not None:
+        # Explicit legacy diagnostic injection only; no default KSS management surface.
+        application.include_router(knowledge_service_management_router, prefix="/api")
+    application.include_router(external_knowledge_router, prefix="/api")
     if selected_mode == "development":
         application.include_router(configuration_router, prefix="/api")
         application.include_router(runs.router, prefix="/api")

@@ -358,7 +358,7 @@ def test_manifest_rejects_package_knowledge_authority(tmp_path: Path) -> None:
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "cannot declare a Knowledge authority" in exc.value.message
-    assert "Knowledge Source Service" in exc.value.fix
+    assert "external knowledge_bindings" in exc.value.fix
 
 
 def test_legacy_knowledge_sources_field_is_rejected(tmp_path: Path) -> None:
@@ -372,7 +372,7 @@ def test_legacy_knowledge_sources_field_is_rejected(tmp_path: Path) -> None:
 
     assert exc.value.code == "PA_CONFIG_001"
     assert "KSS authority cutover" in exc.value.message
-    assert "Knowledge Source Service" in exc.value.fix
+    assert "external knowledge_bindings" in exc.value.fix
 
 def test_inline_knowledge_provider_is_rejected_after_direct_migration(tmp_path: Path) -> None:
     agent_yaml = tmp_path / "agent.yaml"
@@ -413,7 +413,7 @@ audit:
 
     assert exc.value.code == "PA_CONFIG_001"
     assert "knowledge.provider" in exc.value.message
-    assert "Knowledge Source Service" in exc.value.fix
+    assert "external knowledge_bindings" in exc.value.fix
 
 
 def test_missing_policy_file_fails_fast(tmp_path: Path) -> None:

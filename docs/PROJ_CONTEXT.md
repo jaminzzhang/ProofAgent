@@ -1,6 +1,21 @@
 # Project Context
 
-## Current implementation facts
+## Current external Knowledge cutover — 2026-09-06
+
+[KNOWN | HIGH] ADR-0242 replaces KSS runtime association with external Knowledge bindings.
+Dify read-only retrieval now uses the existing ReAct/Harness, guarded HTTPS, Secret
+Provider, Candidate admission and bound required-query completion. Dashboard edits
+Agent-scoped external bindings; local validation/publication freezes the same settings.
+Default API, Executor, readiness and deployment no longer require KSS. Old bindings
+cannot execute or be reactivated. Dify Dataset content remains mutable; per-observation
+hashes preserve the actual evidence. The external production publication profile and
+live Dify verification remain pending; local verification is not Production GO.
+
+See `docs/features/external-knowledge/configuration.md`, `scope-plan.md` and
+`verification.md`. Older KSS-specific status entries below are historical, even where
+they describe the then-current runtime or earlier local deployments.
+
+## Earlier implementation facts
 
 - `[COMPUTED | HIGH]` As of 2026-09-06, Agent kernel quality P0-2 gates final
   answers on the frozen intent's required queries and same-run bound retrieval
@@ -194,6 +209,10 @@ is governed by ADR-0210 and current code; Graphify is navigation evidence, not
 release approval.
 
 ## Feature index
+
+- `external-knowledge`: `docs/features/external-knowledge/`; ADR-0242; Dify configuration,
+  retrieval and KSS default-runtime retirement. Verification is local and scoped.
+
 
 [KNOWN | HIGH] On 2026-08-26, KSS Connection Profile TDD-01B adds PostgreSQL
 revision/receipt/audit authority, authenticated management commands, and an

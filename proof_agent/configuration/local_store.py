@@ -458,12 +458,20 @@ class LocalAgentConfigurationStore:
                 "Embedded and shared Knowledge bindings were removed; publish the "
                 "Agent Version with one exact KSS binding."
             )
-        if (
-            resolved_knowledge_bindings is not None
-            and len(resolved_knowledge_bindings.bindings) > 1
-        ):
+        from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+
+        try:
+            raw = yaml.safe_load(draft.contract_bundle.agent_yaml)
+            expected = tuple(ExternalKnowledgeBinding.model_validate(item)
+                             for item in raw.get("knowledge_bindings", ()))
+            if len(expected) > 5 or len({item.binding_id for item in expected}) != len(expected):
+                raise ValueError("duplicate or excess bindings")
+        except (ValueError, TypeError, AttributeError):
+            raise _knowledge_authority_conflict("Invalid external Knowledge configuration.") from None
+        actual = resolved_knowledge_bindings.bindings if resolved_knowledge_bindings else ()
+        if expected != actual:
             raise _knowledge_authority_conflict(
-                "A Published Agent Version accepts at most one exact KSS binding."
+                "Validated external Knowledge bindings must match the exact Draft configuration."
             )
         self._require_mcp_tool_sources_publishable_unlocked(
             draft.contract_bundle.tools_yaml
@@ -1827,7 +1835,7 @@ def _manifest_has_embedded_or_shared_knowledge(agent_yaml: str) -> bool:
         return True
     if not isinstance(raw, Mapping):
         return True
-    return bool(raw.get("package_knowledge_sources") or raw.get("knowledge_bindings"))
+    return bool(raw.get("package_knowledge_sources") or raw.get("knowledge") or raw.get("knowledge_sources"))
 
 
 def _require_no_unavailable_workflow_stage_configuration(agent_yaml: str) -> None:

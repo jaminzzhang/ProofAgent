@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   chatUrl,
@@ -21,12 +21,12 @@ import {
   validateConfigDraft,
 } from '../api/client'
 import type {
-  AgentKnowledgeReleaseBindingConfiguration,
+  ExternalKnowledgeConfiguration,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
   DraftAgent,
-  DraftKnowledgeReleaseBindingCandidate,
+  ExternalKnowledgeBinding,
   ProductionAgentPublicationConfiguration,
   SharedModelConnection,
   WorkflowTemplateDescriptor,
@@ -97,8 +97,7 @@ export function AgentDetailPage() {
   const advertisedLifecycleTabs = draft?.capabilities?.lifecycle_tabs ?? SAFE_LIFECYCLE_TABS
   const canEditGeneral = draft?.capabilities?.editable_modules.includes('general') ?? false
   const canEditKnowledge = (
-    draft?.capabilities?.mode === 'production'
-    && editableModuleIds.includes('knowledge')
+    editableModuleIds.includes('knowledge')
   )
   const canValidate = draft?.capabilities?.actions.can_validate ?? false
   const canPublish = draft?.capabilities?.actions.can_publish ?? false
@@ -126,8 +125,12 @@ export function AgentDetailPage() {
   const [skillsConfig, setSkillsConfig] = useState<BusinessFlowSkillPackConfiguration | null>(null)
   const [skillsLoaded, setSkillsLoaded] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
-  const [knowledgeConfig, setKnowledgeConfig] = useState<AgentKnowledgeReleaseBindingConfiguration | null>(null)
-  const [knowledgeLoaded, setKnowledgeLoaded] = useState(false)
+  const [knowledgeConfig, setKnowledgeConfig] = useState<ExternalKnowledgeConfiguration | null>(null)
+  const knowledgeRouteKey = `${agentId}/${draftId}`
+  const knowledgeRouteRef = useRef(knowledgeRouteKey)
+  knowledgeRouteRef.current = knowledgeRouteKey
+  const [knowledgeLoadedFor, setKnowledgeLoadedFor] = useState<string | null>(null)
+  const knowledgeLoaded = knowledgeLoadedFor === knowledgeRouteKey
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
   const [publicationConfiguration, setPublicationConfiguration] = useState<ProductionAgentPublicationConfiguration | null>(null)
   const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
@@ -237,11 +240,13 @@ export function AgentDetailPage() {
       || !draftId
     ) return
     let mounted = true
+    setKnowledgeError(null)
+    setKnowledgeConfig(null)
     fetchConfigDraftKnowledgeBinding(agentId, draftId)
       .then((response) => {
         if (!mounted) return
         setKnowledgeConfig(response)
-        setKnowledgeLoaded(true)
+        setKnowledgeLoadedFor(knowledgeRouteKey)
         setKnowledgeError(null)
       })
       .catch((err) => {
@@ -251,7 +256,7 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded])
+  }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded, knowledgeRouteKey])
 
   useEffect(() => {
     if (
@@ -373,8 +378,9 @@ export function AgentDetailPage() {
       if (isConflictError(err) && agentId && draftId) {
         try {
           const latest = await fetchConfigDraftKnowledgeBinding(agentId, draftId)
+          if (knowledgeRouteRef.current !== knowledgeRouteKey) return 'failed'
           setKnowledgeConfig(latest)
-          setKnowledgeLoaded(true)
+          setKnowledgeLoadedFor(knowledgeRouteKey)
           setKnowledgeError(null)
         } catch (reloadError) {
           setActionError(
@@ -525,9 +531,9 @@ export function AgentDetailPage() {
   }
 
   async function saveKnowledgeReleaseBinding(
-    candidate: DraftKnowledgeReleaseBindingCandidate,
+    bindings: ExternalKnowledgeBinding[],
   ): Promise<KnowledgeBindingMutationResult> {
-    if (!agentId || !draftId || !knowledgeConfig) return 'failed'
+    if (!agentId || !draftId || !knowledgeConfig || !knowledgeLoaded) return 'failed'
     if (hasUnsavedChanges) {
       setActionError(t('agentDetail.saveCurrentModuleFirst'))
       return 'failed'
@@ -535,10 +541,11 @@ export function AgentDetailPage() {
     return runKnowledgeMutation(async () => {
       const updated = await updateConfigDraftKnowledgeBinding(agentId, draftId, {
         expected_revision: knowledgeConfig.revision,
-        ...candidate,
+        bindings,
       })
+      if (knowledgeRouteRef.current !== knowledgeRouteKey) return
       setKnowledgeConfig(updated)
-      setKnowledgeLoaded(true)
+      setKnowledgeLoadedFor(knowledgeRouteKey)
       setKnowledgeError(null)
       setStatus(t('agentDetail.knowledgeBindingSaved'))
       refresh()
@@ -824,7 +831,9 @@ export function AgentDetailPage() {
       {activeTab === 'knowledge' && (
         canEditKnowledge ? (
           <KnowledgeModuleEditor
-            config={knowledgeConfig}
+            key={knowledgeRouteKey}
+            mode={draft?.capabilities?.mode ?? "development"}
+            config={knowledgeLoaded ? knowledgeConfig : null}
             loading={!knowledgeLoaded && !knowledgeError}
             error={knowledgeError}
             busy={busy === 'knowledge'}

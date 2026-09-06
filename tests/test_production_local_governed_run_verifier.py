@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -103,57 +102,16 @@ class _Runtime:
         )
 
 
-def test_fixed_synthetic_governed_run_answers_with_one_citation() -> None:
+@pytest.mark.parametrize("score", [1.0, 0.1])
+def test_legacy_governed_verifier_cannot_admit_candidates_after_cutover(score) -> None:
     verifier = _verifier()
-    scorer = _AdmissionScorer()
+    scorer = _AdmissionScorer(score=score)
     runtime = _Runtime(scorer)
-
-    result = verifier.verify_production_local_governed_run(
-        runtime=runtime,
-        binding=_binding(),
-    )
-
-    assert runtime.bindings == [ResolvedKnowledgeBindingSet(bindings=(_binding(),))]
-    assert len(scorer.calls) == 1
-    assert result == {
-        "schema_version": "production-local-governed-run-verification.v1",
-        "evidence_class": "local_synthetic_dependency_validation_only",
-        "status": "passed",
-        "outcome": "answered_with_citations",
-        "scorer_id": SCORER_ID,
-        "scorer_revision": SCORER_REVISION,
-        "accepted_evidence_count": 1,
-        "citation_count": 1,
-        "question_sha256": hashlib.sha256(SYNTHETIC_QUESTION.encode("utf-8")).hexdigest(),
-        "candidate_set_sha256": hashlib.sha256(SYNTHETIC_CANDIDATE_ID.encode("utf-8")).hexdigest(),
-        "kss_query_created": False,
-        "external_answer_model_called": False,
-        "artifact_store_written": False,
-        "phase_f_authorized": False,
-        "publication_authorized": False,
-    }
-    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True).casefold()
-    for forbidden in (
-        SYNTHETIC_QUESTION.casefold(),
-        SYNTHETIC_CANDIDATE_ID.casefold(),
-        SYNTHETIC_CONTENT.casefold(),
-        '"final_output":',
-        '"citation":',
-        '"admission_score":',
-        '"credential":',
-        '"authorization":',
-    ):
-        assert forbidden not in serialized
-
-
-def test_fixed_synthetic_governed_run_fails_closed_below_manifest_threshold() -> None:
-    verifier = _verifier()
-
-    with pytest.raises(RuntimeError, match="governed Run did not produce a cited answer"):
-        verifier.verify_production_local_governed_run(
-            runtime=_Runtime(_AdmissionScorer(score=0.1)),
-            binding=_binding(),
-        )
+    with pytest.raises(verifier.GovernedRunVerificationError) as error:
+        verifier.verify_production_local_governed_run(runtime=runtime, binding=_binding())
+    assert error.value.reason_code == "run_execution"
+    assert scorer.calls == []
+    assert "synthetic" not in str(error.value).lower().replace("fixed synthetic", "fixed")
 
 
 def test_fixed_synthetic_governed_run_uses_ephemeral_audit_paths(
@@ -176,10 +134,12 @@ def test_fixed_synthetic_governed_run_uses_ephemeral_audit_paths(
 
     monkeypatch.setattr(verifier, "load_agent_manifest", load_manifest)
 
-    verifier.verify_production_local_governed_run(
-        runtime=_Runtime(_AdmissionScorer()),
-        binding=_binding(),
-    )
+    with pytest.raises(verifier.GovernedRunVerificationError):
+        verifier.verify_production_local_governed_run(
+            runtime=_Runtime(_AdmissionScorer()),
+            binding=_binding(),
+        )
+
 
     assert writable_artifact_checks == [False]
 

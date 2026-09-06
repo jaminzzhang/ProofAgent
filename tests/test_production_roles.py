@@ -296,7 +296,7 @@ def test_reference_client_authorization_fails_closed_on_secret_version_drift() -
         production_roles._knowledge_service_client_authorization(provider, handle)
 
 
-def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) -> None:
+def test_production_api_starts_without_kss_or_legacy_publication_dependencies(monkeypatch) -> None:
     class Persistence:
         engine = object()
         models = object()
@@ -386,11 +386,6 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
     )
     monkeypatch.setattr(
         production_roles,
-        "compose_production_knowledge_candidate_runtime",
-        lambda *args, **kwargs: object(),
-    )
-    monkeypatch.setattr(
-        production_roles,
         "_compose_formal_production_agent_publication_command",
         lambda **kwargs: formal_publication_command,
     )
@@ -405,8 +400,6 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         {
             "PROOF_AGENT_MODE": "production",
             "PROOF_AGENT_POSTGRES_DSN": "postgresql+psycopg://proof@postgres/proof",
-            "PROOF_AGENT_KSS_ENDPOINT": ("https://proof-agent.example:8444"),
-            "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE": ("knowledge/source-service/operator"),
             "PROOF_AGENT_RELEASE_BUNDLE_CACHE_DIR": "/tmp/release-bundles",
         }
     )
@@ -416,10 +409,7 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
     assert "production_hybrid_intake_service" not in captured
     assert "production_knowledge_repository" not in captured
     assert "knowledge_source_configuration_application" not in captured
-    assert isinstance(
-        captured["knowledge_service_management_client"],
-        production_roles.KnowledgeSourceServiceManagementClient,
-    )
+    assert "knowledge_service_management_client" not in captured
     assert isinstance(
         captured["agent_configuration_workspace"],
         production_roles.AgentConfigurationWorkspace,
@@ -436,20 +426,14 @@ def test_production_api_uses_kss_as_its_only_knowledge_authority(monkeypatch) ->
         captured["agent_configuration_workspace"]._skill_pack_inspector,
         production_roles.LocalAgentConfigurationSkillPackAdapter,
     )
-    assert (
-        captured["agent_configuration_workspace"]._knowledge_release_catalog
-        is captured["knowledge_service_management_client"]
-    )
+    assert captured["agent_configuration_workspace"]._knowledge_release_catalog is None
     assert isinstance(
         captured["agent_configuration_workspace"]._publication_configuration_projector,
         production_roles.ProductionAgentPublicationConfigurationProjector,
     )
-    assert captured["formal_production_agent_publication_command"] is formal_publication_command
+    assert "formal_production_agent_publication_command" not in captured
     assert captured["production_agent_rollback_enabled"] is False
-    assert (
-        application.state.formal_production_agent_candidate_external_smoke_runner
-        is formal_candidate_external_smoke_runner
-    )
+    assert not hasattr(application.state, "formal_production_agent_candidate_external_smoke_runner")
 
 
 def test_embedded_reference_profile_source_selection_is_removed() -> None:

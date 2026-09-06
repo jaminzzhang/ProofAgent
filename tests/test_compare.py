@@ -46,4 +46,4 @@ def test_harness_compare_executes_v3_agent_package() -> None:
     )
 
     assert result.outcome == "REFUSED_NO_EVIDENCE"
-    assert "no governed evidence" in result.message
+    assert "required retrieval requirement(s) lack verified evidence" in result.message

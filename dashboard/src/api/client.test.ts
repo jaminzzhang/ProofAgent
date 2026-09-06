@@ -929,26 +929,11 @@ test('deleteConfigDraftSkillPack deletes a draft-local Skill Pack', async () => 
   expect(response.packs).toEqual([])
 })
 
-test('fetchConfigDraftKnowledgeBinding requests the live KSS Release catalog projection', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({
-      revision: 7,
-      candidate: null,
-      readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
-      releases: [],
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
+test('fetchConfigDraftKnowledgeBinding requests frozen external configuration', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ revision: 7, bindings: [] }), { status: 200 }))
   const response = await fetchConfigDraftKnowledgeBinding('enterprise_qa', 'draft_1')
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/config/agents/enterprise_qa/drafts/draft_1/knowledge-binding',
-    sameOriginRequest(),
-  )
-  expect(response.readiness.revision).toBe('catalog-3')
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/enterprise_qa/drafts/draft_1/external-knowledge', sameOriginRequest())
+  expect(response).toEqual({ revision: 7, bindings: [] })
 })
 
 test('fetchConfigDraftPublicationConfiguration requests the server-authoritative publication projection', async () => {
@@ -973,43 +958,10 @@ test('fetchConfigDraftPublicationConfiguration requests the server-authoritative
   expect(response.formal_publication_state).toBe('workspace_draft_not_bound')
 })
 
-test('updateConfigDraftKnowledgeBinding patches one exact KSS Release tuple with Draft CAS', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({
-      revision: 8,
-      candidate: {
-        knowledge_space_id: 'space_insurance',
-        knowledge_base_id: 'base_claims',
-        knowledge_base_version_id: 'base_version_4',
-        knowledge_base_release_id: 'release_9',
-      },
-      readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
-      releases: [],
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
-
-  await updateConfigDraftKnowledgeBinding('enterprise_qa', 'draft_1', {
-    expected_revision: 7,
-    knowledge_space_id: 'space_insurance',
-    knowledge_base_id: 'base_claims',
-    knowledge_base_version_id: 'base_version_4',
-    knowledge_base_release_id: 'release_9',
-  })
-
-  expect(fetchMock).toHaveBeenCalledWith(
-    '/api/config/agents/enterprise_qa/drafts/draft_1/knowledge-binding',
-    sameOriginRequest({
-      method: 'PATCH',
-      body: JSON.stringify({
-        expected_revision: 7,
-        knowledge_space_id: 'space_insurance',
-        knowledge_base_id: 'base_claims',
-        knowledge_base_version_id: 'base_version_4',
-        knowledge_base_release_id: 'release_9',
-      }),
-    }),
-  )
+test('updateConfigDraftKnowledgeBinding removes bindings using Draft CAS', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ revision: 8, bindings: [] }), { status: 200 }))
+  await updateConfigDraftKnowledgeBinding('enterprise_qa', 'draft_1', { expected_revision: 7, bindings: [] })
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/enterprise_qa/drafts/draft_1/external-knowledge', sameOriginRequest({
+    method: 'PATCH', body: JSON.stringify({ expected_revision: 7, bindings: [] }),
+  }))
 })

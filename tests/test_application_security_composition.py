@@ -119,11 +119,11 @@ def test_production_app_fails_closed_without_oidc_session_composition(
         )
 
 
-def test_production_app_fails_closed_without_formal_publication_command(
+def test_production_app_can_start_with_legacy_formal_publication_unavailable(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="Formal Production Agent publication command"):
-        _production_app(tmp_path, formal_publication_command=None)
+    app = _production_app(tmp_path, formal_publication_command=None)
+    assert app.state.formal_production_agent_publication_command is None
 
 
 def test_development_auth_session_projects_the_local_operator(tmp_path: Path) -> None:

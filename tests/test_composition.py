@@ -47,28 +47,23 @@ def test_compose_harness_invocation_resolves_non_knowledge_dependencies() -> Non
     assert invocation.review_subagent is not None
 
 
-def test_composition_preserves_exact_kss_runtime_dependencies() -> None:
+def test_composition_rejects_complete_legacy_kss_runtime_dependencies() -> None:
     candidate_service = object()
     query_factory = object()
     admission_scorer = object()
     bindings = _kss_bindings()
 
-    invocation = compose_harness_invocation(
-        AGENT,
-        resolved_knowledge_bindings=bindings,
-        knowledge_candidate_service=candidate_service,
-        knowledge_candidate_query_factory=query_factory,
-        knowledge_candidate_admission_scorer=admission_scorer,
-    )
-
-    assert invocation.resolved_knowledge_bindings is bindings
-    assert invocation.knowledge_candidate_service is candidate_service
-    assert invocation.knowledge_candidate_query_factory is query_factory
-    assert invocation.knowledge_candidate_admission_scorer is admission_scorer
+    with pytest.raises(ProofAgentError, match="legacy KSS runtime is retired"):
+        compose_harness_invocation(
+            AGENT, resolved_knowledge_bindings=bindings,
+            knowledge_candidate_service=candidate_service,
+            knowledge_candidate_query_factory=query_factory,
+            knowledge_candidate_admission_scorer=admission_scorer,
+        )
 
 
 def test_composition_rejects_kss_runtime_without_published_binding() -> None:
-    with pytest.raises(ProofAgentError, match="requires one exact Published KSS binding"):
+    with pytest.raises(ProofAgentError, match="legacy KSS runtime is retired"):
         compose_harness_invocation(
             AGENT,
             knowledge_candidate_service=object(),
@@ -78,7 +73,7 @@ def test_composition_rejects_kss_runtime_without_published_binding() -> None:
 
 
 def test_composition_rejects_binding_without_kss_runtime() -> None:
-    with pytest.raises(ProofAgentError, match="has no executable Candidate runtime"):
+    with pytest.raises(ProofAgentError, match="legacy KSS binding is retired"):
         compose_harness_invocation(
             AGENT,
             resolved_knowledge_bindings=_kss_bindings(),

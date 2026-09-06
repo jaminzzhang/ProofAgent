@@ -77,6 +77,7 @@ def test_local_contract_validator_cleans_package_after_success(
         contract_adapter_module,
         "load_agent_manifest",
         lambda _: SimpleNamespace(
+            package_knowledge_sources=(), knowledge_bindings=(),
             workflow=SimpleNamespace(template="react_enterprise_qa_v3"),
             capabilities=SimpleNamespace(
                 skills=SimpleNamespace(business_flows=())
@@ -127,6 +128,7 @@ def test_local_contract_validator_rejects_external_skill_definition_before_load(
         contract_adapter_module,
         "load_agent_manifest",
         lambda _: SimpleNamespace(
+            package_knowledge_sources=(), knowledge_bindings=(),
             workflow=SimpleNamespace(template="react_enterprise_qa_v3"),
             capabilities=SimpleNamespace(
                 skills=SimpleNamespace(

@@ -1,5 +1,13 @@
 # Production deployment assets
 
+> [KNOWN | HIGH] 2026-09-06: ADR-0242 retires the KSS coupling described in the
+> historical release instructions below. The default local topology and core verifier
+> no longer use KSS. External Knowledge configuration is documented in
+> [Dify setup](../../docs/features/external-knowledge/configuration.md).
+> External-provider formal publication requires a new verified profile; do not run
+> the historical KSS build, Grant, Reference or publication sequence for Dify.
+
+
 [KNOWN | HIGH] This directory now contains the checked-in foundations for S6: a strict Deployment Compatibility Manifest contract, a multi-stage product image, hardened Blue/Green slot Compose, a stable Nginx Gateway Compose, and the runtime binding for finalized Release Registry downloads. These files are production-oriented definitions, not evidence that a production candidate has been built, scanned, deployed or approved.
 
 ## Files

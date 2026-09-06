@@ -16,15 +16,9 @@ from proof_agent.bootstrap.application_services import (
     compose_production_security,
     compose_production_vault_secret_provider,
 )
-from proof_agent.bootstrap.knowledge_candidate_runtime import (
-    compose_production_knowledge_candidate_runtime,
-)
 from proof_agent.bootstrap.model_credentials import compose_model_credential_cipher
 from proof_agent.capabilities.artifacts.s3 import S3ArtifactStore
 from proof_agent.capabilities.artifacts.materialization import VerifiedArtifactMaterializer
-from proof_agent.capabilities.knowledge.source_service_management_client import (
-    KnowledgeSourceServiceManagementClient,
-)
 from proof_agent.capabilities.knowledge.source_service_query_grant_provisioner import (
     KnowledgeSourceServiceQueryGrantProvisioner,
 )
@@ -263,24 +257,11 @@ def create_production_api_application(
             guarded,
             environment=values,
         )
-        knowledge_candidate_runtime = compose_production_knowledge_candidate_runtime(
-            values,
-            http_client=guarded,
-            secret_provider=secret_provider,
-        )
         security = compose_production_security(
             persistence,
             secret_provider,
             environment=values,
             guarded_http_client=guarded,
-        )
-        knowledge_service_management = KnowledgeSourceServiceManagementClient(
-            endpoint=_required(values, "PROOF_AGENT_KSS_ENDPOINT"),
-            http_client=guarded,
-            authorization_header_factory=lambda: _knowledge_service_authorization(
-                secret_provider,
-                _required(values, "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"),
-            ),
         )
         artifact_store = _artifact_store(values)
         resources.append(artifact_store)
@@ -308,9 +289,6 @@ def create_production_api_application(
             identity=_production_readiness_identity(values),
             checks={
                 "artifact_store": artifact_store.check_ready,
-                "knowledge_source_service": lambda: (
-                    knowledge_service_management.workspace().readiness.state == "ready"
-                ),
                 "oidc": security.oidc_client.check_ready,
                 "egress_policy": lambda: (
                     persistence.security.get_active_egress_policy() is not None
@@ -343,33 +321,14 @@ def create_production_api_application(
             contract_validator=LocalAgentConfigurationContractValidator(),
             workflow_stage_inspector=LocalAgentConfigurationWorkflowStageAdapter(),
             skill_pack_inspector=LocalAgentConfigurationSkillPackAdapter(),
-            knowledge_release_catalog=knowledge_service_management,
             publication_configuration_projector=(
                 ProductionAgentPublicationConfigurationProjector(
                     configuration_store=runtime_configuration,
                 )
             ),
         )
-        formal_publication_command = _compose_formal_production_agent_publication_command(
-            values=values,
-            unit_of_work_factory=publication_uow,
-            knowledge_service_management=knowledge_service_management,
-            runtime_configuration=runtime_configuration,
-            knowledge_candidate_runtime=knowledge_candidate_runtime,
-            guarded_http_client=guarded,
-            secret_provider=secret_provider,
-            model_credential_resolver=model_credentials,
-            artifact_store=artifact_store,
-        )
-        formal_candidate_external_smoke_runner = _compose_formal_candidate_external_smoke_runner(
-            values=values,
-            runtime_configuration=runtime_configuration,
-            knowledge_candidate_runtime=knowledge_candidate_runtime,
-            guarded_http_client=guarded,
-            secret_provider=secret_provider,
-            model_credential_resolver=model_credentials,
-            artifact_store=artifact_store,
-        )
+        # KSS Phase F / Reference / Grant publication cannot authorize mutable external datasets.
+        # The external production publication profile remains closed until independently verified.
         application = create_app(
             mode="production",
             operator_session_service=security.operator_session_service,
@@ -386,15 +345,10 @@ def create_production_api_application(
             production_configuration_uow_factory=publication_uow,
             agent_configuration_workspace=agent_configuration_workspace,
             production_agent_rollback_enabled=False,
-            formal_production_agent_publication_command=formal_publication_command,
-            knowledge_service_management_client=knowledge_service_management,
             release_registry_repository=persistence.releases,
             release_bundle_materializer=release_bundle_materializer,
             release_bundle_attestation_verifier=release_bundle_attestation_verifier,
             release_bundle_audit_repository=persistence.audit,
-        )
-        application.state.formal_production_agent_candidate_external_smoke_runner = (
-            formal_candidate_external_smoke_runner
         )
 
         def close_resources() -> None:
@@ -443,19 +397,6 @@ def compose_production_run_executor(
             guarded,
             environment=values,
         )
-        knowledge_candidate_runtime = compose_production_knowledge_candidate_runtime(
-            values,
-            http_client=guarded,
-            secret_provider=secret_provider,
-        )
-        knowledge_service_management = KnowledgeSourceServiceManagementClient(
-            endpoint=_required(values, "PROOF_AGENT_KSS_ENDPOINT"),
-            http_client=guarded,
-            authorization_header_factory=lambda: _knowledge_service_authorization(
-                secret_provider,
-                _required(values, "PROOF_AGENT_KSS_OPERATOR_SECRET_HANDLE"),
-            ),
-        )
         artifact_store = _artifact_store(values)
         resources.append(artifact_store)
         authority = _published_agent_authority(persistence, values)
@@ -482,7 +423,6 @@ def compose_production_run_executor(
             configuration_store=runtime_configuration,
             controlled_react_snapshot_store=FileControlledReActSnapshotStore(control_store_root),
             controlled_react_observation_truth_store=FileObservationTruthStore(control_store_root),
-            knowledge_candidate_runtime=knowledge_candidate_runtime,
             guarded_http_client=guarded,
             secret_provider=secret_provider,
             model_credential_resolver=model_credentials,
@@ -515,9 +455,6 @@ def compose_production_run_executor(
             identity=_production_readiness_identity(values, role="run_executor"),
             checks={
                 "artifact_store": artifact_store.check_ready,
-                "knowledge_source_service": lambda: (
-                    knowledge_service_management.workspace().readiness.state == "ready"
-                ),
                 "postgresql": lambda: _postgres_ready(persistence),
                 "published_agent": lambda: _sole_agent_ready(
                     authority,
@@ -772,6 +709,10 @@ def _sole_agent_ready(
     agent = authority.resolve(SOLE_PRODUCTION_AGENT_ID)
     version = authority.get_active_version(SOLE_PRODUCTION_AGENT_ID)
     if agent is None or version is None:
+        return False
+    from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+    bindings = agent.resolved_knowledge_bindings
+    if bindings is not None and any(not isinstance(item, ExternalKnowledgeBinding) for item in bindings.bindings):
         return False
     try:
         validate_production_agent_candidate(

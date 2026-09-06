@@ -75,11 +75,13 @@ Key boundaries:
 - `proof_agent/observability/`: trace, receipt, RunStore and read APIs;
 - `proof_agent/release/`: immutable release contracts and fail-closed release verifier.
 
-[KNOWN | HIGH] KSS source, migrations, distribution, internal tests and image build are
-owned by a separate project. ProofAgent retains only guarded HTTPS clients, exact KSS
-artifact/binding contracts, Evidence Admission and answer governance. The local
-production integration stack can start an explicitly supplied external KSS image, but
-it cannot build KSS from this repository.
+[KNOWN | HIGH] Knowledge is now configured through external provider bindings (ADR-0242).
+Dify Knowledge API is the first read-only adapter, using guarded HTTPS and server-side
+Secret Handles. The existing ReAct/Harness owns evidence admission, citations and
+required-query completion. The default stack no longer requires KSS or KSS_IMAGE.
+See [Dify configuration](docs/features/external-knowledge/configuration.md).
+Historical KSS release evidence does not authorize external-provider production publication;
+that profile remains pending independent verification.
 
 There is no active `proof_agent/runtime/` compatibility package. LangGraph and LangChain are not production dependencies.
 

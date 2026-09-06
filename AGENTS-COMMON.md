@@ -33,6 +33,13 @@ Historical ADRs and dated specs may describe removed capabilities. Active truth 
 
 - Control Plane owns workflow, policy, evidence admission, validation and outcome mapping.
 - Models, knowledge, memory and tools are capabilities behind provider-neutral ports.
+- ADR-0242 supersedes KSS-only runtime rules: external Knowledge bindings are configured
+  in Agent manifests; Dify is the first adapter. KSS contracts are historical only.
+- External providers return candidates; ProofAgent owns admission and required-query
+  completion. Dataset IDs are mutable remote identities, not immutable KSS Releases.
+- Default API/Executor/readiness/deployment must not require KSS. External production
+  publication remains closed until its own profile and verification are delivered.
+  Configuration and limits: `docs/features/external-knowledge/configuration.md`.
 - The model proposes; it never grants itself permission or executes a capability directly.
 - Memory and conversation context are not Accepted Evidence.
 - Tools enter only through Tool Gateway; initial-production tools are read-only, published, schema-bounded and server-authorized.

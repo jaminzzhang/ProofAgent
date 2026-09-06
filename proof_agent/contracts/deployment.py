@@ -219,7 +219,7 @@ class DeploymentCompatibilityComponent(StrictFrozenModel):
 class DeploymentCompatibilityManifest(StrictFrozenModel):
     """Complete secret-free compatibility binding for one production environment."""
 
-    schema_version: Literal["proofagent.deployment-compatibility.v1"]
+    schema_version: Literal["proofagent.deployment-compatibility.v1", "proofagent.deployment-compatibility.v2"]
     topology: Literal["single_host_blue_green"]
     tls_required: Literal[True]
     tool_mode: ToolMode
@@ -250,6 +250,8 @@ class DeploymentCompatibilityManifest(StrictFrozenModel):
             raise ValueError("deployment component identities must be unique")
         actual = set(component_ids)
         expected = set(REQUIRED_COMPONENT_IDS)
+        if self.schema_version == "proofagent.deployment-compatibility.v2":
+            expected -= {"knowledge_source_service", "opensearch", "knowledge_model_plane"}
         if self.tool_mode == "read_only_https":
             expected.add("read_only_tool")
         if actual != expected:

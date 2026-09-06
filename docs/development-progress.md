@@ -1,5 +1,11 @@
 # Development Progress
 
+> [KNOWN | HIGH] 2026-09-06：ADR-0242 覆盖本文历史 KSS-only 运行与默认部署描述。
+> 当前知识库采用外部 provider 绑定，首接 Dify，继续由 ProofAgent 执行证据准入与任务完成校验。
+> 配置、能力限制与验收见 [外部知识库配置](features/external-knowledge/configuration.md)。
+> KSS 专属正式发布证据不复用；外部知识库生产发布 profile 尚待独立验证。
+
+
 Updated: 2026-09-06
 
 ## Current decision

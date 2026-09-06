@@ -52,6 +52,10 @@ class RunSubmissionService:
             raise RunSubmissionRejectedError(
                 "Run admission requires the authenticated permission authority version"
             )
+        from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+        bindings = published_agent.resolved_knowledge_bindings
+        if bindings is not None and any(not isinstance(item, ExternalKnowledgeBinding) for item in bindings.bindings):
+            raise RunSubmissionRejectedError("Legacy KSS Agent execution is retired")
         now = self._clock()
         if now.utcoffset() is None:
             raise RunSubmissionRejectedError("Run admission clock must be timezone-aware")

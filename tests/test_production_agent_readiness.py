@@ -755,3 +755,39 @@ def test_online_candidate_validator_executes_real_path_and_retains_exact_artifac
     assert result.receipt_ref.artifact_uri == store.exact_uri(stored[1][0])
     assert stored[0][1].endswith(b"\n")
     assert stored[1][1].startswith(b"# governed")
+
+
+def test_historical_kss_remains_readable_but_cannot_be_ready_or_queued(tmp_path: Path) -> None:
+    from proof_agent.bootstrap.production_roles import _sole_agent_ready
+    from proof_agent.delivery.run_submission_service import (
+        RunSubmissionRejectedError,
+        RunSubmissionService,
+    )
+
+    agent, version = _candidate(tmp_path)
+    authority = SimpleNamespace(
+        list_active_agent_ids=lambda: (AGENT_ID,),
+        resolve=lambda _: agent,
+        get_active_version=lambda _: version,
+    )
+    assert authority.get_active_version(AGENT_ID) == version
+    assert not _sole_agent_ready(authority, object(), object())
+
+    class Queue:
+        calls = 0
+
+        def admit(self, request):
+            self.calls += 1
+            raise AssertionError("Retired KSS must not enter the queue")
+
+    queue = Queue()
+    with pytest.raises(RunSubmissionRejectedError, match="Legacy KSS"):
+        RunSubmissionService(queue).submit(
+            published_agent=agent,
+            question="Synthetic question",
+            operator_subject="operator",
+            idempotency_key="test-kss-retired",
+            permission_mapping_version_id="019ba001-1111-7000-8000-000000000099",
+            permission_epoch=1,
+        )
+    assert queue.calls == 0

@@ -233,7 +233,7 @@ def test_create_config_agent_uses_server_owned_template(tmp_path: Path) -> None:
         "memory",
         "response",
     ]
-    assert "knowledge" not in draft["capabilities"]["editable_modules"]
+    assert "knowledge" in draft["capabilities"]["editable_modules"]
     assert draft["capabilities"]["actions"] == {
         "can_validate": True,
         "can_publish": True,

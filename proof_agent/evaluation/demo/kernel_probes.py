@@ -7,14 +7,17 @@ The observations report behavior; they never assert that a known bug must persis
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import re
 from typing import Self
 
 from proof_agent.bootstrap.composition import compose_harness_invocation
+from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+from proof_agent.contracts.ports.guarded_http import GuardedHttpResponse
+from proof_agent.capabilities.secrets.local_environment import LocalEnvironmentSecretProvider
 from proof_agent.capabilities.react.intent import LLMIntentResolver
 from proof_agent.capabilities.react.planner import LLMReActPlanner
 from proof_agent.contracts import (
@@ -32,19 +35,11 @@ from proof_agent.contracts import (
     ReActPlannerConfig,
     ReasoningSummary,
     ReceiptOutcome,
-    ResolvedKnowledgeBindingSet,
-    ResolvedKnowledgeSourceServiceBinding,
     RetrievalQueryItem,
     ValidationStatus,
 )
-from proof_agent.contracts.knowledge_candidates import (
-    KnowledgeCandidateExecutionBudget,
-    KnowledgeCandidateQuery,
-    KnowledgeCandidateResult,
-)
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
 from proof_agent.control.conversation import admit_conversation_context
-from proof_agent.control.knowledge.candidate_request import BoundKnowledgeCandidateQueryFactory
 from proof_agent.control.workflow.controlled_react import (
     ControlledReActStartRequest,
     build_controlled_react_orchestrator_for_invocation,
@@ -87,42 +82,26 @@ class ScriptedModelProvider:
         )
 
 
-class SyntheticCandidateService:
+class SyntheticDifyHttp:
+    """Exercise the real Dify adapter with deterministic, secret-free wire responses."""
+
     def __init__(self, *, structured: bool = False) -> None:
         self.structured = structured
-        self.requests: list[KnowledgeCandidateQuery] = []
+        self.queries: list[str] = []
 
-    def query(self, request: KnowledgeCandidateQuery) -> KnowledgeCandidateResult:
-        self.requests.append(request)
-        payload = json.loads((FIXTURES / "kernel_baseline/knowledge_result.json").read_text())
-        text_candidate = payload["evidence_groups"][0]["candidate_evidence"][0]
-        text = FACT_B if request.question == QUERY_B else FACT_A
-        text_candidate["content"]["text"] = text
-        text_candidate["content_hash"] = "sha256:" + sha256(text.encode()).hexdigest()
-        # Keep candidates from distinct queries distinct at the admission boundary.
-        suffix = "b" if request.question == QUERY_B else "a"
-        for field in ("candidate_evidence_id", "evidence_unit_id", "knowledge_source_version_id"):
-            text_candidate[field] += "-" + suffix
-        if not self.structured:
-            payload["evidence_groups"] = payload["evidence_groups"][:1]
-            payload["query_plan_summary"]["planned_lanes"] = ["lexical"]
-            payload["query_plan_summary"]["structured_query_count"] = 0
-            payload["execution_summary"]["budget_usage"]["candidates"] = 1
-        return KnowledgeCandidateResult.model_validate(payload)
-
-
-class SyntheticAdmissionScorer:
-    scorer_id = "baseline-admission"
-    scorer_revision = "baseline-admission.v1"
-
-    def score_candidates(
-        self, *, query: KnowledgeCandidateQuery, result: KnowledgeCandidateResult
-    ) -> dict[str, float]:
-        return {
-            candidate.candidate_evidence_id: 1.0
-            for group in result.evidence_groups
-            for candidate in group.candidate_evidence
-        }
+    def request(self, method: str, url: str, *, headers: Mapping[str, str] | None = None, body: bytes | None = None, timeout_seconds: float = 10.0) -> GuardedHttpResponse:
+        assert body is not None
+        query = json.loads(body)["query"]
+        self.queries.append(query)
+        content = FACT_B if query == QUERY_B else FACT_A
+        if self.structured:
+            # Dify supplies text; typed fact/slot authority still needs a separate kernel slice.
+            content += " claim_total=12345.67"
+        payload = {"query": {"content": query}, "records": [{"score": 0.95, "segment": {
+            "id": "segment_b" if query == QUERY_B else "segment_a", "document_id": "policy",
+            "enabled": True, "status": "completed", "content": content,
+        }}]}
+        return GuardedHttpResponse(200, {"content-type": "application/json"}, json.dumps(payload).encode())
 
 
 @dataclass(frozen=True)
@@ -157,40 +136,19 @@ def exercise_retrieval(
     intent_queries: tuple[str, ...] = (),
     structured: bool = False,
 ) -> RetrievalObservation:
-    service = SyntheticCandidateService(structured=structured)
+    service = SyntheticDifyHttp(structured=structured)
+    manifest_path = FIXTURES / "react_enterprise_qa_v3/agent.yaml"
+    binding = ExternalKnowledgeBinding(
+        binding_id="baseline-dify", provider="dify", endpoint="https://dify.example/v1",
+        dataset_id="c42e2a6e-40b3-4330-96f8-f1e4d768e8c9",
+        credential_ref=ProductionSecretHandle(protocol_id="local-environment-v1",
+            handle_id="BASELINE_DIFY_KEY", purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL, version_id="env"),
+    )
+    manifest = load_agent_manifest(manifest_path).model_copy(update={"knowledge_bindings": (binding,)})
     invocation = compose_harness_invocation(
-        FIXTURES / "react_enterprise_qa_v3/agent.yaml",
-        require_runtime_credentials=False,
-        resolved_knowledge_bindings=ResolvedKnowledgeBindingSet(
-            bindings=(
-                ResolvedKnowledgeSourceServiceBinding(
-                    binding_id="baseline-kss",
-                    knowledge_base_release_id="release-1",
-                    client_credential_ref=ProductionSecretHandle(
-                        protocol_id="vault-kv-v2",
-                        handle_id="synthetic/baseline-unused",
-                        purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
-                        version_id="synthetic-v1",
-                    ),
-                    admission_scorer_id="baseline-admission",
-                    admission_scorer_revision="baseline-admission.v1",
-                ),
-            )
-        ),
-        knowledge_candidate_service=service,
-        knowledge_candidate_query_factory=BoundKnowledgeCandidateQueryFactory(
-            knowledge_base_release_id="release-1",
-            execution_budget=KnowledgeCandidateExecutionBudget(
-                max_rounds=1,
-                max_model_calls=1,
-                max_candidates=10,
-                max_model_tokens=1000,
-                max_duration_ms=5000,
-            ),
-            deadline_after=timedelta(seconds=30),
-            clock=lambda: datetime(2026, 9, 5, tzinfo=UTC),
-        ),
-        knowledge_candidate_admission_scorer=SyntheticAdmissionScorer(),
+        manifest_path, manifest=manifest, require_runtime_credentials=False,
+        guarded_http_client=service,
+        secret_provider=LocalEnvironmentSecretProvider({"BASELINE_DIFY_KEY": "synthetic-unused-key"}, mode="development"),
     )
     intent = IntentResolution(
         resolution_id="intent-baseline",
@@ -254,7 +212,7 @@ def exercise_retrieval(
         )
     )
     return RetrievalObservation(
-        queries=tuple(request.question for request in service.requests),
+        queries=tuple(service.queries),
         answer_inputs=tuple(
             "\n".join(message.content for message in request.messages)
             for request in answer_provider.requests

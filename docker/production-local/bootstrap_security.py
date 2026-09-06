@@ -27,7 +27,7 @@ LEGACY_PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000001"
 PERMISSION_VERSION_ID = "019ba100-0000-7000-8000-000000000004"
 LEGACY_EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000003"
 PREVIOUS_EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000005"
-EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000006"
+EGRESS_VERSION_ID = "019ba100-0000-7000-8000-000000000007"
 _DOCKER_DESKTOP_DNS_PROXY_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
@@ -139,9 +139,7 @@ def _local_egress_rules(model_cidrs: str) -> tuple[EgressOriginRule, ...]:
         )
         for origin in (
             "https://proof-agent.localhost:8443",
-            "https://proof-agent.localhost:8444",
             "https://vault.internal:8200",
-            "https://opensearch.internal:9200",
             "https://models.internal:9443",
             "https://models.internal:9444",
             "https://models.internal:9445",

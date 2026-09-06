@@ -10,6 +10,9 @@ from pathlib import Path
 from proof_agent.bootstrap.knowledge_resolution import (
     ManifestKnowledgeAuthorityGuard,
 )
+from proof_agent.bootstrap.external_knowledge import ExternalKnowledgeRuntime, development_knowledge_dependencies
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+from proof_agent.contracts.ports.external_knowledge import ExternalKnowledgeSourceSet
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.bootstrap.model_resolution import resolve_model_role_config
 from proof_agent.bootstrap.skills import load_business_flow_skill_pack_set
@@ -32,7 +35,6 @@ from proof_agent.contracts import (
     ModelConnectionResolutionRecord,
     ReActPlannerConfig,
     ResolvedKnowledgeBindingSet,
-    ResolvedKnowledgeSourceServiceBinding,
     ReviewSubagentConfig,
 )
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
@@ -81,6 +83,7 @@ class HarnessInvocation:
         default_factory=InstitutionAuthorizationContext
     )
     knowledge_candidate_service: KnowledgeCandidateService | None = None
+    external_knowledge: ExternalKnowledgeSourceSet | None = None
     knowledge_candidate_query_factory: KnowledgeCandidateQueryFactory | None = None
     knowledge_candidate_admission_scorer: (
         KnowledgeCandidateAdmissionScorer | None
@@ -111,20 +114,18 @@ def compose_harness_invocation(
     model_credential_resolver: ModelCredentialResolver | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> HarnessInvocation:
-    """Resolve one Agent Contract with KSS as its only Knowledge authority."""
+    """Resolve one governed Agent with optional external Knowledge providers."""
 
     candidate_dependencies = (
         knowledge_candidate_service,
         knowledge_candidate_query_factory,
         knowledge_candidate_admission_scorer,
     )
-    if any(item is not None for item in candidate_dependencies) and any(
-        item is None for item in candidate_dependencies
-    ):
+    if any(item is not None for item in candidate_dependencies):
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "KSS service, exact Query factory and Evidence Admission scorer must be composed together.",
-            "Configure the complete Published Agent Version Candidate runtime.",
+            "The legacy KSS runtime is retired.",
+            "Configure an external Knowledge provider binding.",
         )
 
     model_provider_resolver = _model_provider_resolver(
@@ -223,10 +224,25 @@ def compose_harness_invocation(
     resolved_bindings = resolved_knowledge_bindings
     if resolved_bindings is None:
         resolved_bindings = ManifestKnowledgeAuthorityGuard().resolve(resolved_manifest)
-    _validate_knowledge_authority(
-        resolved_bindings,
-        candidate_runtime_configured=knowledge_candidate_service is not None,
-    )
+    external_bindings = _validate_knowledge_authority(resolved_bindings)
+    expected_bindings = ManifestKnowledgeAuthorityGuard().resolve(resolved_manifest)
+    if resolved_bindings != expected_bindings:
+        raise ProofAgentError(
+            "PA_CONFIG_002", "Frozen Knowledge bindings differ from the Agent manifest.",
+            "Validate and publish the exact external Knowledge configuration again.",
+        )
+    external_knowledge = None
+    if external_bindings:
+        guarded_http_client, secret_provider = development_knowledge_dependencies(guarded_http_client, secret_provider)
+        if guarded_http_client is None or secret_provider is None:
+            raise ProofAgentError(
+                "PA_CONFIG_002", "External Knowledge requires guarded HTTP and a Secret Provider.",
+                "Compose the server-owned transport and credential resolver before execution.",
+            )
+        external_knowledge = ExternalKnowledgeRuntime(
+            external_bindings, http_client=guarded_http_client, secret_provider=secret_provider,
+            timeout_seconds=min(resolved_manifest.retrieval.query_timeout_seconds, 60.0),
+        )
 
     policy = PolicyEngine.from_file(resolved_manifest.policy.file)
     return HarnessInvocation(
@@ -261,6 +277,7 @@ def compose_harness_invocation(
             institution_authorization or InstitutionAuthorizationContext()
         ),
         knowledge_candidate_service=knowledge_candidate_service,
+        external_knowledge=external_knowledge,
         knowledge_candidate_query_factory=knowledge_candidate_query_factory,
         knowledge_candidate_admission_scorer=knowledge_candidate_admission_scorer,
         model_resolver=model_provider_resolver,
@@ -290,31 +307,16 @@ def _resolve_optional_model(
 
 def _validate_knowledge_authority(
     bindings: ResolvedKnowledgeBindingSet,
-    *,
-    candidate_runtime_configured: bool,
-) -> None:
-    if not bindings.bindings:
-        if candidate_runtime_configured:
+) -> tuple[ExternalKnowledgeBinding, ...]:
+    external: list[ExternalKnowledgeBinding] = []
+    for binding in bindings.bindings:
+        if not isinstance(binding, ExternalKnowledgeBinding):
             raise ProofAgentError(
-                "PA_CONFIG_002",
-                "The Candidate runtime requires one exact Published KSS binding.",
-                "Publish the Agent Version with its KSS release binding.",
+                "PA_CONFIG_002", "The legacy KSS binding is retired.",
+                "Create and validate an external Knowledge binding before execution.",
             )
-        return
-    if len(bindings.bindings) != 1 or not isinstance(
-        bindings.bindings[0], ResolvedKnowledgeSourceServiceBinding
-    ):
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "Embedded and legacy Knowledge bindings were removed by the KSS authority cutover.",
-            "Use exactly one Published Knowledge Source Service binding.",
-        )
-    if not candidate_runtime_configured:
-        raise ProofAgentError(
-            "PA_CONFIG_002",
-            "The Published KSS binding has no executable Candidate runtime.",
-            "Compose the exact KSS client, Query factory and Evidence Admission scorer.",
-        )
+        external.append(binding)
+    return tuple(external)
 
 
 def _model_provider_resolver(

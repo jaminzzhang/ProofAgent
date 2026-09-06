@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, Link } from 'react-router-dom'
 import { ThemeProvider } from '@proofagent/ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -25,7 +25,7 @@ import {
   updateWorkflowStages,
   validateConfigDraft,
 } from '../../api/client'
-import type { DraftAgent, DraftValidationResponse, RunDetail } from '../../api/types'
+import type { ExternalKnowledgeBinding, DraftAgent, DraftValidationResponse, RunDetail } from '../../api/types'
 import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
 
@@ -157,6 +157,7 @@ function agentDetailView(initialEntry: string) {
     <ThemeProvider>
       <LocaleProvider>
         <MemoryRouter initialEntries={[initialEntry]}>
+          <Link to="/agents/agent-2/drafts/draft-2?tab=knowledge">Switch to Draft B</Link>
           <Routes>
             <Route path="/agents/:agentId/drafts/:draftId" element={<AgentDetailPage />} />
           </Routes>
@@ -304,39 +305,19 @@ function addReferenceChip(
   fireEvent.keyDown(input, { key: 'Enter' })
 }
 
+const difyBinding: ExternalKnowledgeBinding = {
+  binding_id: 'policies', provider: 'dify', endpoint: 'https://dify.example/v1',
+  dataset_id: 'c42e2a6e-40b3-4330-96f8-f1e4d768e8c9',
+  credential_ref: { protocol_id: 'hashicorp-vault-2.0-kv-v2', handle_id: 'knowledge/dify', purpose: 'knowledge_credential', version_id: '1' },
+  retrieval: { search_method: 'semantic_search', top_k: 3, score_threshold: 0.2 },
+}
+
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     installTestLocalStorage()
     vi.mocked(fetchModelConnections).mockResolvedValue({ data: [], meta: { total: 0 } })
-    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValue({
-      revision: 4,
-      candidate: {
-        knowledge_space_id: 'space_insurance',
-        knowledge_base_id: 'base_claims',
-        knowledge_base_version_id: 'base_version_3',
-        knowledge_base_release_id: 'release_7',
-      },
-      readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
-      releases: [
-        {
-          knowledge_space_id: 'space_insurance',
-          knowledge_base_id: 'base_claims',
-          knowledge_base_version_id: 'base_version_3',
-          knowledge_base_release_id: 'release_7',
-          source_version_count: 3,
-          state: 'queryable',
-        },
-        {
-          knowledge_space_id: 'space_insurance',
-          knowledge_base_id: 'base_claims',
-          knowledge_base_version_id: 'base_version_4',
-          knowledge_base_release_id: 'release_9',
-          source_version_count: 5,
-          state: 'queryable',
-        },
-      ],
-    })
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValue({ revision: 4, bindings: [difyBinding] })
     vi.mocked(fetchConfigDraftPublicationConfiguration).mockResolvedValue({
       draft_revision: 11,
       authoring_configuration_state: 'blocked',
@@ -378,20 +359,9 @@ describe('AgentDetailPage', () => {
         activation_mode: 'postgres_atomic_cas',
       },
     })
-    vi.mocked(updateConfigDraftKnowledgeBinding).mockImplementation(
-      async (_agentId, _draftId, payload) => ({
-        revision: payload.expected_revision + 1,
-        candidate: {
-          knowledge_space_id: payload.knowledge_space_id,
-          knowledge_base_id: payload.knowledge_base_id,
-          knowledge_base_version_id: payload.knowledge_base_version_id,
-          knowledge_base_release_id: payload.knowledge_base_release_id,
-        },
-        readiness: { state: 'ready', revision: 'catalog-3', blockers: [] },
-        releases: await vi.mocked(fetchConfigDraftKnowledgeBinding)
-          .getMockImplementation()?.('agent-1', 'draft-1').then((value) => value.releases) ?? [],
-      }),
-    )
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockImplementation(async (_agent, _draft, payload) => ({
+      revision: payload.expected_revision + 1, bindings: payload.bindings,
+    }))
     vi.mocked(fetchConfigDraftSkills).mockResolvedValue({
       revision: 4,
       enabled: true,
@@ -2078,135 +2048,83 @@ workflow:
     )
   })
 
-  it('loads the live KSS Release catalog for Production Knowledge authoring', async () => {
+  it('loads external datasets and exposes only a server credential reference', async () => {
     enableProductionKnowledgeEditing()
-
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
-
-    expect(await screen.findByRole('heading', { name: 'KSS Release Binding' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'External knowledge bases' })).toBeInTheDocument()
     expect(fetchConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-1', 'draft-1')
-    expect(screen.getByText('Draft authoring only. Saving does not change the active runtime.')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /release_9.*5 source versions/ })).toBeInTheDocument()
-    expect(screen.queryByLabelText(/credential/i)).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/scorer/i)).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Dataset ID')).toHaveValue(difyBinding.dataset_id)
+    expect(screen.getByLabelText('Secret Handle / environment variable name')).toHaveValue('knowledge/dify')
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+    expect(screen.queryByText('Exact KSS Release')).not.toBeInTheDocument()
   })
 
-  it('saves one exact KSS Release tuple with the current Draft revision', async () => {
+  it('saves a Dify dataset change with the current Draft revision', async () => {
     enableProductionKnowledgeEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
-
-    const release = await screen.findByLabelText('Exact KSS Release')
-    fireEvent.change(release, {
-      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
-
-    await waitFor(() => {
-      expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith(
-        'agent-1',
-        'draft-1',
-        {
-          expected_revision: 4,
-          knowledge_space_id: 'space_insurance',
-          knowledge_base_id: 'base_claims',
-          knowledge_base_version_id: 'base_version_4',
-          knowledge_base_release_id: 'release_9',
-        },
-      )
-    })
-    expect(await screen.findByText('Knowledge source binding saved.')).toBeInTheDocument()
+    const field = await screen.findByLabelText('Top K')
+    fireEvent.change(field, { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
+    await waitFor(() => expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-1', 'draft-1', {
+      expected_revision: 4, bindings: [{ ...difyBinding, retrieval: { ...difyBinding.retrieval, top_k: 5 } }],
+    }))
     expect(refreshDraft).toHaveBeenCalledTimes(1)
   })
 
-  it('freezes a stale KSS Release selection until the user explicitly reloads latest', async () => {
+  it('preserves unsaved settings on conflict until explicitly reloaded', async () => {
     enableProductionKnowledgeEditing()
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
-
-    const release = await screen.findByLabelText('Exact KSS Release')
-    fireEvent.change(release, {
-      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
-    })
-    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValueOnce({
-      revision: 5,
-      candidate: {
-        knowledge_space_id: 'space_insurance',
-        knowledge_base_id: 'base_claims',
-        knowledge_base_version_id: 'base_version_3',
-        knowledge_base_release_id: 'release_7',
-      },
-      readiness: { state: 'ready', revision: 'catalog-4', blockers: [] },
-      releases: [
-        {
-          knowledge_space_id: 'space_insurance',
-          knowledge_base_id: 'base_claims',
-          knowledge_base_version_id: 'base_version_3',
-          knowledge_base_release_id: 'release_7',
-          source_version_count: 3,
-          state: 'queryable',
-        },
-        {
-          knowledge_space_id: 'space_insurance',
-          knowledge_base_id: 'base_claims',
-          knowledge_base_version_id: 'base_version_4',
-          knowledge_base_release_id: 'release_9',
-          source_version_count: 5,
-          state: 'queryable',
-        },
-      ],
-    })
-    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(
-      Object.assign(new Error('stale draft revision'), { status: 409 }),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
-
+    const field = await screen.findByLabelText('Top K')
+    fireEvent.change(field, { target: { value: '5' } })
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValueOnce({ revision: 5, bindings: [difyBinding] })
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(Object.assign(new Error('stale draft revision'), { status: 409 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
     expect(await screen.findByText(/Your selection is preserved/)).toBeInTheDocument()
-    expect(release).toHaveValue('space_insurance|base_claims|base_version_4|release_9')
-    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
+    expect(field).toHaveValue(5)
+    expect(screen.getByRole('button', { name: 'Save knowledge configuration' })).toBeDisabled()
     expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledTimes(1)
-
     fireEvent.click(screen.getByRole('button', { name: 'Reload Latest' }))
-    expect(release).toHaveValue('space_insurance|base_claims|base_version_3|release_7')
-    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeEnabled()
+    expect(field).toHaveValue(3)
+    fireEvent.change(field, { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
+    await waitFor(() => expect(updateConfigDraftKnowledgeBinding).toHaveBeenLastCalledWith('agent-1', 'draft-1', expect.objectContaining({ expected_revision: 5 })))
   })
 
-  it('preserves the selected KSS Release when a non-conflict save fails', async () => {
+  it('isolates unsaved external bindings when navigating between Drafts with equal revisions', async () => {
     enableProductionKnowledgeEditing()
-    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(
-      new Error('agent_knowledge_binding_update_failed'),
-    )
+    const second = { ...difyBinding, binding_id: 'second', dataset_id: 'c42e2a6e-40b3-4330-96f8-f1e4d768e8ca', credential_ref: { ...difyBinding.credential_ref, handle_id: 'knowledge/second' } }
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockImplementation(async (agent) => ({ revision: 4, bindings: [agent === 'agent-2' ? second : difyBinding] }))
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    fireEvent.change(await screen.findByLabelText('Top K'), { target: { value: '9' } })
+    fireEvent.click(screen.getByRole('link', { name: 'Switch to Draft B' }))
+    await waitFor(() => expect(screen.getByLabelText('Dataset ID')).toHaveValue(second.dataset_id))
+    expect(fetchConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-2', 'draft-2')
+    expect(screen.getByLabelText('Top K')).toHaveValue(3)
+    fireEvent.change(screen.getByLabelText('Top K'), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
+    await waitFor(() => expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-2', 'draft-2', {
+      expected_revision: 4, bindings: [{ ...second, retrieval: { ...second.retrieval, top_k: 5 } }],
+    }))
+  })
 
-    const release = await screen.findByLabelText('Exact KSS Release')
-    fireEvent.change(release, {
-      target: { value: 'space_insurance|base_claims|base_version_4|release_9' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Release Binding' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('agent_knowledge_binding_update_failed')
-    expect(release).toHaveValue('space_insurance|base_claims|base_version_4|release_9')
+  it('preserves external settings when a non-conflict save fails', async () => {
+    enableProductionKnowledgeEditing()
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockRejectedValueOnce(new Error('external_knowledge_configuration_invalid'))
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    const field = await screen.findByLabelText('Top K')
+    fireEvent.change(field, { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save knowledge configuration' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('external_knowledge_configuration_invalid')
+    expect(field).toHaveValue(5)
     expect(refreshDraft).not.toHaveBeenCalled()
   })
 
-  it('fails closed when the live KSS Release catalog is unavailable', async () => {
+  it('prevents saves when the external binding projection cannot load', async () => {
     enableProductionKnowledgeEditing()
-    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValueOnce({
-      revision: 4,
-      candidate: null,
-      readiness: {
-        state: 'unavailable',
-        revision: null,
-        blockers: ['Knowledge Source Service is unavailable.'],
-      },
-      releases: [],
-    })
-
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockRejectedValueOnce(new Error('configuration unavailable'))
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
-
-    expect(await screen.findByRole('heading', { name: 'KSS Release Binding' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Save Release Binding' })).toBeDisabled()
-    expect(screen.getByText('Knowledge Source Service is unavailable.')).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('configuration unavailable')
+    expect(screen.queryByRole('button', { name: 'Save knowledge configuration' })).not.toBeInTheDocument()
     expect(updateConfigDraftKnowledgeBinding).not.toHaveBeenCalled()
   })
 

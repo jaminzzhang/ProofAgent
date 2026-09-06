@@ -60,13 +60,13 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
 
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
+    except yaml.YAMLError:
         raise ProofAgentError(
             "PA_SCHEMA_001",
-            f"invalid YAML in {path}: {exc}",
+            f"invalid YAML in {path}",
             "Fix YAML syntax and run the command again.",
             artifact_path=path,
-        ) from exc
+        ) from None
     if not isinstance(raw, dict):
         raise ProofAgentError(
             "PA_SCHEMA_001",

@@ -9,6 +9,9 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.knowledge_resolution import ManifestKnowledgeAuthorityGuard
+from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
+from proof_agent.contracts.ports.secret_provider import SecretProvider
 from proof_agent.configuration.compiler import compile_draft_agent
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
 from proof_agent.contracts import (
@@ -48,9 +51,13 @@ class LocalAgentConfigurationValidationAdapter:
         *,
         configuration_store: LocalAgentConfigurationStore,
         run_store: RunStore,
+        guarded_http_client: GuardedHttpClient | None = None,
+        secret_provider: SecretProvider | None = None,
     ) -> None:
         self._configuration_store = configuration_store
         self._run_store = run_store
+        self._guarded_http_client = guarded_http_client
+        self._secret_provider = secret_provider
 
     def validate(
         self,
@@ -66,6 +73,7 @@ class LocalAgentConfigurationValidationAdapter:
             self._configuration_store.root_dir / "compiled",
         )
         manifest = load_agent_manifest(package_dir / "agent.yaml")
+        resolved_bindings = ManifestKnowledgeAuthorityGuard().resolve(manifest)
         run_id = f"run_{uuid4().hex[:8]}"
         run_artifact_dir = self._run_store.create_run_dir(run_id)
         result = execute_agent_package_run(
@@ -76,7 +84,9 @@ class LocalAgentConfigurationValidationAdapter:
                 run_id=run_id,
                 store=self._run_store,
                 manifest=manifest,
-                resolved_knowledge_bindings=None,
+                guarded_http_client=self._guarded_http_client,
+                secret_provider=self._secret_provider,
+                resolved_knowledge_bindings=resolved_bindings,
                 configuration_store=self._configuration_store,
                 run_purpose=RunPurpose.VALIDATION,
                 agent_id=draft.agent_id,
@@ -130,7 +140,7 @@ class LocalAgentConfigurationValidationAdapter:
             trace_events=detail.trace_events,
             validation_capture=validation_capture,
             capture_error=capture_error,
-            resolved_knowledge_bindings=None,
+            resolved_knowledge_bindings=resolved_bindings,
         )
 
 

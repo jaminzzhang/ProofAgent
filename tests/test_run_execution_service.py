@@ -131,7 +131,7 @@ def test_v3_published_agent_run_uses_controlled_react_orchestrator(
     assert (store.history_dir / execution.detail.run_id / "governance_receipt.md").exists()
 
 
-def test_published_agent_run_propagates_exact_kss_runtime_dependencies(
+def test_published_agent_run_rejects_legacy_kss_before_execution(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -174,26 +174,25 @@ def test_published_agent_run_propagates_exact_kss_runtime_dependencies(
     monkeypatch.setattr(run_execution_service, "execute_agent_package_run", execute)
     monkeypatch.setattr(store, "get_run_detail", lambda _run_id: object())
 
-    run_execution_service.execute_published_agent_run(
-        dependencies=run_execution_service.RunExecutionDependencies(
-            store=store,
-            runs_dir=tmp_path / "latest",
-            configuration_store=configuration_store,
-            knowledge_candidate_runtime=Runtime(),
-        ),
-        published_agent=PublishedAgent(
-            agent_id="react_enterprise_qa_v3",
-            manifest_path=Path(
-                "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+    import pytest
+    with pytest.raises(RuntimeError, match="Legacy KSS Agent execution is retired"):
+        run_execution_service.execute_published_agent_run(
+            dependencies=run_execution_service.RunExecutionDependencies(
+                store=store,
+                runs_dir=tmp_path / "latest",
+                configuration_store=configuration_store,
+                knowledge_candidate_runtime=Runtime(),
             ),
-            display_name="Enterprise QA V3",
-            purpose="Answer enterprise QA questions.",
-            customer_facing=False,
-            resolved_knowledge_bindings=bindings,
-        ),
-        question="What is the insurance rule?",
-    )
-
-    assert captured[0].knowledge_candidate_service is service
-    assert captured[0].knowledge_candidate_query_factory is factory
-    assert captured[0].knowledge_candidate_admission_scorer is scorer
+            published_agent=PublishedAgent(
+                agent_id="react_enterprise_qa_v3",
+                manifest_path=Path(
+                    "proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml"
+                ),
+                display_name="Enterprise QA V3",
+                purpose="Answer enterprise QA questions.",
+                customer_facing=False,
+                resolved_knowledge_bindings=bindings,
+            ),
+            question="What is the insurance rule?",
+        )
+    assert captured == []

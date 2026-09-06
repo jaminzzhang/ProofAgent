@@ -13,7 +13,7 @@ from proof_agent.contracts._base import (
     freeze_value,
 )
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
-from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet
+from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet, ResolvedKnowledgeSourceServiceBinding
 from proof_agent.contracts.knowledge_release import (
     FormalProductionAgentPhaseFRecord,
     KnowledgeReleaseEvidenceSet,
@@ -234,7 +234,7 @@ class FormalProductionAgentCandidate(StrictFrozenModel):
     @model_validator(mode="after")
     def require_exact_draft_release_binding(self) -> "FormalProductionAgentCandidate":
         bindings = self.resolved_knowledge_bindings.bindings
-        if len(bindings) != 1:
+        if len(bindings) != 1 or not isinstance(bindings[0], ResolvedKnowledgeSourceServiceBinding):
             raise ValueError("Formal production candidate requires exactly one KSS binding")
         if (
             bindings[0].knowledge_base_release_id
@@ -690,6 +690,7 @@ class PublishedAgentVersion(FrozenModel):
         if (
             bindings is None
             or len(bindings.bindings) != 1
+            or not isinstance(bindings.bindings[0], ResolvedKnowledgeSourceServiceBinding)
             or bindings.bindings[0].knowledge_base_release_id != reference.knowledge_base_release_id
         ):
             raise ValueError("Published Agent Version formal KSS binding must match")

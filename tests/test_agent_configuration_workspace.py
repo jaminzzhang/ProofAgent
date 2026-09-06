@@ -1472,7 +1472,7 @@ def test_workspace_rollback_atomically_switches_pointer_and_audits_target(
         updated_at="2026-08-19T04:00:00Z",
     )
     factory = UnitOfWorkFactory((current,))
-    target_bindings = _kss_bindings()
+    target_bindings = _external_bindings()
     version_one = _published_version(
         agent_id=current.draft.agent_id,
         draft_id=current.draft.draft_id,
@@ -1531,7 +1531,7 @@ def test_workspace_rollback_atomically_switches_pointer_and_audits_target(
     assert event.target_id == version_one.version_id
     assert event.metadata["replaced_active_version_id"] == version_two.version_id
     assert factory.units[-1].committed is True
-    assert catalog.calls == 1
+    assert catalog.calls == 0
 
 
 @pytest.mark.parametrize("release_state", ("retired", "revoked"))
@@ -1581,7 +1581,7 @@ def test_workspace_rollback_rejects_an_unavailable_kss_release_before_writes(
     assert factory.agents.get_active(target.agent_id) == previous
     assert factory.agents.activations == []
     assert factory.audit.events == []
-    assert catalog.calls == 1
+    assert catalog.calls == 0
 
 
 def test_workspace_rollback_rejects_a_stale_confirmed_pointer_before_catalog() -> None:
@@ -1640,7 +1640,7 @@ def test_workspace_rollback_rejects_pointer_drift_after_release_preflight() -> N
         draft_id=current.draft.draft_id,
         version_id="version_target",
         published_at="2026-08-19T05:00:00Z",
-        resolved_knowledge_bindings=_kss_bindings(),
+        resolved_knowledge_bindings=_external_bindings(),
     )
     previous = ActiveAgentVersion(
         agent_id=target.agent_id,
@@ -1681,7 +1681,7 @@ def test_workspace_rollback_rejects_pointer_drift_after_release_preflight() -> N
     assert factory.agents.get_active(target.agent_id) == concurrent
     assert factory.agents.activations == []
     assert factory.audit.events == []
-    assert catalog.calls == 1
+    assert catalog.calls == 0
 
 
 def test_workspace_rollback_requires_a_ready_kss_catalog() -> None:
@@ -1717,7 +1717,7 @@ def test_workspace_rollback_requires_a_ready_kss_catalog() -> None:
             actor=_actor(),
         )
 
-    assert conflict.value.code == "agent_knowledge_catalog_unavailable"
+    assert conflict.value.code == "agent_rollback_knowledge_release_unavailable"
     assert factory.agents.get_active(target.agent_id) is None
     assert factory.agents.activations == []
     assert factory.audit.events == []
@@ -1774,7 +1774,7 @@ def test_workspace_rollback_requires_one_exact_kss_release_match(
     assert factory.audit.events == []
 
 
-def test_workspace_rollback_uses_formal_reference_scope_to_resolve_release() -> None:
+def test_workspace_rollback_rejects_even_formally_published_kss_versions() -> None:
     current = _draft(
         "agent_alpha",
         "019ba001-1111-7000-8000-000000000844",
@@ -1807,17 +1807,15 @@ def test_workspace_rollback_uses_formal_reference_scope_to_resolve_release() -> 
         scope=AgentConfigurationScope.MULTI_AGENT,
     )
 
-    result = workspace.rollback_version(
-        agent_id=target.agent_id,
-        version_id=target.version_id,
-        expected_active_version_id=None,
-        actor=_actor(),
-    )
-
-    assert result.restored == target
-    assert result.activation.version_id == target.version_id
-    assert factory.audit.events[-1].event_type == "agent.version.rolled_back"
-    assert catalog.calls == 1
+    with pytest.raises(AgentConfigurationConflict, match="Legacy KSS rollback is retired"):
+        workspace.rollback_version(
+            agent_id=target.agent_id, version_id=target.version_id,
+            expected_active_version_id=None, actor=_actor(),
+        )
+    assert factory.agents.get_published(target.agent_id, target.version_id) == target
+    assert factory.agents.get_active(target.agent_id) is None
+    assert factory.agents.activations == [] and factory.audit.events == []
+    assert catalog.calls == 0
 
 
 def test_workspace_rollback_rechecks_the_immutable_target_before_writes() -> None:
@@ -1831,7 +1829,7 @@ def test_workspace_rollback_rechecks_the_immutable_target_before_writes() -> Non
         draft_id=current.draft.draft_id,
         version_id="version_target",
         published_at="2026-08-19T05:00:00Z",
-        resolved_knowledge_bindings=_kss_bindings(),
+        resolved_knowledge_bindings=_external_bindings(),
     )
     factory = MutatingPublishedVersionFactory((current,), target=target)
     factory.agents.published[(target.agent_id, target.version_id)] = target
@@ -1888,8 +1886,8 @@ def test_workspace_rollback_maps_a_kss_catalog_failure_without_detail_leakage() 
             actor=_actor(),
         )
 
-    assert conflict.value.code == "agent_knowledge_catalog_unavailable"
-    assert conflict.value.detail == "The Knowledge Source Service catalog is unavailable."
+    assert conflict.value.code == "agent_rollback_knowledge_release_unavailable"
+    assert "Legacy KSS rollback is retired" in conflict.value.detail
     assert "sensitive" not in conflict.value.detail
     assert factory.agents.get_active(target.agent_id) is None
     assert factory.agents.activations == []
@@ -3105,3 +3103,12 @@ def test_workspace_kss_candidate_update_rolls_back_atomic_persistence(
         current.draft.agent_id, current.draft.draft_id
     ) == current
     assert factory.audit.events == []
+
+
+def _external_bindings() -> ResolvedKnowledgeBindingSet:
+    from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+    return ResolvedKnowledgeBindingSet(bindings=(ExternalKnowledgeBinding(
+        binding_id="policies", provider="dify", endpoint="https://dify.example/v1",
+        dataset_id="c42e2a6e-40b3-4330-96f8-f1e4d768e8c9",
+        credential_ref=ProductionSecretHandle(protocol_id="local-environment-v1", handle_id="SYNTHETIC", purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL, version_id="env"),
+    ),))

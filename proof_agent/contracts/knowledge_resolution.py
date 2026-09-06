@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import ConfigDict, Field, StrictStr, StringConstraints, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
 
 
@@ -61,7 +62,7 @@ class ResolvedKnowledgeSourceServiceBinding(FrozenModel):
         return self
 
 
-ResolvedKnowledgeBindingItem = ResolvedKnowledgeSourceServiceBinding
+ResolvedKnowledgeBindingItem = ResolvedKnowledgeSourceServiceBinding | ExternalKnowledgeBinding
 
 
 class ResolvedKnowledgeBindingSet(FrozenModel):

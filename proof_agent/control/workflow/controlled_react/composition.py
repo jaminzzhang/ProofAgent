@@ -414,6 +414,7 @@ class _InvocationKnowledgeObservationAdapter:
         service = KnowledgeRetrievalService(
             trace=trace,
             policy=self._invocation.policy,
+            external_knowledge=self._invocation.external_knowledge,
             knowledge_candidate_service=self._invocation.knowledge_candidate_service,
             knowledge_candidate_admission_scorer=(
                 self._invocation.knowledge_candidate_admission_scorer

@@ -19,7 +19,19 @@ not a second glossary.
   governed resolution, verified quality and release evidence boundaries;
   `docs/adr/0240-separate-verified-quality-from-governed-resolution.md` records P0-1B.
 
-## Knowledge Source Service design authority
+## Active external Knowledge boundary
+
+- `docs/adr/0242-replace-kss-runtime-coupling-with-external-knowledge.md` supersedes
+  the KSS-only execution and default deployment assumptions below.
+- `docs/features/external-knowledge/configuration.md` describes Dify configuration,
+  candidate admission, mutable observations and production limits.
+- `docs/features/external-knowledge/scope-plan.md` and `verification.md` route acceptance.
+
+## Historical Knowledge Source Service design authority
+
+The following KSS records explain historical contracts and evidence. They do not
+require or authorize KSS in the current runtime; ADR-0242 takes precedence.
+
 
 - `docs/superpowers/specs/2026-08-11-knowledge-source-service-design.md` — accepted
   target design.
@@ -28,11 +40,11 @@ not a second glossary.
 - `docs/adr/0192-separate-knowledge-source-service-from-agent-evidence-admission.md`
   through `docs/adr/0207-deploy-one-knowledge-service-with-isolated-process-roles.md`
   — accepted service boundary and runtime decisions.
-- `docs/adr/0210-make-kss-the-only-executable-knowledge-authority.md` — current
+- `docs/adr/0210-make-kss-the-only-executable-knowledge-authority.md` — historical
   execution authority. It supersedes executable Hybrid, package-local and shared
   knowledge binding paths in ProofAgent.
 - `docs/adr/0234-revalidate-exact-kss-release-before-agent-version-rollback.md` —
-  current Agent Version rollback Release-state preflight and failure boundary.
+  historical Agent Version rollback Release-state preflight and failure boundary.
 - `docs/adr/0235-bind-agent-version-rollback-to-the-confirmed-active-pointer.md` —
   caller-confirmed Active pointer and rollback concurrency boundary.
 - `docs/adr/0236-gate-production-agent-version-rollback-at-composition.md` —

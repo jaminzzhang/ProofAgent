@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
-import subprocess
 import tomllib
 
 import yaml  # type: ignore[import-untyped]
@@ -46,60 +44,21 @@ def test_proof_agent_python_does_not_import_kss_implementation() -> None:
     assert offenders == []
 
 
-def test_production_local_consumes_one_external_kss_image_without_building_it() -> None:
-    compose = yaml.safe_load(
-        (ROOT / "docker-compose.production-local.yml").read_text(encoding="utf-8")
-    )
-    kss_role_names = (
-        "kss-migrate",
-        "kss-runtime-client-bootstrap",
-        "kss-reference-client-bootstrap",
-        "kss-api",
-        "kss-query-executor",
-        "kss-knowledge-worker",
-        "kss-sync-scheduler",
-    )
-    kss_services = {name: compose["services"][name] for name in kss_role_names}
-
-    assert kss_services
-    assert all("build" not in service for service in kss_services.values())
-    images = {service.get("image") for service in kss_services.values()}
-    assert len(images) == 1
-    assert next(iter(images)).startswith("${KSS_IMAGE:?")
+def test_default_topology_has_no_kss_image_services_or_environment() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.production-local.yml").read_text())
+    assert not any("kss" in name for name in compose["services"])
+    assert "KSS_IMAGE" not in str(compose)
+    assert "PROOF_AGENT_KSS_" not in str(compose)
+    for service in compose["services"].values():
+        assert isinstance(service.get("environment", {}), dict)
+        assert set(service.get("depends_on", {})).issubset(compose["services"])
 
 
-def test_production_local_entry_requires_an_immutable_external_kss_image() -> None:
-    script = (ROOT / "scripts/production-local-up.sh").read_text(encoding="utf-8")
-
-    assert "KSS_IMAGE=${KSS_IMAGE:?" in script
-    assert 'KSS_DIGEST=${KSS_IMAGE##*@sha256:}' in script
-    assert '${#KSS_DIGEST}' in script
-    assert "export KSS_IMAGE" in script
-
-
-def test_production_local_entry_rejects_malformed_kss_image_before_prepare() -> None:
-    script = ROOT / "scripts/production-local-up.sh"
-    invalid_images = (
-        "kss:latest",
-        f"@sha256:{'0' * 64}",
-        f"registry.example/kss@sha256:{'0' * 63}",
-        f"registry.example/kss@sha256:{'A' * 64}",
-    )
-
-    for image in invalid_images:
-        environment = os.environ.copy()
-        environment["KSS_IMAGE"] = image
-        result = subprocess.run(
-            [str(script)],
-            cwd=ROOT,
-            env=environment,
-            capture_output=True,
-            check=False,
-            text=True,
-        )
-
-        assert result.returncode == 2, (image, result.stderr)
-        assert "KSS_IMAGE" in result.stderr
+def test_local_entry_never_requires_or_resolves_a_kss_image() -> None:
+    script = (ROOT / "scripts/production-local-up.sh").read_text()
+    assert "KSS" not in script
+    assert '"$ROOT_DIR/scripts/production-local-prepare.sh"' in script
+    assert 'config --quiet' in script
 
 
 def test_proof_agent_image_does_not_request_removed_hybrid_extra() -> None:

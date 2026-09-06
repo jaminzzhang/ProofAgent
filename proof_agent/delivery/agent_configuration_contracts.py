@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from proof_agent.bootstrap.loader import load_agent_manifest
+from proof_agent.bootstrap.knowledge_resolution import ManifestKnowledgeAuthorityGuard
 from proof_agent.bootstrap.package_security import (
     require_package_local_skill_pack_definitions,
 )
@@ -25,6 +26,7 @@ class LocalAgentConfigurationContractValidator:
                 package_dir = compile_draft_agent(draft, Path(temporary_dir))
                 manifest_path = package_dir / "agent.yaml"
                 manifest = load_agent_manifest(manifest_path)
+                ManifestKnowledgeAuthorityGuard().resolve(manifest)
                 require_package_local_skill_pack_definitions(
                     manifest,
                     manifest_path=manifest_path,

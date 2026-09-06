@@ -1472,3 +1472,22 @@ export interface ReleaseRegistrySummary {
 export interface ReleasesResponse {
   releases: ReleaseRegistrySummary[]
 }
+
+export interface ExternalKnowledgeBinding {
+  binding_id: string
+  provider: 'dify'
+  endpoint: string
+  dataset_id: string
+  credential_ref: { protocol_id: string; handle_id: string; purpose: 'knowledge_credential'; version_id: string }
+  retrieval: { search_method: 'semantic_search' | 'full_text_search' | 'keyword_search'; top_k: number; score_threshold: number }
+  consistency?: 'mutable_remote'
+  binding_kind?: 'external_knowledge'
+  schema_version?: 'external-knowledge-binding.v1'
+  failure_mode?: 'required'
+  admission_policy?: 'external-relevance-and-provenance.v1'
+}
+
+export interface ExternalKnowledgeConfiguration {
+  revision: number
+  bindings: ExternalKnowledgeBinding[]
+}

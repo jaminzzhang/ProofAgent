@@ -759,6 +759,11 @@ class AgentConfigurationWorkspace:
                 code="agent_publication_configuration_unavailable",
                 detail="Production publication configuration is unavailable.",
             )
+        if self._knowledge_release_catalog is None:
+            raise AgentConfigurationConflict(
+                code="external_knowledge_publication_profile_pending",
+                detail="External Knowledge production publication verification is pending; the legacy KSS publication flow is retired.",
+            )
         current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
         catalog = self._require_knowledge_release_catalog().workspace()
         return self._publication_configuration_projector.project(
@@ -1572,51 +1577,17 @@ class AgentConfigurationWorkspace:
         target: PublishedAgentVersion,
     ) -> None:
         bindings = target.resolved_knowledge_bindings
-        if bindings is None:
+        if bindings is None or not bindings.bindings:
             return
-        if len(bindings.bindings) != 1:
-            raise AgentConfigurationConflict(
-                code="agent_rollback_knowledge_release_unavailable",
-                detail="The rollback target does not have one exact KSS Release binding.",
-            )
-        try:
-            catalog = self._require_knowledge_release_catalog().workspace()
-        except AgentConfigurationConflict:
-            raise
-        except Exception as exc:
-            raise AgentConfigurationConflict(
-                code="agent_knowledge_catalog_unavailable",
-                detail="The Knowledge Source Service catalog is unavailable.",
-            ) from exc
-        if catalog.readiness.state != "ready":
-            raise AgentConfigurationConflict(
-                code="agent_knowledge_catalog_unavailable",
-                detail="The Knowledge Source Service catalog is unavailable.",
-            )
+        from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
 
-        release_id = bindings.bindings[0].knowledge_base_release_id
-        reference = (
-            None
-            if target.formal_production_evidence is None
-            else target.formal_production_evidence.release_reference
+        if all(isinstance(binding, ExternalKnowledgeBinding) for binding in bindings.bindings):
+            # Restore frozen connection settings; remote Dataset contents are not rolled back.
+            return
+        raise AgentConfigurationConflict(
+            code="agent_rollback_knowledge_release_unavailable",
+            detail="Legacy KSS rollback is retired; configure and validate an external Knowledge binding.",
         )
-        matches = tuple(
-            release
-            for release in catalog.releases
-            if release.knowledge_base_release_id == release_id
-            and (
-                reference is None
-                or (
-                    release.knowledge_space_id == reference.knowledge_space_id
-                    and release.knowledge_base_id == reference.knowledge_base_id
-                )
-            )
-        )
-        if len(matches) != 1 or matches[0].state not in {"queryable", "deprecated"}:
-            raise AgentConfigurationConflict(
-                code="agent_rollback_knowledge_release_unavailable",
-                detail="The rollback target's exact KSS Release is unavailable.",
-            )
 
     def _require_agent_scope(self, agent_id: str) -> None:
         _require_safe_resource_id(agent_id, resource="Agent")

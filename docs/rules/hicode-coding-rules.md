@@ -28,14 +28,14 @@ language.
 
 ## Authority boundaries
 
-- Knowledge Source Service may analyze, store, plan, and retrieve Candidate
-  Evidence. It must not admit evidence, decide truth, resolve conflicts, or
-  generate ProofAgent's final answer.
-- ProofAgent authorizes its user-facing operation and performs Evidence
-  Admission. Knowledge Source Service independently enforces service grants and
-  Knowledge Space scope.
-- Production composition must fail closed when PostgreSQL, object storage, or
-  required search dependencies are unavailable; do not add a local fallback.
+- External Knowledge providers retrieve Candidate Evidence. ProofAgent owns policy,
+  evidence admission, conflict handling and final-answer validation (ADR-0242).
+- Dify is the first adapter. Bind exact Dataset, endpoint, versioned credential
+  reference and retrieval settings; the model cannot choose another dataset or key.
+- KSS-only runtime and release assumptions are historical. Do not add KSS startup,
+  readiness or query dependencies to the active Agent kernel.
+- Production must fail closed when PostgreSQL, object storage or the guarded
+  transport/Secret Provider is unavailable. No development fallback is allowed.
 
 ## Security and evidence
 

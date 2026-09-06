@@ -12,8 +12,6 @@ from proof_agent.contracts import (
     ContextBudgetProfile,
     ContextConvergenceLadder,
     CustomerConfig,
-    KnowledgeBindingConfig,
-    KnowledgeSourceReferenceConfig,
     MemoryCapabilityConfig,
     MemoryConfig,
     MemoryScopeConfig,
@@ -36,6 +34,10 @@ from proof_agent.contracts import (
     WorkflowStageContextConfig,
     WorkflowStagePromptConfig,
 )
+from pydantic import ValidationError
+
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+from proof_agent.errors import ProofAgentError
 
 PATH_PARAM_KEYS = {
     "path",
@@ -138,25 +140,16 @@ def _package_knowledge_source_config_from_mapping(
     )
 
 
-def _knowledge_binding_config_from_mapping(raw: Any) -> KnowledgeBindingConfig:
-    if not isinstance(raw, dict):
-        raise TypeError("knowledge_bindings entries must be mappings")
-    source_ref = raw["source_ref"]
-    if not isinstance(source_ref, dict):
-        raise TypeError("knowledge_bindings entries require source_ref mappings")
-    return KnowledgeBindingConfig(
-        binding_id=raw["binding_id"],
-        source_ref=KnowledgeSourceReferenceConfig(
-            scope=source_ref["scope"],
-            source_id=source_ref["source_id"],
-        ),
-        retrieval_profile_revision_id=raw.get("retrieval_profile_revision_id"),
-        alias=raw.get("alias"),
-        failure_mode=raw.get("failure_mode", "required"),
-        fusion_weight=raw.get("fusion_weight", 1.0),
-        top_k=raw.get("top_k"),
-        routing_metadata=raw.get("routing_metadata", {}),
-    )
+def _knowledge_binding_config_from_mapping(raw: Any) -> ExternalKnowledgeBinding:
+    try:
+        return ExternalKnowledgeBinding.model_validate(raw)
+    except (TypeError, ValueError, ValidationError):
+        # Validation errors can contain pasted API keys. Never echo raw input.
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Invalid external Knowledge binding configuration.",
+            "Use a supported provider, HTTPS endpoint, Dataset ID and Knowledge Secret Handle; raw keys and legacy KSS bindings are not accepted.",
+        ) from None
 
 
 def _model_config_from_mapping(raw: Any) -> ModelConfig | None:

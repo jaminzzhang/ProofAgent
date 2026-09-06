@@ -195,17 +195,10 @@ def test_synthetic_verifier_host_entry_accepts_no_data_arguments() -> None:
         assert forbidden not in script
 
 
-def test_production_local_scorer_identity_and_endpoint_are_deployment_owned() -> None:
-    compose = (PROJECT_ROOT / "docker-compose.production-local.yml").read_text(encoding="utf-8")
-
-    assert "PROOF_AGENT_KSS_ADMISSION_SCORER_ENDPOINT: https://models.internal:9447" in compose
-    assert "PROOF_AGENT_KSS_ADMISSION_SCORER_SECRET_HANDLE: knowledge/admission-scorer" in compose
-    assert 'PROOF_AGENT_KSS_ADMISSION_SCORER_SECRET_VERSION_ID: "1"' in compose
-    assert "PROOF_AGENT_KSS_ADMISSION_SCORER_ID: insurance-evidence-admission" in compose
-    assert (
-        "PROOF_AGENT_KSS_ADMISSION_SCORER_REVISION: "
-        "insurance-evidence-admission.local-compatibility.v1" in compose
-    )
+def test_default_deployment_does_not_compose_the_legacy_kss_admission_scorer() -> None:
+    compose = (PROJECT_ROOT / "docker-compose.production-local.yml").read_text()
+    assert "PROOF_AGENT_KSS_ADMISSION_SCORER" not in compose
+    assert "knowledge/admission-scorer" not in compose
 
 
 def test_control_plane_synthetic_verifier_admits_one_candidate() -> None:

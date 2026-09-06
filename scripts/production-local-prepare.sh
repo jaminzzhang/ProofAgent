@@ -61,12 +61,6 @@ ensure_random_secret() {
 # These credentials are intentionally generated after the initial file block so
 # existing local-production environments can be upgraded without rotating any
 # already-issued authority secret.
-ensure_random_secret KSS_MODEL_BEARER_TOKEN
-ensure_random_secret KSS_OPERATOR_BEARER_TOKEN
-ensure_random_secret KSS_RUNTIME_CLIENT_V2_BEARER_TOKEN
-ensure_random_secret KSS_REFERENCE_CLIENT_BEARER_TOKEN
-ensure_random_secret KSS_ADMISSION_SCORER_BEARER_TOKEN
-ensure_random_secret KSS_POSTGRES_PASSWORD
 
 refresh_public_setting() {
   key=$1

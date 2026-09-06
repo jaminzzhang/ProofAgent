@@ -100,6 +100,7 @@ _DEVELOPMENT_DRAFT_CAPABILITIES = {
         "response",
     ],
     "editable_modules": [
+        "knowledge",
         "general",
         "workflow",
         "skills",

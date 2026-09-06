@@ -52,8 +52,8 @@ review:
   subagent:
     model_source: shared
     connection_id: other_model
-knowledge:
-  ignored: true
+knowledge_bindings: []
+package_knowledge_sources: []
 """
 
 

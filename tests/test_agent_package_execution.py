@@ -195,7 +195,7 @@ def test_package_without_published_kss_binding_refuses_no_evidence(tmp_path: Pat
 
 
 def test_candidate_runtime_without_published_kss_binding_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ProofAgentError, match="requires one exact Published KSS binding"):
+    with pytest.raises(ProofAgentError, match="legacy KSS runtime is retired"):
         execute_agent_package_run(
             AgentPackageRunRequest(
                 agent_yaml=AGENT,
@@ -208,49 +208,13 @@ def test_candidate_runtime_without_published_kss_binding_is_rejected(tmp_path: P
         )
 
 
-def test_exact_kss_binding_answers_from_proofagent_admitted_candidates(
-    tmp_path: Path,
-) -> None:
-    service = CandidateService()
-
-    result = execute_agent_package_run(
-        AgentPackageRunRequest(
-            agent_yaml=AGENT,
-            question="What is the reimbursement rule for travel meals?",
-            runs_dir=tmp_path,
-            run_id="run-kss-candidate-1",
-            resolved_knowledge_bindings=_bindings(),
-            knowledge_candidate_service=service,
-            knowledge_candidate_query_factory=_query_factory(),
-            knowledge_candidate_admission_scorer=AdmissionScorer(),
-        )
-    )
-
-    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
-    assert service.requests[0].knowledge_base_release_id == "release-enterprise-1"
-    assert result.workflow_template_execution_result is not None
-    evidence = result.workflow_template_execution_result.evidence[0]
-    assert evidence.source.startswith(
-        "knowledge://space-enterprise-1/release-enterprise-1/source-version-enterprise-1/"
-    )
-    assert evidence.admission_score == 1.0
-
-
-def test_exact_kss_binding_refuses_when_service_returns_no_candidates(
-    tmp_path: Path,
-) -> None:
-    result = execute_agent_package_run(
-        AgentPackageRunRequest(
-            agent_yaml=AGENT,
-            question="What is the reimbursement rule for travel meals?",
-            runs_dir=tmp_path,
-            resolved_knowledge_bindings=_bindings(),
-            knowledge_candidate_service=CandidateService(include_candidate=False),
-            knowledge_candidate_query_factory=_query_factory(),
-            knowledge_candidate_admission_scorer=AdmissionScorer(),
-        )
-    )
-
-    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
-    assert result.workflow_template_execution_result is not None
-    assert result.workflow_template_execution_result.evidence == ()
+@pytest.mark.parametrize("include_candidate", [True, False])
+def test_legacy_kss_binding_cannot_execute_even_with_complete_dependencies(tmp_path, include_candidate):
+    service = CandidateService(include_candidate=include_candidate)
+    with pytest.raises(ProofAgentError, match="legacy KSS runtime is retired"):
+        execute_agent_package_run(AgentPackageRunRequest(
+            agent_yaml=AGENT, question="What is the reimbursement rule?", runs_dir=tmp_path,
+            resolved_knowledge_bindings=_bindings(), knowledge_candidate_service=service,
+            knowledge_candidate_query_factory=_query_factory(), knowledge_candidate_admission_scorer=AdmissionScorer(),
+        ))
+    assert service.requests == []

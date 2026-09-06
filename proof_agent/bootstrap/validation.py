@@ -70,19 +70,19 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
         raise ProofAgentError(
             "PA_CONFIG_001",
             "legacy inline knowledge.provider was removed by the KSS authority cutover",
-            "Publish the Agent Version with one exact Knowledge Source Service binding.",
+            "Configure external knowledge_bindings with a supported provider.",
             artifact_path=manifest_path,
         )
     if "knowledge_sources" in raw:
         raise ProofAgentError(
             "PA_CONFIG_001",
             "legacy knowledge_sources was removed by the KSS authority cutover",
-            "Create and publish the source in Knowledge Source Service, then bind it to the Agent Version.",
+            "Configure external knowledge_bindings with a supported provider.",
             artifact_path=manifest_path,
         )
     removed_authority_fields = tuple(
         field
-        for field in ("package_knowledge_sources", "knowledge_bindings")
+        for field in ("package_knowledge_sources",)
         if raw.get(field)
     )
     if removed_authority_fields:
@@ -90,7 +90,7 @@ def require_manifest_shape(raw: Mapping[str, Any], *, manifest_path: Path) -> No
             "PA_CONFIG_002",
             "Agent manifests cannot declare a Knowledge authority: "
             + ", ".join(removed_authority_fields),
-            "Publish the Agent Version with one exact Knowledge Source Service binding.",
+            "Configure external knowledge_bindings with a supported provider.",
             artifact_path=manifest_path,
         )
     if "tools" in raw:

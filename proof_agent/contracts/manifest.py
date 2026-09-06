@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
 
 
 class WorkflowStagePromptConfig(FrozenModel):
@@ -309,7 +310,7 @@ class AgentManifest(FrozenModel):
     purpose: str
     workflow: WorkflowConfig
     package_knowledge_sources: tuple[PackageKnowledgeSourceConfig, ...]
-    knowledge_bindings: tuple[KnowledgeBindingConfig, ...]
+    knowledge_bindings: tuple[ExternalKnowledgeBinding, ...]
     retrieval: RetrievalConfig
     model: ModelConfig
     policy: PolicyConfig

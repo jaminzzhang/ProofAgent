@@ -1,6 +1,7 @@
 import type {
   ActiveAgentVersion,
-  AgentKnowledgeReleaseBindingConfiguration,
+  ExternalKnowledgeConfiguration,
+  ExternalKnowledgeBinding,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
@@ -8,7 +9,6 @@ import type {
   ConfigVersionsResponse,
   ContractBundle,
   DraftAgent,
-  DraftKnowledgeReleaseBindingCandidate,
   DraftValidationResponse,
   EvaluationCampaignCasesResponse,
   EvaluationCampaignsResponse,
@@ -564,9 +564,9 @@ export function deleteConfigDraftSkillPack(
 export function fetchConfigDraftKnowledgeBinding(
   agentId: string,
   draftId: string,
-): Promise<AgentKnowledgeReleaseBindingConfiguration> {
-  return fetchJson<AgentKnowledgeReleaseBindingConfiguration>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-binding`,
+): Promise<ExternalKnowledgeConfiguration> {
+  return fetchJson<ExternalKnowledgeConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/external-knowledge`,
   )
 }
 
@@ -582,10 +582,10 @@ export function fetchConfigDraftPublicationConfiguration(
 export function updateConfigDraftKnowledgeBinding(
   agentId: string,
   draftId: string,
-  payload: DraftKnowledgeReleaseBindingCandidate & { expected_revision: number },
-): Promise<AgentKnowledgeReleaseBindingConfiguration> {
-  return fetchJson<AgentKnowledgeReleaseBindingConfiguration>(
-    `${BASE}/config/agents/${agentId}/drafts/${draftId}/knowledge-binding`,
+  payload: { bindings: ExternalKnowledgeBinding[]; expected_revision: number },
+): Promise<ExternalKnowledgeConfiguration> {
+  return fetchJson<ExternalKnowledgeConfiguration>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/external-knowledge`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

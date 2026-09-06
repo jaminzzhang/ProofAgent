@@ -1,245 +1,100 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Badge } from '@proofagent/ui'
-import type {
-  AgentKnowledgeReleaseBindingConfiguration,
-  DraftKnowledgeReleaseBindingCandidate,
-  KnowledgeServiceReleaseProjection,
-} from '../../api/types'
+import { useEffect, useState } from 'react'
+import type { ExternalKnowledgeBinding, ExternalKnowledgeConfiguration } from '../../api/types'
 import { useLocale } from '../../i18n/locale'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 
 export type KnowledgeBindingMutationResult = 'saved' | 'conflict' | 'failed'
 
-interface KnowledgeModuleEditorProps {
-  config: AgentKnowledgeReleaseBindingConfiguration | null
+interface Props {
+  config: ExternalKnowledgeConfiguration | null
+  mode: 'development' | 'production'
   loading: boolean
   error: string | null
   busy: boolean
-  onSave: (
-    candidate: DraftKnowledgeReleaseBindingCandidate,
-  ) => Promise<KnowledgeBindingMutationResult>
+  onSave: (bindings: ExternalKnowledgeBinding[]) => Promise<KnowledgeBindingMutationResult>
 }
 
-const RELEASE_ID_SEPARATOR = '|'
+const inputClass = 'w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)]'
 
-export function KnowledgeModuleEditor({
-  config,
-  loading,
-  error,
-  busy,
-  onSave,
-}: KnowledgeModuleEditorProps) {
+export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSave }: Props) {
   const { t } = useLocale()
-  const [selectedIdentity, setSelectedIdentity] = useState('')
+  const [bindings, setBindings] = useState<ExternalKnowledgeBinding[]>([])
   const [dirty, setDirty] = useState(false)
   const [conflict, setConflict] = useState(false)
-
-  const releasesByIdentity = useMemo(
-    () => new Map(
-      (config?.releases ?? []).map((release) => [releaseIdentity(release), release]),
-    ),
-    [config],
-  )
-  const selectedRelease = releasesByIdentity.get(selectedIdentity) ?? null
-
   useEffect(() => {
-    if (!config || dirty || conflict) return
-    setSelectedIdentity(config.candidate ? releaseIdentity(config.candidate) : '')
-  }, [config, conflict, dirty])
+    if (config && !dirty && !conflict) setBindings(config.bindings)
+  }, [config, dirty, conflict])
+  if (loading) return <LoadingSpinner />
+  if (error) return <p role="alert">{error}</p>
+  if (!config) return <p>{t('knowledgeBinding.notLoaded')}</p>
 
-  if (loading) {
-    return (
-      <div className="border border-[var(--border)] bg-[var(--bg-surface)] p-8">
-        <div className="flex justify-center"><LoadingSpinner /></div>
-      </div>
-    )
+  function change(index: number, patch: Partial<ExternalKnowledgeBinding>) {
+    setBindings(current => current.map((item, i) => i === index ? { ...item, ...patch } : item))
+    setDirty(true)
+  }
+  function add() {
+    let id = 1
+    while (bindings.some(item => item.binding_id === `knowledge_${id}`)) id += 1
+    setBindings(current => [...current, {
+      binding_id: `knowledge_${id}`, provider: 'dify', endpoint: 'https://api.dify.ai/v1', dataset_id: '',
+      credential_ref: { protocol_id: mode === 'production' ? 'hashicorp-vault-2.0-kv-v2' : 'local-environment-v1',
+        handle_id: '', purpose: 'knowledge_credential', version_id: mode === 'production' ? '' : 'env' },
+      retrieval: { search_method: 'semantic_search', top_k: 3, score_threshold: 0.2 },
+    }])
+    setDirty(true)
   }
 
-  if (error) {
-    return (
-      <div className="border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-5 text-sm text-[var(--danger)]">
-        {error}
-      </div>
-    )
-  }
-
-  if (!config) {
-    return (
-      <div className="border border-[var(--border)] bg-[var(--bg-surface)] p-5 text-sm text-[var(--text-muted)]">
-        {t('knowledgeBinding.notLoaded')}
-      </div>
-    )
-  }
-
-  const catalogReady = config.readiness.state === 'ready'
-  const canSave = catalogReady && selectedRelease?.state === 'queryable' && !conflict && !busy
-
-  async function save() {
-    if (!selectedRelease || !canSave) return
-    const attemptedIdentity = selectedIdentity
-    const result = await onSave(toCandidate(selectedRelease))
-    if (result === 'conflict') {
-      setConflict(true)
-      setDirty(true)
-      setSelectedIdentity(attemptedIdentity)
-      return
-    }
-    if (result === 'saved') {
-      setConflict(false)
-      setDirty(false)
-    }
-  }
-
-  function reloadLatest() {
-    setSelectedIdentity(config?.candidate ? releaseIdentity(config.candidate) : '')
-    setConflict(false)
-    setDirty(false)
-  }
-
-  return (
-    <section className="space-y-5 border border-[var(--border)] bg-[var(--bg-surface)] p-6">
-      <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-primary)]">
-              {t('knowledgeBinding.title')}
-            </h3>
-            <Badge variant={catalogReady ? 'success' : 'danger'}>
-              {config.readiness.state}
-            </Badge>
-          </div>
-          <p className="mt-2 text-sm text-[var(--text-muted)]">
-            {t('knowledgeBinding.description')}
-          </p>
-          <p className="mt-1 text-xs font-medium text-[var(--warning)]">
-            {t('knowledgeBinding.authoringOnly')}
-          </p>
-        </div>
-        <dl className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2">
-            <dt className="text-[var(--text-muted)]">{t('knowledgeBinding.draftRevision')}</dt>
-            <dd className="mt-1 font-mono text-[var(--text-primary)]">{config.revision}</dd>
-          </div>
-          <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2">
-            <dt className="text-[var(--text-muted)]">{t('knowledgeBinding.catalogRevision')}</dt>
-            <dd className="mt-1 font-mono text-[var(--text-primary)]">
-              {config.readiness.revision ?? '—'}
-            </dd>
-          </div>
-        </dl>
-      </div>
-
-      {config.readiness.blockers.length > 0 && (
-        <div className="border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-4 text-sm text-[var(--danger)]">
-          <ul className="list-disc space-y-1 pl-5">
-            {config.readiness.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
-          </ul>
-        </div>
-      )}
-
-      {conflict && (
-        <div role="alert" className="border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-4 text-sm text-[var(--text-primary)]">
-          <p>{t('knowledgeBinding.conflict')}</p>
-          <button
-            type="button"
-            onClick={reloadLatest}
-            className="mt-3 rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm font-medium hover:bg-[var(--bg-hover)]"
-          >
-            {t('knowledgeBinding.reloadLatest')}
-          </button>
-        </div>
-      )}
-
-      <div>
-        <label htmlFor="knowledge-release-binding" className="mb-2 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-          {t('knowledgeBinding.exactRelease')}
-        </label>
-        <select
-          id="knowledge-release-binding"
-          value={selectedIdentity}
-          onChange={(event) => {
-            setSelectedIdentity(event.target.value)
-            setDirty(true)
-          }}
-          disabled={!catalogReady || conflict || busy}
-          className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"
-        >
-          <option value="">{t('knowledgeBinding.selectRelease')}</option>
-          {config.releases.map((release) => (
-            <option
-              key={releaseIdentity(release)}
-              value={releaseIdentity(release)}
-              disabled={release.state !== 'queryable'}
-            >
-              {releaseLabel(release, t('knowledgeBinding.sourceVersions'))}
-            </option>
-          ))}
-        </select>
-        {config.releases.length === 0 && (
-          <p className="mt-2 text-sm text-[var(--text-muted)]">{t('knowledgeBinding.noReleases')}</p>
-        )}
-      </div>
-
-      {selectedRelease && (
-        <dl className="grid gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-4 text-sm md:grid-cols-2 xl:grid-cols-4">
-          <ReleaseIdentity label={t('knowledgeBinding.space')} value={selectedRelease.knowledge_space_id} />
-          <ReleaseIdentity label={t('knowledgeBinding.base')} value={selectedRelease.knowledge_base_id} />
-          <ReleaseIdentity label={t('knowledgeBinding.baseVersion')} value={selectedRelease.knowledge_base_version_id} />
-          <ReleaseIdentity label={t('knowledgeBinding.release')} value={selectedRelease.knowledge_base_release_id} />
-        </dl>
-      )}
-
-      <div className="flex justify-end border-t border-[var(--border)] pt-4">
-        <button
-          type="button"
-          onClick={save}
-          disabled={!canSave}
-          className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-fg)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy ? t('agentDetail.saving') : t('knowledgeBinding.save')}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function ReleaseIdentity({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</dt>
-      <dd className="mt-1 break-all font-mono text-xs text-[var(--text-primary)]">{value}</dd>
-    </div>
-  )
-}
-
-function releaseIdentity(candidate: DraftKnowledgeReleaseBindingCandidate): string {
-  return [
-    candidate.knowledge_space_id,
-    candidate.knowledge_base_id,
-    candidate.knowledge_base_version_id,
-    candidate.knowledge_base_release_id,
-  ].join(RELEASE_ID_SEPARATOR)
-}
-
-function toCandidate(
-  release: KnowledgeServiceReleaseProjection,
-): DraftKnowledgeReleaseBindingCandidate {
-  return {
-    knowledge_space_id: release.knowledge_space_id,
-    knowledge_base_id: release.knowledge_base_id,
-    knowledge_base_version_id: release.knowledge_base_version_id,
-    knowledge_base_release_id: release.knowledge_base_release_id,
-  }
-}
-
-function releaseLabel(
-  release: KnowledgeServiceReleaseProjection,
-  sourceVersionsLabel: string,
-): string {
-  return [
-    release.knowledge_space_id,
-    release.knowledge_base_id,
-    release.knowledge_base_version_id,
-    release.knowledge_base_release_id,
-  ].join(' / ') + ` · ${release.source_version_count} ${sourceVersionsLabel} · ${release.state}`
+  return <form className="space-y-5 border border-[var(--border)] bg-[var(--bg-surface)] p-6"
+    onSubmit={async event => {
+      event.preventDefault()
+      if (!dirty || conflict || busy) return
+      const result = await onSave(bindings)
+      if (result === 'saved') setDirty(false)
+      if (result === 'conflict') setConflict(true)
+    }}>
+    <h3 className="text-lg font-semibold">{t('externalKnowledge.title')}</h3>
+    <p className="text-sm text-[var(--text-muted)]">{t('externalKnowledge.description')}</p>
+    <p className="text-sm text-[var(--text-muted)]">{t('externalKnowledge.credentialHelp')}</p>
+    <p className="text-xs">{t('knowledgeBinding.draftRevision')}: {config.revision}</p>
+    {conflict && <div role="alert">
+      <p>{t('knowledgeBinding.conflict')}</p>
+      <button type="button" onClick={() => { setBindings(config.bindings); setDirty(false); setConflict(false) }}>
+        {t('knowledgeBinding.reloadLatest')}
+      </button>
+    </div>}
+    {!bindings.length && <p>{t('externalKnowledge.empty')}</p>}
+    <fieldset disabled={busy || conflict} className="space-y-5">
+      {bindings.map((binding, index) => <fieldset key={index} className="grid gap-4 border border-[var(--border)] p-4 md:grid-cols-2">
+        <legend>Dify · {index + 1}</legend>
+        <label>{t('externalKnowledge.bindingId')}<input className={inputClass} required pattern="[A-Za-z0-9_-]+" maxLength={128}
+          value={binding.binding_id} onChange={event => change(index, { binding_id: event.target.value })} /></label>
+        <label>Service API URL<input className={inputClass} type="url" required pattern="https://.*" value={binding.endpoint}
+          onChange={event => change(index, { endpoint: event.target.value })} /></label>
+        <label>Dataset ID<input className={inputClass} required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" value={binding.dataset_id}
+          onChange={event => change(index, { dataset_id: event.target.value })} /></label>
+        <label>{t('externalKnowledge.protocol')}<select className={inputClass} value={binding.credential_ref.protocol_id}
+          onChange={event => change(index, { credential_ref: { ...binding.credential_ref, protocol_id: event.target.value, version_id: event.target.value === 'local-environment-v1' ? 'env' : '' } })}>
+          {mode === 'development' && <option value="local-environment-v1">Local environment</option>}
+          <option value="hashicorp-vault-2.0-kv-v2">Vault KV v2</option>
+        </select></label>
+        <label>{t('externalKnowledge.handle')}<input className={inputClass} required value={binding.credential_ref.handle_id}
+          onChange={event => change(index, { credential_ref: { ...binding.credential_ref, handle_id: event.target.value } })} /></label>
+        <label>{t('externalKnowledge.version')}<input className={inputClass} required value={binding.credential_ref.version_id}
+          onChange={event => change(index, { credential_ref: { ...binding.credential_ref, version_id: event.target.value } })} /></label>
+        <label>{t('externalKnowledge.method')}<select className={inputClass} value={binding.retrieval.search_method}
+          onChange={event => change(index, { retrieval: { ...binding.retrieval, search_method: event.target.value as ExternalKnowledgeBinding['retrieval']['search_method'] } })}>
+          {['semantic_search', 'full_text_search', 'keyword_search'].map(method => <option key={method}>{method}</option>)}
+        </select></label>
+        <label>Top K<input className={inputClass} type="number" required min={1} max={20} step={1} value={binding.retrieval.top_k}
+          onChange={event => change(index, { retrieval: { ...binding.retrieval, top_k: Number(event.target.value) } })} /></label>
+        <label>{t('externalKnowledge.threshold')}<input className={inputClass} type="number" required min={0} max={1} step={0.01} value={binding.retrieval.score_threshold}
+          onChange={event => change(index, { retrieval: { ...binding.retrieval, score_threshold: Number(event.target.value) } })} /></label>
+        <button type="button" onClick={() => { setBindings(current => current.filter((_, i) => i !== index)); setDirty(true) }}>{t('externalKnowledge.remove')}</button>
+      </fieldset>)}
+      <button type="button" disabled={bindings.length >= 5} onClick={add}>{t('externalKnowledge.add')}</button>
+    </fieldset>
+    <button type="submit" disabled={!dirty || conflict || busy} className="rounded-md bg-[var(--accent)] px-4 py-2 font-semibold text-[var(--accent-fg)] disabled:opacity-50">
+      {busy ? t('agentDetail.saving') : t('externalKnowledge.save')}
+    </button>
+  </form>
 }

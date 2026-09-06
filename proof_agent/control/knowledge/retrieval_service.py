@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import isfinite
 from typing import assert_never
 from urllib.parse import quote
@@ -39,6 +40,7 @@ from proof_agent.contracts.ports.knowledge_candidates import (
     KnowledgeCandidateService,
 )
 from proof_agent.control.policy.engine import PolicyEngine
+from proof_agent.contracts.ports.external_knowledge import ExternalKnowledgeSourceSet
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.errors import ProofAgentError
 from proof_agent.observability.audit.trace import TraceEmitter
@@ -81,6 +83,7 @@ class KnowledgeRetrievalService:
         trace: TraceEmitter,
         policy: PolicyEngine,
         knowledge_candidate_service: KnowledgeCandidateService | None,
+        external_knowledge: ExternalKnowledgeSourceSet | None = None,
         knowledge_candidate_admission_scorer: (
             KnowledgeCandidateAdmissionScorer | None
         ) = None,
@@ -88,6 +91,7 @@ class KnowledgeRetrievalService:
         self._trace = trace
         self._policy = policy
         self._knowledge_candidate_service = knowledge_candidate_service
+        self._external_knowledge = external_knowledge
         self._knowledge_candidate_admission_scorer = (
             knowledge_candidate_admission_scorer
         )
@@ -110,6 +114,8 @@ class KnowledgeRetrievalService:
         *,
         reviewed: bool,
     ) -> KnowledgeRetrievalResult:
+        if self._external_knowledge is not None:
+            return self._retrieve_external(request)
         candidate_query = request.knowledge_candidate_query
         if candidate_query is None:
             if (
@@ -221,6 +227,63 @@ class KnowledgeRetrievalService:
             evidence=evidence,
             evidence_result=evidence_result,
             candidate_result=candidate_result,
+        )
+
+    def _retrieve_external(self, request: KnowledgeRetrievalRequest) -> KnowledgeRetrievalResult:
+        sources = self._external_knowledge
+        assert sources is not None
+        known = {binding.binding_id for binding in sources.bindings}
+        if not set(request.preferred_binding_ids).issubset(known):
+            raise ProofAgentError(
+                "PA_KNOWLEDGE_002", "Retrieval selected an unbound Knowledge source.",
+                "Select only bindings frozen in this Agent configuration.",
+            )
+        selected = tuple(binding for binding in sources.bindings
+                         if not request.preferred_binding_ids or binding.binding_id in request.preferred_binding_ids)
+        # Authorize all selected sources before performing any network effect.
+        for binding in selected:
+            decision = self._policy.evaluate(EnforcementPoint.BEFORE_RETRIEVAL, {
+                "question": request.question, "strategy": request.strategy,
+                "provider": binding.provider, "binding_id": binding.binding_id,
+                "dataset_id": binding.dataset_id,
+            })
+            _emit_policy(self._trace, decision)
+            if not _allowed(decision):
+                return self._result_for_evidence((), min_score=request.min_score,
+                                                no_evidence_reason_code="retrieval_policy_denied")
+        evidence: list[EvidenceChunk] = []
+        for binding in selected:
+            result = sources.query(binding.binding_id, request.question)
+            if result.binding_id != binding.binding_id or result.query != request.question:
+                raise ProofAgentError("PA_KNOWLEDGE_002", "External Knowledge result scope mismatch.",
+                                      "Retrieve again using the frozen binding and exact question.")
+            observed_at = datetime.now(timezone.utc).isoformat()
+            for candidate in result.candidates[:min(binding.retrieval.top_k, request.top_k)]:
+                # The configured relevance/provenance gate does not prove semantic or numeric claims.
+                admitted = candidate.available and candidate.native_score >= max(
+                    binding.retrieval.score_threshold, request.min_score)
+                source = f"external://{binding.binding_id}/datasets/{binding.dataset_id}/documents/{candidate.document_id}"
+                citation = f"{source}#segment={candidate.chunk_id}&sha256={candidate.content_sha256}"
+                evidence.append(EvidenceChunk(
+                    source=source, content=candidate.content,
+                    status=EvidenceStatus.CANDIDATE if admitted else EvidenceStatus.REJECTED,
+                    evidence_id=f"{binding.binding_id}:{candidate.chunk_id}:{candidate.content_sha256}",
+                    source_id=binding.dataset_id, source_version_id=f"sha256:{candidate.content_sha256}",
+                    binding_id=binding.binding_id, provider_name=binding.provider,
+                    document_id=candidate.document_id, chunk_id=candidate.chunk_id,
+                    provider_native_score=candidate.native_score,
+                    admission_score=1.0 if admitted else None, citation=citation,
+                    metadata={"admission_policy": binding.admission_policy,
+                              "consistency": binding.consistency, "observed_at": observed_at,
+                              "content_sha256": candidate.content_sha256},
+                ))
+            self._trace.emit("knowledge_candidate_query", status="ok", payload={
+                "provider": binding.provider, "binding_id": binding.binding_id,
+                "candidate_count": len(result.candidates), "admission_policy": binding.admission_policy,
+            })
+        return self._result_for_evidence(
+            () if request.force_empty else tuple(evidence), min_score=request.min_score,
+            no_evidence_reason_code="external_knowledge_no_admissible_candidates",
         )
 
     def _result_for_evidence(

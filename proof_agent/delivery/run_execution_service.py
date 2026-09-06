@@ -76,16 +76,11 @@ def execute_published_agent_run(
         published_agent.manifest_path,
         require_writable_artifacts=False,
     )
-    knowledge_candidate_dependencies = None
     resolved_bindings = published_agent.resolved_knowledge_bindings
-    if resolved_bindings is not None and resolved_bindings.bindings:
-        if dependencies.knowledge_candidate_runtime is None:
-            raise RuntimeError(
-                "Published KSS Agent execution requires the production Candidate runtime"
-            )
-        knowledge_candidate_dependencies = dependencies.knowledge_candidate_runtime.bind_for_run(
-            resolved_bindings
-        )
+    if resolved_bindings is not None:
+        from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+        if any(not isinstance(binding, ExternalKnowledgeBinding) for binding in resolved_bindings.bindings):
+            raise RuntimeError("Legacy KSS Agent execution is retired; configure external Knowledge bindings")
     result = execute_agent_package_run(
         AgentPackageRunRequest(
             agent_yaml=published_agent.manifest_path,
@@ -108,21 +103,6 @@ def execute_published_agent_run(
             controlled_react_snapshot_store=dependencies.controlled_react_snapshot_store,
             institution_authorization=(
                 institution_authorization or InstitutionAuthorizationContext()
-            ),
-            knowledge_candidate_service=(
-                knowledge_candidate_dependencies.service
-                if knowledge_candidate_dependencies is not None
-                else None
-            ),
-            knowledge_candidate_query_factory=(
-                knowledge_candidate_dependencies.query_factory
-                if knowledge_candidate_dependencies is not None
-                else None
-            ),
-            knowledge_candidate_admission_scorer=(
-                knowledge_candidate_dependencies.admission_scorer
-                if knowledge_candidate_dependencies is not None
-                else None
             ),
             controlled_react_observation_truth_store=(
                 dependencies.controlled_react_observation_truth_store

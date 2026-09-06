@@ -239,7 +239,7 @@ def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Pa
     assert body["agent_id"] == "react_enterprise_qa_v3"
     assert body["run_id"].startswith("run_")
     assert body["outcome"] == "REFUSED_NO_EVIDENCE"
-    assert "no governed evidence" in body["final_output"]
+    assert "required retrieval requirement(s) lack verified evidence" in body["final_output"]
     assert body["links"]["run_detail"] == f"/api/runs/{body['run_id']}"
     assert body["links"]["trace"] == f"/api/runs/{body['run_id']}/trace"
     assert body["links"]["receipt"] == f"/api/runs/{body['run_id']}/receipt"
