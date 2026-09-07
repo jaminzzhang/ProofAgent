@@ -1,6 +1,10 @@
 # Project Context
 
-## Current Agent kernel P0-4 — 2026-09-06
+## Current Agent kernel P1/P2 — 2026-09-07
+
+[KNOWN | HIGH] Bounded local task-state continuity, required read-only tool plans, verified reports, Skill resource/runtime scope and a development-only business-action ledger are implemented. Five fixed kernel probes now pass, including long-context constraints. Repeated synchronous V3 retrieval measurements preserve missing usage/cost as null. Final backend verification with temporary PostgreSQL: 2751 passed, 24 skipped, 2 deselected; Ruff/Mypy/lock/domain checks pass. See `docs/features/agent-kernel-quality/tdd-p1-p2.md` for current acceptance and remaining gaps. Overall `PARTIAL_VERIFICATION`: real business action/provider semantics, production queue recovery, live Dify/models, S3 and release Gates remain incomplete.
+
+## Prior Agent kernel P0-4 — 2026-09-06
 
 [COMPUTED | HIGH] P0-4 adds bounded consistency checks for cited numeric facts and
 explicit assertions, preserving typed values and identities. Fact failures enter the

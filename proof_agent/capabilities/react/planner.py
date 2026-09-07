@@ -271,6 +271,8 @@ def _conversation_context_prompt_payload(
     if conversation_context is None or not conversation_context.admitted:
         return None
     payload = context_admission_payload(conversation_context)
+    # Model working context carries content; the audit projection above carries only state metadata.
+    payload["summary"] = conversation_context.summary
     payload["usage"] = "follow_up_resolution_only_not_evidence"
     return payload
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from proof_agent.capabilities.tools.schema import validate_tool_schema
+
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
@@ -77,6 +79,18 @@ class ToolGateway:
         self._tool_source_env = dict(tool_source_env or {})
         self._mcp_tool_transport = mcp_tool_transport
         self._guarded_http_client = guarded_http_client
+
+    def source_configuration_digest(self, tool_name: str) -> str | None:
+        """Bind task recovery to the selected server-owned source configuration."""
+        config = self.tools[tool_name]
+        if config.tool_source_id is None:
+            return None
+        if self._configuration_store is None:
+            raise ProofAgentError("PA_TOOL_SOURCE_002", "Tool source configuration is unavailable.", "Restore the configured Tool Source.")
+        source = self._configuration_store.get_tool_source(config.tool_source_id)
+        if source is None:
+            raise ProofAgentError("PA_TOOL_SOURCE_002", "Tool source configuration is unavailable.", "Restore the configured Tool Source.")
+        return _stable_digest(source.model_dump(mode="json"))
 
     @classmethod
     def from_file(
@@ -211,6 +225,7 @@ class ToolGateway:
                     f"tool request is missing required parameter(s): {', '.join(sorted(missing))}",
                     "Provide all parameters required by the MCP Tool Contract input_schema.",
                 )
+            validate_tool_schema(config.input_schema, parameters, label="input_schema")
 
     def _call_mcp_tool(
         self,
@@ -437,26 +452,7 @@ def _validate_mcp_result_schema(
     config: ToolConfig,
     result: Mapping[str, Any],
 ) -> None:
-    missing = [
-        field for field in _required_schema_fields(config.result_schema) if field not in result
-    ]
-    if missing:
-        raise ProofAgentError(
-            "PA_TOOL_SOURCE_002",
-            "MCP tool result failed result_schema validation.",
-            "Return all fields required by the Tool Contract result_schema.",
-        )
-    type_errors = [
-        field
-        for field, expected_type in _schema_property_types(config.result_schema).items()
-        if field in result and not _json_schema_type_matches(result[field], expected_type)
-    ]
-    if type_errors:
-        raise ProofAgentError(
-            "PA_TOOL_SOURCE_002",
-            "MCP tool result failed result_schema validation.",
-            "Return values matching the Tool Contract result_schema types.",
-        )
+    validate_tool_schema(config.result_schema, result, label="result_schema")
 
 
 def _required_schema_fields(schema: Mapping[str, Any]) -> tuple[str, ...]:

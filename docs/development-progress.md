@@ -6,9 +6,13 @@
 > KSS 专属正式发布证据不复用；外部知识库生产发布 profile 尚待独立验证。
 
 
-Updated: 2026-09-06
+Updated: 2026-09-07
 
 ## Current decision
+
+[KNOWN | HIGH] P1/P2 local bounded implementation and current verification are recorded in [tdd-p1-p2.md](features/agent-kernel-quality/tdd-p1-p2.md). Task state, read-only tool plans and reports, Skill confinement and runtime narrowing are active locally; business-action coordination remains development-only. Five fixed probes pass. Final backend with temporary PostgreSQL: 2751 passed, 24 skipped, 2 deselected; Ruff/Mypy/lock/domain checks pass. Real business/provider and production release requirements remain open; overall `PARTIAL_VERIFICATION`.
+
+## Prior P0-4 decision
 
 [COMPUTED | HIGH] P0-4 now validates source-near numeric facts and explicit assertions
 against cited Accepted Evidence, then reuses one policy-governed repair and all final

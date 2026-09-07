@@ -27,9 +27,9 @@ from proof_agent.contracts import (
     ProductionSecretHandle,
     PublishedAgentVersion,
     ResolvedKnowledgeBindingSet,
-    ResolvedKnowledgeSourceServiceBinding,
     SecretPurpose,
 )
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
 from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceManagementWorkspace,
     KnowledgeServiceReadinessProjection,
@@ -127,17 +127,17 @@ def _draft(*, draft_id: str, purpose: str, updated_at: str) -> DraftAgent:
 def _knowledge_bindings() -> ResolvedKnowledgeBindingSet:
     return ResolvedKnowledgeBindingSet(
         bindings=(
-            ResolvedKnowledgeSourceServiceBinding(
+            ExternalKnowledgeBinding(
                 binding_id="insurance-knowledge",
-                knowledge_base_release_id=_RELEASE_ID,
-                client_credential_ref=ProductionSecretHandle(
+                provider="dify",
+                endpoint="https://dify.example/v1",
+                dataset_id="c42e2a6e-40b3-4330-96f8-f1e4d768e8c9",
+                credential_ref=ProductionSecretHandle(
                     protocol_id="hashicorp-vault-2.0-kv-v2",
                     handle_id="knowledge/source-service/agent-client",
                     purpose=SecretPurpose.KNOWLEDGE_CREDENTIAL,
                     version_id="credential-v7",
                 ),
-                admission_scorer_id="insurance-evidence-admission",
-                admission_scorer_revision="insurance-evidence-admission.v3",
             ),
         )
     )
@@ -295,14 +295,14 @@ def test_postgres_workspace_rollback_allows_only_one_concurrent_pointer_winner(
     postgres_engine: Engine,
 ) -> None:
     target, current = _seed_versions(postgres_engine)
+    barrier = Barrier(2)
+    def concurrent_clock():
+        barrier.wait(timeout=10)
+        return datetime(2026, 9, 1, 12, 5, tzinfo=UTC)
     workspace = AgentConfigurationWorkspace(
         unit_of_work_factory=lambda: PostgresConfigurationUnitOfWork(postgres_engine),
         template_bundle=_template_bundle(),
-        knowledge_release_catalog=BarrierKnowledgeReleaseCatalog(
-            _catalog(),
-            barrier=Barrier(2),
-        ),
-        clock=lambda: datetime(2026, 9, 1, 12, 5, tzinfo=UTC),
+        clock=concurrent_clock,
     )
 
     def rollback() -> str:

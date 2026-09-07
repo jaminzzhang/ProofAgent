@@ -457,3 +457,17 @@ def test_patch_nonexistent_conversation(tmp_path: Path) -> None:
         json={"title": "Nope"},
     )
     assert response.status_code == 404
+
+
+def test_conversation_concurrent_append_returns_conflict(tmp_path, monkeypatch):
+    from proof_agent.contracts import PersistenceConflictError
+    from proof_agent.observability.storage.conversation_store import ConversationStore
+    client = _client(tmp_path)
+    created = client.post('/api/chat/conversations', json={'agent_id': 'react_enterprise_qa_v3'})
+    conversation_id = created.json()['conversation_id']
+    def conflict(*args, **kwargs):
+        raise PersistenceConflictError(resource_type='conversation', resource_id=conversation_id,
+            expected_revision=0, actual_revision=1)
+    monkeypatch.setattr(ConversationStore, 'append_turn_expected', conflict)
+    response = client.post(f'/api/chat/conversations/{conversation_id}/runs', json={'question': 'Budget is 500 yuan.'})
+    assert response.status_code == 409

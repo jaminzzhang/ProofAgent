@@ -4,6 +4,8 @@ Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `reac
 
 ## Ambiguity Resolutions
 
+- [FRAME | HIGH] ADR-0246 freezes package-bound read-only tool tasks and verifies same-Run observations before dependency execution and report delivery. Configuration-bound local checkpoint recovery does not imply production Queue automatic recovery. ADR-0247 binds tool availability to the Control Plane admitted Skill, never its prompt instructions. See [P1/P2 acceptance](../../features/agent-kernel-quality/tdd-p1-p2.md).
+
 - [KNOWN | HIGH] [ADR-0241](../../adr/0241-gate-final-answers-on-required-retrieval-evidence.md)
   defines P0-2's required retrieval completion gate. The frozen intent and bound
   observation truth are authority; the versioned completion projection is audit

@@ -316,7 +316,7 @@ def _business_flow_skill_pack_binding_from_mapping(
         raise TypeError("capabilities.skills.business_flows entries must be mappings")
     return BusinessFlowSkillPackBindingConfig(
         id=raw["id"],
-        definition=resolve_path(base_dir, raw["definition"]),
+        definition=base_dir / Path(raw["definition"]),
         default=raw.get("default", False),
     )
 
@@ -378,6 +378,7 @@ def _react_config_from_mapping(raw: Any) -> ReActConfig | None:
     return ReActConfig(
         max_plan_rounds=int(raw.get("max_plan_rounds", 4)),
         max_tool_calls=raw.get("max_tool_calls", 1),
+        tool_task_plan=raw.get("tool_task_plan"),
         record_reasoning_summary=raw.get("record_reasoning_summary", True),
         planner=ReActPlannerConfig(
             model_source=planner_config.model_source,

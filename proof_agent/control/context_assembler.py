@@ -14,7 +14,8 @@ from proof_agent.contracts import (
     WorkingContextSection,
 )
 from proof_agent.contracts import ContextAdmission
-from proof_agent.control.conversation import admit_conversation_context
+from proof_agent.control.conversation import admit_conversation_context, bound_task_context
+from proof_agent.control.conversation_task_state import conversation_task_state, render_task_state
 from proof_agent.control.context_budget import (
     ContextBudgetKey,
     ContextConvergenceLevel,
@@ -46,6 +47,9 @@ def assemble_controlled_run_context(
     """Assemble the first Controlled Run Context slice from a conversation timeline."""
 
     admission = admit_conversation_context(conversation, max_turns=max_recent_turns)
+    task_budget = _resolve_assembly_budget(context_config=context_config,
+        calibration_store=context_budget_calibration_store, key=context_budget_key)
+    admission, memory_recall_admissions = _bound_task_inputs(admission, memory_recall_admissions, task_budget.available_input_tokens)
     source_refs = tuple(
         ContextSourceRef(
             source_type=ContextSourceType.CONVERSATION_TURN,
@@ -121,7 +125,8 @@ def assemble_controlled_run_context(
                 ),
             ),
         )
-    estimated_tokens = admission.char_count + sum(
+    all_source_refs, working_sections = _task_state_sections(admission, all_source_refs, working_sections)
+    estimated_tokens = (len(admission.summary.encode("utf-8")) if admission.task_state and admission.task_state.items else admission.char_count) + sum(
         len(memory.summary) for memory in memory_recall_admissions if memory.admitted
     )
     budget = _resolve_assembly_budget(
@@ -179,6 +184,13 @@ def assemble_run_start_context_from_admission(
 ) -> RunStartContextAssembly:
     """Build a run-start context package from the compatibility admission result."""
 
+    resolved_budget = _resolve_assembly_budget(
+        context_config=context_config, calibration_store=context_budget_calibration_store,
+        key=context_budget_key,
+    )
+    conversation_context, memory_recall_admissions = _bound_task_inputs(
+        conversation_context, memory_recall_admissions, resolved_budget.available_input_tokens,
+    )
     controlled_run_context = _controlled_run_context_from_admission(
         run_id=run_id,
         conversation_context=conversation_context,
@@ -211,6 +223,13 @@ def assemble_run_start_context(
         conversation,
         max_turns=max_recent_turns,
     )
+    resolved_budget = _resolve_assembly_budget(
+        context_config=context_config, calibration_store=context_budget_calibration_store,
+        key=context_budget_key,
+    )
+    conversation_context, memory_recall_admissions = _bound_task_inputs(
+        conversation_context, memory_recall_admissions, resolved_budget.available_input_tokens,
+    )
     controlled_run_context = assemble_controlled_run_context(
         run_id=run_id,
         conversation=conversation,
@@ -239,7 +258,7 @@ def _controlled_run_context_from_admission(
 ) -> ControlledRunContext:
     source_refs = tuple(
         ContextSourceRef(
-            source_type=_context_source_type(source_id),
+            source_type=ContextSourceType.CONVERSATION_TURN if conversation_context.task_state is not None else _context_source_type(source_id),
             source_id=source_id,
         )
         for source_id in conversation_context.included_turn_ids
@@ -293,7 +312,8 @@ def _controlled_run_context_from_admission(
                 ),
             ),
         )
-    estimated_tokens = conversation_context.char_count + sum(
+    source_refs, working_sections = _task_state_sections(conversation_context, source_refs, working_sections)
+    estimated_tokens = (len(conversation_context.summary.encode("utf-8")) if conversation_context.task_state and conversation_context.task_state.items else conversation_context.char_count) + sum(
         len(admission.summary) for admission in memory_recall_admissions if admission.admitted
     )
     budget = _resolve_assembly_budget(
@@ -404,7 +424,7 @@ def _deep_compress_working_sections(
     compressed: list[WorkingContextSection] = []
     dropped_refs: list[str] = []
     for section in _dedupe_working_sections(working_sections):
-        if section.section_id == "clarification_continuation":
+        if section.section_id in {"clarification_continuation", "task_state"}:
             compressed.append(section)
             continue
         if section.section_id == "recent_turns" and section.source_refs:
@@ -527,15 +547,55 @@ def _compaction_summaries(
     if not older_turns:
         return ()
     covered_ids = tuple(turn.turn_id for turn in older_turns)
+    current_state = conversation_task_state(conversation)
+    covered_state = current_state.model_copy(update={"items": tuple(item for item in current_state.items if item.source_turn_id in covered_ids), "unresolved": ()})
     return (
         ConversationCompactionSummary(
             summary_id=f"compaction:{covered_ids[0]}-{covered_ids[-1]}",
             covered_turn_ids=covered_ids,
             strategy="deterministic_recent_window_overflow",
-            summary=(
-                f"{len(covered_ids)} older conversation turn(s) were compacted "
-                "for Working Context budget."
+            summary=render_task_state(covered_state) or (
+                "No explicit task goals or constraints were extracted from retained user turns."
             ),
             omission_risks=("older_turn_details_not_in_working_context",),
         ),
     )
+
+
+def _bound_task_inputs(admission: ContextAdmission, memories: tuple[MemoryRecallAdmission, ...],
+                       max_bytes: int) -> tuple[ContextAdmission, tuple[MemoryRecallAdmission, ...]]:
+    bounded = bound_task_context(admission, max_bytes)
+    if admission.task_state is None or not (admission.task_state.items or admission.task_state.unresolved):
+        return bounded, memories
+    remaining = max_bytes - len(bounded.summary.encode("utf-8"))
+    admitted_memories = []
+    for memory in memories:
+        content = memory.working_payload.model_dump_json() if memory.working_payload is not None else memory.summary
+        size = len(content.encode("utf-8")) if memory.admitted else 0
+        if size <= remaining:
+            admitted_memories.append(memory)
+            remaining -= size
+        else:
+            admitted_memories.append(memory.model_copy(update={
+                "admitted": False, "working_payload": None, "summary": "",
+                "included_memory_ids": (), "fact_keys": (), "fact_count": 0,
+                "rejected_memory_ids": (*memory.rejected_memory_ids, *memory.included_memory_ids),
+                "rejection_reasons": {**memory.rejection_reasons,
+                    **{key: "task_state_context_budget" for key in memory.included_memory_ids}},
+            }))
+    return bounded, tuple(admitted_memories)
+
+
+def _task_state_sections(admission: ContextAdmission, sources: tuple[ContextSourceRef, ...],
+                         sections: tuple[WorkingContextSection, ...]) -> tuple[tuple[ContextSourceRef, ...], tuple[WorkingContextSection, ...]]:
+    state = admission.task_state
+    if state is None or not (state.items or state.unresolved):
+        return sources, sections
+    task_ids = tuple(dict.fromkeys(item.source_turn_id for item in state.items))
+    task_sources = tuple(ContextSourceRef(source_type=ContextSourceType.CONVERSATION_TURN, source_id=source_id) for source_id in task_ids)
+    existing = {(source.source_type, source.source_id) for source in sources}
+    sources = (*sources, *(source for source in task_sources if (source.source_type, source.source_id) not in existing))
+    sections = tuple(section.model_copy(update={"estimated_tokens": len((admission.recent_summary or "").encode("utf-8"))})
+        if section.section_id == "recent_turns" else section for section in sections)
+    return sources, (WorkingContextSection(section_id="task_state", source_refs=task_ids, priority=20,
+        stable_prefix=False, estimated_tokens=len(render_task_state(state).encode("utf-8"))), *sections)

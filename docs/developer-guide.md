@@ -41,7 +41,7 @@ source change was detected; `2` means the measurement infrastructure failed. Ins
 `kernel_baseline.md` and `kernel_baseline.json` in the output directory. The report is
 diagnostic evidence, not answer accuracy, formal campaign readiness or Production GO.
 Current results and slice acceptance are in
-`docs/features/agent-kernel-quality/tdd-p0-4.md`; the original measurement record is
+`docs/features/agent-kernel-quality/tdd-p1-p2.md`; the original measurement record is
 `docs/features/agent-kernel-quality/tdd-report.md`.
 
 [KNOWN | HIGH] Final-answer validation includes bounded numeric and explicit-assertion
@@ -260,3 +260,20 @@ Exit codes: 0 GO, 1 valid NO-GO, 2 invalid input. Never hand-edit a result to GO
 ## 9. Documentation discipline
 
 Update README, PRD, technical design, developer guide and progress when active behavior changes. Keep ADRs and dated specs historical. Label proposed production behavior as planned until executable tests prove it.
+
+
+## Bounded P1/P2 local execution
+
+[KNOWN | HIGH] Conversation working state accepts `Goal[key]: value`, `Constraint[key]: value`, `Revise[key]: value` and `Revoke[key]`, plus bounded budget/prohibition statements. User-turn provenance is retained; assistant replies and Knowledge cannot mutate the state. Contradictions ask for clarification; a hard-state budget overflow rejects rather than truncates. State persists with the original optimistic turn append; conflicting appends return HTTP 409.
+
+[KNOWN | HIGH] `react.tool_task_plan.steps` configures at most eight read-only steps. Each declares `step_id`, `tool_name`, literal `parameters`, optional prior-result `bindings` and explicit `report_fields`. Bindings use a prior `step_id` and object `path`; cycles and forward references reject. `calculation` currently supports only `operation: sum`, `operand_parameter` and `result_field`, using exact decimal strings. Set `react.max_tool_calls` to the required bounded budget. The controller requires all configured tasks even if the model proposes an early final answer. Configured Skills narrow tool availability to the admitted pack's `tool_contract_refs`; an empty or missing selection allows no tools when packs are configured.
+
+[KNOWN | HIGH] Local snapshot recovery validates the same Run, task inputs, configuration and observation bindings before skipping completed steps. It is not production Queue automatic recovery. Report rows come only from verified results and configured summary fields. The development business-action ledger has no production route; see ADR-0248.
+
+Measure fixed local retrieval-input coverage with:
+
+```bash
+.venv/bin/python scripts/measure-agent-kernel.py --output-dir /tmp/proof-agent-measurement --repetitions 5
+```
+
+[KNOWN | HIGH] This records latency and logical model calls on fixed synthetic responses. Missing Token usage/cost stays null. Answer quality, remote-service latency and production readiness are not measured. Use matching sample/version/environment and complete quality predicates before interpreting deltas; current output establishes no performance improvement.

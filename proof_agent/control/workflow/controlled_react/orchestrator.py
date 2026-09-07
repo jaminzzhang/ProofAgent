@@ -27,6 +27,7 @@ from proof_agent.contracts import (
     ReActActionProposal,
     ReActActionType,
     ReceiptOutcome,
+    ReasoningSummary,
     RetrievalObservationTruth,
     ToolObservationTruth,
     ValidationResult,
@@ -75,6 +76,12 @@ from proof_agent.control.workflow.controlled_react.task_completion import (
 )
 
 
+from proof_agent.contracts.tool_tasks import ToolTaskPlan
+from proof_agent.control.workflow.controlled_react.tool_task_completion import (
+    assess_tool_tasks, parameters_for, pending_tool_action, verify_calculation, digest, task_error, build_tool_task_report, task_result,
+)
+
+
 @dataclass(frozen=True)
 class ControlledReActStartRequest:
     run_id: str
@@ -88,6 +95,9 @@ class ControlledReActStartRequest:
     memory_recall_payloads: tuple[MemoryRecallWorkingPayload, ...] = ()
     max_plan_rounds: int = 4
     retrieval_max_queries: int = 3
+    tool_task_plan: ToolTaskPlan | None = None
+    max_tool_calls: int = 1
+    task_checkpoint_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +118,7 @@ class ControlledReActOrchestrator:
 
     def __init__(self, *, ports: ControlledReActPorts) -> None:
         self._ports = ports
+        self.last_task_checkpoint_ref: str | None = None
         self._observation_truth_store = (
             ports.observation_truth_store or InMemoryObservationTruthStore()
         )
@@ -125,15 +136,50 @@ class ControlledReActOrchestrator:
             template_name=request.template_name,
             template_descriptor_version=request.template_descriptor_version,
             question=request.question,
+            execution_configuration_digest=self._ports.execution_configuration_digest,
+            tool_task_plan=request.tool_task_plan,
+            max_tool_calls=request.max_tool_calls,
+            task_plan_round_limit=request.max_plan_rounds if request.tool_task_plan is not None else 4,
             institution_authorization=request.institution_authorization,
             conversation_context=request.conversation_context,
             memory_recall_payloads=request.memory_recall_payloads,
             phase=ControlledReActRunPhase.PLANNING,
         )
-        state = self._prepare_pre_loop_state(
-            state,
-            retrieval_max_queries=request.retrieval_max_queries,
-        )
+        context = state.conversation_context
+        if context is not None and context.task_state is not None and context.task_state.unresolved:
+            clarification = ReActActionProposal(action_id="act_task_state_clarification",
+                action_type=ReActActionType.ASK_CLARIFICATION, risk_level="low",
+                parameters={"missing_fields": ("the current task constraints",)},
+                reasoning_summary=ReasoningSummary(goal="Resolve the current task constraints.",
+                    observations=(), candidate_actions=(ReActActionType.ASK_CLARIFICATION,),
+                    selected_action=ReActActionType.ASK_CLARIFICATION,
+                    rationale_summary="Conflicting or incomplete user constraints need clarification.",
+                    risk_flags=(), required_evidence=()))
+            return self._ask_clarification(request, clarification, state=state)
+        if request.task_checkpoint_ref is not None:
+            if self._ports.snapshot_store is None or state.tool_task_plan is None:
+                raise task_error()
+            snapshot = self._ports.snapshot_store.load(request.task_checkpoint_ref)
+            verify_controlled_react_snapshot_binding(snapshot, request.task_checkpoint_ref)
+            restored = snapshot.state
+            if (restored.run_id != state.run_id or restored.question != state.question
+                or restored.template_name != state.template_name
+                or restored.template_descriptor_version != state.template_descriptor_version
+                or restored.institution_authorization != state.institution_authorization
+                or restored.execution_configuration_digest != state.execution_configuration_digest
+                or restored.conversation_context != state.conversation_context
+                or restored.memory_recall_payloads != state.memory_recall_payloads
+                or restored.tool_task_plan != state.tool_task_plan
+                or restored.max_tool_calls != state.max_tool_calls
+                or restored.task_plan_round_limit != state.task_plan_round_limit
+                or restored.phase is not ControlledReActRunPhase.PLANNING):
+                raise task_error()
+            state = restored
+            self._task_completion(state)
+            assess_tool_tasks(state, self._answer_evidence_context(state).observation_truth)
+            self.last_task_checkpoint_ref = request.task_checkpoint_ref
+        else:
+            state = self._prepare_pre_loop_state(state, retrieval_max_queries=request.retrieval_max_queries)
         state, action = self._plan_next_action(
             state,
             max_plan_rounds=request.max_plan_rounds,
@@ -167,15 +213,22 @@ class ControlledReActOrchestrator:
                     answer = _tool_approval_denied_answer(state, action)
                     return _workflow_result_from_answer(state, answer, action)
                 answer_context = self._answer_evidence_context(state)
+                tool_progress = assess_tool_tasks(state, answer_context.observation_truth)
+                if tool_progress.pending is not None:
+                    raise task_error()
                 completion = self._task_completion(state, answer_context=answer_context)
                 if completion is not None and not completion.complete:
                     action = incomplete_refusal(action, reason="requirements_unsatisfied")
                     return self._refuse_plan_budget_exhausted(request, action, state=state)
-                answer = self._ports.answer_synthesis.synthesize(
-                    state,
-                    action,
-                    answer_context,
-                )
+                task_report = None
+                if state.tool_task_plan is not None:
+                    task_report = build_tool_task_report(state, answer_context.observation_truth)
+                    report_text = canonical_json_bytes(task_report.model_dump(mode="json")).decode("utf-8")
+                    answer = AnswerSynthesisResult(outcome=ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                        final_output=report_text, message=report_text,
+                        reasoning_summary=action.reasoning_summary.model_dump(mode="json"))
+                else:
+                    answer = self._ports.answer_synthesis.synthesize(state, action, answer_context)
                 answer = self._admit_final_answer(
                     state,
                     action,
@@ -189,6 +242,8 @@ class ControlledReActOrchestrator:
                     action,
                     memory_write_result=memory_write,
                 )
+                if task_report is not None and answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS:
+                    result = result.model_copy(update={"tool_task_report": task_report})
                 return _with_task_completion(result, completion)
             if action.action_type is ReActActionType.PLAN_RETRIEVAL:
                 if self._review_denies(state, action):
@@ -703,6 +758,7 @@ class ControlledReActOrchestrator:
                 )
             state = state.model_copy(
                 update={
+                    "business_flow_skill_pack_id": getattr(self._ports.intent_resolution, "admitted_business_flow_skill_pack_id", None),
                     "intent_resolution": freeze_value(
                         intent_result.intent_resolution.model_dump(
                             mode="json",
@@ -920,6 +976,14 @@ class ControlledReActOrchestrator:
     ) -> ControlledReActRunState:
         if self._ports.tool_observation is None:
             raise ValueError("tool observation port is required for allowed tool actions")
+        used = sum(record.action_type is ReActActionType.PROPOSE_TOOL_CALL for record in state.observation_records)
+        if used >= state.max_tool_calls:
+            raise task_error()
+        progress = assess_tool_tasks(state, self._answer_evidence_context(state).observation_truth)
+        if state.tool_task_plan is not None:
+            step = progress.pending
+            if step is None or action.target_tool_name != step.tool_name or digest(action.parameters) != digest(parameters_for(step, progress.results)):
+                raise task_error()
         observing_state = state.model_copy(
             update={
                 "phase": ControlledReActRunPhase.OBSERVING,
@@ -929,7 +993,32 @@ class ControlledReActOrchestrator:
         )
         identity = _allocate_observation_identity(observing_state, action)
         effect = self._ports.tool_observation.observe(observing_state, action, identity)
-        return self._commit_observation_effect(observing_state, action, effect, identity)
+        if state.tool_task_plan is not None:
+            step = progress.pending
+            truth = effect.truth_artifact
+            if step is None or not isinstance(truth, ToolObservationTruth) or truth.redaction_metadata.get("executed") is not True:
+                raise task_error()
+            parameters = parameters_for(step, progress.results)
+            if action.target_tool_name != step.tool_name or digest(action.parameters) != digest(parameters):
+                raise task_error()
+            verify_calculation(step, parameters, task_result(truth))
+            from dataclasses import replace
+            effect = replace(effect, truth_artifact=truth.model_copy(update={"redaction_metadata": {
+                **dict(truth.redaction_metadata), "task_input_digest": digest(parameters),
+                "task_plan_digest": digest(state.tool_task_plan.model_dump(mode="json")),
+            }}))
+        committed = self._commit_observation_effect(observing_state, action, effect, identity)
+        if committed.tool_task_plan is not None and self._ports.snapshot_store is not None:
+            checkpoint = ControlledReActRunStateSnapshot(snapshot_id=f"task_{committed.plan_round}",
+                run_id=committed.run_id,
+                state=committed.model_copy(update={"phase": ControlledReActRunPhase.PLANNING}))
+            expected = bind_controlled_react_snapshot(checkpoint)
+            reference = self._ports.snapshot_store.save(checkpoint)
+            if reference != expected.reference:
+                raise task_error()
+            verify_controlled_react_snapshot_binding(self._ports.snapshot_store.load(reference), reference)
+            self.last_task_checkpoint_ref = reference
+        return committed
 
     def _observe_tool_approval_denial(
         self,
@@ -1077,6 +1166,28 @@ class ControlledReActOrchestrator:
         max_plan_rounds: int,
     ) -> ReActActionProposal:
         completion = self._task_completion(state)
+        if state.tool_task_plan is not None and action.action_type not in {
+            ReActActionType.REFUSE, ReActActionType.ASK_CLARIFICATION,
+        }:
+            progress = assess_tool_tasks(state, self._answer_evidence_context(state).observation_truth)
+            if completion is not None and not completion.complete:
+                if completion.pending and state.plan_round < max_plan_rounds:
+                    return pending_retrieval_action(action, completion.pending[0], plan_round=state.plan_round)
+                return incomplete_refusal(action, reason="requirements_unsatisfied")
+            if progress.pending is not None:
+                used = sum(a.action_type is ReActActionType.PROPOSE_TOOL_CALL for a in state.action_history)
+                if state.plan_round >= max_plan_rounds or used >= state.max_tool_calls:
+                    return incomplete_refusal(action, reason="plan_budget_exhausted")
+                proposed = pending_tool_action(progress.pending, parameters_for(progress.pending, progress.results))
+                scope = state.effective_tool_proposal_scope
+                if scope is not None:
+                    interface = next((item for item in scope.tool_interfaces if item.tool_contract_id == proposed.target_tool_name), None)
+                    if interface is None or not interface.read_only or interface.requires_approval:
+                        return incomplete_refusal(action, reason="tool_scope_denied")
+                    proposed = proposed.model_copy(update={"risk_level": interface.risk_level})
+                return proposed
+            if action.action_type is ReActActionType.PROPOSE_TOOL_CALL:
+                return incomplete_refusal(action, reason="requirements_unsatisfied")
         eligible_actions, convergence_signal = _eligible_actions_for_state(
             state,
             max_plan_rounds=max_plan_rounds,

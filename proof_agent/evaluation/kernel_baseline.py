@@ -124,6 +124,7 @@ def baseline_source_fingerprint(root: Path) -> str:
             *root.joinpath("proof_agent/evaluation/demo/fixtures").rglob("*.yaml"),
             *root.joinpath("proof_agent/evaluation/demo/fixtures").rglob("*.json"),
             root / "scripts/check-agent-kernel-baseline.py",
+            root / "scripts/measure-agent-kernel.py",
             root / "uv.lock",
         }
     )

@@ -125,3 +125,23 @@ def test_postgres_conversation_serializes_frozen_evidence_mapping(
     )
 
     assert updated.turns[0].evidence == turn.evidence
+
+
+def test_postgres_task_state_persists_with_turn_and_reopens(postgres_engine):
+    from proof_agent.control.conversation import admit_conversation_context
+    _seed_run(postgres_engine)
+    repository = PostgresConversationRepository(postgres_engine)
+    conversation = conversation_record()
+    repository.create(conversation)
+    question = 'Budget is 500 yuan. Do not submit anything.'
+    admission = admit_conversation_context(conversation, current_question=question,
+        current_turn_id=TEST_TURN_ID)
+    turn = conversation_turn().model_copy(update={'question': question,
+        'context_admission': admission, 'task_state': admission.task_state})
+    repository.append_turn(conversation.conversation_id, turn, expected_turn_count=0)
+    reopened = PostgresConversationRepository(postgres_engine).get(conversation.conversation_id)
+    assert reopened is not None and reopened.turns[0].task_state == admission.task_state
+    assert len(reopened.turns[0].task_state.items) == 2
+    with pytest.raises(PersistenceConflictError):
+        repository.append_turn(conversation.conversation_id, turn, expected_turn_count=0)
+    assert len(repository.get(conversation.conversation_id).turns) == 1

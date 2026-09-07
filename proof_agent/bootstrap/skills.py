@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
+from proof_agent.bootstrap.package_security import require_package_local_skill_pack_definitions
 from proof_agent.contracts import AgentManifest, BusinessFlowSkillPackDefinition
 from proof_agent.control.policy.rules import load_policy_rules
 from proof_agent.control.workflow.stage_validation import (
@@ -14,6 +17,12 @@ from proof_agent.control.workflow.stage_validation import (
 )
 from proof_agent.control.workflow.templates import WorkflowTemplate
 from proof_agent.errors import ProofAgentError
+
+
+MAX_SKILL_DEFINITION_BYTES = 65536
+MAX_SKILL_DEFINITIONS = 32
+MAX_SKILL_YAML_EVENTS = 4096
+MAX_SKILL_YAML_DEPTH = 24
 
 
 SUPPORTED_BUSINESS_FLOW_VALIDATOR_REFS = {
@@ -46,6 +55,15 @@ def load_business_flow_skill_pack_set(
     if not skills.enabled:
         return ()
 
+    require_package_local_skill_pack_definitions(manifest, manifest_path=manifest_path)
+    ids = [binding.id for binding in skills.business_flows]
+    if len(ids) > MAX_SKILL_DEFINITIONS or len(ids) != len(set(ids)):
+        raise ProofAgentError(
+            "PA_CONFIG_002",
+            "Business Flow Skill Pack bindings exceed the count limit or repeat an id",
+            "Bind at most 32 Skill definitions with unique ids.",
+            artifact_path=manifest_path,
+        )
     definitions: list[BusinessFlowSkillPackDefinition] = []
     for binding in skills.business_flows:
         definition = load_business_flow_skill_pack_definition(binding.definition)
@@ -86,36 +104,63 @@ def load_business_flow_skill_pack_definition(
     except ValidationError as exc:
         raise ProofAgentError(
             "PA_SCHEMA_001",
-            f"invalid Business Flow Skill Pack schema: {exc}",
+            "invalid Business Flow Skill Pack schema: business_flow_skill_pack.v1 "
+            + ", ".join(sorted({
+                str(error["loc"][0])
+                for error in exc.errors(include_input=False, include_context=False)
+                if error["loc"] and error["loc"][0] in {
+                    *BusinessFlowSkillPackDefinition.model_fields, "executable_steps"
+                }
+            })),
             "Fix the Skill Pack YAML to match business_flow_skill_pack.v1.",
             artifact_path=definition_path,
-        ) from exc
+        ) from None
+
+
+class _UniqueSkillLoader(yaml.SafeLoader):  # type: ignore[misc]
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        keys = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str) or key in keys:
+                raise yaml.YAMLError("ambiguous mapping")
+            keys.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 def _load_yaml_mapping(path: Path) -> Mapping[str, Any]:
-    if not path.exists():
-        raise ProofAgentError(
-            "PA_CONFIG_001",
-            f"Business Flow Skill Pack definition does not exist: {path}",
-            "Create the Skill Pack definition or update capabilities.skills.business_flows[].definition.",
-            artifact_path=path,
-        )
+    # O_NOFOLLOW closes the last-component replacement race; package validation
+    # rejects symlink ancestors before loading. Published packages remain immutable.
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as resource:
+            metadata = os.fstat(resource.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_SKILL_DEFINITION_BYTES:
+                raise ValueError("resource limit")
+            data = resource.read(MAX_SKILL_DEFINITION_BYTES + 1)
+        if len(data) > MAX_SKILL_DEFINITION_BYTES:
+            raise ValueError("resource limit")
+        source = data.decode("utf-8")
+        depth = 0
+        for count, event in enumerate(yaml.parse(source), start=1):
+            if isinstance(event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)):
+                depth += 1
+            elif isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
+                depth -= 1
+            if (count > MAX_SKILL_YAML_EVENTS or depth > MAX_SKILL_YAML_DEPTH
+                    or isinstance(event, yaml.events.AliasEvent)
+                    or getattr(event, "anchor", None) is not None):
+                raise ValueError("YAML resource limit")
+        raw = yaml.load(source, Loader=_UniqueSkillLoader)
+        if not isinstance(raw, Mapping):
+            raise ValueError("mapping required")
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError, RecursionError):
         raise ProofAgentError(
             "PA_SCHEMA_001",
-            f"invalid Business Flow Skill Pack YAML: {path}: {exc}",
-            "Fix Skill Pack YAML syntax.",
+            "invalid or unbounded Business Flow Skill Pack resource",
+            "Use a regular UTF-8 YAML mapping of at most 64 KiB, without aliases, duplicate keys or excessive nesting.",
             artifact_path=path,
-        ) from exc
-    if not isinstance(raw, Mapping):
-        raise ProofAgentError(
-            "PA_SCHEMA_001",
-            f"Business Flow Skill Pack must be a YAML mapping: {path}",
-            "Use top-level mapping fields such as schema_version, id, and stage_prompt_addenda.",
-            artifact_path=path,
-        )
+        ) from None
     return raw
 
 
@@ -206,7 +251,7 @@ def _raise_unknown_refs(
         return
     raise ProofAgentError(
         "PA_CONFIG_002",
-        f"unknown Business Flow Skill Pack {field_name}: {', '.join(unknown_refs)}",
+        f"unknown Business Flow Skill Pack {field_name}",
         (
             f"Reference only governed capability ids that are already bound in the "
             f"Agent Contract, or remove {field_name} from {definition_path}."

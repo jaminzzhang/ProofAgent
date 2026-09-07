@@ -170,3 +170,4 @@ class ControlledReActPorts:
     tool_proposal_scope: ToolProposalScopePort | None = None
     snapshot_store: SnapshotStorePort | None = None
     observation_truth_store: ObservationTruthStorePort | None = None
+    execution_configuration_digest: str | None = None

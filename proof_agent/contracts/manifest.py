@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from proof_agent.contracts.tool_tasks import ToolTaskPlan
+
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -222,7 +224,8 @@ class ReActPlannerConfig(FrozenModel):
 
 class ReActConfig(FrozenModel):
     max_plan_rounds: int = 4
-    max_tool_calls: int = 1
+    max_tool_calls: int = Field(default=1, ge=0, le=8, strict=True)
+    tool_task_plan: ToolTaskPlan | None = None
     record_reasoning_summary: bool = True
     planner: ReActPlannerConfig
 

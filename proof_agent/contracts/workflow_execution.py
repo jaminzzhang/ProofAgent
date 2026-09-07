@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from proof_agent.contracts.tool_tasks import ToolTaskReport
+
 from collections.abc import Mapping
 from enum import Enum
 import re
@@ -296,6 +298,7 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     )
     model_usage_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
     trace_summary_refs: tuple[str, ...] = Field(default_factory=tuple)
+    tool_task_report: ToolTaskReport | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator(
         "intent_resolution",

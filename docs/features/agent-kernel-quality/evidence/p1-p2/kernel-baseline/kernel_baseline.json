@@ -1,0 +1,61 @@
+{
+  "baseline_version": "agent-kernel-baseline.v1",
+  "source_fingerprint": "sha256:7a2c615a2083e85d4752b8a972369ecbb8caaf25fdfe11265267167e9497b757",
+  "execution_scope": "synthetic_local",
+  "production_readiness": "not_evaluated",
+  "status": "passed_with_diagnostics",
+  "required_probe_ids": [
+    "numeric_answer_validation",
+    "compound_retrieval_completion",
+    "intent_rewrite_reaches_kss",
+    "structured_fact_reaches_answer",
+    "long_conversation_constraints"
+  ],
+  "results": [
+    {
+      "probe_id": "numeric_answer_validation",
+      "status": "passed_with_diagnostics",
+      "source": "exploratory",
+      "surface_ref": null,
+      "intent_boundary": null,
+      "finding_summary": "expected: correct_answer_accepted, wrong_amount_rejected=true; observed: correct_answer_accepted=true, wrong_amount_rejected=true",
+      "diagnostic_blocker_candidate": false
+    },
+    {
+      "probe_id": "compound_retrieval_completion",
+      "status": "passed_with_diagnostics",
+      "source": "exploratory",
+      "surface_ref": null,
+      "intent_boundary": null,
+      "finding_summary": "expected: both_sources_queried, both_facts_reach_answer=true; observed: both_sources_queried=true, both_facts_reach_answer=true",
+      "diagnostic_blocker_candidate": false
+    },
+    {
+      "probe_id": "intent_rewrite_reaches_kss",
+      "status": "passed_with_diagnostics",
+      "source": "exploratory",
+      "surface_ref": null,
+      "intent_boundary": null,
+      "finding_summary": "expected: required_rewrite_reaches_kss=true; observed: required_rewrite_reaches_kss=true",
+      "diagnostic_blocker_candidate": false
+    },
+    {
+      "probe_id": "structured_fact_reaches_answer",
+      "status": "passed_with_diagnostics",
+      "source": "exploratory",
+      "surface_ref": null,
+      "intent_boundary": null,
+      "finding_summary": "expected: structured_amount_reaches_answer=true; observed: structured_amount_reaches_answer=true",
+      "diagnostic_blocker_candidate": false
+    },
+    {
+      "probe_id": "long_conversation_constraints",
+      "status": "passed_with_diagnostics",
+      "source": "exploratory",
+      "surface_ref": null,
+      "intent_boundary": null,
+      "finding_summary": "expected: budget_retained, submission_prohibition_retained=true; observed: budget_retained=true, submission_prohibition_retained=true",
+      "diagnostic_blocker_candidate": false
+    }
+  ]
+}

@@ -24,3 +24,5 @@
 [COMPUTED | HIGH] P0-3 已完成本地验收：显式结构化 Dify 分段经准入进入初次/修复答案请求，保持字段类型、精确数值、单位、来源和恢复引用。当时后端 2499 项、Dashboard 226 项、Chat 35 项通过，独立 Review 为 `NO_BLOCKING_FINDINGS`。见 [范围](scope-p0-3.md)、[验收](tdd-p0-3.md)。
 
 [COMPUTED | HIGH] P0-4 的有界事实一致性与一次修复已完成本地验收：65 项专项、后端 2564 项通过，独立 Review 为 `NO_BLOCKING_FINDINGS`。数值、复合检索、改写与结构化事实四项固定探针通过，长对话约束仍为 `needs_review`。未识别语言、通用语义、真实 Dify/模型和生产验证没有完成，整体仍为 `PARTIAL_VERIFICATION`。下一切片为 P1-1 长对话任务状态，尚未执行。见 [范围](scope-p0-4.md)、[验收](tdd-p0-4.md)。
+
+[KNOWN | HIGH] 2026-09-07：P1/P2 已完成本地有界实现，五项固定探针全部通过；本地业务动作模拟、工具/Skill 权限、会话状态及真实 PostgreSQL 合同验证详见 [当前验收](tdd-p1-p2.md) 与 [范围](scope-p1-p2.md)。真实动作和生产恢复/发布仍有明确缺口，整体 `PARTIAL_VERIFICATION`。上文 P1-1 尚未执行为 P0-4 时点记录。

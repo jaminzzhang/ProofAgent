@@ -5,6 +5,8 @@ not a second glossary.
 
 ## Primary maps
 
+- `docs/features/agent-kernel-quality/scope-p1-p2.md` and `tdd-p1-p2.md` — bounded task state, read-only tool completion, local business-action fencing, Skill runtime narrowing and measurement; ADR-0245 through ADR-0248 define their authority boundaries.
+
 - `CONTEXT-MAP.md` — bounded contexts and ownership boundaries.
 - `docs/domain/knowledge-evidence/CONTEXT.md` — Knowledge & Evidence language,
   invariants, and ownership.

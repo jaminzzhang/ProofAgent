@@ -118,6 +118,10 @@ def build_controlled_react_orchestrator_for_invocation(
         if business_flow_admission_callback is not None:
             business_flow_admission_callback(selected_pack_id)
 
+    def restore_selection(selected_pack_id: str) -> None:
+        if business_flow_selection["selected_pack_id"] != selected_pack_id:
+            record_business_flow_selection(selected_pack_id)
+
     return ControlledReActOrchestrator(
         ports=ControlledReActPorts(
             planner=_InvocationPlannerAdapter(invocation, stage_contexts=stage_contexts),
@@ -140,7 +144,8 @@ def build_controlled_react_orchestrator_for_invocation(
             policy=_InvocationPolicyAdapter(invocation, trace=trace_port),
             review=_InvocationReviewAdapter(invocation, trace=trace_port),
             trace=trace_port,
-            tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation),
+            tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation, restore_selection=restore_selection),
+            execution_configuration_digest=_execution_configuration_digest(invocation, stage_contexts),
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
             observation_truth_store=observation_truth_store,
             answer_synthesis=_ModelAnswerSynthesisAdapter(
@@ -179,6 +184,7 @@ class _InvocationIntentResolutionAdapter:
         self._stage_contexts = stage_contexts if stage_contexts is not None else {}
         self._trace = trace
         self._business_flow_admission_callback = business_flow_admission_callback
+        self.admitted_business_flow_skill_pack_id: str | None = None
         self._fallback = DeterministicIntentResolver()
         self.stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
 
@@ -234,6 +240,8 @@ class _InvocationIntentResolutionAdapter:
                 },
             )
         selected_pack_id = admission_result.admission.selected_pack_id
+        if admission_result.admission.decision is BusinessFlowSkillPackAdmissionDecision.ADMITTED:
+            self.admitted_business_flow_skill_pack_id = selected_pack_id
         if selected_pack_id is not None and self._business_flow_admission_callback is not None:
             self._business_flow_admission_callback(selected_pack_id)
         if (
@@ -332,15 +340,29 @@ class _InvocationPlannerAdapter:
 
 
 class _InvocationToolProposalScopeAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, restore_selection: Callable[[str], None] | None = None) -> None:
         self._invocation = invocation
+        self._restore_selection = restore_selection
         self._resolver = ToolProposalScopeResolver()
 
     def resolve(self, state: ControlledReActRunState) -> EffectiveToolProposalScope:
         return self._resolver.resolve(
             state,
-            tools=self._invocation.tool_gateway.tools,
+            tools=self._allowed_tools(state),
+            remaining_call_budget=max(0, state.max_tool_calls - sum(record.action_type is ReActActionType.PROPOSE_TOOL_CALL for record in state.observation_records)),
         )
+
+
+    def _allowed_tools(self, state: ControlledReActRunState) -> Mapping[str, Any]:
+        tools = self._invocation.tool_gateway.tools
+        packs = self._invocation.business_flow_skill_packs
+        if not packs:
+            return tools
+        selected = next((pack for pack in packs if pack.id == state.business_flow_skill_pack_id), None)
+        if selected is not None and self._restore_selection is not None:
+            self._restore_selection(selected.id)
+        allowed = set(selected.tool_contract_refs) if selected is not None else set()
+        return {name: tool for name, tool in tools.items() if name in allowed}
 
 
 class _DeterministicKnowledgeObservationAdapter:
@@ -552,6 +574,12 @@ class _InvocationToolObservationAdapter:
     ) -> ObservationEffect:
         _check_cancellation(self._invocation)
         tool_name = action.target_tool_name or "unknown_tool"
+        config = self._invocation.tool_gateway.tools.get(tool_name)
+        if state.tool_task_plan is not None:
+            step = next((item for item in state.tool_task_plan.steps if f"act_task_{item.step_id}" == action.action_id), None)
+            if (config is None or step is None or not config.read_only or config.requires_approval
+                or set(step.report_fields) - set(config.summary_fields)):
+                raise ProofAgentError("PA_TOOL_SOURCE_002", "Task tool is outside its frozen read-only contract.", "Use authorized read-only task tools and summary fields.")
         result = self._invocation.tool_gateway.request_tool(
             tool_name=tool_name,
             parameters=dict(action.parameters),
@@ -559,6 +587,8 @@ class _InvocationToolObservationAdapter:
             run_id=state.run_id,
         )
         _check_cancellation(self._invocation)
+        if not result.executed:
+            raise ProofAgentError("PA_TOOL_SOURCE_002", "Tool execution did not produce a successful result.", "Resolve the tool failure before restarting the task.")
         tool_result = dict(result.result or {})
         truth = ToolObservationTruth(
             truth_ref=identity.truth_ref,
@@ -567,7 +597,8 @@ class _InvocationToolObservationAdapter:
             tool_name=tool_name,
             authorized_result=tool_result,
             result_schema_id=f"{tool_name}.v1",
-            redaction_metadata={"redacted_field_count": 0},
+            redaction_metadata={"redacted_field_count": 0, "executed": True,
+                "tool_contract_digest": _task_tool_contract_digest(config)},
         )
         config = self._invocation.tool_gateway.tools.get(tool_name)
         summary_projection = _tool_summary_projection(
@@ -1254,3 +1285,42 @@ def _string_value(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+def _task_tool_contract_digest(config: Any) -> str:
+    from proof_agent.control.workflow.controlled_react.tool_task_completion import digest
+    if config is None:
+        return ""
+    return digest({"name": config.name, "source": config.source, "read_only": config.read_only,
+        "risk_level": config.risk_level, "requires_approval": config.requires_approval,
+        "input_schema": config.input_schema, "result_schema": config.result_schema,
+        "summary_fields": config.summary_fields, "contract_snapshot": config.mcp_contract_snapshot})
+
+
+def _execution_configuration_digest(invocation: HarnessInvocation, stage_contexts: Any) -> str:
+    from pydantic import BaseModel
+    from proof_agent.control.workflow.controlled_react.tool_task_completion import digest
+
+    def plain(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return {name: plain(getattr(value, name)) for name in type(value).model_fields}
+        if isinstance(value, Mapping):
+            return {key: plain(item) for key, item in value.items()}
+        if isinstance(value, (set, frozenset)):
+            return [plain(item) for item in sorted(value)]
+        if isinstance(value, (tuple, list)):
+            return [plain(item) for item in value]
+        return value
+
+    return digest(plain({
+        "tools": {name: {"contract": _task_tool_contract_digest(tool),
+            "source_id": tool.tool_source_id, "mcp_tool_name": tool.mcp_tool_name,
+            "source_configuration": invocation.tool_gateway.source_configuration_digest(name),
+            "allowed_parameters": tool.allowed_parameters, "denied_parameters": tool.denied_parameters}
+            for name, tool in invocation.tool_gateway.tools.items()},
+        "skills": invocation.business_flow_skill_packs,
+        "skill_admission": invocation.manifest.capabilities.skills.admission,
+        "policy": invocation.policy.rules,
+        "stage_contexts": stage_contexts or {},
+        "knowledge": invocation.resolved_knowledge_bindings,
+    }))

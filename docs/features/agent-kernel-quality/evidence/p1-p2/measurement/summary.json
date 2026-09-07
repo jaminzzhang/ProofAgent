@@ -1,0 +1,55 @@
+{
+  "schema_version": "kernel-measurement-series.v1",
+  "status": "measured",
+  "source_fingerprint": "sha256:7a2c615a2083e85d4752b8a972369ecbb8caaf25fdfe11265267167e9497b757",
+  "sample_fingerprint": "sha256:59300c356965e2a301de5b0cd85fa5ca68e77f32d22385654b7993f4882b3e79",
+  "environment": "CPython|3.12.11|Darwin|25.6.0|arm64",
+  "quality_scope": "required_retrieval_and_admitted_input_coverage_only",
+  "execution_scope": "synthetic_local_existing_v3",
+  "production_readiness": "not_evaluated",
+  "performance_improvement": "not_established",
+  "scenarios": [
+    {
+      "scenario_id": "single_retrieval",
+      "repetitions": 5,
+      "p50_elapsed_ms": 12.879375,
+      "p95_elapsed_ms": 15.71925,
+      "model_calls": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "tokens": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "cost": null
+    },
+    {
+      "scenario_id": "compound_retrieval",
+      "repetitions": 5,
+      "p50_elapsed_ms": 17.008916,
+      "p95_elapsed_ms": 17.273875,
+      "model_calls": [
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "tokens": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "cost": null
+    }
+  ]
+}

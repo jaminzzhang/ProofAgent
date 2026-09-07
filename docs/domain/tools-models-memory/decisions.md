@@ -2,6 +2,8 @@
 
 ## Ambiguity Resolutions
 
+- [FRAME | HIGH] ADR-0245 preserves bounded user-turn-sourced task state through actual model context and the existing atomic conversation append. It remains working state, not evidence or authority. ADR-0248 introduces development-only exact business authorization, durable idempotency and outcome reconciliation contracts; no production write route is added. See [P1/P2 acceptance](../../features/agent-kernel-quality/tdd-p1-p2.md).
+
 - "`validation_capture.v2` schema enforcement" could mean continuing a naked dictionary builder, relying on store sanitization, or adding an explicit contract. Resolved: use **Validation Capture V2 Contract Model** in the contracts layer and let Delivery persist the model's JSON dump through the existing Sensitive Validation Capture Artifact store.
 - "Intent summary" could mean reusing **Reasoning Summary** or creating a separate contract. Resolved: use **Intent Resolution Contract** because user-intent understanding and ReAct action rationale are different audit facts.
 - "Multi-round Intent Resolution" could mean repeated hidden thinking inside one run or governed accumulation across user turns. Resolved: run Intent Resolution once per governed run and accumulate multi-turn understanding through **Controlled Conversation Context** and **Clarification Continuation Run**.

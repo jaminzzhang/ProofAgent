@@ -1,0 +1,50 @@
+name: it_service_desk
+purpose: Internal test fixture for evidence-based password reset guidance.
+workflow:
+  template: react_enterprise_qa_v3
+  template_descriptor_version: react_enterprise_qa.v3
+package_knowledge_sources: []
+knowledge_bindings: []
+retrieval:
+  strategy: single_step
+  top_k: 2
+  min_score: 0.2
+react:
+  max_plan_rounds: 4
+  max_tool_calls: 0
+  record_reasoning_summary: true
+  planner:
+    provider: deterministic
+    name: react-planner-demo
+review:
+  mode: auto
+  subagent:
+    provider: deterministic
+    name: harness-review-demo
+    fail_closed: true
+    params:
+      timeout_seconds: 5
+      max_output_tokens: 500
+response:
+  include_reasoning_summary: false
+  include_review_results: false
+model:
+  provider: deterministic
+  name: demo
+policy:
+  file: ./policy.yaml
+capabilities:
+  tools:
+    enabled: false
+  memory:
+    enabled: true
+    provider: session
+  skills:
+    enabled: true
+    business_flows:
+    - id: password_reset
+      definition: ./skills/password_reset.yaml
+      default: true
+audit:
+  trace_path: ./trace.jsonl
+  receipt_path: ./receipt.md

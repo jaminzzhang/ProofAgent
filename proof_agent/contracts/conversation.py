@@ -1,21 +1,43 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
+from hashlib import sha256
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
-from proof_agent.contracts._base import FrozenModel, freeze_value
+from proof_agent.contracts._base import FrozenModel, StrictFrozenModel, freeze_value
 from proof_agent.contracts.receipt import ReceiptOutcome
+
+
+class TaskStateItem(StrictFrozenModel):
+    key: str = Field(min_length=1, max_length=96)
+    value: str = Field(min_length=1, max_length=512)
+    source_turn_id: str = Field(min_length=1, max_length=256)
+    kind: Literal["constraint", "goal"] = "constraint"
+
+
+class ConversationTaskState(StrictFrozenModel):
+    version: Literal[1] = 1
+    items: tuple[TaskStateItem, ...] = Field(default_factory=tuple, max_length=32)
+    unresolved: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
+
+    @model_validator(mode="after")
+    def unique_keys(self) -> ConversationTaskState:
+        if len({item.key for item in self.items}) != len(self.items):
+            raise ValueError("task state keys must be unique")
+        return self
 
 
 class ContextAdmission(FrozenModel):
     """Trace-safe result of admitting prior chat turns into a new run."""
 
+    task_state: ConversationTaskState | None = Field(default=None, exclude_if=lambda value: value is None)
     admitted: bool
     turn_count: int = 0
     included_turn_ids: tuple[str, ...] = Field(default_factory=tuple)
     summary: str = ""
+    recent_summary: str | None = Field(default=None, exclude_if=lambda value: value is None)
     char_count: int = 0
     max_turns: int = 3
     dropped_turn_ids: tuple[str, ...] = Field(default_factory=tuple)
@@ -34,6 +56,7 @@ class ConversationTurn(FrozenModel):
     outcome: ReceiptOutcome
     created_at: str
     context_admission: ContextAdmission
+    task_state: ConversationTaskState | None = Field(default=None, exclude_if=lambda value: value is None)
     evidence: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
     approval_state: Mapping[str, Any] | None = None
     governance_details: Mapping[str, Any] | None = None
@@ -77,7 +100,14 @@ def context_admission_payload(admission: ContextAdmission) -> dict[str, Any]:
         "admitted": admission.admitted,
         "turn_count": admission.turn_count,
         "included_turn_ids": list(admission.included_turn_ids),
-        "summary": admission.summary,
+        "summary": admission.recent_summary if admission.recent_summary is not None else admission.summary,
+        **({"task_state": {
+            "version": admission.task_state.version,
+            "digest": sha256(admission.task_state.model_dump_json().encode()).hexdigest(),
+            "item_count": len(admission.task_state.items),
+            "unresolved_count": len(admission.task_state.unresolved),
+            "source_turn_ids": list(dict.fromkeys(item.source_turn_id for item in admission.task_state.items)),
+        }} if admission.task_state is not None else {}),
         "char_count": admission.char_count,
         "max_turns": admission.max_turns,
         "dropped_turn_ids": list(admission.dropped_turn_ids),

@@ -11,6 +11,7 @@ from proof_agent.contracts.conversation import ConversationTurn
 from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.contracts.run_execution import RunClaim
 from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.delivery.tool_task_artifacts import tool_task_report_members
 from proof_agent.delivery.run_execution_service import (
     RunExecutionDependencies,
     execute_published_agent_run,
@@ -61,7 +62,10 @@ class PublishedAgentRunWorkHandler:
                 or len(conversation.turns) != request.conversation_turn_count
             ):
                 raise RuntimeError("conversation changed after Run admission")
-            context_admission = admit_conversation_context(conversation)
+            conversation_turn_id = str(uuid4())
+            context_admission = admit_conversation_context(
+                conversation, current_question=request.question, current_turn_id=conversation_turn_id,
+            )
         cancellation_check()
         execution = execute_published_agent_run(
             dependencies=self._dependencies,
@@ -81,7 +85,8 @@ class PublishedAgentRunWorkHandler:
         if request.conversation_id is not None:
             assert context_admission is not None
             conversation_turn = ConversationTurn(
-                turn_id=str(uuid4()),
+                turn_id=conversation_turn_id,
+                task_state=context_admission.task_state,
                 run_id=request.run_id,
                 agent_id=request.agent_id,
                 question=request.question,
@@ -97,7 +102,7 @@ class PublishedAgentRunWorkHandler:
                 governance_details=execution.detail.governance_details,
             )
         return RunWorkResult(
-            members=(
+            members=tool_task_report_members(execution.result.workflow_template_execution_result, run_id=request.run_id) + (
                 ArtifactMemberPayload(
                     member_id="governance_receipt",
                     kind=ArtifactKind.GOVERNANCE_RECEIPT,

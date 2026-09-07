@@ -208,6 +208,7 @@ def test_unexpected_observation_values_are_not_serialized() -> None:
 def test_source_change_during_measurement_blocks_pass(tmp_path: Path) -> None:
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/check-agent-kernel-baseline.py").write_text("# before")
+    (tmp_path / "scripts/measure-agent-kernel.py").write_text("# measurement entry")
     (tmp_path / "uv.lock").write_text("# synthetic lock")
     probes = _passing_probes()
     probe_id = next(iter(probes))

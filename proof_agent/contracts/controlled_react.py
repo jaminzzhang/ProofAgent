@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from proof_agent.contracts.tool_tasks import ToolTaskPlan
+
 from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal
@@ -212,6 +214,11 @@ class ControlledReActRunState(FrozenModel):
     template_name: str
     template_descriptor_version: str
     question: str
+    execution_configuration_digest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    business_flow_skill_pack_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    tool_task_plan: ToolTaskPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    max_tool_calls: int = Field(default=1, ge=0, le=8, strict=True, exclude_if=lambda value: value == 1)
+    task_plan_round_limit: int = Field(default=4, ge=0, le=64, strict=True, exclude_if=lambda value: value == 4)
     institution_authorization: InstitutionAuthorizationContext = Field(
         default_factory=InstitutionAuthorizationContext
     )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
@@ -123,6 +123,8 @@ def execute_agent_package_run(request: AgentPackageRunRequest) -> RunResult:
         context_config=manifest.context,
         context_budget_calibration_store=request.context_budget_calibration_store,
     )
+    if run_start_context is not None:
+        request = replace(request, conversation_context=run_start_context.conversation_context)
     if request.cancellation_check is not None:
         request.cancellation_check()
     result = _execute_controlled_react_v3_agent_package_run(
@@ -257,6 +259,8 @@ def _execute_controlled_react_v3_agent_package_run(
             conversation_context=request.conversation_context,
             memory_recall_payloads=_memory_recall_working_payloads(run_start_context),
             max_plan_rounds=manifest.react.max_plan_rounds,
+            max_tool_calls=manifest.react.max_tool_calls,
+            tool_task_plan=manifest.react.tool_task_plan,
             retrieval_max_queries=manifest.retrieval.max_queries,
         )
     )

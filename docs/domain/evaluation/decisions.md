@@ -2,6 +2,8 @@
 
 ## Ambiguity Resolutions
 
+- [KNOWN | HIGH] P2 uses source/sample/environment-bound synchronous V3 retrieval-input coverage measurements. Nested model wrappers count once; missing usage and cost remain null; incomplete or mismatched samples cannot establish improvement. Local PostgreSQL tests and synthetic domain fixtures are separate from live providers and release Gates. See [P1/P2 acceptance](../../features/agent-kernel-quality/tdd-p1-p2.md).
+
 - [FRAME | HIGH] "High resolution rate" must distinguish governed resolution from verified answer semantics, curated refusal decisions and task completion. ADR-0240 adds separate quality cohorts, stable not-evaluated reasons and explicit membership; unverified or missing artifacts cannot prove quality success or failure. The new projection does not override deterministic or release Gates. See [ADR-0240](../../adr/0240-separate-verified-quality-from-governed-resolution.md).
 
 - "Handoff trigger configuration" could mean hard-coded only, business-configurable, or prompt-defined. Resolved: V1 keeps fixed baseline triggers and permits Agent Contract or policy configuration only for enterprise high-value failure scenarios; frontend and prompt-defined triggers are not trusted.

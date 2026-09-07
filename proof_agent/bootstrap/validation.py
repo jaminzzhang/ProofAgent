@@ -743,13 +743,26 @@ def _validate_react_config(manifest: AgentManifest, *, manifest_path: Path) -> N
             "Set react.max_plan_rounds to a positive integer.",
             artifact_path=manifest_path,
         )
-    if react.max_tool_calls not in {0, 1}:
+    if not 0 <= react.max_tool_calls <= 8:
         raise ProofAgentError(
             "PA_CONFIG_002",
-            "react.max_tool_calls must be 0 or 1 for v1",
-            "Set react.max_tool_calls to 0 or 1.",
+            "react.max_tool_calls must be between 0 and 8",
+            "Set react.max_tool_calls between 0 and 8.",
             artifact_path=manifest_path,
         )
+    if react.tool_task_plan is not None:
+        tools_file = manifest.capabilities.tools.file
+        raw_tools = yaml.safe_load(tools_file.read_text(encoding="utf-8")) if manifest.capabilities.tools.enabled and tools_file else {}
+        entries = raw_tools.get("tools", ()) if isinstance(raw_tools, Mapping) else ()
+        tools = {tool.get("name"): tool for tool in entries if isinstance(tool, Mapping)}
+        for step in react.tool_task_plan.steps:
+            tool = tools.get(step.tool_name)
+            if tool is None or tool.get("read_only") is not True or tool.get("requires_approval", False) is not False:
+                raise ProofAgentError("PA_CONFIG_002", "Task plan requires published read-only tools without approval.", "Use only the package read-only Tool Contracts.", artifact_path=manifest_path)
+            if set(step.report_fields) - set(tool.get("summary_fields", ())):
+                raise ProofAgentError("PA_CONFIG_002", "Task report fields are outside the tool summary contract.", "Select only the tool's authorized summary fields.", artifact_path=manifest_path)
+            if (set(step.parameters) | set(step.bindings)) - set(tool.get("allowed_parameters", ())):
+                raise ProofAgentError("PA_CONFIG_002", "Task plan parameters are outside the tool contract.", "Use only allowed tool parameters.", artifact_path=manifest_path)
     _validate_model_role_config(
         react.planner,
         "react.planner",

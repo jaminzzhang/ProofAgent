@@ -18,6 +18,8 @@ from proof_agent.contracts import (
     ConversationTurn,
     MemoryRecallAdmission,
     RunPurpose,
+    PersistenceConflictError,
+    PersistenceNotFoundError,
 )
 from proof_agent.contracts.conversation import (
     context_admission_payload,
@@ -269,7 +271,13 @@ def create_conversation_run(
             },
         )
 
-    context_admission = admit_conversation_context(conversation)
+    conversation_turn_id = f"turn_{uuid4().hex}"
+    try:
+        context_admission = admit_conversation_context(
+            conversation, current_question=request.question, current_turn_id=conversation_turn_id,
+        )
+    except ProofAgentError as exc:
+        raise proof_agent_http_exception(exc) from exc
     result, detail, manifest = _execute_published_agent_run(
         app_request=app_request,
         published_agent=published_agent,
@@ -287,7 +295,8 @@ def create_conversation_run(
         serialize_dashboard_evidence_chunk(chunk) for chunk in detail.evidence_chunks
     )
     turn = ConversationTurn(
-        turn_id=f"turn_{uuid4().hex[:8]}",
+        turn_id=conversation_turn_id,
+        task_state=context_admission.task_state,
         run_id=detail.run_id,
         agent_id=conversation.agent_id,
         question=request.question,
@@ -300,21 +309,27 @@ def create_conversation_run(
         governance_details=governance_details,
     )
     repository = _get_conversation_repository(app_request)
-    if repository is None:
-        updated = _get_conversation_store(app_request).append_turn(
-            conversation_id=conversation.conversation_id,
-            turn=turn,
-        )
-        if updated is None:
-            raise HTTPException(
-                status_code=404, detail=f"Conversation not found: {conversation_id}"
+    try:
+        if repository is None:
+            updated = _get_conversation_store(app_request).append_turn_expected(
+                conversation.conversation_id,
+                turn,
+                expected_turn_count=len(conversation.turns),
             )
-    else:
-        repository.append_turn(
-            conversation.conversation_id,
-            turn,
-            expected_turn_count=len(conversation.turns),
-        )
+            if updated is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Conversation not found: {conversation_id}"
+                )
+        else:
+            repository.append_turn(
+                conversation.conversation_id,
+                turn,
+                expected_turn_count=len(conversation.turns),
+            )
+    except PersistenceConflictError:
+        raise HTTPException(status_code=409, detail="Conversation changed during execution; retry with the latest context.") from None
+    except PersistenceNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from None
 
     return _run_response(
         agent_id=conversation.agent_id,

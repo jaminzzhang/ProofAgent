@@ -64,13 +64,22 @@ def require_package_local_skill_pack_definitions(
     package_root = manifest_path.parent.resolve()
     for binding in manifest.capabilities.skills.business_flows:
         try:
+            lexical_path = binding.definition.absolute()
+            relative = lexical_path.relative_to(package_root)
+            if ".." in relative.parts:
+                raise ValueError("parent segment")
+            cursor = package_root
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError("symbolic link")
             binding.definition.resolve().relative_to(package_root)
-        except ValueError as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             raise ProofAgentError(
                 "PA_CONFIG_002",
                 (
                     "Business Flow Skill Pack definition must be package-local: "
-                    f"{binding.id}"
+                    "unsafe definition"
                 ),
                 (
                     "Place the definition inside the Agent package directory "
