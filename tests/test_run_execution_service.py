@@ -11,7 +11,7 @@ from proof_agent.contracts import (
     SecretPurpose,
     WorkflowTemplateExecutionResult,
 )
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.control.workflow.controlled_react.local_stores import (
     FileControlledReActSnapshotStore,

@@ -246,6 +246,15 @@ python3 scripts/check-domain-contexts.py
 git diff --check
 ```
 
+[KNOWN | HIGH] Real S3 tests use `s3_integration`; the queue-to-artifact test also
+requires `postgres_integration`. The default suite excludes S3 tests. With disposable
+test services configured, select them explicitly with
+`pytest tests/integration -m s3_integration --strict-markers`.
+The retired `hybrid_integration` and unused `search_integration` markers are removed.
+The offline `demo` has no Knowledge binding: its supported/unsupported questions both
+refuse for lack of evidence, while the clarification scenario waits for user input.
+External Knowledge answer success is covered by Dify/Agentset adapter and Harness tests.
+
 Release manifests are checked with:
 
 ```bash

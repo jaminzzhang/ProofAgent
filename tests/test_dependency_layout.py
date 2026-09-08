@@ -3,6 +3,19 @@ import tomllib
 from pathlib import Path
 
 
+def test_control_and_contracts_do_not_depend_on_delivery() -> None:
+    violations: list[str] = []
+    for root in (Path("proof_agent/control"), Path("proof_agent/contracts")):
+        for path in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                for module in _resolved_import_modules(path, node):
+                    if module == "proof_agent.delivery" or module.startswith(
+                        "proof_agent.delivery."
+                    ):
+                        violations.append(f"{path}:{node.lineno}: {module}")
+    assert violations == []
+
+
 def test_local_index_stack_is_optional_not_core_dependency() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(pyproject["project"]["dependencies"])

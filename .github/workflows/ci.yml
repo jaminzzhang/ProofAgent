@@ -22,14 +22,14 @@ jobs:
       - name: Type check
         run: uv run mypy proof_agent
       - name: Test
-        run: uv run pytest tests/ -m "not postgres_integration and not hybrid_integration" -v
+        run: uv run pytest tests/ -m "not postgres_integration and not s3_integration" -v
       - name: CLI smoke (deterministic demo)
         run: |
           uv run proof-agent demo > demo.out
-          # All three documented outcomes must appear in the demo output.
-          grep -q "ANSWERED_WITH_CITATIONS" demo.out
-          grep -q "REFUSED_NO_EVIDENCE" demo.out
-          grep -q "WAITING_FOR_USER_CLARIFICATION" demo.out
+          # The offline demo has no Knowledge binding; both answer requests fail closed.
+          grep -qx "supported: REFUSED_NO_EVIDENCE" demo.out
+          grep -qx "unsupported: REFUSED_NO_EVIDENCE" demo.out
+          grep -qx "clarify: WAITING_FOR_USER_CLARIFICATION" demo.out
           # The final run must also leave a trace and receipt on disk.
           test -f runs/latest/trace.jsonl
           test -f runs/latest/governance_receipt.md

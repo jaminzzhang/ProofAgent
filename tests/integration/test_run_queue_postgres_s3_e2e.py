@@ -34,14 +34,14 @@ from proof_agent.contracts.conversation import ContextAdmission, ConversationRec
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.run_execution import RunExecutionSnapshot
 from proof_agent.contracts.worker_roles import ProductionWorkerRole
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.run_artifact_results import RunArtifactResultReader
 from proof_agent.delivery.run_executor import RunExecutor, RunWorkResult
 from proof_agent.observability.api.app import create_app
 from proof_agent.observability.storage.run_store import RunStore
 
 
-pytestmark = [pytest.mark.postgres_integration, pytest.mark.hybrid_integration]
+pytestmark = [pytest.mark.postgres_integration, pytest.mark.s3_integration]
 DIGEST = "a" * 64
 AUTHORITY_ID = "019ba001-1111-7000-8000-000000000099"
 TEST_AGENT_ID = "agent_management_insurance_specialist"

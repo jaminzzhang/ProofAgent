@@ -8,7 +8,7 @@ from proof_agent.contracts.dashboard import RunPurpose
 from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.ports.run_queue import RunQueueRepository
 from proof_agent.contracts.run_execution import RunQueueRecord, RunRequest
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 
 
 class RunSubmissionRejectedError(ValueError):

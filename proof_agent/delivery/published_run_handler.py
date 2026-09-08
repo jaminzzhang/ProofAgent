@@ -10,7 +10,7 @@ from proof_agent.contracts.artifacts import ArtifactKind
 from proof_agent.contracts.conversation import ConversationTurn
 from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.contracts.run_execution import RunClaim
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.tool_task_artifacts import tool_task_report_members
 from proof_agent.delivery.run_execution_service import (
     RunExecutionDependencies,

@@ -6,7 +6,6 @@ import signal
 
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
-import pytest
 
 from proof_agent.bootstrap import production_roles
 from proof_agent.contracts.health import ProductionDeploymentIdentity
@@ -46,19 +45,9 @@ class RecordingExecutor:
         return None
 
 
-class RecordingKnowledgeWorker:
-    def __init__(self) -> None:
-        self.run_calls = 0
-
-    def run_once(self) -> None:
-        self.run_calls += 1
-        return None
-
-
 @dataclass
 class Composition:
     executor: RecordingExecutor | None = None
-    worker: RecordingKnowledgeWorker | None = None
     closed: bool = False
 
     def close(self) -> None:
@@ -100,26 +89,6 @@ def test_active_executor_once_may_claim(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert executor.run_calls == 1
-    assert composition.closed is True
-
-
-@pytest.mark.skip(reason="ProofAgent embedded knowledge worker was removed in the KSS cutover")
-def test_standby_knowledge_worker_once_never_claims(monkeypatch) -> None:
-    worker = RecordingKnowledgeWorker()
-    composition = Composition(worker=worker)
-    monkeypatch.setenv("PROOF_AGENT_MODE", "production")
-    monkeypatch.setenv("PROOF_AGENT_ACTIVATION_STATE", "standby")
-    monkeypatch.setattr(
-        production_roles,
-        "compose_production_knowledge_worker",
-        lambda **_kwargs: composition,
-    )
-
-    result = CliRunner().invoke(app, ["knowledge-worker", "--once"])
-
-    assert result.exit_code == 0
-    assert '"activation_state": "STANDBY"' in result.stdout
-    assert worker.run_calls == 0
     assert composition.closed is True
 
 

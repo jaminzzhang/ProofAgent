@@ -753,59 +753,6 @@ admission:
     assert "operator-secret" not in issue_response.text
 
 
-@pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
-def test_fetch_config_draft_skills_reports_missing_refs_without_blocking_list(
-    tmp_path: Path,
-) -> None:
-    client = _client(tmp_path)
-    store = _configuration_store(client)
-    imported = client.post(
-        "/api/config/agents/import",
-        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
-    ).json()
-    draft = store.get_draft(imported["agent_id"], imported["draft_id"])
-    assert draft is not None
-    raw_agent_yaml = yaml.safe_load(draft.contract_bundle.agent_yaml)
-    raw_agent_yaml["knowledge_bindings"] = [
-        binding
-        for binding in raw_agent_yaml["knowledge_bindings"]
-        if binding["binding_id"] != "general_insurance_knowledge"
-    ]
-    store.update_draft(
-        agent_id=draft.agent_id,
-        draft_id=draft.draft_id,
-        actor="test-operator",
-        contract_bundle=ContractBundle(
-            agent_yaml=yaml.safe_dump(raw_agent_yaml, sort_keys=False),
-            policy_yaml=draft.contract_bundle.policy_yaml,
-            tools_yaml=draft.contract_bundle.tools_yaml,
-            extra_files=draft.contract_bundle.extra_files,
-            advanced_fields=draft.contract_bundle.advanced_fields,
-        ),
-    )
-
-    response = client.get(f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}/skills")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["configuration_issues"][0]["code"] == "PA_CONFIG_002"
-    assert (
-        "unknown Business Flow Skill Pack knowledge_binding_refs"
-        in (payload["configuration_issues"][0]["message"])
-    )
-    assert "general_insurance_knowledge" in payload["configuration_issues"][0]["message"]
-    pack = next(item for item in payload["packs"] if item["id"] == "general_insurance_specialist")
-    assert "general_insurance_knowledge" in pack["capability_refs"]["knowledge_binding_refs"]
-    repaired = client.patch(
-        f"/api/config/agents/{draft.agent_id}/drafts/{draft.draft_id}"
-        "/skills/business-flows/general_insurance_specialist",
-        json={"knowledge_binding_refs": []},
-    )
-
-    assert repaired.status_code == 200
-    assert repaired.json()["configuration_issues"] == []
-
-
 def test_fetch_config_draft_skills_projects_v3_addendum_slots_when_disabled(
     tmp_path: Path,
 ) -> None:
@@ -1332,39 +1279,6 @@ def test_update_contract_view_rejects_unsafe_skill_definition_without_writes(
     assert client.get(draft_path).json() == before_draft
     assert client.get(f"{draft_path}/contract").json() == before_contract
     assert sorted((tmp_path / "config" / "configuration_audit").glob("*.json")) == before_audit
-
-
-@pytest.mark.skip(reason="package Knowledge binding editing was removed by ADR-0210")
-def test_update_contract_view_rejects_removed_skill_pack_knowledge_binding(
-    tmp_path: Path,
-) -> None:
-    client = _client(tmp_path)
-    draft = client.post(
-        "/api/config/agents/import",
-        json={"manifest_path": "examples/agent_management_insurance_specialist/agent.yaml"},
-    ).json()
-    contract = client.get(
-        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract"
-    ).json()
-    raw_agent_yaml = yaml.safe_load(contract["agent_yaml"])
-    raw_agent_yaml["knowledge_bindings"] = [
-        binding
-        for binding in raw_agent_yaml["knowledge_bindings"]
-        if binding["binding_id"] != "general_insurance_knowledge"
-    ]
-
-    updated = client.patch(
-        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/contract",
-        json={"agent_yaml": yaml.safe_dump(raw_agent_yaml, sort_keys=False)},
-    )
-
-    assert updated.status_code == 400
-    assert updated.json()["detail"]["code"] == "PA_CONFIG_002"
-    assert (
-        "unknown Business Flow Skill Pack knowledge_binding_refs"
-        in (updated.json()["detail"]["message"])
-    )
-    assert "general_insurance_knowledge" in updated.json()["detail"]["message"]
 
 
 def test_update_react_contract_view_preserves_reviewer_usage_params(

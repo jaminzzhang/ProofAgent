@@ -68,6 +68,12 @@ The only workflow identity is `react_enterprise_qa_v3`. The template identity se
 
 SDK objects and raw provider payloads must not leak across these boundaries.
 
+[KNOWN | HIGH] `contracts/published_agent.py` owns the resolved `PublishedAgent`
+data object shared by Control and Delivery. Registry lookup, materialization and
+HTTP projections remain in Delivery. Control and Contracts must not import Delivery;
+`tests/test_dependency_layout.py` enforces this direction with an AST import check.
+Architecture analysis and cleanup evidence: [2026-09-08 review](features/architecture-simplification/verification.md).
+
 ## 4. Controlled ReAct V3
 
 The planner proposes only:
@@ -142,7 +148,11 @@ This target belongs to S4 and depends on S2 and S3.
   contracts. Production model credentials resolve through `ModelCredentialResolver`
   only at provider-client construction; development environment references do not
   widen that production boundary.
-- Package Markdown supports offline regression. Production knowledge must resolve published, verified S3-backed snapshots.
+- [KNOWN | HIGH] Dify and Agentset provide read-only Candidate Evidence through
+  frozen external bindings and guarded transport. Remote content remains mutable;
+  observation hashes bind the evidence actually used. Offline fixtures are regression
+  inputs. External Knowledge production publication remains closed pending its own
+  profile and verification (ADR-0242, ADR-0249).
 - Read-only HTTP/MCP tools may be introduced only through frozen contracts, publication validation, server-side authorization, redaction, schema validation and default-deny egress.
 - MCP stdio, local handler imports and state-changing tools are not production-admissible.
 - The initial private pilot keeps runtime Case Memory disabled. PostgreSQL conversation context may provide bounded continuity but is not evidence.
@@ -156,37 +166,31 @@ The immutable release candidate binding pins source commit, clean tree, product 
 
 The `initial-private-pilot-v2` profile requires five top-level risk Gates covering 13 required check families. `proof-agent release verify` recomputes digests, binding, freshness, thresholds and status. Missing, stale, mismatched, unknown or non-passed required evidence returns NO-GO.
 
-### 10.1 KSS-only knowledge boundary
+### 10.1 External Knowledge boundary
 
-KSS is the sole executable Source, version, Release and Candidate Evidence authority.
-A knowledge-enabled Published Agent Version freezes one exact KSS binding, including
-Space, Release, client, versioned secret and ProofAgent Admission Scorer identities.
-Package-local, shared-source and Hybrid binding shapes are invalid.
+[KNOWN | HIGH] Agent manifests bind provider identity, exact remote Dataset or
+Namespace/Tenant, endpoint, versioned credential reference and retrieval settings.
+`bootstrap/external_knowledge.py` composes Dify and Agentset adapters behind the
+same provider-neutral port. The model cannot select another Dataset or credential.
 
-ProofAgent owns Admission, conflict governance, context assembly and final answers.
-KSS ranking remains provider-native relevance metadata and cannot override Evidence
-Admission. KSS, grant, credential or scorer failure is fail-closed with no local
-provider fallback. The old ProofAgent Hybrid worker, provider, API and persistence
-paths are removed; historical Agent Versions using them are not valid rollback or
-replay targets.
+ProofAgent owns Evidence Admission, required-query completion, conflict handling
+and final-answer validation. Provider ranking never grants evidence authority.
+Unavailable required retrieval or invalid provenance fails closed; conversation
+memory is not Accepted Evidence. See [configuration and limits](features/external-knowledge/configuration.md).
 
-[FRAME | HIGH] KSS also has separate source and release ownership. ProofAgent must not
-import the KSS implementation, package its migrations, or build its image. Integration
-uses guarded HTTPS plus exact OCI, distribution, OpenAPI and migration identities. A
-local Compose harness may run an external KSS image for black-box verification without
-becoming the KSS release owner.
-
-Shadow suite v2 contains only question references and binding references. A trusted live driver executes both bindings and the control path verifies active pointers did not change. Sealed Acceptance receives aggregate facts only from an independent evaluator and verifies the canonical attestation digest, evaluator/key identity, signature, candidate, suite and Gate Profile before applying deterministic gates.
-
-The built-in production adapter uses allowlisted HTTPS, validated and pinned private CIDRs, disabled proxy/redirect/retry behavior and bounded responses. Evaluation drivers, operations telemetry, release evidence authority and the acceptance signature verifier are independently selected entry points.
+[KNOWN | HIGH] KSS-only publication, release and evaluation contracts are historical
+(ADR-0242 supersedes their runtime assumptions). Retained readers and rejection gates
+must not reactivate old bindings. Default API, Executor and readiness do not require
+KSS; external production publication needs independent profile and verification.
+Earlier KSS protocols remain documented in the dated ADRs and cutover records.
 
 ## 11. Deployment target
 
-Initial production is one hardened Linux host with a stable gateway and Blue/Green application slots. Gateway, API, Run Executor, Dashboard and Operator Chat are separate ProofAgent Compose roles; API and Executor use the same product image. KSS has its own independently deployed API, Query Executor, Knowledge Worker, Scheduler and migration roles.
+Initial production is one hardened Linux host with a stable gateway and Blue/Green application slots. Gateway, API, Run Executor, Dashboard and Operator Chat are separate ProofAgent Compose roles; API and Executor use the same product image. External Knowledge providers are independently operated dependencies, not ProofAgent process roles.
 
 External PostgreSQL, S3-compatible storage, OIDC, secret provider and model endpoints are deployment bindings. `/readyz` must verify their concrete compatibility, not merely process liveness. Migrations are explicit and backward-compatible across the rollback window.
 
-The readiness projection reports release ID, image digest, deployment slot, process role, activation state, schema revision/compatible range and Deployment Compatibility Manifest digest together with sanitized component status. The API verifies exact PostgreSQL schema compatibility, OIDC discovery/JWKS, a dedicated Secret Provider probe handle, versioned S3 plus a background exact write-read success no older than 60 seconds, active egress policy, the sole Published Agent and its exact KSS binding, and the durable run queue. The Run Executor owns a PostgreSQL-fenced role lease with a monotonically increasing activation epoch, background heartbeat, explicit drain/release transitions and loopback `/livez`/`/readyz`; `STANDBY` and `DRAINING` do not claim new work, while in-flight work is fenced from committing after role ownership loss. KSS role readiness and fencing remain service-owned.
+The readiness projection reports release ID, image digest, deployment slot, process role, activation state, schema revision/compatible range and Deployment Compatibility Manifest digest together with sanitized component status. The API verifies exact PostgreSQL schema compatibility, OIDC discovery/JWKS, a dedicated Secret Provider probe handle, versioned S3 plus a background exact write-read success no older than 60 seconds, active egress policy, the sole Published Agent under the admitted production profile, and the durable run queue. The Run Executor owns a PostgreSQL-fenced role lease with a monotonically increasing activation epoch, background heartbeat, explicit drain/release transitions and loopback `/livez`/`/readyz`; `STANDBY` and `DRAINING` do not claim new work, while in-flight work is fenced from committing after role ownership loss. KSS role readiness and fencing remain service-owned.
 
 Production migration is an explicit, non-restarting Compose profile. The candidate command must acknowledge the advisory lock and expand-only policy and bind the exact packaged schema head; API and worker composition never invokes migration code. Every shipped Alembic revision must be present in the code-owned reviewed expand-only allowlist, while downgrade/contract operations remain unavailable during the rollback window.
 

@@ -2,7 +2,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
 import shutil
 
 from fastapi.testclient import TestClient
@@ -193,33 +192,6 @@ def _copy_react_agent_with_response_details(tmp_path: Path) -> Path:
     return manifest_path
 
 
-def _copy_react_v3_agent_with_unique_knowledge(tmp_path: Path) -> Path:
-    agent_dir = tmp_path / "react_enterprise_qa_v3_unique"
-    shutil.copytree(
-        Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3"),
-        agent_dir,
-    )
-    knowledge_dir = agent_dir / "knowledge"
-    for path in knowledge_dir.glob("*.md"):
-        path.unlink()
-    (knowledge_dir / "sapphire-meals.md").write_text(
-        "# Sapphire Meal Policy\n\n"
-        "## Reimbursement\n\n"
-        "Sapphire meals are reimbursed up to 77 USD per day when the traveler "
-        "keeps the sapphire meal receipt.\n",
-        encoding="utf-8",
-    )
-    manifest_path = agent_dir / "agent.yaml"
-    manifest_text = manifest_path.read_text(encoding="utf-8")
-    manifest_path.write_text(
-        manifest_text.replace(
-            "name: react_enterprise_qa_v3", "name: react_enterprise_qa_v3_unique"
-        ),
-        encoding="utf-8",
-    )
-    return manifest_path
-
-
 def test_chat_run_execution_starts_published_agent_and_persists_run(tmp_path: Path) -> None:
     app = _app_with_published_agent(
         tmp_path, Path("proof_agent/evaluation/demo/fixtures/react_enterprise_qa_v3/agent.yaml")
@@ -344,30 +316,6 @@ def test_chat_run_executes_v3_agent_through_controlled_react_orchestrator(
     assert detail_body["workflow_projection"]["template_descriptor_version"] == (
         "react_enterprise_qa.v3"
     )
-
-
-@pytest.mark.skip(reason="local package Knowledge provider was removed by ADR-0210")
-def test_chat_run_v3_uses_configured_knowledge_provider(tmp_path: Path) -> None:
-    app = _app_with_published_agent(
-        tmp_path,
-        _copy_react_v3_agent_with_unique_knowledge(tmp_path),
-    )
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/chat/runs",
-        json={
-            "agent_id": "react_enterprise_qa_v3_unique",
-            "question": "What is the sapphire meal reimbursement rule?",
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["outcome"] == "ANSWERED_WITH_CITATIONS"
-    assert "77 USD" in body["final_output"]
-    assert body["citation_refs"]
-    assert body["citation_refs"][0]["citation"] == ("sapphire-meals.md#reimbursement:L3-L5")
 
 
 def test_chat_run_v3_persists_observation_truth_for_resume(tmp_path: Path) -> None:

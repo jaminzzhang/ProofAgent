@@ -10,7 +10,7 @@ Read in this order:
 4. `developer-guide.md` — authoring, local operation and verification;
 5. `operations-deployment-development-guide.zh-CN.md` — Chinese newcomer runbook for local operation, deployment boundaries, development and incident triage;
 6. `development-progress.md` — implemented versus remaining work;
-7. `deployment/kss-authority-cutover.md` — KSS-only runtime, production gates and rollback boundary;
+7. `features/external-knowledge/configuration.md` — active Dify/Agentset bindings and production limitations;
 8. `deployment/local-production-docker.md` — local production-shaped Docker stack and verification;
 9. `../CONTEXT-MAP.md` — domain vocabulary routing.
 
@@ -21,6 +21,11 @@ The sole example guide is `examples/agent-management-insurance-specialist.md`.
 - `superpowers/specs/2026-07-11-proofagent-initial-production-release-closure-design.md` — approved closure design;
 - `superpowers/plans/2026-07-11-proofagent-s0-v3-baseline-plan.md` — S0 implementation plan;
 - `../reports/proofagent-release-readiness-2026-07-12.html` — current readiness and dependency-ordered Todo report.
+
+## Architecture maintenance
+
+- [2026-09-08 architecture review and cleanup](features/architecture-simplification/verification.md) — dependency direction, retired Customer code and local verification.
+- [2026-09-08 test applicability cleanup](features/architecture-simplification/test-cleanup.md) — retired tests, integration markers, CI smoke and remaining coverage gaps.
 
 ## Historical records
 

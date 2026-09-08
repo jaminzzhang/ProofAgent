@@ -27,8 +27,8 @@ from proof_agent.contracts.conversation import (
 )
 from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.control.conversation import admit_conversation_context
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.published_agents import (
-    PublishedAgent,
     PublishedAgentRegistry,
     published_agent_directory_payload,
 )

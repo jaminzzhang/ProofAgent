@@ -53,7 +53,7 @@ from proof_agent.delivery.published_agent_materializer import (
     PublishedAgentMaterializationError,
     materialize_agent_contract_bundle,
 )
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.run_execution_service import (
     RunExecutionDependencies,
     execute_published_agent_run,

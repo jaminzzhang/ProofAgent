@@ -11,7 +11,7 @@ from proof_agent.contracts.run_execution import (
     RunRequest,
 )
 from proof_agent.contracts import InstitutionAuthorizationContext
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.run_submission_service import RunSubmissionService
 from proof_agent.observability.api.app import create_app
 

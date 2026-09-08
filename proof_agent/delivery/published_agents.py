@@ -1,31 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.local_store import LocalAgentConfigurationStore
-from proof_agent.contracts import PublishedAgentRuntimeFacts, ResolvedKnowledgeBindingSet
+from proof_agent.contracts import PublishedAgentRuntimeFacts
+from proof_agent.contracts.published_agent import PublishedAgent
 
 
 DEFAULT_PUBLISHED_AGENTS: dict[str, Path] = {}
-
-
-@dataclass(frozen=True)
-class PublishedAgent:
-    """A configured Agent package exposed through a stable identifier."""
-
-    agent_id: str
-    manifest_path: Path
-    display_name: str
-    purpose: str
-    customer_facing: bool
-    agent_version_id: str | None = None
-    source_draft_id: str | None = None
-    validation_run_id: str | None = None
-    resolved_knowledge_bindings: ResolvedKnowledgeBindingSet | None = None
-    runtime_facts: PublishedAgentRuntimeFacts | None = None
-    source: str = "configuration"
 
 
 class PublishedAgentRegistry:

@@ -45,7 +45,7 @@ from proof_agent.control.production_agent import (
 from proof_agent.control.workflow.stage_configuration import (
     resolve_workflow_stage_runtime_configuration,
 )
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 
 
 SOLE_PRODUCTION_AGENT_ID = "agent_management_insurance_specialist"

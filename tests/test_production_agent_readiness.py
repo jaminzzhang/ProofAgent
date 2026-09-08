@@ -49,7 +49,7 @@ from proof_agent.control.production_agent_publication import (
 from proof_agent.delivery.production_agent_validation import (
     ProductionOnlineAgentCandidateValidator,
 )
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 
 
 AGENT_ID = "agent_management_insurance_specialist"

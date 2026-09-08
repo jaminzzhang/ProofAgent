@@ -15,7 +15,7 @@ from proof_agent.contracts import (
 )
 from proof_agent.contracts.ports.model_credentials import ModelCredentialResolver
 from proof_agent.contracts.ports.shared_assets import ModelConnectionReader
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 
 
 _REAL_MODEL_PROVIDERS = frozenset({"deepseek", "openai", "openai_compatible"})

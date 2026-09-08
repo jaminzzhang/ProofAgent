@@ -23,7 +23,7 @@ from proof_agent.delivery.agent_package_execution import (
     ControlledReActOrchestratorDependency,
     execute_agent_package_run,
 )
-from proof_agent.delivery.published_agents import PublishedAgent
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.observability.storage.run_store import RunStore
 from proof_agent.control.workflow.controlled_react.ports import (
     ObservationTruthStorePort,

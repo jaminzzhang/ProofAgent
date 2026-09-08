@@ -11,7 +11,7 @@ from proof_agent.capabilities.artifacts.s3 import S3ArtifactStore
 from proof_agent.contracts.artifacts import ArtifactKind, ArtifactOwner, ArtifactPutRequest
 
 
-pytestmark = pytest.mark.hybrid_integration
+pytestmark = pytest.mark.s3_integration
 
 
 def required(name: str) -> str:

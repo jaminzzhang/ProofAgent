@@ -13,8 +13,8 @@ from proof_agent.bootstrap.loader import load_agent_manifest
 from proof_agent.configuration.file_locking import artifact_lock_path, locked
 from proof_agent.contracts.agent_configuration import ContractBundle, PublishedAgentVersion
 from proof_agent.contracts.ports.agent_lifecycle import AgentLifecycleRepository
+from proof_agent.contracts.published_agent import PublishedAgent
 from proof_agent.delivery.published_agents import (
-    PublishedAgent,
     published_agent_runtime_facts,
 )
 

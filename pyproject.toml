@@ -73,11 +73,9 @@ python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
-addopts = "-m 'not hybrid_integration'"
+addopts = "-m 'not s3_integration'"
 markers = [
-  "hybrid_integration: opt-in tests against disposable local Hybrid Knowledge services",
   "postgres_integration: opt-in tests against a disposable real PostgreSQL database",
   "s3_integration: opt-in tests against a disposable versioned S3-compatible store",
-  "search_integration: opt-in tests against a disposable real OpenSearch cluster",
   "llm_regression: opt-in tests that call a real LLM provider and are skipped unless explicitly enabled",
 ]
