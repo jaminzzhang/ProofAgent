@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus } from 'lucide-react'
+import { Plus, Bot, Search } from 'lucide-react'
 import {
   Button,
   Card,
@@ -28,6 +28,12 @@ export function AgentsPage() {
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<'all' | 'active' | 'unpublished'>('all')
+  const visibleAgents = agents.filter(agent => {
+    const matchesSearch = [agent.display_name, agent.agent_id, agent.purpose].join(' ').toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
+    return matchesSearch && (status === 'all' || (status === 'active' ? Boolean(agent.active_version_id) : !agent.active_version_id))
+  })
   const { t, formatDateTime, formatNumber } = useLocale()
 
   async function handleImport() {
@@ -51,31 +57,34 @@ export function AgentsPage() {
         actions={
           <>
             {capabilities?.can_create && (
-              <Button variant="outline" size="md" onClick={() => setWizardOpen(true)}>
+              <Button variant="default" size="md" onClick={() => setWizardOpen(true)}>
                 <Plus size={15} /> {t('agents.create').replace('+ ', '')}
               </Button>
             )}
-            {capabilities?.can_import_manifest && (
-              <>
-                <Input
-                  value={manifestPath}
-                  onChange={(event) => setManifestPath(event.target.value)}
-                  className="w-72 border-[var(--border)] bg-[var(--bg-base)]"
-                  aria-label={t('agents.import')}
-                />
-                <Button
-                  variant="subtle"
-                  size="md"
-                  onClick={handleImport}
-                  disabled={importing || !manifestPath.trim()}
-                >
-                  {importing ? t('agents.importing') : t('agents.import')}
-                </Button>
-              </>
-            )}
+
           </>
         }
       />
+
+
+      {capabilities?.can_import_manifest && (
+        <details className="business-import">
+          <summary>{t('business.importHelp')}</summary>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Input value={manifestPath} onChange={event => setManifestPath(event.target.value)}
+              className="min-w-0 flex-1" aria-label={t('agents.import')} />
+            <Button variant="outline" onClick={handleImport} disabled={importing || !manifestPath.trim()}>
+              {importing ? t('agents.importing') : t('agents.import')}
+            </Button>
+          </div>
+        </details>
+      )}
+
+      {!loading && !error && <dl className="business-summary">
+        <div><dt>{t('business.total')}</dt><dd>{formatNumber(agents.length)}</dd></div>
+        <div><dt>{t('business.active')}</dt><dd>{formatNumber(agents.filter(agent => agent.active_version_id).length)}</dd></div>
+        <div><dt>{t('business.drafts')}</dt><dd>{formatNumber(agents.filter(agent => agent.latest_draft_id).length)}</dd></div>
+      </dl>}
 
       {(importError || error) && (
         <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger-fg)]">
@@ -93,6 +102,18 @@ export function AgentsPage() {
         </Card>
       ) : (
         <Card className="overflow-hidden p-0">
+          <div className="business-toolbar">
+            <div className="relative min-w-0 flex-1 basis-64">
+              <Search size={16} aria-hidden="true" className="absolute left-3 top-3 text-[var(--text-muted)]" />
+              <Input type="search" className="pl-9" aria-label={t('business.search')} placeholder={t('business.search')}
+                value={search} onChange={event => setSearch(event.target.value)} />
+            </div>
+            <div className="flex flex-wrap gap-1" role="group" aria-label={t('agents.activeVersion')}>
+              {(['all', 'active', 'unpublished'] as const).map(value => <button type="button" key={value}
+                className="business-filter" aria-pressed={status === value} onClick={() => setStatus(value)}>{t(`business.${value}`)}</button>)}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="bg-[var(--bg-subtle)] hover:bg-[var(--bg-subtle)]">
@@ -103,9 +124,12 @@ export function AgentsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {agents.map((agent) => (
+              {visibleAgents.map((agent) => (
                 <TableRow key={agent.agent_id}>
                   <TableCell>
+                    <div className="business-agent-name">
+                    <span className="business-agent-icon" aria-hidden="true"><Bot size={19} /></span>
+                    <div className="min-w-0">
                     {agent.latest_draft_id ? (
                       <Link
                         to={`/agents/${agent.agent_id}/drafts/${agent.latest_draft_id}`}
@@ -117,6 +141,7 @@ export function AgentsPage() {
                       <span className="font-medium text-[var(--text-primary)]">{agent.display_name}</span>
                     )}
                     <div className="mt-1 max-w-xl truncate text-xs text-[var(--text-muted)]">{agent.purpose}</div>
+                    </div></div>
                   </TableCell>
                   <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
                     {formatNumber(agent.draft_count)}
@@ -131,6 +156,11 @@ export function AgentsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
+          {visibleAgents.length === 0 && <p role="status" className="px-6 py-12 text-center text-sm text-[var(--text-muted)]">{t('business.noResults')}</p>}
+          <div className="border-t border-[var(--border)] px-5 py-3 text-xs text-[var(--text-muted)]" aria-live="polite">
+            {t('business.results').replace('{count}', formatNumber(visibleAgents.length))}
+          </div>
         </Card>
       )}
 

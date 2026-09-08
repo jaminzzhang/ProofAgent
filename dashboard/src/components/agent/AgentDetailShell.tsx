@@ -137,7 +137,16 @@ export function AgentDetailShell({
 
       {/* Workspace: secondary sidebar + content. Width/padding aligned with the main Sidebar. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
-        <aside className="min-w-0 shrink-0 overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 lg:w-56 lg:border-b-0 lg:border-r max-md:w-full">
+        <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 lg:hidden">
+          <label htmlFor="agent-section" className="mb-1 block text-xs text-[var(--text-muted)]">{t('configuration.section')}</label>
+          <select id="agent-section" value={activeModule} onChange={event => onModuleChange(event.target.value)}
+            className="h-10 w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 text-sm text-[var(--text-primary)]">
+            {groups.map(group => <optgroup key={group.title} label={group.title}>
+              {group.items.map(item => <option key={item.id} value={item.id}>{group.title} · {item.label}</option>)}
+            </optgroup>)}
+          </select>
+        </div>
+        <aside className="business-sidebar hidden lg:block min-w-0 shrink-0 overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 lg:w-60 lg:border-b-0 lg:border-r max-md:w-full">
           <nav aria-label={t('agentDetail.navigation')} className="px-3">
             <div className="space-y-5 max-md:flex max-md:flex-wrap max-md:gap-x-6 max-md:space-y-0">
               {groups.map((group) => (
@@ -190,6 +199,10 @@ export function AgentDetailShell({
 
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-8 py-8 max-md:px-4 max-md:py-5">
           <div className="mx-auto min-w-0 max-w-7xl pb-12">
+            <div className="business-workspace-title">
+              <h1>{[...modules, ...lifecycle].find(item => item.id === activeModule)?.label}</h1>
+              <span className="text-xs text-[var(--text-muted)]">{t('business.agentWorkspace')}</span>
+            </div>
             {children}
           </div>
         </main>

@@ -85,7 +85,7 @@ def _runtime_sample_context(
         "intent_resolution": {},
         "recent_conversation_summary": recent_conversation_summary,
         "bound_knowledge_sources": [
-            binding.dataset_id for binding in manifest.knowledge_bindings
+            binding.source_id for binding in manifest.knowledge_bindings
         ],
         "bound_tools": "",
         "policy_outline": str(manifest.policy.file),

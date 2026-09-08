@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from proof_agent.capabilities.knowledge.dify import DifyKnowledgeProvider
+from proof_agent.capabilities.knowledge.agentset import AgentsetKnowledgeProvider
 from proof_agent.contracts.external_knowledge import (
     ExternalKnowledgeBinding,
     ExternalKnowledgeResult,
@@ -18,6 +19,12 @@ from proof_agent.contracts.egress import EgressPolicyVersion
 from proof_agent.control.security.egress import CompiledEgressPolicy
 
 
+_PROVIDER_TYPES: dict[str, type[DifyKnowledgeProvider] | type[AgentsetKnowledgeProvider]] = {
+    "dify": DifyKnowledgeProvider,
+    "agentset": AgentsetKnowledgeProvider,
+}
+
+
 def development_knowledge_dependencies(
     http_client: GuardedHttpClient | None,
     secret_provider: SecretProvider | None,
@@ -28,7 +35,14 @@ def development_knowledge_dependencies(
     if http_client is None:
         policy_path = os.environ.get("PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY")
         if not policy_path:
-            return http_client, secret_provider
+            raise ProofAgentError(
+                "PA_CONFIG_002",
+                "External Knowledge outbound access is not configured on this development server.",
+                "Set PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY to an operator-approved "
+                "EgressPolicyVersion JSON file and restart the server. Configure the referenced "
+                "credential in the server environment; do not enter an API key in Dashboard. "
+                "See docs/features/external-knowledge/configuration.md.",
+            )
         try:
             version = EgressPolicyVersion.model_validate_json(Path(policy_path).read_text())
             http_client = GuardedHttpsClient(
@@ -58,7 +72,7 @@ class ExternalKnowledgeRuntime:
     ) -> None:
         self._bindings = bindings
         self._providers: dict[str, ExternalKnowledgeProvider] = {
-            binding.binding_id: DifyKnowledgeProvider(
+            binding.binding_id: _PROVIDER_TYPES[binding.provider](
                 binding=binding,
                 http_client=http_client,
                 secret_provider=secret_provider,

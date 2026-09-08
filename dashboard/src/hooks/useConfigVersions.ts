@@ -24,15 +24,20 @@ export function useConfigVersions(agentId: string | undefined): UseConfigVersion
       setLoading(false)
       return
     }
+    let active = true
     setLoading(true)
+    setVersions([])
+    setActiveVersionId(null)
     setError(null)
     fetchConfigVersions(agentId)
       .then((data) => {
+        if (!active) return
         setVersions(data.data)
         setActiveVersionId(data.meta.active_version_id)
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false))
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : String(err)) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [agentId, refreshToken])
 
   return {

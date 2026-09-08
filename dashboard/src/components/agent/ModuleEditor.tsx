@@ -9,7 +9,7 @@ import {
   Switch,
 } from '@proofagent/ui'
 import { CodeBlock } from '../CodeBlock'
-import { extractAgentYamlSection, readAgentYamlField } from '../../utils/agentYaml'
+import { extractAgentYamlSection, extractAgentYamlPathSection, readAgentYamlField } from '../../utils/agentYaml'
 import { useLocale } from '../../i18n/locale'
 
 interface FieldConfig {
@@ -26,6 +26,10 @@ interface FieldConfig {
   options?: string[]
   description?: string
   placeholder?: string
+  defaultValue?: string
+  min?: number
+  max?: number
+  step?: number
 }
 
 interface ModuleEditorProps {
@@ -54,6 +58,20 @@ export function ModuleEditor({
 
   const sectionYaml = extractAgentYamlSection(agentYaml, yamlSection)
 
+  const fieldValue = (field: FieldConfig) => extractAgentYamlPathSection(agentYaml, field.path)
+    ? readAgentYamlField(agentYaml, field.path) : field.defaultValue || ''
+
+  const errors = fields.map((field) => {
+    if (field.input !== 'number' || field.min === undefined) return null
+    const raw = fieldValue(field)
+    const value = Number(raw)
+    return !raw.trim() || !Number.isFinite(value) || value < field.min
+      || (field.max !== undefined && value > field.max)
+      || (field.step === 1 && !Number.isInteger(value))
+      ? t('configuration.invalidNumber').replace('{field}', field.label)
+      : null
+  })
+
   return (
     <ConfigPanel
       title={title}
@@ -64,7 +82,7 @@ export function ModuleEditor({
           <Button variant="ghost" size="sm" onClick={() => setShowYaml(!showYaml)}>
             {showYaml ? t('moduleEditor.hideYaml') : t('moduleEditor.showYaml')}
           </Button>
-          <Button variant="outline" size="sm" onClick={onSave} disabled={busy}>
+          <Button variant="outline" size="sm" onClick={onSave} disabled={busy || errors.some(Boolean)}>
             {busy ? t('moduleEditor.saving') : t('moduleEditor.save')}
           </Button>
         </>
@@ -84,10 +102,10 @@ export function ModuleEditor({
       {/* Label-above-input cards. min-w-0 on every cell so long values
           truncate/wrap instead of pushing the grid. */}
       <FieldGrid cols={2} gap="md">
-        {fields.map((field) => {
+        {fields.map((field, index) => {
           const fieldPath = field.path.join('.')
           const fieldId = `module-field-${fieldPath.replaceAll('.', '-')}`
-          const value = readAgentYamlField(agentYaml, field.path)
+          const value = fieldValue(field)
           const pathBadge = (
             <Badge
               variant="subtle"
@@ -140,6 +158,12 @@ export function ModuleEditor({
               ) : (
                 <Input
                   id={fieldId}
+                  disabled={busy}
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  aria-invalid={Boolean(errors[index])}
+                  aria-describedby={errors[index] ? `${fieldId}-error` : undefined}
                   type={field.input === 'number' ? 'number' : 'text'}
                   list={field.input === 'combobox' ? `${fieldId}-list` : undefined}
                   value={value}
@@ -147,6 +171,7 @@ export function ModuleEditor({
                   onChange={(e) => onFieldChange(field.path, e.target.value)}
                 />
               )}
+              {errors[index] && <p id={`${fieldId}-error`} role="alert" className="text-sm text-[var(--danger-fg)]">{errors[index]}</p>}
               {field.input === 'combobox' && field.options && (
                 <datalist id={`${fieldId}-list`}>
                   {field.options.map((opt) => (

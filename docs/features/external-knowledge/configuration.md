@@ -1,12 +1,12 @@
-# Dify 外部知识库配置
+# 外部知识库配置：Dify 与 Agentset
 
-[KNOWN | HIGH] 本项目已按 ADR-0242 切换到外部知识库绑定。首期支持 Dify Knowledge API 的只读检索；服务端配置不会创建、上传、修改或删除 Dify 文档。API 以 Dify [Knowledge 指南](https://docs.dify.ai/en/api-reference/guides/knowledge)和[检索接口](https://docs.dify.ai/en/api-reference/knowledge-bases/retrieve-chunks-from-a-knowledge-base-test-retrieval)为依据。
+[KNOWN | HIGH] 本项目已按 ADR-0242 切换到外部知识库绑定。支持 Dify Knowledge API 和 Agentset Search API 的只读检索；服务端配置不会创建、上传、修改或删除 Dify 文档。API 以 Dify [Knowledge 指南](https://docs.dify.ai/en/api-reference/guides/knowledge)和[检索接口](https://docs.dify.ai/en/api-reference/knowledge-bases/retrieve-chunks-from-a-knowledge-base-test-retrieval)为依据。
 
 ## 配置流程
 
 1. 在 Dify 的知识库 Service API 页面获取 Service API 地址、Dataset ID 和 Knowledge API Key。API Key 的权限可能涵盖多个知识库；Agent 只能查询自身绑定的 Dataset。
 2. 将 Key 交给服务端凭证服务。开发环境通过环境变量解析，生产目标通过现有 Vault Secret Provider 解析。不要把 Key 填入 Agent YAML、Dashboard、聊天消息或 Git。
-3. 在 Dashboard → Agent → 草稿 → 知识库中添加 Dify 数据集。填写绑定 ID、Service API URL、Dataset ID、凭证服务、Secret Handle 与版本、检索方式、Top K 和最低相关性分数。最多 5 个绑定；保存检查草稿 revision，冲突后需重新载入。
+3. 在 Dashboard → Agent → 草稿 → 知识库中添加 Dify 数据集。填写绑定 ID、Service API URL、Dataset ID、凭证服务、Secret Handle 与版本、检索方式、Top K 和最低相关性分数。Dify 与 Agentset 合计最多 5 个绑定；保存检查草稿 revision，冲突后需重新载入。
 4. 配置独立的出站许可：明确 Service API 的 HTTPS origin 和允许连接的 IP/CIDR。更改 Agent 地址不会自动获得网络许可。自部署 Dify 需通过 TLS 暴露 Service API。
 5. 开发模式下，执行草稿验证，确认实际引用与回答，再发布开发版本。版本固定连接、Dataset、凭证引用与检索设置；不固定 Dify 数据集的全部内容。
 
@@ -39,6 +39,44 @@ Dataset ID 只是示例，必须替换。Service API 地址从 Dify 复制，不
 
 开发进程需通过自己的环境获得 `DIFY_KNOWLEDGE_API_KEY`。`version_id: env` 表示开发环境变量，不承诺密钥内容不可变。Vault 使用 `protocol_id: hashicorp-vault-2.0-kv-v2`、运维配置的 `handle_id` 和精确 `version_id`；读取到的凭证版本不一致时拒绝检索。
 
+## Agentset 配置
+
+[KNOWN | HIGH] ADR-0249 增加 Agentset 适配器，和 Dify 可在同一 Agent 内混合使用。Dashboard 点击“添加 Agentset Namespace”，填写 Namespace、可选 Tenant、服务端凭证引用及检索设置。切换 Provider 会清空原来源、凭证引用与检索设置，避免配置串用。
+
+```yaml
+knowledge_bindings:
+  - binding_id: manuals
+    provider: agentset
+    endpoint: https://api.agentset.ai/v1
+    namespace_id: ns_REPLACE_WITH_YOUR_NAMESPACE
+    tenant_id: Customer1  # 可选；不使用 Tenant 时省略
+    credential_ref:
+      protocol_id: local-environment-v1
+      handle_id: AGENTSET_KNOWLEDGE_API_KEY
+      purpose: knowledge_credential
+      version_id: env
+    retrieval:
+      search_method: semantic
+      top_k: 3
+      score_threshold: 0.2
+      rerank: true
+      rerank_model: zeroentropy:zerank-2
+    content_format: text
+    consistency: mutable_remote
+    failure_mode: required
+    admission_policy: external-relevance-and-provenance.v1
+```
+
+- 地址填写 API 根路径，服务端拼接 `POST /namespace/{namespace_id}/search`；不填写文档网站或完整 Search URL。凭证通过 Bearer Header 注入；可选 Tenant 固定为 `x-tenant-id`，不由问题文本控制。
+- Namespace 必须以 `ns_` 开头。Tenant 按官方 API schema 限制为 1–64 个英文字母或数字；指南中的其他格式示例不作为此实现的输入合同。
+- 支持 `semantic` 和 `keyword`；Rerank 可关闭，开启时显式固定模型，默认 `zeroentropy:zerank-2`，避免供应商默认值变化。支持的模型列于表单及严格契约；未知模型被拒绝。
+- 复用服务端凭证、版本核验、出站许可、超时、响应体与候选数量上限；需为 `api.agentset.ai:443` 配置核准网络范围。关闭 metadata 和 relationships；不开放任意 filter、远端写入、索引管理或供应商托管 Agent 循环。
+- Agentset 的 `score` 同样只是相关性输入，必须经过 ProofAgent 准入。Search 成功返回的分段作为可检索候选；不伪造 Dify 的文档启用/索引状态。
+- 保留不透明 Chunk ID，不从 `doc_123#4` 等值推导 Document ID。引用来源为 `external://<binding>/namespaces/<namespace>[/tenants/<tenant>]/chunks/<encoded-chunk>`，再附加分段及内容 SHA-256；Tenant 参与来源身份。
+- `structured_json` 同样可用，Agentset 每项 `text` 必须完整遵循下述 JSON 记录合同。来源身份与摘要仍由受控链路产生，内容不能覆盖它们。
+
+协议依据：[Search API](https://docs.agentset.ai/api-reference/endpoint/search)、[引用](https://docs.agentset.ai/search-and-retrieval/citations)、[数据隔离](https://docs.agentset.ai/production/data-segregation)。本地证据见 [Agentset 验证记录](agentset-verification.md)。真实 Namespace/Tenant 权限、连通性、模型可用性与召回质量尚未联调。
+
 ## 开发出站策略
 
 在仓库外保存一份 `EgressPolicyVersion` JSON，并将路径设置到 `PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY`。已有服务端 Guarded HTTP 注入时继续使用该实例，不创建第二套网络权限。未配置许可时拒绝发起请求。
@@ -60,7 +98,7 @@ Dataset ID 只是示例，必须替换。Service API 地址从 Dify 复制，不
 
 ## 检索与证据语义
 
-- 首期检索方式：`semantic_search`、`full_text_search`、`keyword_search`；不开放 hybrid/reranking 或任意 metadata filter。未声明字段会被拒绝。
+- Dify 检索方式：`semantic_search`、`full_text_search`、`keyword_search`；不开放 hybrid/reranking 或任意 metadata filter。未声明字段会被拒绝。
 - 单次查询最多 250 个字符，不静默截断。服务端响应最多 1 MiB，最多解析 100 条候选；单绑定 Top K 为 1–20。实际保留数量还受 Agent `retrieval.top_k` 限制，准入分数门槛取绑定与 Agent `retrieval.min_score` 的较高值。
 - 默认单请求超时 10 秒；实际使用 Agent `retrieval.query_timeout_seconds`，上限 60 秒。多绑定顺序查询，每个被选绑定都必须成功，不因接口失败返回部分成功。零命中属于正常检索结果。
 - HTTP 401/403/404/429/5xx、超时、出站拒绝、重定向、错误查询、损坏内容与身份不一致均返回稳定脱敏错误。不重定向、不自动重试。
@@ -103,3 +141,9 @@ Dataset ID 只是示例，必须替换。Service API 地址从 Dify 复制，不
 [KNOWN | HIGH] KSS 专属 Release、Reference、Grant 和正式发布验证脚本属于历史资料，不能作为此次接入的验收依据。默认正式发布命令未装配，外部知识库生产发布 profile 尚待独立交付。DCM v2 仅移除 KSS 专属基础设施依赖，并保留 v1 历史解析；它不提供外部知识库的生产兼容性或发布证明。
 
 [KNOWN | HIGH] 本切片使用官方协议的合成本地响应验证配置、准入、主循环、冻结与错误行为。未读取真实 Key，未对真实 Dify 进行连通性或数据质量验收，未执行上线。后续真实验收应记录 Dify 版本、Dataset 配置、实际命中/空结果/权限错误、引用准确性和问题集结果。
+
+## Validate 报 PA_CONFIG_002：未装配外部检索组件
+
+如果开发服务器提示未配置 outbound access，需在**启动服务器的环境**中设置 `PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY`，值为上文运维核准的 EgressPolicyVersion JSON 路径，然后重启。仅在 Dashboard 保存 URL、Namespace 和 Secret Handle 不会生成出站许可。凭证引用对应的环境变量也必须由服务器进程获得，不在浏览器输入 Key。
+
+历史报错 `External Knowledge requires guarded HTTP and a Secret Provider` 可能由缺失出站策略导致；现已将该分支改为明确的缺失配置诊断。测试验证提供策略后两项组件能够装配，但这不证明真实凭证、供应商网络与检索质量已通过验证。

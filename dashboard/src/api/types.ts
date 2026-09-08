@@ -1475,12 +1475,14 @@ export interface ReleasesResponse {
 
 export interface ExternalKnowledgeBinding {
   binding_id: string
-  provider: 'dify'
+  provider: 'dify' | 'agentset'
   endpoint: string
-  dataset_id: string
+  dataset_id?: string
+  namespace_id?: string
+  tenant_id?: string
   content_format?: 'text' | 'structured_json'
   credential_ref: { protocol_id: string; handle_id: string; purpose: 'knowledge_credential'; version_id: string }
-  retrieval: { search_method: 'semantic_search' | 'full_text_search' | 'keyword_search'; top_k: number; score_threshold: number }
+  retrieval: { search_method: 'semantic_search' | 'full_text_search' | 'keyword_search' | 'semantic' | 'keyword'; top_k: number; score_threshold: number; rerank?: boolean; rerank_model?: string }
   consistency?: 'mutable_remote'
   binding_kind?: 'external_knowledge'
   schema_version?: 'external-knowledge-binding.v1'

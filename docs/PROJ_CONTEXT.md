@@ -1,5 +1,15 @@
 # Project Context
 
+## Dashboard configuration completion — 2026-09-07
+
+[KNOWN | HIGH] Dashboard adds capability-aware configuration navigation, effective
+external retrieval limits, complete Policy/Tools document editing, unsaved-module
+protection and revision-consistent Draft reads. Current design and usage:
+`docs/features/agent-configuration-workspace/dashboard-configuration-guide.md`.
+Local acceptance and limitations:
+`docs/features/agent-configuration-workspace/dashboard-completion-verification.md`.
+Existing Workspace/CAS and production publication authority are unchanged.
+
 ## Current Agent kernel P1/P2 — 2026-09-07
 
 [KNOWN | HIGH] Bounded local task-state continuity, required read-only tool plans, verified reports, Skill resource/runtime scope and a development-only business-action ledger are implemented. Five fixed kernel probes now pass, including long-context constraints. Repeated synchronous V3 retrieval measurements preserve missing usage/cost as null. Final backend verification with temporary PostgreSQL: 2751 passed, 24 skipped, 2 deselected; Ruff/Mypy/lock/domain checks pass. See `docs/features/agent-kernel-quality/tdd-p1-p2.md` for current acceptance and remaining gaps. Overall `PARTIAL_VERIFICATION`: real business action/provider semantics, production queue recovery, live Dify/models, S3 and release Gates remain incomplete.
@@ -898,3 +908,9 @@ deployment or Production GO action occurred.
 - `VERIFIED_LOCAL`: recorded local acceptance checks pass; local Docker evidence
   may exist, but the status is not production approval or a formal release Gate.
 - `BLOCKED`: a named dependency or decision prevents meaningful progress.
+
+## Agentset external Knowledge extension (2026-09-07)
+
+[KNOWN | HIGH] ADR-0249 adds strict Agentset Namespace/Tenant bindings alongside Dify, guarded Search, opaque chunk provenance, typed-record admission, mixed-source validation/freeze and Dashboard provider forms. See `docs/features/external-knowledge/agentset-verification.md`. Local synthetic acceptance does not establish live provider quality or production publication.
+
+[KNOWN | HIGH] Dashboard business UI (2026-09-07): navy navigation, semantic theme tokens, responsive headers, searchable/filterable Agent list and grouped Knowledge form. 238 frontend tests and build pass. See `docs/features/agent-configuration-workspace/business-ui-verification.md`.

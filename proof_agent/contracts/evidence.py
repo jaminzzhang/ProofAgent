@@ -4,9 +4,11 @@ from collections.abc import Mapping
 from enum import Enum
 from hashlib import sha256
 from typing import Any, Literal
+from urllib.parse import quote
 
 from pydantic import Field, StrictBool, field_validator, model_validator
 
+from proof_agent.contracts.external_source import external_evidence_source
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.structured_evidence import StructuredEvidenceRecord, parse_structured_evidence
 
@@ -60,10 +62,13 @@ class EvidenceChunk(FrozenModel):
             digest = sha256(self.content.encode()).hexdigest()
             if (
                 parse_structured_evidence(self.content) != self.structured_data
-                or not all((self.source, self.binding_id, self.source_id, self.document_id, self.chunk_id))
-                or self.source != f"external://{self.binding_id}/datasets/{self.source_id}/documents/{self.document_id}"
+                or not all((self.source, self.binding_id, self.source_id, self.chunk_id))
+                or self.source != external_evidence_source(
+                    provider=self.provider_name or "dify", binding_id=self.binding_id or "",
+                    source_id=self.source_id or "", document_id=self.document_id,
+                    chunk_id=self.chunk_id or "", tenant_id=self.metadata.get("tenant_id"))
                 or self.source_version_id != f"sha256:{digest}"
-                or self.citation != f"{self.source}#segment={self.chunk_id}&sha256={digest}"
+                or self.citation != f"{self.source}#segment={quote(self.chunk_id or '', safe='')}&sha256={digest}"
             ):
                 raise ValueError("Structured evidence content or provenance does not match")
         return self

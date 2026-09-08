@@ -61,6 +61,9 @@ import { WorkflowModuleEditor } from '../components/agent/WorkflowModuleEditor'
 import { ToolsModuleEditor } from '../components/agent/ToolsModuleEditor'
 import { ValidateWorkspace } from '../components/agent/ValidateWorkspace'
 import { RunDetailDrawer } from '../components/agent/RunDetailDrawer'
+import { ContractDocumentEditor } from '../components/agent/ContractDocumentEditor'
+import { ConfigurationGuide } from '../components/agent/ConfigurationGuide'
+import { RetrievalModuleEditor } from '../components/agent/RetrievalModuleEditor'
 import { POLICY_FIELDS } from '../components/agent/module-configs/policy'
 import { RESPONSE_FIELDS } from '../components/agent/module-configs/response'
 import { useConfigDraft } from '../hooks/useConfigDraft'
@@ -89,6 +92,7 @@ export function AgentDetailPage() {
     versions,
     activeVersionId,
     loading: versionsLoading,
+    error: versionsError,
     refresh: refreshVersions,
   } = useConfigVersions(agentId)
   const requestedTab = agentDetailTab(searchParams.get('tab'))
@@ -114,6 +118,8 @@ export function AgentDetailPage() {
   const [displayName, setDisplayName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [agentYaml, setAgentYaml] = useState('')
+  const [policyYaml, setPolicyYaml] = useState('')
+  const [toolsYaml, setToolsYaml] = useState('')
   const [dirtyConfigurationModule, setDirtyConfigurationModule] = useState<Tab | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -131,6 +137,9 @@ export function AgentDetailPage() {
   knowledgeRouteRef.current = knowledgeRouteKey
   const [knowledgeLoadedFor, setKnowledgeLoadedFor] = useState<string | null>(null)
   const knowledgeLoaded = knowledgeLoadedFor === knowledgeRouteKey
+  const [knowledgeBindingsDirty, setKnowledgeBindingsDirty] = useState(false)
+  const [knowledgeReset, setKnowledgeReset] = useState(0)
+  useEffect(() => { setKnowledgeBindingsDirty(false) }, [knowledgeRouteKey])
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
   const [publicationConfiguration, setPublicationConfiguration] = useState<ProductionAgentPublicationConfiguration | null>(null)
   const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
@@ -148,6 +157,8 @@ export function AgentDetailPage() {
   useEffect(() => {
     if (contract) {
       setAgentYaml(contract.agent_yaml)
+      setPolicyYaml(contract.policy_yaml)
+      setToolsYaml(contract.tools_yaml)
       setDirtyConfigurationModule(null)
     }
   }, [contract])
@@ -287,9 +298,9 @@ export function AgentDetailPage() {
     draft && (displayName !== draft.display_name || purpose !== draft.purpose),
   )
   const contractDirty = Boolean(
-    dirtyConfigurationModule && contract && agentYaml !== contract.agent_yaml,
+    dirtyConfigurationModule && contract && (agentYaml !== contract.agent_yaml || policyYaml !== contract.policy_yaml || toolsYaml !== contract.tools_yaml),
   )
-  const hasUnsavedChanges = basicsDirty || contractDirty
+  const hasUnsavedChanges = basicsDirty || contractDirty || knowledgeBindingsDirty
   const latestValidationFresh = Boolean(
     draft && latestValidation && validationCoversCurrentRevision(draft, latestValidation.run_id),
   )
@@ -420,7 +431,7 @@ export function AgentDetailPage() {
     successMessage = t('agentDetail.configurationSaved'),
   ) {
     if (!agentId || !draftId) return
-    if (basicsDirty || (dirtyConfigurationModule && dirtyConfigurationModule !== module)) {
+    if (knowledgeBindingsDirty || basicsDirty || (dirtyConfigurationModule && dirtyConfigurationModule !== module)) {
       setActionError(t('agentDetail.saveCurrentModuleFirst'))
       return
     }
@@ -428,6 +439,8 @@ export function AgentDetailPage() {
     await runAction(module, async () => {
       await updateConfigDraftContract(agentId, draftId, {
         agent_yaml: agentYaml,
+        ...(module === 'policy' ? { policy_yaml: policyYaml } : {}),
+        ...(module === 'tools' ? { tools_yaml: toolsYaml } : {}),
         ...(draft?.revision === undefined ? {} : { expected_revision: draft.revision }),
       })
       setDirtyConfigurationModule(null)
@@ -534,7 +547,7 @@ export function AgentDetailPage() {
     bindings: ExternalKnowledgeBinding[],
   ): Promise<KnowledgeBindingMutationResult> {
     if (!agentId || !draftId || !knowledgeConfig || !knowledgeLoaded) return 'failed'
-    if (hasUnsavedChanges) {
+    if (basicsDirty || contractDirty) {
       setActionError(t('agentDetail.saveCurrentModuleFirst'))
       return 'failed'
     }
@@ -616,11 +629,19 @@ export function AgentDetailPage() {
   ].filter((tab) => lifecycleTabIds.includes(tab.id as Tab))
 
   if (loading) return <div className="py-12 flex justify-center"><LoadingSpinner /></div>
-  if (error) return <div className="text-[var(--danger)] text-sm">{error}</div>
+  if (error) return <div role="alert" className="p-6 text-[var(--danger)] text-sm">
+    <p>{error === 'agent_draft_snapshot_changed_retry' ? t('configuration.snapshotChanged') : error}</p>
+    <Button className="mt-3" variant="outline" onClick={refresh}>{t('configuration.reload')}</Button>
+  </div>
   if (!draft || !contract) return <div className="text-[var(--text-muted)] text-sm">{t('agentDetail.draftNotFound')}</div>
 
   function setActiveTab(moduleId: string) {
     const nextTab = agentDetailTab(moduleId)
+    if (busy) return
+    if ((knowledgeBindingsDirty && nextTab !== activeTab) || (hasUnsavedChanges && nextTab !== activeTab && !lifecycleTabIds.includes(nextTab) && nextTab !== (dirtyConfigurationModule ?? 'general'))) {
+      setActionError(t('configuration.editPending'))
+      return
+    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
       if (nextTab === 'general') {
@@ -702,6 +723,28 @@ export function AgentDetailPage() {
         )}
       </section>
 
+      {hasUnsavedChanges && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-[var(--border)] p-3" role="status">
+          <Button variant="ghost" size="sm" onClick={() => setActiveTab(knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')}>{t('configuration.returnToEdit')}</Button>
+          <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => {
+            setDisplayName(draft.display_name)
+            setPurpose(draft.purpose)
+            setAgentYaml(contract.agent_yaml)
+            setPolicyYaml(contract.policy_yaml)
+            setToolsYaml(contract.tools_yaml)
+            setDirtyConfigurationModule(null)
+            setKnowledgeBindingsDirty(false)
+            setKnowledgeReset(value => value + 1)
+            setActionError(null)
+          }}>{t('configuration.discard')}</Button>
+        </div>
+      )}
+
+      {versionsError && <p role="alert" className="mb-4 text-sm text-[var(--danger-fg)]">{versionsError}</p>}
+      <fieldset className="min-w-0" disabled={Boolean(busy) || (
+        hasUnsavedChanges && editableModuleIds.includes(activeTab)
+        && activeTab !== (knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')
+      )}>
       {activeTab === 'general' && (
         <div className="space-y-5">
           <section className="border border-[var(--border)] bg-[var(--bg-surface)] p-6">
@@ -781,6 +824,8 @@ export function AgentDetailPage() {
             </div>
           </section>
 
+          <ConfigurationGuide modules={CONFIGURE_MODULES} editableModules={editableModuleIds} onOpen={setActiveTab} />
+
           {agentId && (
             <AgentMonitorSummary
               agentId={agentId}
@@ -830,15 +875,28 @@ export function AgentDetailPage() {
 
       {activeTab === 'knowledge' && (
         canEditKnowledge ? (
+          <div className="space-y-5">
           <KnowledgeModuleEditor
-            key={knowledgeRouteKey}
+            key={`${knowledgeRouteKey}/${knowledgeReset}`}
             mode={draft?.capabilities?.mode ?? "development"}
             config={knowledgeLoaded ? knowledgeConfig : null}
             loading={!knowledgeLoaded && !knowledgeError}
             error={knowledgeError}
-            busy={busy === 'knowledge'}
+            busy={Boolean(busy)}
+            disabled={contractDirty || basicsDirty}
+            onDirtyChange={setKnowledgeBindingsDirty}
             onSave={saveKnowledgeReleaseBinding}
           />
+          <fieldset className="min-w-0" disabled={knowledgeBindingsDirty}>
+          <RetrievalModuleEditor agentYaml={agentYaml} busy={Boolean(busy)}
+            onFieldChange={(path, value) => {
+              setDirtyConfigurationModule('knowledge')
+              setAgentYaml(current => updateAgentYamlField(current, path, value))
+            }}
+            onSave={() => saveAgentYaml('knowledge')}
+          />
+          </fieldset>
+          </div>
         ) : readOnlyConfiguration(
           t('agentDetail.tabKnowledge'),
           [
@@ -851,6 +909,7 @@ export function AgentDetailPage() {
 
       {activeTab === 'tools' && (
         editableModuleIds.includes('tools') ? (
+          <div className="space-y-5">
           <ToolsModuleEditor
             agentYaml={agentYaml}
             onFieldChange={(path, value) => {
@@ -858,8 +917,12 @@ export function AgentDetailPage() {
               setAgentYaml((current: string) => updateConfigurationYamlField(current, path, value))
             }}
             onSave={() => saveAgentYaml('tools', t('agentDetail.toolsSaved'))}
-            busy={busy === 'tools'}
+            busy={Boolean(busy)}
           />
+          <ContractDocumentEditor title={t('configuration.toolContracts')} description={t('configuration.toolContractsHelp')}
+            value={toolsYaml} busy={Boolean(busy)}
+            onChange={value => { setDirtyConfigurationModule('tools'); setToolsYaml(value) }} />
+          </div>
         ) : readOnlyConfiguration(t('agentDetail.tabTools'), [
           { label: 'capabilities.tools', path: ['capabilities', 'tools'] },
           { label: 'tools.yaml', content: contract.tools_yaml },
@@ -868,6 +931,7 @@ export function AgentDetailPage() {
 
       {activeTab === 'policy' && (
         editableModuleIds.includes('policy') ? (
+          <div className="space-y-5">
           <ModuleEditor
             title={t('agentDetail.policyTitle')}
             description={t('agentDetail.policyDescription')}
@@ -879,8 +943,12 @@ export function AgentDetailPage() {
               setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
             }}
             onSave={() => saveAgentYaml('policy', t('agentDetail.policySaved'))}
-            busy={busy === 'policy'}
+            busy={Boolean(busy)}
           />
+          <ContractDocumentEditor title={t('configuration.policyRules')} description={t('configuration.policyHelp')}
+            value={policyYaml} busy={Boolean(busy)}
+            onChange={value => { setDirtyConfigurationModule('policy'); setPolicyYaml(value) }} />
+          </div>
         ) : readOnlyConfiguration(t('agentDetail.tabPolicy'), [
           { label: 'policy', path: ['policy'] },
           { label: 'policy.yaml', content: contract.policy_yaml },
@@ -1096,6 +1164,8 @@ export function AgentDetailPage() {
           onOpenRunDetail={setSelectedRunDetailId}
         />
       )}
+
+      </fieldset>
 
       <Dialog
         open={rollbackTargetVersionId !== null}

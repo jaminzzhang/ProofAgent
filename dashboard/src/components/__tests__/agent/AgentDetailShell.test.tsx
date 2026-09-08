@@ -121,7 +121,7 @@ describe('AgentDetailShell', () => {
       </AgentDetailShell>
     )
 
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Overview', level: 3 })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Design' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Verify' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
@@ -249,4 +249,14 @@ describe('AgentDetailShell', () => {
     expect(screen.getByTestId('content')).toBeInTheDocument()
     expect(screen.getByText('Test Content')).toBeInTheDocument()
   })
+  it('routes the compact module picker through the same navigation handler', () => {
+    const navigate = vi.fn()
+    renderWithRouter(<AgentDetailShell agentName="Agent" modules={mockModules} lifecycle={mockLifecycle}
+      activeModule="general" onModuleChange={navigate}><div>Content</div></AgentDetailShell>)
+    const picker = screen.getByRole('combobox', { name: 'Configuration section' })
+    fireEvent.change(picker, { target: { value: 'knowledge' } })
+    expect(navigate).toHaveBeenCalledWith('knowledge')
+    expect(screen.queryByRole('option', { name: /Publication/ })).not.toBeInTheDocument()
+  })
+
 })

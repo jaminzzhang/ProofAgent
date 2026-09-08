@@ -11,12 +11,14 @@ interface Props {
   loading: boolean
   error: string | null
   busy: boolean
+  disabled?: boolean
+  onDirtyChange?: (dirty: boolean) => void
   onSave: (bindings: ExternalKnowledgeBinding[]) => Promise<KnowledgeBindingMutationResult>
 }
 
 const inputClass = 'w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)]'
 
-export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSave }: Props) {
+export function KnowledgeModuleEditor({ config, mode, loading, error, busy, disabled = false, onSave, onDirtyChange }: Props) {
   const { t } = useLocale()
   const [bindings, setBindings] = useState<ExternalKnowledgeBinding[]>([])
   const [dirty, setDirty] = useState(false)
@@ -24,6 +26,7 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSa
   useEffect(() => {
     if (config && !dirty && !conflict) setBindings(config.bindings)
   }, [config, dirty, conflict])
+  useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
   if (loading) return <LoadingSpinner />
   if (error) return <p role="alert">{error}</p>
   if (!config) return <p>{t('knowledgeBinding.notLoaded')}</p>
@@ -32,22 +35,34 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSa
     setBindings(current => current.map((item, i) => i === index ? { ...item, ...patch } : item))
     setDirty(true)
   }
-  function add() {
-    let id = 1
-    while (bindings.some(item => item.binding_id === `knowledge_${id}`)) id += 1
-    setBindings(current => [...current, {
-      binding_id: `knowledge_${id}`, provider: 'dify', endpoint: 'https://api.dify.ai/v1', dataset_id: '',
+  function newBinding(provider: ExternalKnowledgeBinding['provider'], bindingId: string): ExternalKnowledgeBinding {
+    return {
+      binding_id: bindingId, provider,
+      endpoint: provider === 'dify' ? 'https://api.dify.ai/v1' : 'https://api.agentset.ai/v1',
+      ...(provider === 'dify' ? { dataset_id: '' } : { namespace_id: '' }),
       credential_ref: { protocol_id: mode === 'production' ? 'hashicorp-vault-2.0-kv-v2' : 'local-environment-v1',
         handle_id: '', purpose: 'knowledge_credential', version_id: mode === 'production' ? '' : 'env' },
-      retrieval: { search_method: 'semantic_search', top_k: 3, score_threshold: 0.2 },
-    }])
+      retrieval: provider === 'dify'
+        ? { search_method: 'semantic_search', top_k: 3, score_threshold: 0.2 }
+        : { search_method: 'semantic', top_k: 3, score_threshold: 0.2, rerank: true, rerank_model: 'zeroentropy:zerank-2' },
+    }
+  }
+  function add(provider: ExternalKnowledgeBinding['provider']) {
+    let id = 1
+    while (bindings.some(item => item.binding_id === `knowledge_${id}`)) id += 1
+    setBindings(current => [...current, newBinding(provider, `knowledge_${id}`)])
+    setDirty(true)
+  }
+  function changeProvider(index: number, provider: ExternalKnowledgeBinding['provider']) {
+    // A different service must not inherit the old source identity or credential handle.
+    setBindings(current => current.map((item, i) => i === index ? newBinding(provider, item.binding_id) : item))
     setDirty(true)
   }
 
-  return <form className="space-y-5 border border-[var(--border)] bg-[var(--bg-surface)] p-6"
+  return <form className="business-knowledge space-y-5"
     onSubmit={async event => {
       event.preventDefault()
-      if (!dirty || conflict || busy) return
+      if (!dirty || conflict || busy || disabled) return
       const result = await onSave(bindings)
       if (result === 'saved') setDirty(false)
       if (result === 'conflict') setConflict(true)
@@ -63,15 +78,28 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSa
       </button>
     </div>}
     {!bindings.length && <p>{t('externalKnowledge.empty')}</p>}
-    <fieldset disabled={busy || conflict} className="space-y-5">
+    <fieldset disabled={busy || conflict || disabled} className="space-y-5">
       {bindings.map((binding, index) => <fieldset key={index} className="grid gap-4 border border-[var(--border)] p-4 md:grid-cols-2">
-        <legend>Dify · {index + 1}</legend>
-        <label>{t('externalKnowledge.bindingId')}<input className={inputClass} required pattern="[A-Za-z0-9_-]+" maxLength={128}
+        <legend>{binding.provider === 'agentset' ? 'Agentset' : 'Dify'} · {index + 1}</legend>
+        <label>{t('externalKnowledge.provider')}<select className={inputClass} value={binding.provider}
+          onChange={event => changeProvider(index, event.target.value as ExternalKnowledgeBinding['provider'])}>
+          <option value="dify">Dify</option><option value="agentset">Agentset</option>
+        </select></label>
+        <label>{t('externalKnowledge.bindingId')}<input className={inputClass} required pattern={'[A-Za-z0-9_\\-]+'} maxLength={128}
           value={binding.binding_id} onChange={event => change(index, { binding_id: event.target.value })} /></label>
         <label>Service API URL<input className={inputClass} type="url" required pattern="https://.*" value={binding.endpoint}
           onChange={event => change(index, { endpoint: event.target.value })} /></label>
-        <label>Dataset ID<input className={inputClass} required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" value={binding.dataset_id}
+        {binding.provider === 'dify' ? <label>Dataset ID<input className={inputClass} required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" value={binding.dataset_id}
           onChange={event => change(index, { dataset_id: event.target.value })} /></label>
+          : <label>Namespace ID<input className={inputClass} required pattern={'ns_[A-Za-z0-9_\\-]+'} maxLength={128}
+              value={binding.namespace_id ?? ''} placeholder="ns_..."
+              onChange={event => change(index, { namespace_id: event.target.value })} /></label>}
+        {binding.provider === 'agentset' && <>
+          <label>{t('externalKnowledge.tenant')}<input className={inputClass} pattern="[A-Za-z0-9]{1,64}" maxLength={64}
+            value={binding.tenant_id ?? ''} onChange={event => change(index, { tenant_id: event.target.value || undefined })} /></label>
+          <p className="text-sm text-[var(--text-muted)] md:col-span-2">{t('externalKnowledge.agentsetHelp')}</p>
+        </>}
+        <div className="knowledge-section">{t('business.contentCredentials')}</div>
         <label>{t('externalKnowledge.contentFormat')}<select className={inputClass} value={binding.content_format ?? 'text'}
           onChange={event => change(index, { content_format: event.target.value as ExternalKnowledgeBinding['content_format'] })}>
           <option value="text">{t('externalKnowledge.textContent')}</option>
@@ -87,19 +115,30 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, onSa
           onChange={event => change(index, { credential_ref: { ...binding.credential_ref, handle_id: event.target.value } })} /></label>
         <label>{t('externalKnowledge.version')}<input className={inputClass} required value={binding.credential_ref.version_id}
           onChange={event => change(index, { credential_ref: { ...binding.credential_ref, version_id: event.target.value } })} /></label>
+        <div className="knowledge-section">{t('business.retrievalSettings')}</div>
         <label>{t('externalKnowledge.method')}<select className={inputClass} value={binding.retrieval.search_method}
           onChange={event => change(index, { retrieval: { ...binding.retrieval, search_method: event.target.value as ExternalKnowledgeBinding['retrieval']['search_method'] } })}>
-          {['semantic_search', 'full_text_search', 'keyword_search'].map(method => <option key={method}>{method}</option>)}
+          {(binding.provider === 'agentset' ? ['semantic', 'keyword'] : ['semantic_search', 'full_text_search', 'keyword_search']).map(method => <option key={method}>{method}</option>)}
         </select></label>
+        {binding.provider === 'agentset' && <>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={binding.retrieval.rerank ?? true}
+            onChange={event => change(index, { retrieval: { ...binding.retrieval, rerank: event.target.checked } })} />{t('externalKnowledge.rerank')}</label>
+          <label>{t('externalKnowledge.rerankModel')}<select className={inputClass} disabled={binding.retrieval.rerank === false}
+            value={binding.retrieval.rerank_model ?? 'zeroentropy:zerank-2'}
+            onChange={event => change(index, { retrieval: { ...binding.retrieval, rerank_model: event.target.value } })}>
+            {['zeroentropy:zerank-2', 'zeroentropy:zerank-1', 'zeroentropy:zerank-1-small', 'cohere:rerank-v4.0-pro', 'cohere:rerank-v4.0-fast', 'cohere:rerank-v3.5', 'cohere:rerank-english-v3.0', 'cohere:rerank-multilingual-v3.0'].map(model => <option key={model}>{model}</option>)}
+          </select></label>
+        </>}
         <label>Top K<input className={inputClass} type="number" required min={1} max={20} step={1} value={binding.retrieval.top_k}
           onChange={event => change(index, { retrieval: { ...binding.retrieval, top_k: Number(event.target.value) } })} /></label>
         <label>{t('externalKnowledge.threshold')}<input className={inputClass} type="number" required min={0} max={1} step={0.01} value={binding.retrieval.score_threshold}
           onChange={event => change(index, { retrieval: { ...binding.retrieval, score_threshold: Number(event.target.value) } })} /></label>
         <button type="button" onClick={() => { setBindings(current => current.filter((_, i) => i !== index)); setDirty(true) }}>{t('externalKnowledge.remove')}</button>
       </fieldset>)}
-      <button type="button" disabled={bindings.length >= 5} onClick={add}>{t('externalKnowledge.add')}</button>
+      <button type="button" disabled={bindings.length >= 5} onClick={() => add('dify')}>{t('externalKnowledge.add')}</button>
+      <button type="button" disabled={bindings.length >= 5} onClick={() => add('agentset')}>{t('externalKnowledge.addAgentset')}</button>
     </fieldset>
-    <button type="submit" disabled={!dirty || conflict || busy} className="rounded-md bg-[var(--accent)] px-4 py-2 font-semibold text-[var(--accent-fg)] disabled:opacity-50">
+    <button type="submit" disabled={!dirty || conflict || busy || disabled} className="rounded-md bg-[var(--accent)] px-4 py-2 font-semibold text-[var(--accent-fg)] disabled:opacity-50">
       {busy ? t('agentDetail.saving') : t('externalKnowledge.save')}
     </button>
   </form>

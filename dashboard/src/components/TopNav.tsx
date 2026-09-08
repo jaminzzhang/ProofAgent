@@ -24,8 +24,8 @@ export function TopNav({
   return (
     <UITopNav
       leading={leading}
-      title={title}
-      subtitle={subtitle}
+      title={title ?? "ProofAgent"}
+      subtitle={subtitle ?? t("business.workspace")}
       status={status}
       showThemeToggle={showThemeToggle}
       languageToggle={<LanguageToggleButton />}

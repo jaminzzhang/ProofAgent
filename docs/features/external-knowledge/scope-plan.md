@@ -28,3 +28,20 @@
 | 历史 | 旧 KSS 数据可解释但不可作为新的外部绑定执行或重新激活；旧摘要不重写 |
 
 [FRAME | HIGH] 按测试先行的纵向切片交付：绑定与适配器 → 控制面与运行 → 配置界面 → 默认启动/部署解耦 → 回归与独立 Review。真实 Dify 联调需要部署方提供服务端凭证；本次不读取 `.env` 或索取 Key 内容。发布治理与数据读取验证分开记录，不能把本地测试升级为 Production GO。
+
+## Agentset extension — 2026-09-07 (ADR-0249)
+
+User request: support additional Knowledge sources including Agentset. Local scope:
+Dify + Agentset mixed bindings, provider-specific strict settings, guarded read-only
+adapter, source identity/admission integration, Dashboard and configuration guide.
+No data upload, arbitrary HTTP connector, hosted chat or production gate activation.
+
+| Task | Acceptance | State |
+| --- | --- | --- |
+| AS-1 | Strict per-provider identities/settings; old Dify snapshots unchanged | locally verified |
+| AS-2 | Exact Namespace/Tenant request, secrets/egress/bounds, stable errors | locally verified |
+| AS-3 | Mixed source dispatch, opaque chunk citations, structured provenance and Harness | locally verified |
+| AS-4 | Provider choice and correct fields; no stale credentials/settings after provider switch; CAS unchanged | locally verified |
+| AS-5 | Automated checks, rendered UI, current docs and explicit live-verification limits | locally verified |
+
+Acceptance: `agentset-verification.md`; live provider and production acceptance remain open.

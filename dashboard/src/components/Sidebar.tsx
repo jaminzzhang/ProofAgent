@@ -48,7 +48,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
   const nav = (
     <nav
-      className="flex-1 space-y-5 px-3 max-md:flex max-md:gap-1 max-md:space-y-0 max-md:overflow-x-auto"
+      className="flex-1 space-y-7 px-3"
       aria-label={t('nav.main')}
       onClick={() => onClose?.()}
     >
@@ -79,18 +79,8 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   return (
     <>
       {/* Desktop: fixed aside, always visible. Hidden on mobile. */}
-      <aside className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 md:flex">
+      <aside className="business-sidebar hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 md:flex">
         {nav}
-        {/* Settings: marked as a future surface rather than a dead hash link */}
-        <div className="mt-auto px-3">
-          <div
-            className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-[var(--text-muted)]"
-            title="Settings — coming soon"
-          >
-            <Settings size={16} strokeWidth={2} className="shrink-0" />
-            <span>{t('nav.settings')}</span>
-          </div>
-        </div>
       </aside>
 
       {/* Mobile: slide-over drawer + scrim, only when open. */}
@@ -102,7 +92,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             onClick={() => onClose?.()}
             aria-hidden
           />
-          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[85%] flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 shadow-xl">
+          <aside className="business-sidebar absolute left-0 top-0 flex h-full w-72 max-w-[85%] flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--bg-surface)] pb-4 pt-5 shadow-xl">
             <div className="flex justify-end px-3">
               <button
                 type="button"

@@ -43,6 +43,7 @@ from proof_agent.control.policy.engine import PolicyEngine
 from proof_agent.contracts.ports.external_knowledge import ExternalKnowledgeSourceSet
 from proof_agent.control.validators.evidence import evaluate_evidence
 from proof_agent.errors import ProofAgentError
+from proof_agent.contracts.external_source import external_evidence_source
 from proof_agent.observability.audit.trace import TraceEmitter
 
 
@@ -245,7 +246,8 @@ class KnowledgeRetrievalService:
             decision = self._policy.evaluate(EnforcementPoint.BEFORE_RETRIEVAL, {
                 "question": request.question, "strategy": request.strategy,
                 "provider": binding.provider, "binding_id": binding.binding_id,
-                "dataset_id": binding.dataset_id,
+                **({"dataset_id": binding.source_id} if binding.provider == "dify" else
+                   {"namespace_id": binding.source_id, "tenant_id": binding.tenant_id}),
             })
             _emit_policy(self._trace, decision)
             if not _allowed(decision):
@@ -266,13 +268,15 @@ class KnowledgeRetrievalService:
                 # The configured relevance/provenance gate does not prove semantic or numeric claims.
                 admitted = candidate.available and candidate.native_score >= max(
                     binding.retrieval.score_threshold, request.min_score)
-                source = f"external://{binding.binding_id}/datasets/{binding.dataset_id}/documents/{candidate.document_id}"
-                citation = f"{source}#segment={candidate.chunk_id}&sha256={candidate.content_sha256}"
+                source = external_evidence_source(provider=binding.provider, binding_id=binding.binding_id,
+                    source_id=binding.source_id, document_id=candidate.document_id,
+                    chunk_id=candidate.chunk_id, tenant_id=binding.tenant_id)
+                citation = f"{source}#segment={quote(candidate.chunk_id, safe='')}&sha256={candidate.content_sha256}"
                 evidence.append(EvidenceChunk(
                     source=source, content=candidate.content,
                     status=EvidenceStatus.CANDIDATE if admitted else EvidenceStatus.REJECTED,
                     evidence_id=f"{binding.binding_id}:{candidate.chunk_id}:{candidate.content_sha256}",
-                    source_id=binding.dataset_id, source_version_id=f"sha256:{candidate.content_sha256}",
+                    source_id=binding.source_id, source_version_id=f"sha256:{candidate.content_sha256}",
                     binding_id=binding.binding_id, provider_name=binding.provider,
                     document_id=candidate.document_id, chunk_id=candidate.chunk_id,
                     provider_native_score=candidate.native_score,
@@ -280,7 +284,8 @@ class KnowledgeRetrievalService:
                     structured_data=candidate.structured_data,
                     metadata={"admission_policy": binding.admission_policy,
                               "consistency": binding.consistency, "observed_at": observed_at,
-                              "content_sha256": candidate.content_sha256},
+                              "content_sha256": candidate.content_sha256,
+                              **({"tenant_id": binding.tenant_id} if binding.tenant_id is not None else {})},
                 ))
             self._trace.emit("knowledge_candidate_query", status="ok", payload={
                 "provider": binding.provider, "binding_id": binding.binding_id,

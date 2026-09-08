@@ -34,7 +34,7 @@ not a second glossary.
 
 - `docs/adr/0242-replace-kss-runtime-coupling-with-external-knowledge.md` supersedes
   the KSS-only execution and default deployment assumptions below.
-- `docs/features/external-knowledge/configuration.md` describes Dify configuration,
+- `docs/features/external-knowledge/configuration.md` describes Dify and Agentset configuration,
   candidate admission, mutable observations and production limits.
 - `docs/features/external-knowledge/scope-plan.md` and `verification.md` route acceptance.
 
@@ -89,3 +89,6 @@ require or authorize KSS in the current runtime; ADR-0242 takes precedence.
 
 When implementation exposes an unrecorded domain decision, update the owning
 context or add an ADR before encoding the choice in code.
+
+- `docs/adr/0249-support-provider-specific-external-knowledge-bindings.md` and
+  `docs/features/external-knowledge/agentset-verification.md` cover mixed provider contracts and local acceptance.

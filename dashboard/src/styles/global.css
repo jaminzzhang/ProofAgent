@@ -8,3 +8,97 @@
  */
 @source "../../../node_modules/@proofagent/ui/src/**/*.{ts,tsx}";
 @import '@proofagent/ui/styles/global.css';
+
+/* Dashboard business theme. Shared primitives keep their semantic tokens; Chat is unaffected. */
+:root {
+  --bg-base: #f3f5f8;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f7f9fc;
+  --bg-hover: #edf2f8;
+  --bg-active: #e4ebf5;
+  --border: #dfe5ed;
+  --border-strong: #bdc9d8;
+  --text-primary: #192b43;
+  --text-secondary: #465971;
+  --text-muted: #607087;
+  --accent: #244d7b;
+  --accent-hover: #193958;
+  --accent-fg: #ffffff;
+  --accent-subtle: #e8eff8;
+  --ring: #6b96c7;
+  --shadow-sm: 0 1px 2px rgb(25 43 67 / 3%);
+}
+.dark {
+  --bg-base: #101824;
+  --bg-surface: #172231;
+  --bg-elevated: #1c293b;
+  --bg-subtle: #1a2738;
+  --bg-hover: #24344a;
+  --bg-active: #2d4059;
+  --border: #2e3e52;
+  --border-strong: #536780;
+  --text-primary: #e8eef6;
+  --text-secondary: #bdcbdc;
+  --text-muted: #9eafc4;
+  --accent: #9cc2ed;
+  --accent-hover: #bed8f5;
+  --accent-fg: #142b45;
+  --accent-subtle: #283d57;
+  --ring: #9cc2ed;
+}
+.business-sidebar {
+  --bg-surface: #182a41;
+  --bg-hover: #243b56;
+  --accent-subtle: #2b4563;
+  --accent: #9ac6f6;
+  --text-primary: #ffffff;
+  --text-secondary: #ced8e5;
+  --text-muted: #a7b9cf;
+  background: var(--bg-surface);
+  border-color: #243b56;
+}
+.business-sidebar nav a, .business-sidebar nav button { min-height: 42px; }
+.business-sidebar nav h3 { letter-spacing: .08em; margin-bottom: 10px; }
+.business-page-header { padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.business-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
+.business-filter { min-height: 36px; padding: 6px 12px; border-radius: 6px; color: var(--text-secondary); font-size: 13px; }
+.business-filter[aria-pressed="true"] { background: var(--accent-subtle); color: var(--accent); font-weight: 600; }
+.business-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+.business-summary > div { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); padding: 18px 22px; }
+.business-summary dt { font-size: 13px; color: var(--text-secondary); }
+.business-summary dd { margin-top: 8px; font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.business-agent-name { display: flex; align-items: center; gap: 12px; }
+.business-agent-icon { display: grid; place-items: center; width: 38px; height: 38px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px; color: var(--accent); background: var(--bg-subtle); }
+.business-import { padding: 16px 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); }
+.business-import summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+.business-knowledge { padding: 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); }
+.business-knowledge > h3 { font-size: 20px; }
+.business-knowledge fieldset fieldset { padding: 20px; border-radius: 8px; background: var(--bg-subtle); border-color: var(--border); }
+.business-knowledge legend { padding: 0 8px; font-weight: 600; color: var(--accent); }
+.business-knowledge label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.business-knowledge label input:not([type="checkbox"]), .business-knowledge label select { margin-top: 6px; background-color: var(--bg-surface); min-height: 40px; font-weight: 400; }
+.business-knowledge .knowledge-section { grid-column: 1 / -1; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.business-knowledge fieldset > button { padding: 9px 14px; border: 1px solid var(--border-strong); border-radius: 6px; font-size: 13px; background: var(--bg-surface); margin-right: 8px; }
+.business-knowledge fieldset fieldset > button { justify-self: end; color: var(--danger-fg); border-color: var(--danger-border); }
+.business-knowledge > button[type="submit"] { min-height: 40px; }
+.business-workspace-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.business-workspace-title h1 { font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+button:not(:disabled), select, summary { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+@media (max-width: 767px) {
+  .business-page-header { align-items: stretch; flex-direction: column; }
+  .business-page-header > div:last-child { flex-wrap: wrap; }
+  .business-summary { gap: 8px; }
+  .business-summary > div { padding: 12px; }
+  .business-summary dd { font-size: 23px; }
+  .business-toolbar { padding: 14px; }
+  .business-knowledge { padding: 16px; }
+  .business-knowledge fieldset fieldset { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+/* Long provider/model identifiers must not widen a nested Knowledge column. */
+.business-knowledge fieldset, .business-knowledge label { min-width: 0; }
+.business-knowledge input, .business-knowledge select { max-width: 100%; min-width: 0; }

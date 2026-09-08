@@ -741,3 +741,35 @@
 ### Task ACW-ADF6：真实流程复验
 
 - 验证：临时 Development store 中验证 Model canonical 保存、Tools no-op、精确 revision Validation、immutable Development publication、Monitor 投影和确认式 active-pointer rollback。
+
+## 2026-09-07 Dashboard configuration completion (current request)
+
+[KNOWN | HIGH] Current authority: AGENTS-COMMON.md, ADR-0242 and
+`proof_agent/contracts/manifest.py`; older KSS scope above is historical.
+The user authorizes analysis, local implementation and verification of a systematic,
+usable configuration service. Existing Workspace/UoW, capabilities and publication
+boundaries remain authoritative; no new runtime or production publication profile.
+
+| Task / acceptance | Outcome and evidence entry | State |
+| --- | --- | --- |
+| CFG-1 orientation | Overview and compact mobile navigation explain each advertised module, editing availability and configuration/validation/version sequence; no inferred readiness | verified locally |
+| CFG-2 retrieval | Knowledge editor exposes effective global top_k, min_score, max_queries and query_timeout_seconds with bounds, units and default semantics; save through existing revisioned Contract command | verified locally |
+| CFG-3 policy | Policy and Tools pages edit actual policy_yaml/tools_yaml alongside paths, atomically through existing validator/CAS; invalid/conflicting save retains input | verified locally |
+| CFG-4 edit integrity | Draft reads are revision-consistent; Draft/Versions hooks ignore obsolete responses; unsaved Contract/Dataset changes are isolated during module navigation; explicit discard | verified locally |
+| CFG-5 verification | UI interaction tests, Dashboard suite/build, affected backend contracts, actual rendered browser with synthetic data, current documentation | verified locally |
+
+Design tree: Agent catalog → Draft overview (CFG-1) → capability-selected module
+(CFG-2/3) → revisioned Workspace update → exact-revision validation → immutable
+version → monitor. CFG-4 applies across reads and edits. Production actions follow
+server capabilities. Loading failures have explicit error exits, invalid input has
+inline errors, save failures preserve input, conflicts require explicit reload.
+
+[KNOWN | HIGH] Existing specialized model/workflow/Skills/tools/memory/response editors
+cover the remaining advertised modules. `retrieval.query_concurrency`, rewrite and
+rerank flags are not established as effective in the synchronous Dify path; they must
+not be presented as working controls. Per-binding top_k is capped by global top_k;
+score threshold uses the stricter global/per-binding value. Dify transport caps
+query_timeout_seconds at 60 seconds (`bootstrap/composition.py`). Provider availability
+requires real verification; local configuration completeness cannot establish it.
+
+Verification evidence will be recorded in `dashboard-completion-verification.md`.

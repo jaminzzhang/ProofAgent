@@ -908,7 +908,7 @@ describe('AgentDetailPage', () => {
   it('keeps Development Knowledge read-only without calling the Production KSS binding route', async () => {
     renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
 
-    expect(await screen.findByRole('heading', { name: 'Knowledge' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Knowledge', level: 1 })).toBeInTheDocument()
     expect(screen.getByText('Contract configuration projection')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'KSS Release Binding' })).not.toBeInTheDocument()
     expect(fetchConfigDraftKnowledgeBinding).not.toHaveBeenCalled()
@@ -2409,10 +2409,10 @@ workflow:
       target: { value: './policy-unsaved.yaml' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Model' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
+    expect(screen.getByLabelText('Policy File')).toHaveValue('./policy-unsaved.yaml')
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Save the current configuration before changing another Draft module.',
+      'Save or discard the current module before editing another module.',
     )
     expect(updateConfigDraftContract).not.toHaveBeenCalled()
   })
@@ -2829,4 +2829,51 @@ review:
     })
     expect(screen.getByRole('option', { name: 'DeepSeek Default' })).toBeInTheDocument()
   })
+it('saves actual policy content with the current revision and preserves it on conflict', async () => {
+  enableProductionContractEditing(11)
+  mockContract.policy_yaml = 'rules: []'
+  vi.mocked(updateConfigDraftContract).mockRejectedValueOnce(new Error('agent_draft_revision_conflict'))
+  renderPage('/agents/agent-1/drafts/draft-1?tab=policy')
+  fireEvent.change(screen.getByLabelText('Policy rules (YAML)'), { target: { value: 'rules:\n  - rule_id: evidence' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+    policy_yaml: 'rules:\n  - rule_id: evidence', expected_revision: 11,
+  })))
+  expect(screen.getByLabelText('Policy rules (YAML)')).toHaveValue('rules:\n  - rule_id: evidence')
+})
+
+  it('protects unsaved dataset edits from a global retrieval save and module navigation', async () => {
+    enableProductionKnowledgeEditing()
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    fireEvent.change(await screen.findByLabelText('Top K'), { target: { value: '5' } })
+    expect(screen.getByLabelText('Maximum required queries')).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    expect(screen.getByLabelText('Top K')).toHaveValue(5)
+    expect(updateConfigDraftContract).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard unsaved changes' }))
+    expect(await screen.findByLabelText('Top K')).toHaveValue(3)
+    expect(screen.getByLabelText('Maximum required queries')).toBeEnabled()
+  })
+
+  it('saves global retrieval through the revisioned contract without rewriting bindings', async () => {
+    enableProductionKnowledgeEditing(11)
+    mockContract.agent_yaml = 'retrieval:\n  strategy: single_step\nknowledge_bindings: []\n'
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    fireEvent.change(screen.getByLabelText('Maximum required queries'), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({ expected_revision: 11 })))
+    expect(latestSavedAgentYaml()).toContain('max_queries: 5')
+    expect(latestSavedAgentYaml()).toContain('knowledge_bindings: []')
+    expect(updateConfigDraftKnowledgeBinding).not.toHaveBeenCalled()
+  })
+
+  it('saves tool contract content with revision CAS without rewriting policy', async () => {
+    enableProductionContractEditing(11)
+    renderPage('/agents/agent-1/drafts/draft-1?tab=tools')
+    fireEvent.change(screen.getByLabelText('Tool contracts (YAML)'), { target: { value: 'tools: []' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Tools' }))
+    await waitFor(() => expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({ tools_yaml: 'tools: []', expected_revision: 11 })))
+    expect(vi.mocked(updateConfigDraftContract).mock.calls.at(-1)?.[2]).not.toHaveProperty('policy_yaml')
+  })
+
 })

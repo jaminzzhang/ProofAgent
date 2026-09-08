@@ -94,7 +94,7 @@ describe('Dashboard static UI locale', () => {
     expect(screen.getByText('监控')).toBeInTheDocument()
     expect(screen.getByText('概览')).toBeInTheDocument()
     expect(screen.getByText('配置')).toBeInTheDocument()
-    expect(screen.getByText('设置')).toBeInTheDocument()
+    expect(screen.queryByText('设置')).not.toBeInTheDocument()
   })
 
   it('translates Configuration nav per the PRD glossary, preserves brand terms', () => {
