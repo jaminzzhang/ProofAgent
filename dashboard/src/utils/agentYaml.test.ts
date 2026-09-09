@@ -378,3 +378,17 @@ policy:
     ])
   })
 })
+
+// Covers the API serializer as well as the local advanced-YAML projection.
+describe('unified Workflow Prompt round trips', () => {
+  it.each(['true', '123', 'null', '背景\n任务\n输出 😀', 'Quote " and path C:\\claims', '任务\n\n'])('preserves free-form text %j', (text) => {
+    const stages = [{ id: 'plan', prompt: { business_context: text, task_instructions: [], output_preferences: [] }, context: {} }]
+    expect(readWorkflowStageConfigs(replaceWorkflowStages('workflow:\n  template: react_enterprise_qa_v3\n', 'react_enterprise_qa.v3', stages))[0].prompt.business_context).toBe(text)
+  })
+  it("reads multiline YAML emitted by the backend serializer", () => {
+    const stages = readWorkflowStageConfigs("workflow:\n  template: react_enterprise_qa_v3\n  stages:\n  - id: plan\n    prompt:\n      business_context: '保险服务背景\n\n\n        核对版本 \"A\"，保留路径 C:\\claims\n\n        输出简洁 😀\n\n        '\n      task_instructions:\n      - '旧指令\n\n        第二行'\n      output_preferences:\n      - 简洁\n    context:\n      include_agent_purpose: true\n")
+    expect(stages[0].prompt.business_context).toBe("保险服务背景\n\n核对版本 \"A\"，保留路径 C:\\claims\n输出简洁 😀\n")
+    expect(stages[0].prompt.task_instructions).toEqual(["旧指令\n第二行"])
+    expect(stages[0].context).toEqual({ include_agent_purpose: true })
+  })
+})

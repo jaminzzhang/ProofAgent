@@ -1189,3 +1189,28 @@ capabilities:
         capabilities_section=capabilities_section,
         memory_section=memory_section,
     )
+
+
+def test_loads_unified_stage_prompt_above_old_business_context_limit(tmp_path: Path) -> None:
+    prompt = "保险服务任务与输出要求。" * 200
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        workflow_extra="\n  stages:\n    - id: plan\n      prompt:\n        business_context: "
+        + yaml.safe_dump(prompt, allow_unicode=True).strip().removesuffix("...").strip()
+        + "\n",
+    )
+    manifest = load_agent_manifest(agent_yaml)
+    assert manifest.workflow.stages[0].prompt.business_context == prompt
+
+
+def test_unified_stage_prompts_retain_aggregate_budget(tmp_path: Path) -> None:
+    prompt = "x" * 6500
+    agent_yaml = _write_react_stage_manifest(
+        tmp_path,
+        workflow_extra=(
+            "\n  stages:\n    - id: plan\n      prompt:\n        business_context: " + prompt
+            + "\n    - id: model_answer\n      prompt:\n        business_context: " + prompt + "\n"
+        ),
+    )
+    with pytest.raises(ProofAgentError, match="total prompt"):
+        load_agent_manifest(agent_yaml)

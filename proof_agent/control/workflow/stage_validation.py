@@ -9,7 +9,8 @@ from proof_agent.control.workflow.templates import WorkflowStageDescriptor
 from proof_agent.errors import ProofAgentError
 
 
-MAX_WORKFLOW_STAGE_BUSINESS_CONTEXT_CHARS = 2000
+# The unified Dashboard Prompt uses business_context as its compatibility carrier.
+MAX_WORKFLOW_STAGE_BUSINESS_CONTEXT_CHARS = 12000
 MAX_WORKFLOW_STAGE_INSTRUCTION_COUNT = 10
 MAX_WORKFLOW_STAGE_INSTRUCTION_CHARS = 500
 MAX_WORKFLOW_STAGE_OUTPUT_PREFERENCE_COUNT = 10

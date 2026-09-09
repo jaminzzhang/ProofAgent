@@ -1354,9 +1354,9 @@ workflow:
     expect(screen.getByText('Relationship Map')).toBeInTheDocument()
     expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
     // Field help is rendered via the shared Tooltip primitive (opens on focus).
-    fireEvent.focus(await screen.findByRole('button', { name: 'Explain Business Context' }))
-    expect(screen.getByRole('tooltip')).toHaveTextContent(/Adds domain-specific context/)
-    fireEvent.change(await screen.findByLabelText('Business Context'), {
+    fireEvent.focus(await screen.findByRole('button', { name: 'Explain Prompt' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/自由编写/)
+    fireEvent.change(await screen.findByLabelText('Prompt'), {
       target: { value: 'Claims context' },
     })
     fireEvent.click(screen.getByLabelText('include_agent_purpose'))
@@ -1511,7 +1511,7 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
-    const businessContext = await screen.findByLabelText('Business Context')
+    const businessContext = await screen.findByLabelText('Prompt')
     fireEvent.change(businessContext, { target: { value: 'Local unsaved claims edit' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
 

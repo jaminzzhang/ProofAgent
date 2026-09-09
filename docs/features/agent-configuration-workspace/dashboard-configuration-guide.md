@@ -78,3 +78,18 @@ MCP stdio 或生产写工具。生产外部 Knowledge 发布 profile 与真实�
 [KNOWN | HIGH] 本轮未统一 Workflow Stage 和 Skill drawer 内部编辑状态，也不承诺浏览器关闭、
 外部链接或直接切换路由后的未保存草稿恢复。当前保护覆盖页面模块导航、通用 Contract 编辑和
 Dataset/全局参数交叉保存。真实连接、端到端模型质量和生产发布不是隔离 UI 验证的结论。
+
+## Workflow 单一 Prompt（2026-09-09）
+
+Workflow 的可编辑节点使用一个 Prompt 输入框。可以自由编写，也可点击“插入结构模板”，
+插入 Business Context、Task Instructions 和 Output Preferences 三个章节及填写提示。
+模板不预填保险或其他业务指令，内容由用户填写。模板追加到现有内容末尾，章节可任意
+修改。非模型执行节点显示无需配置提示。
+
+旧的 Business Context、Task Instructions、Output Preferences 会按顺序合并显示，
+保存后统一文本使用现有 `prompt.business_context` 承载，两个列表字段清空。仅查看不会
+保存或迁移 Draft；高级 YAML/API 字段继续兼容既有契约。Skills 模块的独立配置不受影响。
+
+预览、保存和 YAML 投影使用同一份文本，编辑后旧预览失效。整个 Workflow 的提示文本仍
+受 12,000 字符总预算及内容校验约束；运行上下文仍有长度限制，长文本需检查预览中的
+truncation 标记。保存后应通过实际问题验证效果。设计依据：ADR-0251。

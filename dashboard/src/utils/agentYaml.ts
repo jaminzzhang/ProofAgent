@@ -1,3 +1,5 @@
+import { parse as parseYaml } from 'yaml'
+
 export function updateAgentYamlField(
   agentYaml: string,
   path: string[],
@@ -305,38 +307,31 @@ export function readWorkflowTemplateDescriptorVersion(agentYaml: string): string
 }
 
 export function readWorkflowStageConfigs(agentYaml: string): AgentYamlWorkflowStageConfig[] {
-  const lines = agentYaml.split('\n')
-  const workflowStart = findLineIndex(lines, 0, 'workflow')
-  if (workflowStart === -1) return []
-
-  const workflowEnd = findBlockEnd(lines, workflowStart, 0)
-  const stagesIndex = findLineIndex(lines, 2, 'stages', workflowStart + 1, workflowEnd)
-  if (stagesIndex === -1) return []
-
-  const stagesEnd = findBlockEnd(lines, stagesIndex, 2)
-  const stages: AgentYamlWorkflowStageConfig[] = []
-  const itemPattern = /^(\s*)-\s+id:\s*(.*)$/
-  let index = stagesIndex + 1
-  while (index < stagesEnd) {
-    const line = lines[index]
-    const match = line.match(itemPattern)
-    if (!match) {
-      index += 1
-      continue
-    }
-
-    const nodeStart = index
-    const nodeIndent = match[1].length
-    index += 1
-    while (index < stagesEnd) {
-      const nextMatch = lines[index].match(itemPattern)
-      if (nextMatch && nextMatch[1].length === nodeIndent) break
-      index += 1
-    }
-    stages.push(parseWorkflowStageBlock(lines.slice(nodeStart, index), match[2]))
+  // The API emits standard YAML scalars (including multiline quoted strings).
+  // Parse this section with YAML semantics instead of treating each line as a field.
+  let raw: unknown
+  try {
+    raw = parseYaml(agentYaml, { maxAliasCount: 100 })
+  } catch {
+    return []
   }
-
-  return stages
+  if (!isPlainObject(raw) || !isPlainObject(raw.workflow) || !Array.isArray(raw.workflow.stages)) return []
+  return raw.workflow.stages.flatMap((stage: unknown) => {
+    if (!isPlainObject(stage) || typeof stage.id !== 'string') return []
+    const prompt = isPlainObject(stage.prompt) ? stage.prompt : {}
+    const context = isPlainObject(stage.context) ? stage.context : {}
+    const strings = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string') : []
+    return [{
+      id: stage.id,
+      prompt: {
+        business_context: typeof prompt.business_context === 'string' ? prompt.business_context : '',
+        task_instructions: strings(prompt.task_instructions),
+        output_preferences: strings(prompt.output_preferences),
+      },
+      context: Object.fromEntries(Object.entries(context).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')),
+    }]
+  })
 }
 
 export function replaceWorkflowStages(
@@ -477,100 +472,21 @@ function renderWorkflowStages(stages: AgentYamlWorkflowStageConfig[]): string[] 
 function renderWorkflowStagePrompt(prompt: AgentYamlWorkflowStagePrompt): string[] {
   const lines: string[] = []
   if (prompt.business_context?.trim()) {
-    lines.push(`        business_context: ${formatYamlValue(prompt.business_context)}`)
+    lines.push(`        business_context: ${JSON.stringify(prompt.business_context)}`)
   }
   if (prompt.task_instructions.length > 0) {
     lines.push('        task_instructions:')
     for (const instruction of prompt.task_instructions.filter((item) => item.trim())) {
-      lines.push(`          - ${formatYamlValue(instruction)}`)
+      lines.push(`          - ${JSON.stringify(instruction)}`)
     }
   }
   if (prompt.output_preferences.length > 0) {
     lines.push('        output_preferences:')
     for (const preference of prompt.output_preferences.filter((item) => item.trim())) {
-      lines.push(`          - ${formatYamlValue(preference)}`)
+      lines.push(`          - ${JSON.stringify(preference)}`)
     }
   }
   return lines
-}
-
-function parseWorkflowStageBlock(
-  blockLines: string[],
-  nodeIdValue: string,
-): AgentYamlWorkflowStageConfig {
-  const nodeIndent = indentation(blockLines[0] ?? '')
-  const fieldIndent = nodeIndent + 4
-  const listIndent = nodeIndent + 6
-  const prompt: AgentYamlWorkflowStagePrompt = {
-    business_context: '',
-    task_instructions: [],
-    output_preferences: [],
-  }
-  const context: Record<string, boolean> = {}
-
-  for (let index = 1; index < blockLines.length; index += 1) {
-    const line = blockLines[index]
-    const promptScalar = line.match(
-      new RegExp(`^\\s{${fieldIndent}}business_context:\\s*(.*)$`),
-    )
-    if (promptScalar) {
-      prompt.business_context = parseInlineYamlValue(promptScalar[1])
-      continue
-    }
-
-    const instruction = line.match(
-      new RegExp(`^\\s{${fieldIndent},${listIndent}}-\\s*(.*)$`),
-    )
-    if (instruction && isInsideList(blockLines, index, 'task_instructions', fieldIndent)) {
-      prompt.task_instructions.push(parseInlineYamlValue(instruction[1]))
-      continue
-    }
-    if (instruction && isInsideList(blockLines, index, 'output_preferences', fieldIndent)) {
-      prompt.output_preferences.push(parseInlineYamlValue(instruction[1]))
-      continue
-    }
-
-    const contextEntry = line.match(
-      new RegExp(`^\\s{${fieldIndent}}([A-Za-z0-9_]+):\\s*(true|false)$`),
-    )
-    if (contextEntry && isInsideMapping(blockLines, index, 'context', nodeIndent + 2)) {
-      context[contextEntry[1]] = contextEntry[2] === 'true'
-    }
-  }
-
-  return {
-    id: parseInlineYamlValue(nodeIdValue),
-    prompt,
-    context,
-  }
-}
-
-function isInsideList(
-  blockLines: string[],
-  index: number,
-  key: string,
-  fieldIndent: number,
-): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (new RegExp(`^\\s{${fieldIndent}}[A-Za-z0-9_]+:`).test(blockLines[cursor])) {
-      return blockLines[cursor].trim() === `${key}:`
-    }
-  }
-  return false
-}
-
-function isInsideMapping(
-  blockLines: string[],
-  index: number,
-  key: string,
-  sectionIndent: number,
-): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (new RegExp(`^\\s{${sectionIndent}}[A-Za-z0-9_]+:`).test(blockLines[cursor])) {
-      return blockLines[cursor].trim() === `${key}:`
-    }
-  }
-  return false
 }
 
 function isPlainObject(value: unknown): value is AgentYamlMapping {

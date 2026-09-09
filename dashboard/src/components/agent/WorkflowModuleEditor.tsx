@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Badge,
@@ -33,6 +33,7 @@ import {
 } from './module-configs/workflow'
 import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
 import { useLocale } from '../../i18n/locale'
+import { mergeStagePrompt, STRUCTURED_PROMPT_TEMPLATE } from './workflowPrompt'
 
 interface WorkflowModuleEditorProps {
   agentYaml: string
@@ -76,6 +77,7 @@ export function WorkflowModuleEditor({
   const templateOptions = catalogTemplateNames.length
     ? catalogTemplateNames
     : WORKFLOW_TEMPLATE_FALLBACK
+  const previewRevision = useRef(0)
   const [showYaml, setShowYaml] = useState(false)
   const [selectedStageId, setSelectedStageId] = useState('')
   const [stages, setStages] = useState<WorkflowStageConfig[]>([])
@@ -107,9 +109,11 @@ export function WorkflowModuleEditor({
   }, [agentYaml, descriptor])
 
   useEffect(() => {
+    previewRevision.current += 1
+    setPreviewBusy(false)
     setPreview(null)
     setPreviewError(null)
-  }, [selectedStageId])
+  }, [selectedStageId, agentYaml, descriptor])
 
   const selectedDescriptor = descriptor?.stages.find((stage) => stage.id === selectedStageId) ?? null
   const selectedConfig = stages.find((stage) => stage.id === selectedStageId) ?? null
@@ -137,6 +141,10 @@ export function WorkflowModuleEditor({
 
   function updateSelectedStage(updater: (stage: WorkflowStageConfig) => WorkflowStageConfig) {
     if (!selectedConfig) return
+    previewRevision.current += 1
+    setPreviewBusy(false)
+    setPreview(null)
+    setPreviewError(null)
     setStages((current) => current.map((stage) => (
       stage.id === selectedConfig.id ? updater(stage) : stage
     )))
@@ -180,6 +188,7 @@ export function WorkflowModuleEditor({
 
   async function previewSelectedStage() {
     if (!selectedConfig) return
+    const revision = ++previewRevision.current
     setPreviewBusy(true)
     setPreviewError(null)
     try {
@@ -187,11 +196,13 @@ export function WorkflowModuleEditor({
         prompt: selectedConfig.prompt,
         context: selectedConfig.context,
       })
-      setPreview(result)
+      if (previewRevision.current === revision) setPreview(result)
     } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : String(err))
+      if (previewRevision.current === revision) {
+        setPreviewError(err instanceof Error ? err.message : String(err))
+      }
     } finally {
-      setPreviewBusy(false)
+      if (previewRevision.current === revision) setPreviewBusy(false)
     }
   }
 
@@ -425,22 +436,10 @@ export function WorkflowModuleEditor({
                   </div>
                   <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
                     <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                      Editable prompt fields
+                      Prompt
                     </dt>
-                    <dd className="mt-2 flex flex-wrap gap-1.5 font-mono text-[var(--text-primary)]">
-                      {selectedDescriptor.editable_prompt_fields.length > 0 ? (
-                        selectedDescriptor.editable_prompt_fields.map((field) => (
-                          <span
-                            key={field}
-                            translate="no"
-                            className="rounded bg-[var(--bg-hover)] px-2 py-0.5"
-                          >
-                            {field}
-                          </span>
-                        ))
-                      ) : (
-                        <span>None</span>
-                      )}
+                    <dd className="mt-2 text-[var(--text-primary)]">
+                      {canEditPrompt ? '可配置' : '由系统管理'}
                     </dd>
                   </div>
                 </dl>
@@ -460,74 +459,46 @@ export function WorkflowModuleEditor({
                   </div>
                 </div>
 
-                <div className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-secondary)]">
-                  Harness-owned prompt is locked. Stage Prompt is appended only as Business Context Addendum.
-                </div>
-
-                {/* Bounded prompt fields — textareas (genuinely free-form) */}
-                <div className="flex min-w-0 flex-col">
-                  <FieldHeader
-                    label="Business Context"
-                    help="Adds domain-specific context to this stage without replacing the harness-owned control prompt. Use it for policy scope, business rules, and stage-specific operating context."
-                    htmlFor="stage-business-context"
-                  />
-                  <textarea
-                    id="stage-business-context"
-                    value={selectedConfig.prompt.business_context ?? ''}
-                    disabled={!canEditPrompt}
-                    onChange={(event) => updateSelectedStage((stage) => ({
-                      ...stage,
-                      prompt: { ...stage.prompt, business_context: event.target.value },
-                    }))}
-                    rows={4}
-                    className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
-                  />
-                </div>
-
-                <FieldGrid cols={2} gap="md">
-                  <div className="flex min-w-0 flex-col">
-                    <FieldHeader
-                      label="Task Instructions"
-                      help="Adds short, line-by-line instructions for how this stage should perform its task. Each non-empty line is saved as one instruction."
-                      htmlFor="stage-task-instructions"
-                    />
-                    <textarea
-                      id="stage-task-instructions"
-                      value={selectedConfig.prompt.task_instructions.join('\n')}
-                      disabled={!canEditPrompt}
-                      onChange={(event) => updateSelectedStage((stage) => ({
-                        ...stage,
-                        prompt: {
-                          ...stage.prompt,
-                          task_instructions: splitLines(event.target.value),
-                        },
-                      }))}
-                      rows={5}
-                      className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
-                    />
+                {canEditPrompt ? (
+                  <div className="flex min-w-0 flex-col gap-3">
+                    <div>
+                      <FieldHeader
+                        label="Prompt"
+                        help="自由编写本阶段的业务背景、任务要求和输出风格。模板只提供三个章节和填写提示，章节可随意修改；系统控制规则仍然生效。"
+                        htmlFor="stage-prompt"
+                      />
+                      <p id="stage-prompt-help" className="mb-3 text-xs text-[var(--text-muted)]">
+                        用一段 Prompt 描述这个节点的工作。结构模板包含 Business Context、Task Instructions 和 Output Preferences，内容由你填写。
+                      </p>
+                      <div className="mb-3 flex flex-wrap items-end gap-2">
+                        <Button type="button" variant="outline" onClick={() => updateSelectedStage((stage) => ({
+                          ...stage,
+                          prompt: {
+                            business_context: [stage.prompt.business_context, STRUCTURED_PROMPT_TEMPLATE].filter(Boolean).join('\n\n'),
+                            task_instructions: [], output_preferences: [],
+                          },
+                        }))}>插入结构模板</Button>
+                      </div>
+                      <textarea
+                        id="stage-prompt"
+                        aria-describedby="stage-prompt-help"
+                        value={selectedConfig.prompt.business_context ?? ''}
+                        onChange={(event) => updateSelectedStage((stage) => ({
+                          ...stage,
+                          prompt: { business_context: event.target.value, task_instructions: [], output_preferences: [] },
+                        }))}
+                        rows={14}
+                        placeholder="描述这个节点要完成的任务、需要关注的信息和期望的输出。"
+                        className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm leading-relaxed text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                      />
+                      <p className="mt-1 text-xs text-[var(--text-muted)]">模板追加到现有内容末尾，不会替换已写内容。保存时校验长度和内容。</p>
+                    </div>
                   </div>
-                  <div className="flex min-w-0 flex-col">
-                    <FieldHeader
-                      label="Output Preferences"
-                      help="Controls how this stage should shape its output, such as evidence style, formatting preferences, or response constraints. Each non-empty line is saved separately."
-                      htmlFor="stage-output-preferences"
-                    />
-                    <textarea
-                      id="stage-output-preferences"
-                      value={selectedConfig.prompt.output_preferences.join('\n')}
-                      disabled={!canEditPrompt}
-                      onChange={(event) => updateSelectedStage((stage) => ({
-                        ...stage,
-                        prompt: {
-                          ...stage.prompt,
-                          output_preferences: splitLines(event.target.value),
-                        },
-                      }))}
-                      rows={5}
-                      className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
-                    />
-                  </div>
-                </FieldGrid>
+                ) : (
+                  <p className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-secondary)]">
+                    此节点由系统执行，无需配置 Prompt。可在下方选择可用上下文。
+                  </p>
+                )}
 
                 {/* Context Options — shared Switch (was raw checkbox) */}
                 {selectedDescriptor.context_options.length > 0 && (
@@ -806,9 +777,9 @@ function normalizeStageConfig(stage: WorkflowStageConfig): WorkflowStageConfig {
   return {
     id: stage.id,
     prompt: {
-      business_context: stage.prompt.business_context ?? '',
-      task_instructions: stage.prompt.task_instructions ?? [],
-      output_preferences: stage.prompt.output_preferences ?? [],
+      business_context: mergeStagePrompt(stage.prompt),
+      task_instructions: [],
+      output_preferences: [],
     },
     context: stage.context ?? {},
   }
@@ -826,10 +797,6 @@ function sanitizeStageConfigForDescriptor(
     }
   }
   return stage
-}
-
-function splitLines(value: string): string[] {
-  return value.split('\n').map((item) => item.trim()).filter(Boolean)
 }
 
 /**

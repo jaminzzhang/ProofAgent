@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowTemplateDescriptor } from '../../../api/types'
 
@@ -17,6 +17,7 @@ vi.mock('../../../hooks/useWorkflowTemplates', () => ({
 }))
 
 import { WorkflowModuleEditor } from '../../agent/WorkflowModuleEditor'
+import { replaceWorkflowStages } from '../../../utils/agentYaml'
 import { useWorkflowTemplates } from '../../../hooks/useWorkflowTemplates'
 
 const DESCRIPTOR: WorkflowTemplateDescriptor = {
@@ -65,6 +66,82 @@ workflow:
 `
 
 describe('WorkflowModuleEditor', () => {
+  it('inserts only a structural Prompt template without business content or losing edits', async () => {
+    const saveStages = vi.fn().mockResolvedValue(undefined)
+    const previewStage = vi.fn().mockResolvedValue(null)
+    render(<WorkflowModuleEditor
+      agentYaml={`${AGENT_YAML}  stages:
+    - id: plan
+      prompt:
+        business_context: "保险服务背景"
+        task_instructions:
+          - "核对产品版本"
+        output_preferences:
+          - "简洁回答"
+`}
+      descriptor={DESCRIPTOR} onFieldChange={vi.fn()} onSaveCore={vi.fn()}
+      onSaveStages={saveStages} onPreviewStage={previewStage} busy={false} stageBusy={false}
+    />)
+    const prompt = await screen.findByLabelText('Prompt')
+    expect(prompt).toHaveValue('保险服务背景\n\nTask instructions:\n- 核对产品版本\n\nOutput preferences:\n- 简洁回答')
+    expect(screen.queryByLabelText('Task Instructions')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Output Preferences')).not.toBeInTheDocument()
+    fireEvent.change(prompt, { target: { value: '自由格式要求，不需要固定章节。' } })
+    expect(screen.queryByLabelText('Prompt 模板')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '插入结构模板' }))
+    const text = (prompt as HTMLTextAreaElement).value
+    expect(text).toMatch(/^自由格式要求，不需要固定章节。\n\n/)
+    expect(text).toContain('# Business Context\n[填写业务背景、服务对象和适用范围]')
+    expect(text).toContain('# Task Instructions\n[填写本节点的任务、步骤和注意事项]')
+    expect(text).toContain('# Output Preferences\n[填写输出格式、语言和表达风格]')
+    expect(text).not.toContain('保险')
+    expect(text).not.toContain('只读工具')
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
+    await waitFor(() => expect(previewStage).toHaveBeenCalledWith('plan', {
+      prompt: { business_context: text, task_instructions: [], output_preferences: [] }, context: {},
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+    await waitFor(() => expect(saveStages).toHaveBeenCalledWith(expect.objectContaining({
+      stages: expect.arrayContaining([expect.objectContaining({
+        id: 'plan', prompt: { business_context: text, task_instructions: [], output_preferences: [] },
+      })]),
+    })))
+  })
+
+  it('keeps a merged prompt unchanged across save/reload and node switches', async () => {
+    const saveStages = vi.fn().mockResolvedValue(undefined)
+    const props = { descriptor: DESCRIPTOR, onFieldChange: vi.fn(), onSaveCore: vi.fn(),
+      onSaveStages: saveStages, onPreviewStage: vi.fn(), busy: false, stageBusy: false }
+    const { rerender } = render(<WorkflowModuleEditor {...props} agentYaml={AGENT_YAML} />)
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: '背景\n任务\n输出 😀' } })
+    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
+    fireEvent.click(screen.getByText('response').closest('button')!)
+    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('plan').closest('button')!)
+    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
+    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+    await waitFor(() => expect(saveStages).toHaveBeenCalledTimes(1))
+    const saved = saveStages.mock.calls[0][0].stages
+    rerender(<WorkflowModuleEditor {...props} agentYaml={replaceWorkflowStages(AGENT_YAML, DESCRIPTOR.descriptor_version, saved)} />)
+    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
+  })
+
+  it('does not show a stale preview that completes after a Prompt edit', async () => {
+    let resolvePreview!: (value: import('../../../api/types').WorkflowStageContextPreview) => void
+    const previewStage = vi.fn(() => new Promise<import('../../../api/types').WorkflowStageContextPreview>((resolve) => { resolvePreview = resolve }))
+    render(<WorkflowModuleEditor agentYaml={AGENT_YAML} descriptor={DESCRIPTOR}
+      onFieldChange={vi.fn()} onSaveCore={vi.fn()} onSaveStages={vi.fn()}
+      onPreviewStage={previewStage} busy={false} stageBusy={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'New prompt' } })
+    await act(async () => resolvePreview({
+      stage_id: 'plan', stage_label: 'Plan', harness_control_prompt_summary: 'Old preview',
+      business_context_addendum: { present: true, text: 'Stale text', fields: [] },
+      structured_control_context: {}, summary: {},
+    }))
+    expect(screen.queryByText('Stale text')).not.toBeInTheDocument()
+  })
+
   it('presents workflow configuration as a template summary, relationship map, and stage inspector', () => {
     render(
       <WorkflowModuleEditor
@@ -171,10 +248,8 @@ describe('WorkflowModuleEditor', () => {
     const inspector = screen.getByLabelText('Stage Inspector')
     expect(within(inspector).getByText('plan')).toBeInTheDocument()
     expect(within(inspector).getByText('Required')).toBeInTheDocument()
-    expect(within(inspector).getByText('Editable prompt fields')).toBeInTheDocument()
-    expect(within(inspector).getByText('business_context')).toBeInTheDocument()
-    expect(within(inspector).getByText('task_instructions')).toBeInTheDocument()
-    expect(within(inspector).getByText('output_preferences')).toBeInTheDocument()
+    expect(within(inspector).getByLabelText('Prompt')).toBeInTheDocument()
+    expect(within(inspector).getByText('可配置')).toBeInTheDocument()
   })
 
   it('renders descriptor relationships and saves configured stage context', async () => {
@@ -210,14 +285,11 @@ describe('WorkflowModuleEditor', () => {
     expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
     expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()
     // Field help is rendered via the shared Tooltip primitive (opens on focus).
-    fireEvent.focus(screen.getByRole('button', { name: 'Explain Business Context' }))
-    expect(screen.getByRole('tooltip')).toHaveTextContent(/Adds domain-specific context/)
+    fireEvent.focus(screen.getByRole('button', { name: 'Explain Prompt' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/自由编写/)
 
-    fireEvent.change(await screen.findByLabelText('Business Context'), {
+    fireEvent.change(await screen.findByLabelText('Prompt'), {
       target: { value: 'Claims context' },
-    })
-    fireEvent.change(screen.getByLabelText('Task Instructions'), {
-      target: { value: 'Prefer retrieval first.' },
     })
     fireEvent.click(screen.getByLabelText('include_agent_purpose'))
     fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
@@ -226,7 +298,7 @@ describe('WorkflowModuleEditor', () => {
       expect(previewStage).toHaveBeenCalledWith('plan', {
         prompt: {
           business_context: 'Claims context',
-          task_instructions: ['Prefer retrieval first.'],
+          task_instructions: [],
           output_preferences: [],
         },
         context: { include_agent_purpose: true },
@@ -246,7 +318,7 @@ describe('WorkflowModuleEditor', () => {
             id: 'plan',
             prompt: {
               business_context: 'Claims context',
-              task_instructions: ['Prefer retrieval first.'],
+              task_instructions: [],
               output_preferences: [],
             },
             context: { include_agent_purpose: true },
@@ -287,9 +359,9 @@ workflow:
     expect(responseNodeButton).not.toBeNull()
     fireEvent.click(responseNodeButton!)
 
-    expect(await screen.findByLabelText('Business Context')).toBeDisabled()
-    expect(screen.getByLabelText('Task Instructions')).toBeDisabled()
-    expect(screen.getByLabelText('Output Preferences')).toBeDisabled()
+    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Prompt 模板')).not.toBeInTheDocument()
+    expect(screen.getByText(/此节点由系统执行/)).toBeInTheDocument()
     expect(screen.getByLabelText('include_outcome')).not.toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
