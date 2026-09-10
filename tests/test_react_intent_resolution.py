@@ -49,6 +49,33 @@ class FakeIntentProvider:
         return self.requests[-1] if self.requests else None
 
 
+def test_intent_repair_preserves_clarification_policy_date_and_routing():
+    from proof_agent.control.workflow.clarification import clarification_context
+    from proof_agent.contracts.manifest import ResponseConfig
+
+    valid = dict(
+        resolution_id="intent_1", user_goal="查询业绩", domain_intent="public_information",
+        known_facts=[], missing_fields=["口径"], ambiguities=[], risk_flags=[], confidence=0.6,
+        recommended_next_action="ask_clarification", retrieval_query_set=[],
+        clarification_assessments=[dict(field="口径", kind="preference", default_assumption="整体表现")],
+        scope_assumptions=[],
+    )
+    provider = FakeIntentProvider(["{}", json.dumps(valid)])
+    resolver = LLMIntentResolver(config=ReActPlannerConfig(provider="deterministic"), model_provider=provider)
+    result = resolver.resolve(
+        question="集团业绩怎么样？", system_prompt="Resolve intent", context_summary="pre_loop=true",
+        workflow_stage_context=clarification_context(ResponseConfig(clarification_level="minimal")),
+    )
+    assert result.intent_resolution.clarification_assessments[0].kind == "preference"
+    assert len(provider.requests) == 2
+    initial, repair = [json.loads(request.messages[1].content) for request in provider.requests]
+    assert repair["workflow_stage_context"] == initial["workflow_stage_context"]
+    assert repair["workflow_stage_context"]["clarification_policy"]["level"] == "minimal"
+    assert repair["retrieval_query_set_budget"] == initial["retrieval_query_set_budget"]
+    schema = provider.requests[0].function_schema.parameters_schema
+    assert "clarification_assessments" in schema["required"]
+
+
 def test_deterministic_intent_resolver_recommends_clarification_for_missing_fields() -> None:
     resolver = DeterministicIntentResolver()
 
@@ -178,6 +205,8 @@ def test_llm_intent_resolver_uses_planner_config_and_json_contract() -> None:
         "recommended_next_action",
         "retrieval_query_set",
         "insurance_condition_proposal",
+        "clarification_assessments",
+        "scope_assumptions",
     ]
     assert user_payload["retrieval_query_set_budget"]["max_queries"] == 3
     assert resolution.retrieval_query_set[0].query == ("inpatient reimbursement required documents")
@@ -973,3 +1002,23 @@ def test_resolve_intent_resolver_uses_deterministic_provider() -> None:
     resolver = resolve_intent_resolver(ReActPlannerConfig(provider="deterministic"))
 
     assert isinstance(resolver, DeterministicIntentResolver)
+
+
+@pytest.mark.parametrize("fields,assessments,code", [
+    ([], ["口径"], "clarification_assessment_unknown_field"),
+    (["口径"], ["口径", "口径"], "clarification_assessment_duplicate_field"),
+])
+def test_intent_repair_explains_clarification_relationship(fields, assessments, code):
+    invalid = dict(resolution_id="i1", user_goal="业绩", domain_intent="public_information",
+        known_facts=[], missing_fields=fields, ambiguities=[], risk_flags=[], confidence=0.6,
+        recommended_next_action="ask_clarification", retrieval_query_set=[],
+        clarification_assessments=[dict(field=f, kind="preference", default_assumption="整体") for f in assessments],
+        scope_assumptions=[])
+    provider = FakeIntentProvider(json.dumps(invalid))
+    resolver = LLMIntentResolver(config=ReActPlannerConfig(provider="deterministic"), model_provider=provider)
+    with pytest.raises(ModelOutputNormalizationError) as exc:
+        resolver.resolve(question="业绩？", system_prompt="Resolve", context_summary="")
+    assert code in exc.value.violation_codes
+    repair = json.loads(provider.requests[1].messages[-1].content)
+    assert "missing_fields" in repair["repair_guidance"]
+    assert "Control Plane" in repair["repair_guidance"]

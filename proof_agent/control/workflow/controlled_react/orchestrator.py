@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any, Literal, cast
 
+from proof_agent.capabilities.models.normalization import ModelOutputNormalizationError
 from proof_agent.contracts import (
     AnswerEvidenceContext,
     ApprovalPause,
@@ -33,6 +34,7 @@ from proof_agent.contracts import (
     ValidationResult,
     ValidationStatus,
     WorkflowStageResult,
+    WorkflowStageFailureDiagnostic,
     WorkflowStageLlmInteraction,
     WorkflowStageStatus,
     WorkflowTemplateExecutionResult,
@@ -179,7 +181,12 @@ class ControlledReActOrchestrator:
             assess_tool_tasks(state, self._answer_evidence_context(state).observation_truth)
             self.last_task_checkpoint_ref = request.task_checkpoint_ref
         else:
-            state = self._prepare_pre_loop_state(state, retrieval_max_queries=request.retrieval_max_queries)
+            try:
+                state = self._prepare_pre_loop_state(state, retrieval_max_queries=request.retrieval_max_queries)
+            except ModelOutputNormalizationError as exc:
+                if exc.role != "intent_resolution":
+                    raise
+                return self._intent_contract_failure(state, exc)
         state, action = self._plan_next_action(
             state,
             max_plan_rounds=request.max_plan_rounds,
@@ -349,13 +356,22 @@ class ControlledReActOrchestrator:
         state: ControlledReActRunState,
     ) -> WorkflowTemplateExecutionResult:
         missing_fields = _clarification_missing_fields(action)
-        message = f"Please provide {_human_join(missing_fields)} before I can continue."
+        first_field = missing_fields[0]
+        chinese = any("\u4e00" <= char <= "\u9fff" for char in state.question)
+        message = (
+            f"为继续处理，请先补充：{first_field}。"
+            if chinese else f"To continue, please clarify: {first_field}."
+        )
         clarification_need = ClarificationNeed(
             action_id=action.action_id,
             missing_fields=missing_fields,
             message=message,
             summary={
-                "reason": "missing_required_context",
+                "reason": (
+                    "ambiguous_business_flow"
+                    if "ambiguous_business_flow" in action.reasoning_summary.risk_flags
+                    else "missing_required_context"
+                ),
                 "missing_fields": list(missing_fields),
             },
         )
@@ -737,6 +753,35 @@ class ControlledReActOrchestrator:
             stage_results=_stage_results_for_waiting_approval(waiting_state, action),
             intent_resolution=waiting_state.intent_resolution,
             reasoning_summary=action.reasoning_summary.model_dump(mode="json"),
+        )
+
+    def _intent_contract_failure(
+        self, state: ControlledReActRunState, error: ModelOutputNormalizationError,
+    ) -> WorkflowTemplateExecutionResult:
+        diagnostic = WorkflowStageFailureDiagnostic(
+            stage_id="intent_resolution", stage_label="Intent Resolution",
+            event_type="model_output_normalization_failed", status=WorkflowStageStatus.BLOCKED,
+            error_code=error.error_code, role=error.role,
+            raw_content_length=error.raw_content_length, contract_name=error.contract_name,
+            violation_codes=error.violation_codes, field_paths=error.field_paths,
+            violation_count=error.violation_count,
+        )
+        self._emit_trace(diagnostic.event_type, status="blocked",
+            payload=diagnostic.model_dump(mode="json", exclude_none=True))
+        message = (
+            "意图解析失败：模型输出在一次修复后仍未通过结构校验。请查看运行诊断。"
+            if re.search(r"[\u4e00-\u9fff]", state.question) else
+            "Intent resolution failed validation after one repair. See run diagnostics."
+        )
+        return WorkflowTemplateExecutionResult(
+            run_id=state.run_id, template_name=state.template_name,
+            template_descriptor_version=state.template_descriptor_version,
+            outcome=ReceiptOutcome.FAILED_WITH_TRACE, final_output=message, message=message,
+            stage_results=(WorkflowStageResult(stage_id="intent_resolution",
+                status=WorkflowStageStatus.BLOCKED, outcome=ReceiptOutcome.FAILED_WITH_TRACE,
+                summary={"error_code": error.error_code}),),
+            stage_failure_diagnostics=(diagnostic,),
+            stage_llm_interactions=_stage_llm_interactions_from_port(self._ports.intent_resolution),
         )
 
     def _prepare_pre_loop_state(
@@ -1501,12 +1546,6 @@ def _clarification_missing_fields(
         field.strip() for field in candidates if isinstance(field, str) and field.strip()
     )
     return missing_fields or ("required_details",)
-
-
-def _human_join(values: tuple[str, ...]) -> str:
-    if len(values) == 1:
-        return values[0]
-    return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
 def _approval_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:

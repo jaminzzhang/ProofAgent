@@ -25,6 +25,39 @@ _CHINESE_ASSERTION = re.compile(r"(?<=.)[为是]")
 _NUMBER = re.compile(r"(?<![\w.+-])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w.])")
 
 
+def answer_fact_repair_options(evidence: tuple[EvidenceChunk, ...]) -> list[dict[str, str]]:
+    """Bounded source extracts for repair, not prevalidated answers or new evidence."""
+    options: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    total_chars = 0
+    for record in answer_evidence_records(evidence):
+        if "structured_data" in record:
+            continue  # Preserve typed record identity through the existing repair contract.
+        for statement in _statements(record["content"], source=True):
+            if (
+                statement.startswith(("#", "|", "![", "<"))
+                or statement.endswith((":", "："))
+                or "<" in statement
+                or "**" in statement
+                or re.match(r"^[（(]\d+[）)]", statement)
+            ):
+                continue
+            citation = record["citation"] or record["source"]
+            identity = (statement, citation)
+            if identity in seen:
+                continue
+            # Sentence splitting removes full stops. Restore prose punctuation so
+            # exact repair selections do not resemble a bare table/heading dump.
+            ending = "。" if re.search(r"[\u4e00-\u9fff]", statement) else "."
+            rendered = statement if statement.endswith(("?", "!", "？", "！")) else statement + ending
+            if len(options) >= 128 or total_chars + len(rendered) > MAX_ANSWER_CHARS:
+                return options
+            seen.add(identity)
+            total_chars += len(rendered)
+            options.append({"statement": rendered, "citation": citation})
+    return options
+
+
 def validate_answer_facts(
     *,
     message: str,
@@ -52,7 +85,7 @@ def validate_answer_facts(
     for record in cited:
         typed = record.get("structured_data")
         if typed is None:
-            source_statements.extend(_statements(record["content"]))
+            source_statements.extend(_statements(record["content"], source=True))
             continue
         for field in typed["fields"]:
             value = field["value"]
@@ -86,8 +119,9 @@ def validate_answer_facts(
         if subject:
             values_by_subject.setdefault(subject, set()).add(value)
     violations: list[str] = []
+    diagnostics: list[tuple[int, str, str]] = []
     checked = unassessed = 0
-    for statement in answer_statements:
+    for index, statement in enumerate(answer_statements):
         fact = _fact(statement, known_subjects)
         numeric = bool(re.search(r"\d", statement))
         if not numeric and not fact[0]:
@@ -96,6 +130,7 @@ def validate_answer_facts(
         checked += 1
         subject, raw_value = _parts(statement, known_subjects)
         literal_match = subject not in literal_values or raw_value in literal_values[subject]
+        previous_count = len(violations)
         if fact not in supported or not literal_match:
             violations.append(
                 "unsupported_numeric_fact" if numeric else "unsupported_explicit_assertion"
@@ -104,13 +139,47 @@ def validate_answer_facts(
             len(values_by_subject.get(fact[0], ())) > 1 or len(literal_values.get(subject, ())) > 1
         ):
             violations.append("conflicting_explicit_assertion")
+        if len(violations) > previous_count and len(diagnostics) < 32:
+            diagnostics.append(
+                (
+                    index,
+                    violations[-1],
+                    (
+                        "conflicting_source_values"
+                        if violations[-1] == "conflicting_explicit_assertion"
+                        else "subject_matched_value_mismatch"
+                        if fact[0] in values_by_subject
+                        else "no_exact_subject_match"
+                    ),
+                )
+            )
     return _result(
-        tuple(dict.fromkeys(violations)), checked, unassessed, "bounded_consistency_only"
+        tuple(dict.fromkeys(violations)),
+        checked,
+        unassessed,
+        "bounded_consistency_only",
+        tuple(diagnostics),
     )
 
 
-def _statements(text: str) -> list[str]:
+def _statements(text: str, *, source: bool = False) -> list[str]:
     normalized = unicodedata.normalize("NFC", text)
+    if source:
+        # Insurance reading guides use diamond bullets and dotted section leaders.
+        # Strip only that source navigation syntax, not arbitrary dotted values or
+        # anything in model output. Retain every word/condition before the leader.
+        normalized = re.sub(
+            r"(?m)^([ \t]*(?:[-*+]\s+)?❖\s+[^\n]*[\u4e00-\u9fff])"
+            r"\.{3,}\d+(?:\.\d+)+[ \t]*$",
+            r"\1",
+            normalized,
+        )
+    # An isolated signed quantity is not a list item.
+    normalized = re.sub(
+        r"(?m)^[ \t]*(?:[-*+][ \t]+(?:❖[ \t]+)?|❖[ \t]+)(?=[^\W\d_])",
+        "",
+        normalized,
+    )
     # Ordered-list indices are presentation, not quantities. Keep other digits.
     normalized = re.sub(r"(?m)^[ \t]*\d+[.)][ \t]+", "", normalized)
     return [s.strip() for s in _SPLIT.split(normalized) if s.strip()]
@@ -133,9 +202,17 @@ def _parts(statement: str, known_subjects: tuple[str, ...] = ()) -> tuple[str, s
             )
             if assignment:
                 return subject, assignment.group(1).strip()
+    # A copula inside an explicit antecedent is not the assigned fact's subject.
+    # Keep the entire antecedent in the subject so branches cannot exchange values.
+    conditional = re.match(r"^(?:若|如果|If\s+)[^,，]+[,，]\s*", statement, re.IGNORECASE)
+    start = conditional.end() if conditional else 0
     assertion = next(
-        (m for m in _ASSERTION.finditer(statement) if m.start() > 0), None
-    ) or _CHINESE_ASSERTION.search(statement)
+        (m for m in _ASSERTION.finditer(statement, start) if m.start() > 0), None
+    ) or _CHINESE_ASSERTION.search(statement, start)
+    if assertion is None and conditional:
+        assertion = next(
+            (m for m in _ASSERTION.finditer(statement) if m.start() > 0), None
+        ) or _CHINESE_ASSERTION.search(statement)
     if assertion:
         return statement[: assertion.start()].strip(), statement[assertion.end() :].strip()
     return "", statement.strip()
@@ -160,7 +237,11 @@ def _canonical(text: str) -> str:
 
 
 def _result(
-    codes: tuple[str, ...], checked: int, unassessed: int, coverage: str
+    codes: tuple[str, ...],
+    checked: int,
+    unassessed: int,
+    coverage: str,
+    diagnostics: tuple[tuple[int, str, str], ...] = (),
 ) -> ValidationResult:
     return ValidationResult(
         validator_name="answer_facts",
@@ -171,7 +252,9 @@ def _result(
         metadata={
             "violation_codes": codes,
             "violation_count": len(codes),
-            "field_paths": ("message",) if codes else (),
+            "field_paths": tuple(f"message.statements[{item[0]}]" for item in diagnostics)
+            or (("message",) if codes else ()),
+            "statement_diagnostics": diagnostics,
             "checked_statement_count": checked,
             "unassessed_statement_count": unassessed,
             "coverage": coverage,

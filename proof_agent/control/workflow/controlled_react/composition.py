@@ -38,6 +38,12 @@ from proof_agent.control.workflow.controlled_react.orchestrator import (
 from proof_agent.control.workflow.business_flow_skill_packs import (
     admit_business_flow_skill_pack,
 )
+from proof_agent.control.workflow.clarification import (
+    apply_clarification_policy,
+    clarification_context,
+    scope_assumption_context,
+)
+from proof_agent.contracts.manifest import ResponseConfig
 from proof_agent.control.workflow.controlled_react.final_answer_attempt import (
     FinalAnswerAttemptRunner,
 )
@@ -191,17 +197,28 @@ class _InvocationIntentResolutionAdapter:
     def resolve(self, state: ControlledReActRunState) -> IntentResolutionResult:
         _check_cancellation(self._invocation)
         resolver = self._invocation.intent_resolver or self._fallback
-        result = resolver.resolve(
-            question=state.question,
-            system_prompt="Resolve user intent before Controlled ReAct planning.",
-            context_summary="pre_loop=true",
-            workflow_stage_context=self._stage_contexts.get("intent_resolution"),
-            conversation_context=state.conversation_context,
-            memory_recall_payloads=state.memory_recall_payloads,
-            business_flow_skill_packs=self._invocation.business_flow_skill_packs,
-        )
-        _check_cancellation(self._invocation)
-        self.stage_llm_interactions = stage_llm_interactions(resolver)
+        try:
+            result = resolver.resolve(
+                question=state.question,
+                system_prompt="Resolve user intent before Controlled ReAct planning.",
+                context_summary="pre_loop=true",
+                workflow_stage_context=clarification_context(
+                    self._invocation.manifest.response, self._stage_contexts.get("intent_resolution"),
+                ),
+                conversation_context=state.conversation_context,
+                memory_recall_payloads=state.memory_recall_payloads,
+                business_flow_skill_packs=self._invocation.business_flow_skill_packs,
+            )
+            _check_cancellation(self._invocation)
+        finally:
+            self.stage_llm_interactions = stage_llm_interactions(resolver)
+        result = result.model_copy(update={
+            "intent_resolution": apply_clarification_policy(
+                result.intent_resolution,
+                response=self._invocation.manifest.response,
+                question=state.question,
+            ),
+        })
         return self._admit_business_flow(result)
 
     def _admit_business_flow(self, result: IntentResolutionResult) -> IntentResolutionResult:
@@ -251,6 +268,7 @@ class _InvocationIntentResolutionAdapter:
             resolution = result.intent_resolution.model_copy(
                 update={
                     "missing_fields": ("business_flow_skill_pack",),
+                    "clarification_assessments": (),
                     "recommended_next_action": ReActActionType.ASK_CLARIFICATION,
                 }
             )
@@ -314,12 +332,18 @@ class _InvocationPlannerAdapter:
         if _has_tool_observation(state):
             return _final_answer_action("act_generate_after_tool")
         planner = self._invocation.react_planner or self._fallback
+        planner_context = clarification_context(
+            self._invocation.manifest.response, self._stage_contexts.get("plan"),
+        )
         action = planner.plan(
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
             context_summary=_context_summary(
                 state,
-                workflow_stage_context=self._stage_contexts.get("plan"),
+                workflow_stage_context=scope_assumption_context(
+                    state.intent_resolution,
+                    planner_context,
+                ),
             ),
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
@@ -841,7 +865,9 @@ class _ModelAnswerSynthesisAdapter:
         result = FinalAnswerAttemptRunner(
             self._invocation,
             trace=self._trace,
-            workflow_stage_context=self._stage_contexts.get("model_answer"),
+            workflow_stage_context=scope_assumption_context(
+                state.intent_resolution, self._stage_contexts.get("model_answer"),
+            ),
         ).run(
             state,
             action,
@@ -1154,16 +1180,20 @@ def _intent_terminal_action(state: ControlledReActRunState) -> ReActActionPropos
         missing_fields = tuple(
             str(item).strip() for item in missing_field_items if str(item).strip()
         )
+        business_flow = "business_flow_skill_pack" in missing_fields
         return ReActActionProposal(
-            action_id="act_business_flow_clarification",
+            action_id="act_business_flow_clarification" if business_flow else "act_intent_clarification",
             action_type=ReActActionType.ASK_CLARIFICATION,
             reasoning_summary=ReasoningSummary(
-                goal="Clarify the intended governed business flow.",
-                observations=("Business Flow Skill Pack routing is ambiguous.",),
+                goal=("Clarify the intended governed business flow." if business_flow
+                      else "Clarify required user context."),
+                observations=("Business Flow Skill Pack routing is ambiguous." if business_flow
+                              else "Required user context is missing.",),
                 candidate_actions=(ReActActionType.ASK_CLARIFICATION,),
                 selected_action=ReActActionType.ASK_CLARIFICATION,
-                rationale_summary="A single business flow must be selected before execution.",
-                risk_flags=("ambiguous_business_flow",),
+                rationale_summary=("A single business flow must be selected before execution."
+                                   if business_flow else "Resolve the blocking context before continuing."),
+                risk_flags=("ambiguous_business_flow",) if business_flow else ("missing_required_context",),
                 required_evidence=(),
             ),
             parameters={"missing_fields": missing_fields or ("business_flow_skill_pack",)},
@@ -1320,6 +1350,7 @@ def _execution_configuration_digest(invocation: HarnessInvocation, stage_context
             for name, tool in invocation.tool_gateway.tools.items()},
         "skills": invocation.business_flow_skill_packs,
         "skill_admission": invocation.manifest.capabilities.skills.admission,
+        "clarification_level": (invocation.manifest.response or ResponseConfig()).clarification_level,
         "policy": invocation.policy.rules,
         "stage_contexts": stage_contexts or {},
         "knowledge": invocation.resolved_knowledge_bindings,

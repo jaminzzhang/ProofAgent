@@ -977,6 +977,29 @@ def test_workspace_validates_and_atomically_updates_raw_contract_with_revision_c
     assert factory.agents.get_active(current.draft.agent_id) is None
 
 
+@pytest.mark.parametrize("level", ["minimal", "balanced", "thorough"])
+def test_workspace_saves_and_reloads_agent_clarification_level(level: str) -> None:
+    from proof_agent.contracts.manifest import ResponseConfig
+
+    current = _draft("agent_alpha", "draft_clarification", updated_at="2026-09-10T00:00:00Z")
+    factory = UnitOfWorkFactory((current,))
+    workspace = AgentConfigurationWorkspace(
+        unit_of_work_factory=factory, template_bundle=_template_bundle(),
+        contract_validator=RecordingContractValidator(), scope=AgentConfigurationScope.MULTI_AGENT,
+        clock=lambda: datetime(2026, 9, 10, 4, tzinfo=UTC),
+    )
+    saved = workspace.update_contract(
+        agent_id="agent_alpha", draft_id="draft_clarification", expected_revision=1,
+        agent_yaml=current.draft.contract_bundle.agent_yaml + f"response:\n  clarification_level: {level}\n",
+        policy_yaml=None, tools_yaml=None, actor=_actor(),
+    )
+    reloaded = workspace.get_draft(agent_id="agent_alpha", draft_id="draft_clarification")
+    assert reloaded.revision == saved.revision == 2
+    assert ResponseConfig.model_validate(yaml.safe_load(reloaded.draft.contract_bundle.agent_yaml)["response"]).clarification_level == level
+    assert reloaded.draft.contract_bundle.policy_yaml == current.draft.contract_bundle.policy_yaml
+    assert factory.agents.get_active("agent_alpha") is None
+
+
 def test_workspace_contract_update_rejects_stale_revision_before_validation() -> None:
     current = _draft(
         "agent_alpha",

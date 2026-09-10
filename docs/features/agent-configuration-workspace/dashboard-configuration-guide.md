@@ -2,6 +2,34 @@
 
 日期：2026-09-07。适用：当前 Dashboard Draft Workspace；ADR-0242 外部 Knowledge。
 
+## 澄清程度（2026-09-10）
+
+[KNOWN | HIGH] 在 Agent → **Response → 澄清程度** 配置
+`response.clarification_level`，保存沿用 Draft revision CAS。
+
+| 选项 | 配置值 | 行为 |
+| --- | --- | --- |
+| 少澄清 | `minimal` | 缺少非必要偏好时先广泛查询，覆盖可能的解释 |
+| 均衡（默认） | `balanced` | 有明确合理的查询范围默认值时继续，并将该范围交给答案模型说明 |
+| 详细澄清 | `thorough` | 先确认会影响答案侧重的偏好 |
+
+所有档位都保留身份、权限、具体对象、规则适用和冲突约束等必要澄清；
+报告是否存在等可检索事实先查资料。未分类缺口仍阻断，不能通过配置关闭证据校验。
+必要澄清一次只问一个字段，其余未解决字段继续保留。
+旧配置不填写时使用 `balanced`；不支持 `off` 或任意数字。
+
+```yaml
+response:
+  clarification_level: balanced
+  include_reasoning_summary: false
+  include_review_results: false
+```
+
+范围默认值是非证据上下文，不是用户确认事实或可用于工具调用的参数。
+例如“集团今年业绩怎么样”可以先查询已披露的整体经营表现，实际指标、报告期间和金额
+仍以接纳证据为准。修改 Draft 不修改已发布版本，需要按现有验证与发布流程生效。
+设计：[ADR-0253](../../adr/0253-configure-agent-clarification-level.md)。
+
 ## 结论与配置分层
 
 [KNOWN | HIGH] 配置服务已有 Control-owned Workspace、完整 Contract 校验、revision CAS、

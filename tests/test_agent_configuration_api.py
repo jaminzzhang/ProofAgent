@@ -3029,3 +3029,51 @@ def test_rollback_switches_active_version(tmp_path: Path) -> None:
     assert rollback.json()["version_id"] == version_one
     assert rollback.json()["rollback_from_version_id"] == version_two
     assert client.get("/api/config/agents").json()["data"][0]["active_version_id"] == version_one
+
+
+@pytest.mark.parametrize("full_capture", [False, True])
+def test_intent_contract_failure_is_persisted_with_optional_capture(tmp_path, monkeypatch, full_capture):
+    from proof_agent.capabilities.react import LLMIntentResolver
+    from proof_agent.contracts import ModelResponse, ReActPlannerConfig
+
+    class InvalidProvider:
+        provider_name = "deterministic"
+        model_name = "invalid-intent-test"
+        requests = []
+
+        def estimate_tokens(self, request):
+            return 100
+
+        def generate(self, request):
+            self.requests.append(request)
+            return ModelResponse(content='{"intent_resolution": {}}',
+                provider_name=self.provider_name, model_name=self.model_name)
+
+    provider = InvalidProvider()
+    resolver = LLMIntentResolver(config=ReActPlannerConfig(provider="deterministic"), model_provider=provider)
+    monkeypatch.setattr(bootstrap_composition, "resolve_intent_resolver", lambda *a, **kw: resolver)
+    client = _client(tmp_path)
+    draft = _import_react_enterprise_qa_v3(client)
+    response = client.post(
+        f"/api/config/agents/{draft['agent_id']}/drafts/{draft['draft_id']}/validate",
+        json={"question": "集团业绩怎么样？", "full_capture": full_capture},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["outcome"] == "FAILED_WITH_TRACE"
+    assert len(provider.requests) == 2
+    detail = client.get(f"/api/runs/{body['run_id']}")
+    assert detail.status_code == 200
+    trace = client.get(f"/api/runs/{body['run_id']}/trace").json()["events"]
+    failure = next(e for e in trace if e["event_type"] == "model_output_normalization_failed")
+    assert failure["payload"]["contract_name"] == "IntentResolutionResult"
+    assert failure["payload"]["field_paths"]
+    assert not any(e["event_type"] == "intent_resolution" for e in trace)
+    assert "response_json" not in json.dumps(trace)
+    if full_capture:
+        capture = client.get(body["links"]["validation_capture"])
+        assert capture.status_code == 200, capture.text
+        payload = capture.json()["payload"]
+        assert len(payload["llm_interactions"]) == 2
+        assert payload["failure_diagnostics"][0]["field_paths"]
+        assert payload["stage_results"][0]["status"] == "blocked"

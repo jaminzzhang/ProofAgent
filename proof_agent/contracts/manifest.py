@@ -253,8 +253,11 @@ class ReviewConfig(FrozenModel):
 
 
 class ResponseConfig(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     include_reasoning_summary: bool = False
     include_review_results: bool = False
+    clarification_level: Literal["minimal", "balanced", "thorough"] = "balanced"
 
 
 class RetrievalConfig(FrozenModel):

@@ -4,6 +4,16 @@ Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `reac
 
 ## Ambiguity Resolutions
 
+- [FRAME | HIGH] ADR-0254: exhausted intent-contract and answer-validation failures
+  use `FAILED_WITH_TRACE`. Intent failure stops before planning; safe diagnostics
+  and optional sensitive capture follow normal finalization. Invalid source selection
+  stays fail-closed with specific errors; no fact/evidence gate is weakened.
+
+- [FRAME | HIGH] [ADR-0253](../../adr/0253-configure-agent-clarification-level.md)
+  将 Agent 澄清程度配置为 `minimal` / `balanced` / `thorough`，由 Control Plane
+  在冻结检索任务前应用有界缺口分类。范围默认值不是事实或权限，必要上下文与业务流准入
+  保持独立；无技能包匹配不能伪装成用户意图不清。单次澄清只询问一个关键字段。
+
 - [FRAME | HIGH] ADR-0246 freezes package-bound read-only tool tasks and verifies same-Run observations before dependency execution and report delivery. Configuration-bound local checkpoint recovery does not imply production Queue automatic recovery. ADR-0247 binds tool availability to the Control Plane admitted Skill, never its prompt instructions. See [P1/P2 acceptance](../../features/agent-kernel-quality/tdd-p1-p2.md).
 
 - [KNOWN | HIGH] [ADR-0241](../../adr/0241-gate-final-answers-on-required-retrieval-evidence.md)

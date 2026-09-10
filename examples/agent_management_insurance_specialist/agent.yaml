@@ -34,6 +34,7 @@ review:
       timeout_seconds: 10
 
 response:
+  clarification_level: balanced
   include_reasoning_summary: true
   include_review_results: true
 

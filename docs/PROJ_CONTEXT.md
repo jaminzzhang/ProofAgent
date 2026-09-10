@@ -1,5 +1,40 @@
 # Project Context
 
+## Model contract failure capture — 2026-09-10
+
+[KNOWN | HIGH] Exhausted intent and answer validation failures now persist as
+`FAILED_WITH_TRACE`. Optional capture retains both intent calls; ordinary trace
+contains bounded field/code diagnostics. Clarification relationship and source-ID
+selection errors have actionable categories without relaxing contracts or facts.
+Local backend: 2769 passed, 92 skipped, 2 deselected. User-authorized DeepSeek replay
+`run_284f92e5` returned `ANSWERED_WITH_CITATIONS` after one source-selection repair;
+capture `vcap_1e213a938c7b` persisted. This is one execution, not source-quality or
+general reliability proof. No publication.
+Design: ADR-0254; evidence: `docs/features/agent-kernel-quality/tdd-stage-capture-failures.md`.
+
+## Agent clarification policy — 2026-09-10
+
+[KNOWN | HIGH] Agent Response now exposes `clarification_level` (`minimal`, `balanced`,
+`thorough`; default balanced). Control Plane distinguishes required context, optional
+preferences and retrievable facts before freezing queries. Bounded scope assumptions
+remain non-evidence; necessary clarification asks one localized question. Draft CAS,
+execution binding and every authority/evidence gate remain intact. Local verification:
+2760 backend tests passed (92 skipped, 2 deselected), 258 Dashboard / 38 Chat tests,
+build and static checks; browser save/reload verified Draft revision 31 as balanced.
+No real-model replay or publication performed. Design: ADR-0253; detailed evidence:
+`docs/features/agent-kernel-quality/tdd-clarification-policy.md`.
+
+## Text answer fact repair — 2026-09-09
+
+[KNOWN | HIGH] Same-question replay of `run_2b40a67b` exposed presentation and
+conditional-branch fact-check false negatives. Text-only fact repairs now use
+source-bound statement ID selection within the existing one-repair policy;
+rendered answers still pass every admission gate. Real-model replay
+`run_655d4447` and original-port verification `run_4cb2e2b5` returned
+`ANSWERED_WITH_CITATIONS`. Separate unknown business-flow
+route refusals remain unresolved. Local evidence and limits:
+`docs/features/agent-kernel-quality/tdd-run-2b40a67b.md`; design: ADR-0250.
+
 ## Dashboard configuration completion — 2026-09-07
 
 [KNOWN | HIGH] Dashboard adds capability-aware configuration navigation, effective

@@ -5,6 +5,13 @@ not a second glossary.
 
 ## Primary maps
 
+- `docs/adr/0254-preserve-model-contract-failure-diagnostics.md` and
+  `docs/features/agent-kernel-quality/tdd-stage-capture-failures.md` — failed intent
+  capture, safe contract diagnostics and answer-failure outcome semantics.
+- `docs/adr/0253-configure-agent-clarification-level.md` and
+  `docs/features/agent-kernel-quality/tdd-clarification-policy.md` — Agent clarification
+  levels, bounded missing-field classification, non-evidence scope assumptions and local acceptance.
+
 - `docs/features/agent-kernel-quality/scope-p1-p2.md` and `tdd-p1-p2.md` — bounded task state, read-only tool completion, local business-action fencing, Skill runtime narrowing and measurement; ADR-0245 through ADR-0248 define their authority boundaries.
 
 - `CONTEXT-MAP.md` — bounded contexts and ownership boundaries.

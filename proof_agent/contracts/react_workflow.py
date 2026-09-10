@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_serializer, field_validator, model_validator
+from pydantic_core import PydanticCustomError
+
+from pydantic import ConfigDict, Field, StringConstraints, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.policy import EnforcementPoint, PolicyDecisionType
@@ -115,6 +117,18 @@ class InsuranceConditionAdmission(FrozenModel):
         return dict(value)
 
 
+ScopeAssumption = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=400)]
+
+
+class ClarificationAssessment(FrozenModel):
+    """Model-proposed missing-field classification, never an authority grant."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    field: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    kind: Literal["required_context", "preference", "retrievable"]
+    default_assumption: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
+
+
 class IntentResolution(FrozenModel):
     """Audit-safe user intent understanding before ReAct action planning."""
 
@@ -131,6 +145,26 @@ class IntentResolution(FrozenModel):
     insurance_condition_proposal: InsuranceConditionProposal = Field(
         default_factory=InsuranceConditionProposal
     )
+    clarification_assessments: tuple[ClarificationAssessment, ...] = Field(
+        default=(), max_length=8, exclude_if=lambda value: not value,
+    )
+    scope_assumptions: tuple[ScopeAssumption, ...] = Field(
+        default=(), max_length=8, exclude_if=lambda value: not value,
+    )
+    applied_clarification_level: Literal["minimal", "balanced", "thorough"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def validate_clarification_assessments(self) -> IntentResolution:
+        fields = [item.field for item in self.clarification_assessments]
+        if len(fields) != len(set(fields)):
+            raise PydanticCustomError("clarification_assessment_duplicate_field",
+                "clarification assessments must uniquely reference missing_fields")
+        if not set(fields).issubset(self.missing_fields):
+            raise PydanticCustomError("clarification_assessment_unknown_field",
+                "clarification assessments must reference missing_fields")
+        return self
 
     @field_validator("retrieval_query_set", mode="after")
     @classmethod

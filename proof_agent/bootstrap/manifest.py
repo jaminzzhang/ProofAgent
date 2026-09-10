@@ -427,7 +427,4 @@ def _response_config_from_mapping(raw: Any) -> ResponseConfig | None:
         return None
     if not isinstance(raw, dict):
         raise TypeError("response must be a mapping")
-    return ResponseConfig(
-        include_reasoning_summary=raw.get("include_reasoning_summary", False),
-        include_review_results=raw.get("include_review_results", False),
-    )
+    return ResponseConfig.model_validate(raw)

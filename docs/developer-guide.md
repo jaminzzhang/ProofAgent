@@ -70,6 +70,26 @@ block finalization. A denied tool is never executed; governed alternative retrie
 may still answer. Resume validates original proof before any new observation,
 without changing snapshot fields or re-running Intent Resolution.
 
+Agent `response.clarification_level` controls clarification before required queries
+are frozen (ADR-0253). The default `balanced` permits explicit search-scope defaults;
+`minimal` also permits broad retrieval without a preference default; `thorough`
+confirms material answer preferences. All three retain missing identity, permissions,
+specific-object context, rule applicability and conflicting user constraints.
+Facts that can be retrieved do not block retrieval. Unclassified missing fields remain
+blocking. Bounded model classifications are proposals applied by the Control Plane;
+they do not change Business Flow admission, tool authorization or evidence gates.
+Scope assumptions are non-evidence context supplied to planning and answer generation
+with disclosure instructions. A necessary clarification asks one field in the user's
+language while keeping every unresolved field in the result. The setting is available
+in Dashboard → Agent → Response, uses the existing Draft revision CAS, and is bound
+into the execution configuration digest. Invalid values (including `off`) are rejected.
+
+Intent contract failure after one repair persists as `FAILED_WITH_TRACE`, with
+field/code diagnostics and optional Stage Capture of both interactions (ADR-0254).
+Answer-output validation failure uses the same failed-run outcome rather than
+claiming evidence was absent. Invalid source selection reports a bounded specific
+reason; the server still requires 1–16 unique known IDs and revalidates the answer.
+
 Applicable runs emit `task_completion_evaluated` with `stage_id=plan` and
 `retrieval-task-completion.v1` payloads. The final plan stage includes the same
 coverage projection for answers, refusals, clarification and policy/scope denial.

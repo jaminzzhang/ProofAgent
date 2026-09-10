@@ -54,6 +54,8 @@ _INTENT_REQUIRED_FIELDS = (
     "recommended_next_action",
     "retrieval_query_set",
     "insurance_condition_proposal",
+    "clarification_assessments",
+    "scope_assumptions",
 )
 _INTENT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution"
 _INTENT_RESULT_FUNCTION_SCHEMA_NAME = "submit_intent_resolution_result"
@@ -314,6 +316,13 @@ def _intent_required_output_contract(
             "domain_intent": "string",
             "known_facts": "array of strings",
             "missing_fields": "array of strings",
+            "clarification_assessments": (
+                "array of {field, kind: required_context|preference|retrievable, default_assumption}; "
+                "classify every missing field exactly once; field must exactly match an entry in "
+                "missing_fields. Keep defaultable fields in missing_fields for Control Plane policy; "
+                "defaults describe scope only, never facts or permissions"
+            ),
+            "scope_assumptions": "array of explicit search-scope assumptions, not known facts",
             "ambiguities": "array of strings",
             "risk_flags": "array of strings",
             "confidence": "number between 0 and 1",
@@ -331,6 +340,8 @@ def _intent_required_output_contract(
             "domain_intent": "public_insurance_knowledge_query",
             "known_facts": ["The user asks for an insurance product explanation."],
             "missing_fields": [],
+            "clarification_assessments": [],
+            "scope_assumptions": [],
             "ambiguities": [],
             "risk_flags": [],
             "confidence": 0.82,
@@ -485,6 +496,22 @@ def _intent_resolution_parameters_schema() -> dict[str, Any]:
             "domain_intent": {"type": "string"},
             "known_facts": _string_array_schema(),
             "missing_fields": _string_array_schema(),
+            "clarification_assessments": {
+                "type": "array", "maxItems": 8,
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["field", "kind", "default_assumption"],
+                    "properties": {
+                        "field": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "kind": {"type": "string", "enum": ["required_context", "preference", "retrievable"]},
+                        "default_assumption": {"type": "string", "maxLength": 400},
+                    },
+                },
+            },
+            "scope_assumptions": {
+                "type": "array", "maxItems": 8,
+                "items": {"type": "string", "minLength": 1, "maxLength": 400},
+            },
             "ambiguities": _string_array_schema(),
             "risk_flags": _string_array_schema(),
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -663,6 +690,12 @@ def _intent_repair_request(
             "violation_codes": list(error.violation_codes),
             "violation_count": error.violation_count,
         },
+        "repair_guidance": (
+            "Each clarification_assessments field must exactly match one missing_fields entry, "
+            "without duplicates. Keep unresolved preferences in missing_fields even when proposing "
+            "a default; the Control Plane applies clarification policy. Do not remove required "
+            "context to bypass clarification. Return all fields required by the function schema."
+        ),
         "previous_response_json": previous_json,
         "previous_response_parse_error_code": previous_parse_error,
     }
@@ -670,6 +703,9 @@ def _intent_repair_request(
         repair_payload["workflow_stage_context"] = original_payload["workflow_stage_context"]
     if "conversation_context" in original_payload:
         repair_payload["conversation_context"] = original_payload["conversation_context"]
+    for key in ("business_flow_skill_pack_routing", "retrieval_query_set_budget", "context_summary"):
+        if key in original_payload:
+            repair_payload[key] = original_payload[key]
     return ModelRequest(
         provider=provider,
         model=model,
@@ -816,6 +852,11 @@ def _intent_control_prompt() -> str:
         "names, including confidence rather than route_confidence. "
         "Summarize user intent, known facts, missing fields, ambiguities, risk flags, "
         "confidence, and a recommended_next_action. "
+        "Apply workflow_stage_context.clarification_policy and current_date. Classify missing "
+        "fields in clarification_assessments; required_context is never optional. Search for "
+        "retrievable facts before asking the user. For overview questions, allow broad coverage "
+        "and explicit scope defaults instead of demanding a single metric. Keep assumptions in "
+        "scope_assumptions, not known_facts, and never invent data or authority. "
         "Use only allowed recommended_next_action values from the user message. "
         "When the recommended_next_action is plan_retrieval and no missing_fields "
         "block retrieval, include a bounded non-executing retrieval_query_set. "

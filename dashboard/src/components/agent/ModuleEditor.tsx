@@ -24,6 +24,7 @@ interface FieldConfig {
    */
   input: 'text' | 'number' | 'select' | 'switch' | 'combobox'
   options?: string[]
+  optionLabels?: Record<string, string>
   description?: string
   placeholder?: string
   defaultValue?: string
@@ -151,7 +152,7 @@ export function ModuleEditor({
                 >
                   {field.options.map((opt) => (
                     <option key={opt} value={opt}>
-                      {opt}
+                      {field.optionLabels?.[opt] || opt}
                     </option>
                   ))}
                 </select>

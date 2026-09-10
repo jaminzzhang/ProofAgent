@@ -55,6 +55,12 @@ def emit_intent_resolution(
             "risk_flags": list(resolution.risk_flags),
             "confidence": resolution.confidence,
             "recommended_next_action": resolution.recommended_next_action.value,
+            "scope_assumptions": list(resolution.scope_assumptions),
+            "clarification_policy": {
+                "level": resolution.applied_clarification_level,
+                "blocking_field_count": len(resolution.missing_fields),
+                "scope_assumption_count": len(resolution.scope_assumptions),
+            },
             "retrieval_query_set": query_set,
             "stage_id": stage_id,
         },

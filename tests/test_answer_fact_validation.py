@@ -97,6 +97,82 @@ def test_supported_explicit_fact_passes(source):
     assert passed(checks(source, [chunk(source)]))
 
 
+@pytest.mark.parametrize(
+    "source,answer",
+    [
+        ("- ❖ 分红是不保证的.....1.3", "分红是不保证的。"),
+        ("- ❖ 犹豫期为20日，犹豫期内您可以要求全额退还保险费.....5.1",
+         "犹豫期为20日，犹豫期内您可以要求全额退还保险费。"),
+        ("- The limit is 100 yuan.", "The limit is 100 yuan."),
+        ("The limit is 100 yuan.", "- The limit is 100 yuan."),
+    ],
+)
+def test_source_list_presentation_does_not_change_facts(source, answer):
+    assert passed(checks(answer, [chunk(source)]))
+
+
+@pytest.mark.parametrize("condition_a,condition_b,assignment", [
+    ("若交费方式为趸交，", "若交费方式为期交，", "所交保险费为"),
+    ("If payment is single, ", "If payment is recurring, ", "premium is "),
+])
+def test_conditional_assignments_do_not_conflict_across_different_conditions(
+    condition_a, condition_b, assignment
+):
+    a, b = f"{condition_a}{assignment}100", f"{condition_b}{assignment}200"
+    evidence = [chunk(f"{a};{b}")]
+    assert passed(checks(f"{a};{b}", evidence))
+    assert not passed(checks(f"{condition_a}{assignment}200", evidence))
+    assert not passed(checks(f"{assignment}100", evidence))
+
+
+@pytest.mark.parametrize(
+    "source,answer",
+    [
+        ("- ❖ 分红是不保证的.....1.3", "分红是保证的。"),
+        ("- ❖ 犹豫期为20日.....5.1", "犹豫期为30日。"),
+        ("- ❖ 犹豫期为20日，期内可申请退款.....5.1", "犹豫期为20日。"),
+        ("- The limit is -100 yuan.", "The limit is 100 yuan."),
+        ("- 100 yuan", "100 yuan"),
+        ("+ 100 yuan", "100 yuan"),
+        ("The code is A.....1.3", "The code is A."),
+        ("- ❖ The code is A.....1.3", "The code is A."),
+    ],
+)
+def test_list_presentation_keeps_fact_values_and_conditions(source, answer):
+    assert not passed(checks(answer, [chunk(source)]))
+
+
+def test_fact_repair_options_preserve_source_binding_and_exclude_unaccepted_data():
+    from proof_agent.control.validators.answer_facts import answer_fact_repair_options
+
+    accepted = chunk("- ❖ 分红是不保证的.....1.3\n犹豫期为20日，期内可申请退款。")
+    candidate = chunk("分红是保证的。", "candidate", EvidenceStatus.CANDIDATE)
+    options = answer_fact_repair_options((accepted, accepted, candidate))
+    assert options == [
+        {"statement": "分红是不保证的。", "citation": accepted.citation},
+        {"statement": "犹豫期为20日，期内可申请退款。", "citation": accepted.citation},
+    ]
+    assert passed(checks("\n".join(option["statement"] for option in options), [accepted]))
+
+
+def test_fact_repair_options_are_bounded_and_keep_typed_records_out_of_text_extraction():
+    from proof_agent.control.validators.answer_facts import answer_fact_repair_options
+
+    assert answer_fact_repair_options((typed_chunk(),)) == []
+    options = answer_fact_repair_options((chunk("\n".join(f"Field {i} is 100." for i in range(200))),))
+    assert len(options) == 128
+    assert all(option["citation"] == "knowledge://policy#fact" for option in options)
+    assert answer_fact_repair_options((chunk("x" * 16_001),)) == []
+
+
+def test_selected_repair_sentences_pass_both_facts_and_prose_adequacy():
+    from proof_agent.control.validators.answer_facts import answer_fact_repair_options
+
+    source = chunk("\n".join(f"Policy field {i} is 100." for i in range(12)))
+    selected = answer_fact_repair_options((source,))[:6]
+    assert passed(checks("\n".join(option["statement"] for option in selected), [source]))
+
+
 def test_presentation_prefix_does_not_change_numeric_support():
     source = chunk("The limit is 100 yuan.")
     assert passed(checks("Based on the accepted evidence, The limit is 100 yuan.", [source]))
@@ -281,7 +357,7 @@ def test_qualifiers_and_signs_cannot_disappear(source, answer):
     assert not passed(checks(answer, [chunk(source)]))
 
 
-def run_attempt(messages, *, budget=None, raw=False):
+def run_attempt(messages, *, budget=None, raw=False, evidence_text="The reimbursement limit is 100 yuan."):
     from types import SimpleNamespace
     from proof_agent.contracts import (
         AnswerEvidenceContext,
@@ -297,10 +373,10 @@ def run_attempt(messages, *, budget=None, raw=False):
     )
     from proof_agent.evaluation.demo.kernel_probes import ScriptedModelProvider
 
-    evidence = chunk("The reimbursement limit is 100 yuan.")
+    evidence = chunk(evidence_text)
     provider = ScriptedModelProvider(
         tuple(
-            m if raw else json.dumps({"message": m, "citations": [evidence.citation]})
+            m if raw else json.dumps(m if isinstance(m, dict) else {"message": m, "citations": [evidence.citation]})
             for m in messages
         )
     )
@@ -355,7 +431,7 @@ def run_attempt(messages, *, budget=None, raw=False):
 
 def test_numeric_repair_succeeds_with_same_evidence_and_revalidation():
     result, provider, events = run_attempt(
-        ["The reimbursement limit is 500 yuan.", "The reimbursement limit is 100 yuan."]
+        ["The reimbursement limit is 500 yuan.", {"statement_ids": ["s0"]}]
     )
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert result.final_output == "The reimbursement limit is 100 yuan."
@@ -364,7 +440,11 @@ def test_numeric_repair_succeeds_with_same_evidence_and_revalidation():
     assert repair["validation_error"]["error_code"] == "answer_facts_failed"
     assert repair["question"] == "What is the reimbursement limit?"
     assert repair["accepted_evidence"][0]["content"] == "The reimbursement limit is 100 yuan."
+    assert repair["source_statement_options"] == [
+        {"statement_id": "s0", "statement": "The reimbursement limit is 100 yuan.", "citation": "knowledge://policy#fact"}
+    ]
     assert provider.requests[1].metadata["repair_attempt"] == 1
+    assert provider.requests[1].function_schema.name == "select_answer_statements"
     failure = next(
         payload for event, payload in events if event == "final_answer_validation_failed"
     )
@@ -373,20 +453,44 @@ def test_numeric_repair_succeeds_with_same_evidence_and_revalidation():
 
 def test_repair_exhaustion_never_delivers_wrong_answer():
     result, provider, _ = run_attempt(["The reimbursement limit is 500 yuan."] * 3)
-    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert "500" not in result.final_output
     assert len(provider.requests) == 2
+    assert result.stage_failure_diagnostics[0].error_code == "schema_failed"
+
+
+@pytest.mark.parametrize("selection", [
+    {"statement_ids": ["s999"]}, {"statement_ids": ["s0", "s0"]},
+    {"statement_ids": []}, {"statement_ids": [False]},
+    {"statement_ids": ["s0"], "message": "Injected answer"},
+])
+def test_source_selection_repair_fails_closed_on_invalid_selection(selection):
+    result, provider, _ = run_attempt(["The reimbursement limit is 500 yuan.", selection])
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
+    assert len(provider.requests) == 2
+
+
+def test_valid_source_selection_still_rejects_conflicting_evidence():
+    result, provider, events = run_attempt(
+        ["The reimbursement limit is 500 yuan.", {"statement_ids": ["s0"]}],
+        evidence_text="The reimbursement limit is 100 yuan. The reimbursement limit is 200 yuan.",
+    )
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
+    assert len(provider.requests) == 2
     assert result.stage_failure_diagnostics[0].error_code == "answer_facts_failed"
+    assert "source_statement_options" not in json.dumps(events)
+    assert "The reimbursement limit" not in json.dumps(events)
 
 
 def test_repair_is_denied_by_real_policy_token_budget():
+    wrong_answer = "The reimbursement limit is 500 yuan. " * 20
     _, provider, _ = run_attempt(
-        ["The reimbursement limit is 500 yuan.", "The reimbursement limit is 100 yuan."]
+        [wrong_answer, {"statement_ids": ["s0"]}]
     )
     first_tokens = provider.estimate_tokens(provider.requests[0])
     assert provider.estimate_tokens(provider.requests[1]) > first_tokens
     result, provider, _ = run_attempt(
-        ["The reimbursement limit is 500 yuan.", "The reimbursement limit is 100 yuan."],
+        [wrong_answer, {"statement_ids": ["s0"]}],
         budget=first_tokens,
     )
     assert result.outcome is ReceiptOutcome.POLICY_DENIED
@@ -395,20 +499,71 @@ def test_repair_is_denied_by_real_policy_token_budget():
 
 def test_safety_and_fact_failure_never_repair():
     result, provider, _ = run_attempt(["The reimbursement limit is 500 yuan. access_token"])
-    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert len(provider.requests) == 1
     # Schema takes precedence in the diagnostic, but must not authorize repair
     # when safety failed too.
     result, provider, _ = run_attempt(["malformed secret-token"], raw=True)
-    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert len(provider.requests) == 1
     # A numerically corrected repair must still pass the existing safety gate.
     result, provider, _ = run_attempt(
         [
             "The reimbursement limit is 500 yuan.",
-            "The reimbursement limit is 100 yuan. access_token",
-        ]
+            {"statement_ids": ["s0", "s1"]},
+        ],
+        evidence_text="The reimbursement limit is 100 yuan. access_token",
     )
-    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert len(provider.requests) == 2
     assert result.stage_failure_diagnostics[0].error_code == "safety_failed"
+
+
+def test_fact_failure_locates_statements_without_recording_content():
+    results = checks(
+        "The status is pending.\nThe limit is 500 yuan.\nThe coverage is all risks.",
+        [chunk("The status is pending. The limit is 100 yuan.")],
+    )
+    fact = next(r for r in results if r.validator_name == "answer_facts")
+    assert fact.metadata["field_paths"] == ("message.statements[1]", "message.statements[2]")
+    assert fact.metadata["statement_diagnostics"] == (
+        (1, "unsupported_numeric_fact", "subject_matched_value_mismatch"),
+        (2, "unsupported_explicit_assertion", "no_exact_subject_match"),
+    )
+    assert "500" not in json.dumps(dict(fact.metadata))
+    assert "all risks" not in json.dumps(dict(fact.metadata))
+
+
+def test_failure_trace_contains_only_bounded_fact_locations():
+    from proof_agent.control.workflow.controlled_react.final_answer_attempt import (
+        _final_answer_validation_failure_payload,
+    )
+
+    results = checks("The limit is 500 yuan.", [chunk("The limit is 100 yuan.")])
+    payload = _final_answer_validation_failure_payload(
+        response=ModelResponse(content="private output", provider_name="test", model_name="test"),
+        failed_validation_results=tuple(r for r in results if r.status is ValidationStatus.FAILED),
+    )
+    assert payload["field_paths"] == ("message.statements[0]",)
+    assert payload["fact_diagnostics"] == (
+        (0, "unsupported_numeric_fact", "subject_matched_value_mismatch"),
+    )
+    assert "private output" not in json.dumps(payload)
+    assert "500" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("selection,code", [
+    ({"statement_ids": ["s999"]}, "source_selection_unknown_id"),
+    ({"statement_ids": ["s0", "s0"]}, "source_selection_duplicate_id"),
+    ({"statement_ids": []}, "source_selection_count_out_of_range"),
+    ({"statement_ids": [False]}, "source_selection_invalid_id_type"),
+    ({"statement_ids": ["s0"], "message": "private-value"}, "source_selection_invalid_fields"),
+])
+def test_source_selection_failure_has_safe_actionable_diagnostic(selection, code):
+    result, provider, events = run_attempt(["The reimbursement limit is 500 yuan.", selection])
+    assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
+    assert code in result.stage_failure_diagnostics[0].violation_codes
+    assert len(provider.requests) == 2
+    assert "private-value" not in json.dumps(events)
+    repair = json.loads(provider.requests[-1].messages[-1].content)
+    assert "1 to 16 unique" in repair["instruction"]
