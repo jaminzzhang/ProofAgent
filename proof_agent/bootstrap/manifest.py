@@ -65,6 +65,7 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         workflow=WorkflowConfig(
             template=workflow["template"],
             template_descriptor_version=workflow.get("template_descriptor_version"),
+            execution=workflow.get('execution'),
             stages=tuple(
                 _workflow_stage_config_from_mapping(item) for item in workflow.get("stages", ())
             ),
@@ -103,6 +104,8 @@ def manifest_from_mapping(raw: dict[str, Any], *, base_dir: Path) -> AgentManife
         review=_review_config_from_mapping(raw.get("review")),
         response=_response_config_from_mapping(raw.get("response")),
         context=_agent_context_config_from_mapping(raw.get("context")),
+        interaction=raw.get('interaction'),
+        assurance=raw.get('assurance'),
     )
 
 

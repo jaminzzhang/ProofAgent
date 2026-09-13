@@ -39,6 +39,8 @@ from proof_agent.contracts.dashboard import RunPurpose
 from proof_agent.contracts.conversation import ConversationTurn
 from proof_agent.contracts.persistence import RunMetadataRecord
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.contracts.workflow_task import TaskOwner
+from proof_agent.contracts.workflow_task_update import WorkflowTaskUpdate
 from proof_agent.contracts.ports.run_queue import (
     RunClaimRejectedError,
     RunConversationBusyError,
@@ -641,6 +643,7 @@ class PostgresRunQueueRepository:
                 expected_state=run_record.state,
                 expected_state_version=run_record.state_version,
             )
+            self._record_failed_task(connection, run_record.request, now=now)
             return terminal_run
 
     def commit_success(
@@ -653,10 +656,13 @@ class PostgresRunQueueRepository:
         receipt_outcome: ReceiptOutcome | None = None,
         conversation_turn: ConversationTurn | None = None,
         expected_conversation_turn_count: int | None = None,
+        workflow_task_update: WorkflowTaskUpdate | None = None,
     ) -> RunQueueRecord:
         """Atomically bind exact artifacts and commit a still-live successful Attempt."""
 
         self._require_aware(now)
+        if (claim.run_request.task_id is None) != (workflow_task_update is None):
+            raise ValueError("Task Run completion requires its exact internal task update")
         if manifest_ref.kind is not ArtifactKind.ARTIFACT_MANIFEST:
             raise ValueError("Run success requires an artifact manifest object")
         if (
@@ -741,6 +747,18 @@ class PostgresRunQueueRepository:
                     conversation_turn,
                     expected_turn_count=expected_conversation_turn_count,
                 )
+            if workflow_task_update is not None:
+                from proof_agent.capabilities.persistence.postgres.workflow_task_repository import PostgresWorkflowTaskRepository
+                from proof_agent.control.workflow.task_service import WorkflowTaskService
+                request = claim.run_request
+                if (workflow_task_update.task_id != request.task_id
+                        or workflow_task_update.expected_version != request.expected_task_version
+                        or request.task_snapshot_sha256 is None):
+                    raise RunClaimRejectedError("task update does not match the claimed Run")
+                WorkflowTaskService(PostgresWorkflowTaskRepository(connection)).apply_update(
+                    workflow_task_update, owner=TaskOwner(actor_subject=request.operator_subject,
+                        agent_id=request.agent_id, agent_version=request.agent_version_id), now=now,
+                    run_id=request.run_id, expected_snapshot_sha256=request.task_snapshot_sha256)
             return terminal_run
 
     def reap_expired_leases(self, *, now: datetime) -> int:
@@ -799,8 +817,19 @@ class PostgresRunQueueRepository:
                     expected_state=run_record.state,
                     expected_state_version=run_record.state_version,
                 )
+                self._record_failed_task(connection, run_record.request, now=now)
                 reaped += 1
         return reaped
+
+    @staticmethod
+    def _record_failed_task(connection: sa.Connection, request: RunRequest, *, now: datetime) -> None:
+        if request.task_id is None:
+            return
+        from proof_agent.capabilities.persistence.postgres.workflow_task_repository import PostgresWorkflowTaskRepository
+        from proof_agent.control.workflow.task_service import WorkflowTaskService
+        WorkflowTaskService(PostgresWorkflowTaskRepository(connection)).record_failed_run(
+            request.task_id, request.run_id, owner=TaskOwner(actor_subject=request.operator_subject,
+                agent_id=request.agent_id, agent_version=request.agent_version_id), now=now)
 
     @staticmethod
     def _advisory_lock(connection: sa.Connection, key: int) -> None:

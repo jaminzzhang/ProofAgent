@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenModel, StrictFrozenModel, freeze_value
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.contracts.workflow_task import WorkflowTaskSnapshot
 
 
 class TaskStateItem(StrictFrozenModel):
@@ -33,6 +34,8 @@ class ContextAdmission(FrozenModel):
     """Trace-safe result of admitting prior chat turns into a new run."""
 
     task_state: ConversationTaskState | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Internal execution context. Rehydrated from Task authority, never in public/trace dumps.
+    workflow_task: WorkflowTaskSnapshot | None = Field(default=None, exclude=True)
     admitted: bool
     turn_count: int = 0
     included_turn_ids: tuple[str, ...] = Field(default_factory=tuple)

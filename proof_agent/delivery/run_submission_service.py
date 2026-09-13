@@ -43,6 +43,9 @@ class RunSubmissionService:
         conversation_turn_count: int | None = None,
         allow_untrusted_web_supplement: bool = False,
         run_purpose: RunPurpose = RunPurpose.PRODUCTION,
+        task_id: str | None = None,
+        expected_task_version: int | None = None,
+        task_snapshot_sha256: str | None = None,
     ) -> tuple[RunQueueRecord, bool]:
         if published_agent.agent_version_id is None:
             raise RunSubmissionRejectedError(
@@ -76,6 +79,9 @@ class RunSubmissionService:
                 institution_authorization or InstitutionAuthorizationContext()
             ),
             submitted_at=now,
+            task_id=task_id,
+            expected_task_version=expected_task_version,
+            task_snapshot_sha256=task_snapshot_sha256,
         )
         return self._repository.admit(request)
 

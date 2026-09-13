@@ -11,6 +11,7 @@ from proof_agent.contracts import DraftAgent
 from proof_agent.control.agent_configuration_workspace import (
     AgentConfigurationWorkflowStageDraftFacts,
 )
+from proof_agent.control.workflow.execution_compiler import compile_manifest_execution
 
 
 class LocalAgentConfigurationWorkflowStageAdapter:
@@ -51,6 +52,7 @@ class LocalAgentConfigurationWorkflowStageAdapter:
                     "provider": manifest.capabilities.memory.provider,
                     "scopes": dict(manifest.capabilities.memory.scopes),
                 },
+                execution_plan=compile_manifest_execution(manifest),
             )
 
 

@@ -242,7 +242,7 @@ services:
       - --locked
       - --expand-only
       - --target
-      - 0024_formal_candidate_checkpoint
+      - 0025_workflow_tasks
     restart: "no"
     networks: [production]
 

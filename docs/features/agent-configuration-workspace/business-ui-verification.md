@@ -20,3 +20,45 @@
 [KNOWN | HIGH] 视觉验证没有保存临时 Agentset 配置；离开前使用“放弃未保存修改”。现有服务与数据目录保持不变。截图作为本地附件交付：`dashboard-business-agents.png`、`dashboard-business-knowledge.png`、`dashboard-business-mobile.png`。
 
 [UNKNOWN | HIGH] 环境没有 Lighthouse CLI，未提供自动 Lighthouse 分数，也不声称完整无障碍合规。当前证据覆盖真实渲染、语义标签、键盘原生控件和上述视口；后端与发布权限未变更。
+
+## 跨应用跳转修复（2026-09-08）
+
+[KNOWN | HIGH] 版本页 `chatUrl` 与 Operator Chat 的 Run 详情链接原先在构建变量缺省时回退到硬编码 localhost:5174/5173。统一网关构建曾依赖启动命令设置空字符串，普通 npm build 会重新引入错误地址。
+
+两处现改为：显式 VITE_CHAT_URL/VITE_DASHBOARD_URL 优先；普通构建缺省同源相对路径；仅 Vite 开发模式回退到当前 hostname 的相邻开发端口。显式地址尾部斜杠被规范化。新增双向导航回归测试；不改变发布版本选择和执行语义。
+
+## Operator Chat 本地发送 404（2026-09-08）
+
+[KNOWN | HIGH] 本机日志显示会话创建成功，随后 `POST /api/runs` 返回 404。Chat 原先固定采用生产队列协议，而本地服务提供 `/api/chat/conversations/{id}/runs` 同步开发入口。Session 现在明确返回 `chat_execution_mode`：开发为 `development_sync`，生产为 `queued`。Chat 等待初始化后按该能力选择；未知/缺省值仍走队列，生产错误不回退到开发执行。
+
+[COMPUTED | HIGH] Chat 38 项测试、构建通过；会话/队列后端回归 43 passed、1 skipped。新增测试覆盖本地能力声明和真实本地会话接口（合成模型），未自动重放用户私有问题至外部模型。
+
+Local restart verification: `/api/auth/session` reports `development_sync`, and
+`/operator` returns HTTP 200 after rebuilding both frontends. The ignored local
+launcher uses the existing server `--no-seed-example-agent` option because this
+store contains a user-published version; resetting it to the canonical demo seed
+would discard the configured state. No real model conversation was replayed in
+this verification.
+
+### Bounded answer-fact diagnostics
+
+Fact failures now carry zero-based `message.statements[N]` locations through the
+existing diagnostic field paths (including repair requests). Statements use the
+validator's NFC normalization, ordered-list-prefix removal and sentence splitting.
+The failure trace also includes at most 32 `fact_diagnostics` tuples containing
+(statement index, violation code, match status). Status distinguishes an unmatched
+subject, a matched subject with a different value, and conflicting source values.
+These are exact-match diagnostics, not semantic hallucination determinations.
+Audience/redaction review: only bounded indices and fixed codes are persisted;
+no failed answer text, evidence text, prompt, credential or content hash is added.
+The admission and answer validation decisions remain unchanged. Existing historic
+Runs cannot be reconstructed from these new fields. Verification: 67 fact and
+failure-payload tests passed; real-model replay remains unverified.
+
+Planner pending-retrieval diagnosis (`run_b4298fdd`): one of two required queries
+completed with three accepted candidates before the model proposed refusal. The
+restricted-action context omitted accepted evidence progress. It now reports the
+accepted count and recommends continuing eligible pending retrieval without
+removing refusal or authorizing final answers early. This repairs missing context;
+causation of the real model's choice and successful real-model completion remain
+unverified. Targeted context/orchestrator/state-machine checks: 45 passed.

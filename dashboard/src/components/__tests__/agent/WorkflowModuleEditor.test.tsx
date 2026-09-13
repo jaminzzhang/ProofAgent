@@ -1,512 +1,285 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { WorkflowTemplateDescriptor } from '../../../api/types'
-
-// The Template selector loads its options from useWorkflowTemplates. Mock it
-// so tests do not hit the network; default to the fallback list so existing
-// assertions that rely on the static template inventory still hold.
-vi.mock('../../../hooks/useWorkflowTemplates', () => ({
-  useWorkflowTemplates: vi.fn(() => ({
-    templates: [],
-    names: ['react_enterprise_qa_v3'],
-    loaded: true,
-    error: null,
-  })),
-}))
-
+import type {
+  WorkflowStageContextPreview,
+  WorkflowTemplateDescriptor,
+} from '../../../api/types'
 import { WorkflowModuleEditor } from '../../agent/WorkflowModuleEditor'
 import { replaceWorkflowStages } from '../../../utils/agentYaml'
-import { useWorkflowTemplates } from '../../../hooks/useWorkflowTemplates'
 
 const DESCRIPTOR: WorkflowTemplateDescriptor = {
   name: 'react_enterprise_qa_v3',
-  description: 'Controlled ReAct V3 enterprise question answering.',
+  description: 'Controlled workflow',
   descriptor_version: 'react_enterprise_qa.v3',
-  stages: [
-    {
-      id: 'plan',
-      label: 'Plan',
-      description: 'Propose the next governed action.',
-      predecessors: [],
-      successors: ['response'],
-      branch_conditions: { response: 'STOP' },
-      governed_handoff_points: ['before_retrieval_plan'],
-      editable_prompt_fields: ['business_context', 'task_instructions', 'output_preferences'],
-      context_options: ['include_agent_purpose'],
-      input_summary: 'User question.',
-      output_summary: 'Action proposal.',
-      model_bearing: true,
-      required: true,
-    },
-    {
-      id: 'response',
-      label: 'Response',
-      description: 'Project governed outcome.',
-      predecessors: ['plan'],
-      successors: [],
-      branch_conditions: {},
-      governed_handoff_points: [],
-      editable_prompt_fields: [],
-      context_options: ['include_outcome'],
-      input_summary: 'Outcome.',
-      output_summary: 'Final response.',
-      model_bearing: false,
-      required: true,
-    },
-  ],
+  stages: ['plan', 'model_answer', 'response'].map((id) => ({
+    id,
+    label: id,
+    description: id,
+    predecessors: [],
+    successors: [],
+    branch_conditions: {},
+    governed_handoff_points: [],
+    editable_prompt_fields:
+      id === 'response'
+        ? []
+        : ['business_context', 'task_instructions', 'output_preferences'],
+    context_options: ['include_agent_purpose'],
+    input_summary: 'Input',
+    output_summary: 'Output',
+    model_bearing: id !== 'response',
+    required: true,
+  })),
+}
+const AGENT_YAML =
+  'workflow:\n  template: react_enterprise_qa_v3\n  template_descriptor_version: react_enterprise_qa.v3\n'
+function props() {
+  return {
+    agentYaml: AGENT_YAML,
+    descriptor: DESCRIPTOR,
+    onSaveStages: vi.fn().mockResolvedValue(undefined),
+    onPreviewStage: vi.fn().mockResolvedValue(null),
+    busy: false,
+    stageBusy: false,
+  }
+}
+function edit(text = 'Custom prompt') {
+  fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: text } })
+}
+function advanced() {
+  fireEvent.click(screen.getByRole('button', { name: '高级设置' }))
 }
 
-const AGENT_YAML = `name: insurance
-workflow:
-  runtime: controlled_react
-  template: react_enterprise_qa_v3
-  template_descriptor_version: react_enterprise_qa.v3
-`
-
 describe('WorkflowModuleEditor', () => {
-  it('inserts only a structural Prompt template without business content or losing edits', async () => {
-    const saveStages = vi.fn().mockResolvedValue(undefined)
-    const previewStage = vi.fn().mockResolvedValue(null)
-    render(<WorkflowModuleEditor
-      agentYaml={`${AGENT_YAML}  stages:
-    - id: plan
-      prompt:
-        business_context: "保险服务背景"
-        task_instructions:
-          - "核对产品版本"
-        output_preferences:
-          - "简洁回答"
-`}
-      descriptor={DESCRIPTOR} onFieldChange={vi.fn()} onSaveCore={vi.fn()}
-      onSaveStages={saveStages} onPreviewStage={previewStage} busy={false} stageBusy={false}
-    />)
-    const prompt = await screen.findByLabelText('Prompt')
-    expect(prompt).toHaveValue('保险服务背景\n\nTask instructions:\n- 核对产品版本\n\nOutput preferences:\n- 简洁回答')
-    expect(screen.queryByLabelText('Task Instructions')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Output Preferences')).not.toBeInTheDocument()
-    fireEvent.change(prompt, { target: { value: '自由格式要求，不需要固定章节。' } })
-    expect(screen.queryByLabelText('Prompt 模板')).not.toBeInTheDocument()
+  it('merges legacy content, appends a structural template, and previews/saves the same text', async () => {
+    const p = props()
+    p.agentYaml +=
+      '  stages:\n    - id: plan\n      prompt:\n        business_context: "背景"\n        task_instructions:\n          - "任务"\n        output_preferences:\n          - "表达"\n'
+    render(<WorkflowModuleEditor {...p} />)
+    expect(screen.getByLabelText('Prompt')).toHaveValue(
+      '背景\n\nTask instructions:\n- 任务\n\nOutput preferences:\n- 表达',
+    )
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+    edit('自由内容')
     fireEvent.click(screen.getByRole('button', { name: '插入结构模板' }))
-    const text = (prompt as HTMLTextAreaElement).value
-    expect(text).toMatch(/^自由格式要求，不需要固定章节。\n\n/)
-    expect(text).toContain('# Business Context\n[填写业务背景、服务对象和适用范围]')
-    expect(text).toContain('# Task Instructions\n[填写本节点的任务、步骤和注意事项]')
-    expect(text).toContain('# Output Preferences\n[填写输出格式、语言和表达风格]')
+    const text = (screen.getByLabelText('Prompt') as HTMLTextAreaElement).value
+    expect(text).toMatch(/^自由内容\n\n# Business Context/)
+    expect(text).toContain('# Task Instructions')
+    expect(text).toContain('# Output Preferences')
     expect(text).not.toContain('保险')
-    expect(text).not.toContain('只读工具')
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
-    await waitFor(() => expect(previewStage).toHaveBeenCalledWith('plan', {
-      prompt: { business_context: text, task_instructions: [], output_preferences: [] }, context: {},
-    }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-    await waitFor(() => expect(saveStages).toHaveBeenCalledWith(expect.objectContaining({
-      stages: expect.arrayContaining([expect.objectContaining({
-        id: 'plan', prompt: { business_context: text, task_instructions: [], output_preferences: [] },
-      })]),
-    })))
-  })
-
-  it('keeps a merged prompt unchanged across save/reload and node switches', async () => {
-    const saveStages = vi.fn().mockResolvedValue(undefined)
-    const props = { descriptor: DESCRIPTOR, onFieldChange: vi.fn(), onSaveCore: vi.fn(),
-      onSaveStages: saveStages, onPreviewStage: vi.fn(), busy: false, stageBusy: false }
-    const { rerender } = render(<WorkflowModuleEditor {...props} agentYaml={AGENT_YAML} />)
-    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: '背景\n任务\n输出 😀' } })
-    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
-    fireEvent.click(screen.getByText('response').closest('button')!)
-    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('plan').closest('button')!)
-    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-    await waitFor(() => expect(saveStages).toHaveBeenCalledTimes(1))
-    const saved = saveStages.mock.calls[0][0].stages
-    rerender(<WorkflowModuleEditor {...props} agentYaml={replaceWorkflowStages(AGENT_YAML, DESCRIPTOR.descriptor_version, saved)} />)
-    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n任务\n输出 😀')
-  })
-
-  it('does not show a stale preview that completes after a Prompt edit', async () => {
-    let resolvePreview!: (value: import('../../../api/types').WorkflowStageContextPreview) => void
-    const previewStage = vi.fn(() => new Promise<import('../../../api/types').WorkflowStageContextPreview>((resolve) => { resolvePreview = resolve }))
-    render(<WorkflowModuleEditor agentYaml={AGENT_YAML} descriptor={DESCRIPTOR}
-      onFieldChange={vi.fn()} onSaveCore={vi.fn()} onSaveStages={vi.fn()}
-      onPreviewStage={previewStage} busy={false} stageBusy={false} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
-    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'New prompt' } })
-    await act(async () => resolvePreview({
-      stage_id: 'plan', stage_label: 'Plan', harness_control_prompt_summary: 'Old preview',
-      business_context_addendum: { present: true, text: 'Stale text', fields: [] },
-      structured_control_context: {}, summary: {},
-    }))
-    expect(screen.queryByText('Stale text')).not.toBeInTheDocument()
-  })
-
-  it('presents workflow configuration as a template summary, relationship map, and stage inspector', () => {
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    const summary = screen.getByLabelText('Workflow Template Summary')
-    expect(within(summary).getByText('Workflow Template')).toBeInTheDocument()
-    expect(within(summary).getByText('react_enterprise_qa_v3')).toBeInTheDocument()
-    expect(within(summary).getByText('react_enterprise_qa.v3')).toBeInTheDocument()
-    expect(within(summary).getByText('2 stages')).toBeInTheDocument()
-    expect(within(summary).queryByText('Checkpointer')).not.toBeInTheDocument()
-    expect(within(summary).queryByText('Compatibility Template')).not.toBeInTheDocument()
-    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
-    expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Advanced YAML' })).toBeInTheDocument()
-    expect(screen.queryByText(/name: insurance/)).not.toBeInTheDocument()
-  })
-
-  it('uses stage terminology for the public Workflow configuration surface', () => {
-    const { container } = render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
-    expect(screen.getByText('Stage Inspector')).toBeInTheDocument()
-    expect(container).not.toHaveTextContent(['Node', 'Panel'].join(' '))
-    expect(container).not.toHaveTextContent(['node', 'editor'].join(' '))
-    expect(container).not.toHaveTextContent(['workflow', 'node'].join(' '))
-  })
-
-  it('explains that Controlled ReAct V3 is the sole production template', () => {
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    // The "?" affordance is a shared Tooltip (opens on focus/hover, rendered via
-    // Portal as role="tooltip"), replacing the old hand-rolled role="note".
-    fireEvent.focus(screen.getByRole('button', { name: 'Explain Template' }))
-
-    expect(screen.getByRole('tooltip')).toHaveTextContent(
-      'react_enterprise_qa_v3 is the only production workflow template',
-    )
-    expect(screen.getByRole('tooltip')).not.toHaveTextContent('compatibility')
-  })
-
-  it('shows governed handoff points in the read-only relationship map', () => {
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    expect(screen.getByText('before_retrieval_plan')).toBeInTheDocument()
-  })
-
-  it('explains the selected stage identity and editable prompt field set in the inspector', () => {
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    const inspector = screen.getByLabelText('Stage Inspector')
-    expect(within(inspector).getByText('plan')).toBeInTheDocument()
-    expect(within(inspector).getByText('Required')).toBeInTheDocument()
-    expect(within(inspector).getByLabelText('Prompt')).toBeInTheDocument()
-    expect(within(inspector).getByText('可配置')).toBeInTheDocument()
-  })
-
-  it('renders descriptor relationships and saves configured stage context', async () => {
-    const saveStages = vi.fn().mockResolvedValue(undefined)
-    const previewStage = vi.fn().mockResolvedValue({
-      stage_id: 'plan',
-      stage_label: 'Plan',
-      harness_control_prompt_summary: 'Harness control prompt retained.',
-      structured_control_context: { agent_purpose: 'Answer governed questions.' },
-      business_context_addendum: {
-        present: true,
-        text: 'Business Context:\nClaims context',
-        fields: ['business_context'],
-      },
-      summary: { stage_id: 'plan' },
-    })
-
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={saveStages}
-        onPreviewStage={previewStage}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
-    expect(screen.getByText('Entry')).toBeInTheDocument()
-    expect(screen.getAllByText('Terminal').length).toBeGreaterThan(0)
-    expect(screen.getByText(/Response \(STOP\)/)).toBeInTheDocument()
-    // Field help is rendered via the shared Tooltip primitive (opens on focus).
-    fireEvent.focus(screen.getByRole('button', { name: 'Explain Prompt' }))
-    expect(screen.getByRole('tooltip')).toHaveTextContent(/自由编写/)
-
-    fireEvent.change(await screen.findByLabelText('Prompt'), {
-      target: { value: 'Claims context' },
-    })
-    fireEvent.click(screen.getByLabelText('include_agent_purpose'))
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
-
-    await waitFor(() => {
-      expect(previewStage).toHaveBeenCalledWith('plan', {
+    advanced()
+    fireEvent.click(screen.getByRole('switch', { name: '助手职责' }))
+    fireEvent.click(screen.getByRole('button', { name: '预览节点上下文' }))
+    await waitFor(() =>
+      expect(p.onPreviewStage).toHaveBeenCalledWith('plan', {
         prompt: {
-          business_context: 'Claims context',
+          business_context: text,
           task_instructions: [],
           output_preferences: [],
         },
         context: { include_agent_purpose: true },
-      })
-    })
-    expect(await screen.findByText('Business Context Addendum')).toBeInTheDocument()
-    expect(screen.getAllByText(/Claims context/).length).toBeGreaterThan(1)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-
-    await waitFor(() => {
-      expect(saveStages).toHaveBeenCalledWith({
-        template: 'react_enterprise_qa_v3',
-        template_descriptor_version: 'react_enterprise_qa.v3',
-        stages: expect.arrayContaining([
-          {
-            id: 'plan',
-            prompt: {
-              business_context: 'Claims context',
-              task_instructions: [],
-              output_preferences: [],
-            },
-            context: { include_agent_purpose: true },
-          },
-        ]),
-      })
-    })
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() =>
+      expect(p.onSaveStages).toHaveBeenCalledWith(
+        expect.objectContaining({
+          template: 'react_enterprise_qa_v3',
+          template_descriptor_version: 'react_enterprise_qa.v3',
+          stages: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'plan',
+              prompt: {
+                business_context: text,
+                task_instructions: [],
+                output_preferences: [],
+              },
+            }),
+          ]),
+        }),
+      ),
+    )
   })
-
-  it('does not save prompt fields for stages that only expose context options', async () => {
-    const saveStages = vi.fn().mockResolvedValue(undefined)
-
-    render(
+  it('keeps per-node edits across navigation and reload, and clears dirty state only after persisted YAML arrives', async () => {
+    const p = props(),
+      dirty = vi.fn()
+    const { rerender } = render(
+      <WorkflowModuleEditor {...p} onDirtyChange={dirty} />,
+    )
+    edit('背景\n输出 😀')
+    expect(dirty).toHaveBeenLastCalledWith(true)
+    fireEvent.click(screen.getByRole('button', { name: '生成答案' }))
+    edit('Answer prompt')
+    fireEvent.click(screen.getByRole('button', { name: '规划下一步' }))
+    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n输出 😀')
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(p.onSaveStages).toHaveBeenCalledTimes(1))
+    const saved = p.onSaveStages.mock.calls[0][0].stages
+    rerender(
       <WorkflowModuleEditor
-        agentYaml={`name: insurance
-workflow:
-  runtime: controlled_react
-  template: react_enterprise_qa_v3
-  template_descriptor_version: react_enterprise_qa.v3
-  stages:
-    - id: response
-      prompt:
-        business_context: "Stale response context"
-      context:
-        include_outcome: true
-`}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={saveStages}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
+        {...p}
+        agentYaml={replaceWorkflowStages(
+          AGENT_YAML,
+          DESCRIPTOR.descriptor_version,
+          saved,
+        )}
+        onDirtyChange={dirty}
       />,
     )
-
-    const responseNodeButton = screen.getByText('response').closest('button')
-    expect(responseNodeButton).not.toBeNull()
-    fireEvent.click(responseNodeButton!)
-
+    expect(screen.getByLabelText('Prompt')).toHaveValue('背景\n输出 😀')
+    expect(dirty).toHaveBeenLastCalledWith(false)
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+  })
+  it('discards stale in-flight previews after an edit', async () => {
+    let finish!: (value: WorkflowStageContextPreview) => void
+    const p = props()
+    p.onPreviewStage.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    render(<WorkflowModuleEditor {...p} />)
+    advanced()
+    fireEvent.click(screen.getByRole('button', { name: '预览节点上下文' }))
+    edit('New prompt')
+    await act(async () =>
+      finish({
+        stage_id: 'plan',
+        stage_label: 'Plan',
+        harness_control_prompt_summary: '',
+        business_context_addendum: {
+          present: true,
+          text: 'Stale preview',
+          fields: [],
+        },
+        structured_control_context: {},
+        summary: {},
+      }),
+    )
+    expect(screen.queryByText('Stale preview')).not.toBeInTheDocument()
+  })
+  it('keeps edits after save rejection', async () => {
+    const p = props()
+    p.onSaveStages.mockRejectedValue(new Error('revision conflict'))
+    render(<WorkflowModuleEditor {...p} />)
+    edit()
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'revision conflict',
+    )
+    expect(screen.getByLabelText('Prompt')).toHaveValue('Custom prompt')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeEnabled()
+  })
+  it('does not let a stale descriptor save another template or descriptor version', () => {
+    for (const field of ['template', 'template_descriptor_version']) {
+      const p = props()
+      p.agentYaml = AGENT_YAML.replace(
+        field === 'template'
+          ? 'react_enterprise_qa_v3'
+          : 'react_enterprise_qa.v3',
+        'outdated',
+      )
+      const { unmount } = render(<WorkflowModuleEditor {...p} />)
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        '配置与当前流程描述不一致',
+      )
+      expect(screen.getByLabelText('Prompt')).toBeDisabled()
+      expect(
+        screen.getByRole('button', { name: '保存 Workflow' }),
+      ).toBeDisabled()
+      unmount()
+    }
+  })
+  it('keeps system steps visible and does not expose Prompt editing there', () => {
+    render(<WorkflowModuleEditor {...props()} />)
+    fireEvent.click(screen.getByRole('button', { name: '返回结果' }))
     expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Prompt 模板')).not.toBeInTheDocument()
-    expect(screen.getByText(/此节点由系统执行/)).toBeInTheDocument()
-    expect(screen.getByLabelText('include_outcome')).not.toBeDisabled()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-
-    await waitFor(() => {
-      expect(saveStages).toHaveBeenCalledWith({
-        template: 'react_enterprise_qa_v3',
-        template_descriptor_version: 'react_enterprise_qa.v3',
-        stages: expect.arrayContaining([
-          {
-            id: 'response',
-            prompt: {
-              business_context: '',
-              task_instructions: [],
-              output_preferences: [],
-            },
-            context: { include_outcome: true },
-          },
-        ]),
-      })
-    })
+    expect(
+      screen.queryByRole('button', { name: '插入结构模板' }),
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '技术信息' }))
+    expect(screen.getByText('节点 ID：response')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '规划下一步' }))
+    expect(screen.getByLabelText('Prompt')).toBeInTheDocument()
   })
-
-  it('renders the dynamic catalog as the Template selector options', () => {
-    vi.mocked(useWorkflowTemplates).mockReturnValue({
-      templates: [],
-      names: ['react_enterprise_qa_v3'],
-      loaded: true,
-      error: null,
-    })
-
+  it('preserves configured stages omitted from the current descriptor', async () => {
+    const p = props()
+    p.agentYaml +=
+      '  stages:\n    - id: tool_review\n      prompt:\n        business_context: "Stored review"\n'
+    render(<WorkflowModuleEditor {...p} />)
+    edit()
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() =>
+      expect(p.onSaveStages).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stages: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'tool_review',
+              prompt: expect.objectContaining({
+                business_context: 'Stored review',
+              }),
+            }),
+          ]),
+        }),
+      ),
+    )
+  })
+  it('prevents duplicate saves and editing while save is in flight', async () => {
+    let finish!: () => void
+    const p = props()
+    p.onSaveStages.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    render(<WorkflowModuleEditor {...p} />)
+    edit()
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    expect(screen.getByRole('button', { name: '保存中…' })).toBeDisabled()
+    expect(screen.getByLabelText('Prompt')).toBeDisabled()
+    await act(async () => finish())
+    expect(p.onSaveStages).toHaveBeenCalledTimes(1)
+  })
+  it('does not save a context toggle that was returned to its original value', () => {
+    render(<WorkflowModuleEditor {...props()} />)
+    advanced()
+    const toggle = screen.getByRole('switch', { name: '助手职责' })
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeEnabled()
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+  })
+  it('protects page reload only while there are unsaved edits', () => {
+    render(<WorkflowModuleEditor {...props()} />)
+    const clean = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(false)
+    edit()
+    const dirty = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirty)
+    expect(dirty.defaultPrevented).toBe(true)
+  })
+  it('counts Unicode characters consistently with the server and blocks excess budget', () => {
+    render(<WorkflowModuleEditor {...props()} />)
+    edit('😀'.repeat(12000))
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeEnabled()
+    edit('😀'.repeat(12001))
+    expect(screen.getByRole('alert')).toHaveTextContent('12001')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+  })
+  it('shows descriptor failures without writable controls', () => {
     render(
       <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
+        {...props()}
+        descriptor={null}
+        descriptorError="Unavailable"
       />,
     )
-
-    const select = screen.getByLabelText('Template') as HTMLSelectElement
-    const optionValues = Array.from(select.options).map((option) => option.value)
-    expect(optionValues).toEqual(['react_enterprise_qa_v3'])
-  })
-
-  it('updates template identity without reintroducing retired workflow runtime fields', () => {
-    const onFieldChange = vi.fn()
-
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={onFieldChange}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    fireEvent.change(screen.getByLabelText('Template'), {
-      target: { value: 'react_enterprise_qa_v3' },
-    })
-
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template'], 'react_enterprise_qa_v3')
-    expect(onFieldChange).toHaveBeenCalledWith(['workflow', 'template_descriptor_version'], 'react_enterprise_qa.v3')
-    expect(onFieldChange).not.toHaveBeenCalledWith(['workflow', 'runtime'], expect.anything())
-  })
-
-  it('falls back to the static template list when the catalog fails to load', () => {
-    vi.mocked(useWorkflowTemplates).mockReturnValue({
-      templates: [],
-      names: [],
-      loaded: true,
-      error: 'network down',
-    })
-
-    render(
-      <WorkflowModuleEditor
-        agentYaml={AGENT_YAML}
-        descriptor={DESCRIPTOR}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={vi.fn()}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    const select = screen.getByLabelText('Template') as HTMLSelectElement
-    const optionValues = Array.from(select.options).map((option) => option.value)
-    expect(optionValues).toEqual(['react_enterprise_qa_v3'])
-  })
-
-  it('saves the descriptor_version for the persisted template even when catalog and descriptor are stale', async () => {
-    // Regression for the 400 "template_descriptor_version does not match
-    // registered template descriptor" seen when switching to v3 and saving
-    // stages. The agent YAML has the persisted v3 template, but the descriptor
-    // prop can lag (describes the previously-loaded template) and the catalog
-    // may be empty (network/permission failure). The saved version must still
-    // come from the selected template name via the fallback name->version map,
-    // never from the stale descriptor.
-    vi.mocked(useWorkflowTemplates).mockReturnValue({
-      templates: [],
-      names: ['react_enterprise_qa_v3'],
-      loaded: true,
-      error: null,
-    })
-
-    const saveStages = vi.fn().mockResolvedValue(undefined)
-
-    render(
-      <WorkflowModuleEditor
-        agentYaml={`name: institution_insurance_specialist
-workflow:
-  runtime: controlled_react
-  template: react_enterprise_qa_v3
-  template_descriptor_version: react_enterprise_qa.v3
-`}
-        descriptor={{
-          ...DESCRIPTOR,
-          name: 'react_enterprise_qa_v2',
-          descriptor_version: 'react_enterprise_qa.v2',
-        }}
-        onFieldChange={vi.fn()}
-        onSaveCore={vi.fn()}
-        onSaveStages={saveStages}
-        onPreviewStage={vi.fn()}
-        busy={false}
-        stageBusy={false}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-
-    await waitFor(() => {
-      expect(saveStages).toHaveBeenCalledWith(expect.objectContaining({
-        template_descriptor_version: 'react_enterprise_qa.v3',
-      }))
-    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Unavailable')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
   })
 })

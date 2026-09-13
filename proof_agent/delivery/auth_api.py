@@ -51,11 +51,12 @@ def oidc_callback(
 def session(request: Request) -> dict[str, object]:
     resolution = getattr(request.state, "session_resolution", None)
     if isinstance(resolution, SessionResolution):
-        return resolution.projection.model_dump(mode="json")
+        return {**resolution.projection.model_dump(mode="json"), "chat_execution_mode": "queued"}
     if getattr(request.app.state, "proof_agent_mode", None) == "development":
         identity = request.app.state.operator_identity_provider.current_identity()
         return {
             "session_id": "development-local-session",
+            "chat_execution_mode": "development_sync",
             "principal": {
                 "subject": identity.operator_id,
                 "display_name": identity.display_name,

@@ -10,6 +10,9 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
+from proof_agent.contracts.workflow_policy import (
+    AssurancePolicy, InteractionPolicy, WorkflowExecutionPolicy,
+)
 
 
 class WorkflowStagePromptConfig(FrozenModel):
@@ -37,6 +40,7 @@ class WorkflowConfig(FrozenModel):
     template: str
     template_descriptor_version: str | None = None
     stages: tuple[WorkflowStageConfig, ...] = Field(default_factory=tuple)
+    execution: WorkflowExecutionPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ContextBudgetProfile(FrozenModel):
@@ -327,6 +331,16 @@ class AgentManifest(FrozenModel):
     review: ReviewConfig | None = None
     response: ResponseConfig | None = None
     context: AgentContextConfiguration | None = None
+    interaction: InteractionPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
+    assurance: AssurancePolicy | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode='after')
+    def reject_conflicting_clarification_policy(self) -> 'AgentManifest':
+        if (self.interaction is not None and self.response is not None
+            and 'clarification_level' in self.response.model_fields_set
+            and self.response.clarification_level != self.interaction.intensity):
+            raise ValueError('Legacy clarification_level conflicts with interaction.intensity; migrate to one policy.')
+        return self
 
 
 CONTEXT_POLICY_FORBIDDEN_KEYS = frozenset(

@@ -9,6 +9,44 @@ UUID = postgresql.UUID(as_uuid=True)
 JSONB = postgresql.JSONB(astext_type=sa.Text())
 UTC_TIMESTAMP = sa.DateTime(timezone=True)
 
+workflow_tasks = sa.Table(
+    "workflow_tasks", metadata,
+    sa.Column("task_id", sa.Text(), primary_key=True),
+    sa.Column("actor_subject", sa.Text(), nullable=False),
+    sa.Column("agent_id", sa.Text(), nullable=False),
+    sa.Column("agent_version", sa.Text(), nullable=False),
+    sa.Column("version", sa.BigInteger(), nullable=False),
+    sa.Column("goal_revision", sa.BigInteger(), nullable=False),
+    sa.Column("schema_version", sa.Integer(), nullable=False),
+    sa.Column("phase", sa.Text(), nullable=False),
+    sa.Column("snapshot_json", JSONB, nullable=False),
+    sa.Column("snapshot_sha256", sa.String(64), nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("updated_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("raw_content_expires_at", UTC_TIMESTAMP, nullable=False),
+    sa.CheckConstraint("version > 0 AND goal_revision > 0 AND schema_version = 1", name="workflow_tasks_versions"),
+    sa.CheckConstraint("phase IN ('active','waiting_for_input','paused','complete','failed','cancelled')", name="workflow_tasks_phase"),
+    sa.CheckConstraint("snapshot_sha256 ~ '^[a-f0-9]{64}$'", name="workflow_tasks_digest"),
+    sa.CheckConstraint("raw_content_expires_at <= created_at + interval '90 days' AND raw_content_expires_at > created_at", name="workflow_tasks_retention"),
+)
+sa.Index("workflow_tasks_owner", workflow_tasks.c.actor_subject, workflow_tasks.c.agent_id, workflow_tasks.c.agent_version)
+sa.Index("workflow_tasks_retention", workflow_tasks.c.raw_content_expires_at)
+
+workflow_task_resumes = sa.Table(
+    "workflow_task_resumes", metadata,
+    sa.Column("intent_id", sa.Text(), primary_key=True),
+    sa.Column("task_id", sa.Text(), sa.ForeignKey("workflow_tasks.task_id", ondelete="CASCADE"), nullable=False),
+    sa.Column("actor_subject", sa.Text(), nullable=False),
+    sa.Column("agent_id", sa.Text(), nullable=False),
+    sa.Column("agent_version", sa.Text(), nullable=False),
+    sa.Column("goal_revision", sa.BigInteger(), nullable=False),
+    sa.Column("intent_json", JSONB, nullable=False),
+    sa.Column("created_at", UTC_TIMESTAMP, nullable=False),
+    sa.Column("run_id", sa.Text()),
+)
+sa.Index("workflow_task_resumes_pending", workflow_task_resumes.c.created_at,
+    postgresql_where=workflow_task_resumes.c.run_id.is_(None))
+
 agent_drafts = sa.Table(
     "agent_drafts",
     metadata,

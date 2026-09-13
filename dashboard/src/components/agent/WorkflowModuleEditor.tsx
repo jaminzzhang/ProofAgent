@@ -1,51 +1,43 @@
+import { WorkflowConfigurationFlow } from './WorkflowConfigurationFlow'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
-import {
-  Badge,
-  Button,
-  ConfigPanel,
-  FieldGrid,
-  KeyValueList,
-  SectionField,
-  Switch,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@proofagent/ui'
+import { Button, ConfigPanel, SectionField, Switch } from '@proofagent/ui'
 import type {
   WorkflowStageConfig,
   WorkflowStageContextPreview,
   WorkflowStageDescriptor,
   WorkflowStagePromptConfig,
   WorkflowTemplateDescriptor,
+  WorkflowPolicyPatch,
+  ResolvedExecutionPlan,
 } from '../../api/types'
+import { WorkflowPolicyEditor } from './WorkflowPolicyEditor'
+import { readWorkflowPolicies, workflowPolicyPatch } from './workflowPolicy'
 import { CodeBlock } from '../CodeBlock'
 import {
   readAgentYamlField,
   readWorkflowStageConfigs,
   replaceWorkflowStages,
 } from '../../utils/agentYaml'
-import {
-  WORKFLOW_FIELDS,
-  WORKFLOW_TEMPLATE_FALLBACK,
-  WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS,
-} from './module-configs/workflow'
-import { useWorkflowTemplates } from '../../hooks/useWorkflowTemplates'
-import { useLocale } from '../../i18n/locale'
 import { mergeStagePrompt, STRUCTURED_PROMPT_TEMPLATE } from './workflowPrompt'
+import {
+  canConfigurePrompt,
+  CONTEXT_LABELS,
+  stageDescription,
+  stageName,
+} from './workflowPresentation'
 
 interface WorkflowModuleEditorProps {
   agentYaml: string
   descriptor: WorkflowTemplateDescriptor | null
   descriptorError?: string | null
-  onFieldChange: (path: string[], value: string) => void
-  onSaveCore: () => void
   onSaveStages: (payload: {
     template: string
     template_descriptor_version: string
     stages: WorkflowStageConfig[]
+    policy?: WorkflowPolicyPatch
   }) => Promise<void>
+  revision?: number
+  onPreviewExecution?: (policy: WorkflowPolicyPatch) => Promise<ResolvedExecutionPlan>
   onPreviewStage: (
     stageId: string,
     payload: {
@@ -53,6 +45,7 @@ interface WorkflowModuleEditorProps {
       context: Record<string, boolean>
     },
   ) => Promise<WorkflowStageContextPreview>
+  onDirtyChange?: (dirty: boolean) => void
   busy: boolean
   stageBusy: boolean
 }
@@ -61,709 +54,557 @@ export function WorkflowModuleEditor({
   agentYaml,
   descriptor,
   descriptorError,
-  onFieldChange,
-  onSaveCore,
   onSaveStages,
   onPreviewStage,
+  onDirtyChange,
+  revision,
+  onPreviewExecution,
   busy,
   stageBusy,
 }: WorkflowModuleEditorProps) {
-  const { t } = useLocale()
-  // Template options come from the Dynamic Workflow Template Catalog, falling
-  // back to the static list when the catalog fails to load (Template Selector
-  // Fallback) so the selector is never empty.
-  const { templates: catalogTemplates, names: catalogTemplateNames } =
-    useWorkflowTemplates()
-  const templateOptions = catalogTemplateNames.length
-    ? catalogTemplateNames
-    : WORKFLOW_TEMPLATE_FALLBACK
-  const previewRevision = useRef(0)
-  const [showYaml, setShowYaml] = useState(false)
-  const [selectedStageId, setSelectedStageId] = useState('')
-  const [stages, setStages] = useState<WorkflowStageConfig[]>([])
-  const [preview, setPreview] = useState<WorkflowStageContextPreview | null>(null)
-  const [previewError, setPreviewError] = useState<string | null>(null)
+  const initialPolicy = useMemo(() => readWorkflowPolicies(agentYaml), [agentYaml])
+  const [policy, setPolicy] = useState(initialPolicy)
+  const [policyInvalid, setPolicyInvalid] = useState(false)
+  const policyChanges = workflowPolicyPatch(initialPolicy, policy)
+  const policyDirty = Object.keys(policyChanges).length > 0
+  const [executionPreview, setExecutionPreview] = useState<ResolvedExecutionPlan | null>(null)
+  const [executionPreviewBusy, setExecutionPreviewBusy] = useState(false)
+  const [executionPreviewError, setExecutionPreviewError] = useState<string | null>(null)
+  const executionPreviewRevision = useRef(0)
+  useEffect(() => { setPolicy(initialPolicy); setPolicyInvalid(false) }, [initialPolicy])
+  useEffect(() => {
+    executionPreviewRevision.current += 1
+    setExecutionPreview(null)
+    setExecutionPreviewBusy(false)
+    setExecutionPreviewError(null)
+    return () => { executionPreviewRevision.current += 1 }
+  }, [policy, initialPolicy, revision, policyInvalid])
+  const initialStages = useMemo(() => {
+    if (!descriptor) return []
+    const configured = readWorkflowStageConfigs(agentYaml)
+    const byId = new Map(configured.map((stage) => [stage.id, stage]))
+    return [
+      ...descriptor.stages.map((stage) => {
+        const saved = byId.get(stage.id)
+        if (!saved) return emptyStage(stage.id)
+        // Only consolidate the editable Prompt nodes. Hidden legacy settings stay intact.
+        return canConfigurePrompt(stage)
+          ? {
+              ...saved,
+              prompt: {
+                business_context: mergeStagePrompt(saved.prompt),
+                task_instructions: [],
+                output_preferences: [],
+              },
+            }
+          : {
+              ...saved,
+              prompt: {
+                business_context: saved.prompt.business_context ?? '',
+                task_instructions: saved.prompt.task_instructions,
+                output_preferences: saved.prompt.output_preferences,
+              },
+            }
+      }),
+      ...configured
+        .filter(
+          (stage) => !descriptor.stages.some((item) => item.id === stage.id),
+        )
+        .map((stage) => ({
+          ...stage,
+          prompt: {
+            ...stage.prompt,
+            business_context: stage.prompt.business_context ?? '',
+          },
+        })),
+    ] as WorkflowStageConfig[]
+  }, [agentYaml, descriptor])
+  const [stages, setStages] = useState(initialStages)
+  const [selectedId, setSelectedId] = useState('')
+  const [advanced, setAdvanced] = useState(false)
+  const [technical, setTechnical] = useState(false)
+  const [preview, setPreview] = useState<WorkflowStageContextPreview | null>(
+    null,
+  )
   const [previewBusy, setPreviewBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const previewRevision = useRef(0)
+  const savingRef = useRef(false)
+  const [flowExpanded, setFlowExpanded] = useState(false)
+  const configurationRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    if (!descriptor) {
-      setStages([])
-      setSelectedStageId('')
-      return
-    }
-    const configuredById = new Map(
-      readWorkflowStageConfigs(agentYaml).map((stage) => [stage.id, stage]),
-    )
-    const nextStages = descriptor.stages.map((stage) => {
-      const configured = configuredById.get(stage.id)
-      return configured
-        ? normalizeStageConfig(configured)
-        : emptyStageConfig(stage.id)
-    })
-    setStages(nextStages)
-    setSelectedStageId((current) => (
-      current && descriptor.stages.some((stage) => stage.id === current)
+    setStages(initialStages)
+    setSelectedId((current) =>
+      descriptor?.stages.some((stage) => stage.id === current)
         ? current
-        : descriptor.stages[0]?.id ?? ''
-    ))
-  }, [agentYaml, descriptor])
-
+        : (descriptor?.stages.find(canConfigurePrompt)?.id ??
+          descriptor?.stages[0]?.id ??
+          ''),
+    )
+  }, [initialStages, descriptor])
   useEffect(() => {
     previewRevision.current += 1
-    setPreviewBusy(false)
     setPreview(null)
-    setPreviewError(null)
-  }, [selectedStageId, agentYaml, descriptor])
+    setPreviewBusy(false)
+    setError(null)
+    setAdvanced(false)
+    setTechnical(false)
+  }, [selectedId, initialStages])
 
-  const selectedDescriptor = descriptor?.stages.find((stage) => stage.id === selectedStageId) ?? null
-  const selectedConfig = stages.find((stage) => stage.id === selectedStageId) ?? null
-  const canEditPrompt = Boolean(selectedDescriptor?.editable_prompt_fields.length)
-  const canConfigureContext = Boolean(selectedDescriptor?.context_options.length)
-  const canPreviewSelected = canEditPrompt || canConfigureContext
-  const workflowTemplate = readAgentYamlField(agentYaml, ['workflow', 'template']) || descriptor?.name || t('workflow.notConfigured')
-  const workflowRuntime = readAgentYamlField(agentYaml, ['workflow', 'runtime']) || t('workflow.notConfigured')
-  const stageCount = descriptor?.stages.length ?? 0
-  const modelBearingStageCount = descriptor?.stages.filter((stage) => stage.model_bearing).length ?? 0
-  const editableStageCount = descriptor?.stages.filter((stage) => stage.editable_prompt_fields.length > 0).length ?? 0
+  const dirty =
+    configurationFingerprint(stages) !== configurationFingerprint(initialStages) || policyDirty || policyInvalid
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  const selected = descriptor?.stages.find((stage) => stage.id === selectedId)
+  const config = stages.find((stage) => stage.id === selectedId)
+  const editable = selected ? canConfigurePrompt(selected) : false
+  const template = readAgentYamlField(agentYaml, ['workflow', 'template'])
+  const version = readAgentYamlField(agentYaml, [
+    'workflow',
+    'template_descriptor_version',
+  ])
+  const compatible =
+    !!descriptor &&
+    template === descriptor.name &&
+    (!version || version === descriptor.descriptor_version)
+  const totalChars = stages.reduce(
+    (sum, stage) =>
+      sum +
+      [...(stage.prompt.business_context ?? '')].length +
+      stage.prompt.task_instructions.reduce(
+        (n, text) => n + [...text].length,
+        0,
+      ) +
+      stage.prompt.output_preferences.reduce(
+        (n, text) => n + [...text].length,
+        0,
+      ),
+    0,
+  )
+  const overBudget = totalChars > 12000
+  const locked = busy || stageBusy || saving || !compatible || !!descriptorError
+  const mismatch =
+    descriptor && !compatible
+      ? '配置与当前流程描述不一致，请刷新并核对版本后再保存。'
+      : null
+  const extraContext = config
+    ? Object.entries(config.context).filter(([key]) => !(key in CONTEXT_LABELS))
+    : []
+  const availableContext =
+    selected?.context_options.filter((key) => key in CONTEXT_LABELS) ?? []
   const localYaml = descriptor
-    ? replaceWorkflowStages(agentYaml, descriptor.descriptor_version, stages)
+    ? replaceWorkflowStages(
+        agentYaml,
+        version || descriptor.descriptor_version,
+        stages,
+      )
     : agentYaml
 
-  const stageLabelById = useMemo(() => {
-    const labels = new Map<string, string>()
-    for (const stage of descriptor?.stages ?? []) labels.set(stage.id, stage.label)
-    return labels
-  }, [descriptor])
-  const stageGroups = useMemo(
-    () => groupWorkflowStages(descriptor?.stages ?? []),
-    [descriptor],
-  )
-
-  function updateSelectedStage(updater: (stage: WorkflowStageConfig) => WorkflowStageConfig) {
-    if (!selectedConfig) return
+  function update(
+    updater: (stage: WorkflowStageConfig) => WorkflowStageConfig,
+  ) {
+    if (locked || !config) return
     previewRevision.current += 1
-    setPreviewBusy(false)
     setPreview(null)
-    setPreviewError(null)
-    setStages((current) => current.map((stage) => (
-      stage.id === selectedConfig.id ? updater(stage) : stage
-    )))
+    setPreviewBusy(false)
+    setError(null)
+    setStages((current) =>
+      current.map((stage) =>
+        stage.id === selectedId ? updater(stage) : stage,
+      ),
+    )
   }
-
-  function updateWorkflowField(path: string[], value: string) {
-    onFieldChange(path, value)
-    if (path.join('.') !== 'workflow.template') return
-
-    const descriptorVersion =
-      catalogTemplates.find((entry) => entry.name === value)?.descriptor_version
-      ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[value]
-    if (descriptorVersion) {
-      onFieldChange(['workflow', 'template_descriptor_version'], descriptorVersion)
+  async function save() {
+    if (!descriptor || locked || !dirty || overBudget || policyInvalid || savingRef.current)
+      return
+    savingRef.current = true
+    setSaving(true)
+    setError(null)
+    try {
+      await onSaveStages({
+        template,
+        template_descriptor_version: version || descriptor.descriptor_version,
+        stages,
+        ...(policyDirty ? { policy: policyChanges } : {}),
+      })
+      // The caller supplies the persisted YAML. A failed API save never clears local edits.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      savingRef.current = false
+      setSaving(false)
     }
   }
-
-  async function saveStages() {
-    if (!descriptor) return
-    // The descriptor_version sent with stages must match the currently selected
-    // Template (the value persisted by the core save), NOT the descriptor prop,
-    // which can describe a previously-loaded template after the dropdown changes.
-    // Resolve it in three layers so the persisted template always wins:
-    //   1. Dynamic Workflow Template Catalog (authoritative, live).
-    //   2. WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS map (catalog failed to load).
-    //   3. The loaded descriptor's version (last resort).
-    const selectedTemplateName = workflowTemplate
-    const catalogDescriptorVersion =
-      catalogTemplates.find((entry) => entry.name === selectedTemplateName)
-        ?.descriptor_version ?? null
-    const descriptorVersion =
-      catalogDescriptorVersion
-      ?? WORKFLOW_TEMPLATE_DESCRIPTOR_VERSIONS[selectedTemplateName]
-      ?? descriptor.descriptor_version
-    await onSaveStages({
-      template: selectedTemplateName,
-      template_descriptor_version: descriptorVersion,
-      stages: stages.map((stage) => sanitizeStageConfigForDescriptor(stage, descriptor)),
-    })
+  async function previewExecution() {
+    if (!onPreviewExecution || revision === undefined || locked || policyInvalid) return
+    const request = ++executionPreviewRevision.current
+    setExecutionPreviewBusy(true)
+    setExecutionPreviewError(null)
+    try {
+      const result = await onPreviewExecution(policyChanges)
+      if (request === executionPreviewRevision.current) setExecutionPreview(result)
+    } catch (err) {
+      if (request === executionPreviewRevision.current) setExecutionPreviewError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (request === executionPreviewRevision.current) setExecutionPreviewBusy(false)
+    }
   }
-
-  async function previewSelectedStage() {
-    if (!selectedConfig) return
+  async function previewContext() {
+    if (!config || !editable || locked) return
     const revision = ++previewRevision.current
     setPreviewBusy(true)
-    setPreviewError(null)
+    setError(null)
     try {
-      const result = await onPreviewStage(selectedConfig.id, {
-        prompt: selectedConfig.prompt,
-        context: selectedConfig.context,
+      const result = await onPreviewStage(selectedId, {
+        prompt: config.prompt,
+        context: config.context,
       })
       if (previewRevision.current === revision) setPreview(result)
     } catch (err) {
-      if (previewRevision.current === revision) {
-        setPreviewError(err instanceof Error ? err.message : String(err))
-      }
+      if (previewRevision.current === revision)
+        setError(err instanceof Error ? err.message : String(err))
     } finally {
       if (previewRevision.current === revision) setPreviewBusy(false)
     }
   }
+  function nodeButton(stage: WorkflowStageDescriptor) {
+    const current = stages.find((item) => item.id === stage.id)
+    const initial = initialStages.find((item) => item.id === stage.id)
+    const changed =
+      configurationFingerprint(current ? [current] : []) !==
+      configurationFingerprint(initial ? [initial] : [])
+    return (
+      <button
+        key={stage.id}
+        type="button"
+        aria-label={stageName(stage)}
+        aria-current={selectedId === stage.id ? 'true' : undefined}
+        onClick={() => {
+          setSelectedId(stage.id)
+          if (flowExpanded)
+            configurationRef.current?.focus({ preventScroll: true })
+          setFlowExpanded(false)
+        }}
+        className={`w-full rounded-md border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${selectedId === stage.id ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-transparent hover:bg-[var(--bg-hover)]'}`}
+      >
+        <span className="flex items-center justify-between gap-2 text-xs font-medium text-[var(--text-primary)]">
+          {stageName(stage)}
+          {changed && (
+            <span className="text-xs text-[var(--accent)]">未保存</span>
+          )}
+        </span>
+      </button>
+    )
+  }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
-      {/*
-        Panel 1 — Workflow Template (job: pick the template + core config).
-        Footer holds Save Core so the save action lives where the field job
-        is, not stranded at the top of a giant panel.
-      */}
+    <div className="mx-auto max-w-6xl space-y-4">
       <ConfigPanel
         headingLevel={3}
-        title={t('workflow.template')}
-        description={t('workflow.templatePanelDescription')}
-        actions={
-          <Button variant="outline" size="sm" onClick={onSaveCore} disabled={busy}>
-            {busy ? t('agentDetail.saving') : t('workflow.saveCore')}
-          </Button>
-        }
-      >
-        <section aria-label={t('workflow.templateSummary')}>
-          {/* Template summary — its own labeled region, kept separate from the
-              config fields below so the summary stays independently queryable.
-              Template NAME and descriptor VERSION are two distinct fields, so
-              they are labeled explicitly instead of stacked unlabeled. */}
-          <div className="mb-4">
-            <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              {t('workflow.template')}
-            </span>
-            <p translate="no" className="mt-1 break-all font-mono text-sm font-medium text-[var(--text-primary)]">
-              {workflowTemplate}
-            </p>
-            {descriptor && (
-              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                <span className="font-medium">Descriptor version:</span>{' '}
-                <span translate="no" className="font-mono">{descriptor.descriptor_version}</span>
-              </p>
-            )}
-          </div>
-          <KeyValueList
-            variant="inline"
-            items={[
-              { label: 'Runtime', value: workflowRuntime, kind: 'text' },
-              {
-                label: t('workflow.stages'),
-                value: t('workflow.stagesCount').replace('{count}', String(stageCount)),
-                kind: 'number',
-              },
-              { label: t('workflow.modelBearing'), value: String(modelBearingStageCount), kind: 'number' },
-              { label: t('workflow.editable'), value: String(editableStageCount), kind: 'number' },
-            ]}
-          />
-
-          {descriptorError && (
-            <div
-              role="alert"
-              className="mt-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-fg)]"
-            >
-              {descriptorError}
-            </div>
-          )}
-        </section>
-
-        {/* Core config fields */}
-        <h4 className="mt-6 mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-          {t('workflow.design')}
-        </h4>
-        <FieldGrid cols={4} gap="md">
-          {WORKFLOW_FIELDS.map((field) => {
-            // The Template selector uses the dynamic catalog (or its static
-            // fallback) instead of a hardcoded field.options list.
-            const fieldOptions =
-              field.path.join('.') === 'workflow.template'
-                ? templateOptions
-                : field.options
-            const fieldId = `workflow-field-${field.path.join('-')}`
-            return (
-              <div key={field.path.join('.')} className="flex min-w-0 flex-col">
-                <FieldHeader
-                  label={field.label}
-                  help={workflowFieldHelp(field.path.join('.'))}
-                  htmlFor={fieldId}
-                />
-                {field.input === 'select' && fieldOptions ? (
-                  <NativeSelect
-                    id={fieldId}
-                    value={readAgentYamlField(agentYaml, field.path)}
-                    onChange={(event) => updateWorkflowField(field.path, event.target.value)}
-                  >
-                    {fieldOptions.map((option) => (
-                      <option key={option} value={option}>{option}</option>
-                    ))}
-                  </NativeSelect>
-                ) : (
-                  <input
-                    id={fieldId}
-                    type={field.input}
-                    value={readAgentYamlField(agentYaml, field.path)}
-                    onChange={(event) => updateWorkflowField(field.path, event.target.value)}
-                    className="h-9 w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                  />
-                )}
-              </div>
-            )
-          })}
-        </FieldGrid>
-      </ConfigPanel>
-
-      {/*
-        Panel 2 — Stage Design (job: read the relationship map + edit one stage).
-        Save Stages lives in the title row (actions) next to the panel identity.
-      */}
-      <ConfigPanel
-        headingLevel={3}
-        title="Stage Design"
-        description="Browse the relationship map and edit a stage's bounded prompt and context."
+        className="[&>header]:flex-col [&>header]:items-stretch sm:[&>header]:flex-row sm:[&>header]:items-center"
+        title="Workflow"
+        description="选择流程节点，编辑 Prompt。留空使用系统默认指令。"
         bodyPadding="flush"
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={saveStages}
-            disabled={stageBusy || !descriptor || !descriptor.name.startsWith('react_enterprise_qa')}
-          >
-            {stageBusy ? t('agentDetail.saving') : t('workflow.saveStages')}
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <span role="status" className="text-xs text-[var(--text-muted)]">
+              {dirty ? '有未保存修改' : '没有未保存修改'}
+            </span>
+            <Button onClick={save} disabled={locked || !dirty || overBudget || policyInvalid}>
+              {saving || stageBusy ? '保存中…' : '保存 Workflow'}
+            </Button>
+          </div>
         }
       >
-        <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)]">
-          {/* Relationship map */}
-          <section
-            aria-label="Relationship Map"
-            className="bg-[var(--bg-base)] p-4 lg:border-r lg:border-[var(--border)]"
+        <WorkflowPolicyEditor
+          value={policy} resetKey={agentYaml} descriptor={descriptor}
+          onChange={setPolicy} onInvalidChange={setPolicyInvalid}
+          onPreview={previewExecution} locked={locked}
+          previewAvailable={!!onPreviewExecution && revision !== undefined}
+          previewBusy={executionPreviewBusy} preview={executionPreview} previewError={executionPreviewError}
+        />
+        {(descriptorError || mismatch || error || overBudget) && (
+          <div
+            role="alert"
+            className="m-4 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3 text-sm text-[var(--danger-fg)]"
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                  Relationship Map
-                </h4>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  {descriptor?.descriptor_version ?? 'Descriptor not loaded'}
-                </p>
+            {descriptorError ||
+              mismatch ||
+              error ||
+              `Prompt 总长度为 ${totalChars} 字符，超过 12,000 字符限制，请精简后保存。`}
+          </div>
+        )}
+        {!descriptor ? (
+          <p className="p-5 text-sm text-[var(--text-muted)]">
+            暂时无法加载流程配置，请刷新后重试。
+          </p>
+        ) : (
+          <div className="grid lg:grid-cols-[224px_minmax(0,1fr)]">
+            <aside className="min-w-0 border-b border-[var(--border)] lg:border-r lg:border-b-0">
+              <button
+                type="button"
+                aria-expanded={flowExpanded}
+                aria-controls="workflow-flow-navigation"
+                onClick={() => setFlowExpanded(!flowExpanded)}
+                className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm text-[var(--text-secondary)] lg:hidden"
+              >
+                <span>
+                  {flowExpanded ? '收起流程' : '查看流程'} ·{' '}
+                  {descriptor.stages.length} 个节点
+                </span>
+                <span className="text-xs">
+                  {selected ? stageName(selected) : '选择节点'}{' '}
+                  {flowExpanded ? '⌃' : '⌄'}
+                </span>
+              </button>
+              <div
+                id="workflow-flow-navigation"
+                className={flowExpanded ? 'block' : 'hidden lg:block'}
+              >
+                <WorkflowConfigurationFlow
+                  stages={descriptor.stages}
+                  renderNode={nodeButton}
+                />
               </div>
-              {descriptor && (
-                <Badge variant="subtle" className="shrink-0">
-                  {descriptor.stages.length} stages
-                </Badge>
-              )}
-            </div>
-
-            {!descriptor ? (
-              <p className="text-sm text-[var(--text-muted)]">No workflow descriptor available.</p>
-            ) : (
-              <div className="space-y-4">
-                {stageGroups.map((group) => (
-                  <div key={group.title}>
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                        {group.title}
-                      </h5>
-                      <span className="text-[11px] tabular-nums text-[var(--text-muted)]">
-                        {group.stages.length}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      {group.stages.map((stage, index) => (
-                        <WorkflowMapStage
-                          key={stage.id}
-                          stage={stage}
-                          selected={stage.id === selectedStageId}
-                          stageLabelById={stageLabelById}
-                          isLast={index === group.stages.length - 1}
-                          onSelect={() => setSelectedStageId(stage.id)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Stage Inspector */}
-          <section aria-label="Stage Inspector" className="p-5">
-            {!selectedDescriptor || !selectedConfig ? (
-              <p className="text-sm text-[var(--text-muted)]">Select a workflow stage.</p>
-            ) : (
-              <div className="space-y-5">
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                    Stage Inspector
-                  </h4>
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">
-                    Review the selected stage before editing bounded prompt and context fields.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
+            </aside>
+            <section
+              ref={configurationRef}
+              tabIndex={-1}
+              aria-label="节点配置"
+              className="min-w-0 space-y-4 p-4 sm:p-5"
+            >
+              {selected && config ? (
+                <>
+                  <div>
                     <h4 className="text-base font-semibold text-[var(--text-primary)]">
-                      {selectedDescriptor.label}
+                      {stageName(selected)}
                     </h4>
-                    <p className="mt-1 break-words text-sm text-[var(--text-muted)]">
-                      {selectedDescriptor.description}
+                    <p className="mt-1 text-sm text-[var(--text-muted)]">
+                      {stageDescription(selected)}
                     </p>
                   </div>
-                  <Badge
-                    variant={selectedDescriptor.model_bearing ? 'subtle' : 'outline'}
-                    className="shrink-0"
-                  >
-                    {selectedDescriptor.model_bearing ? 'Model-bearing' : 'Governed'}
-                  </Badge>
-                </div>
-
-                <dl className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-3">
-                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                      Stage ID
-                    </dt>
-                    <dd translate="no" className="mt-1 break-all font-mono text-[var(--text-primary)]">
-                      {selectedDescriptor.id}
-                    </dd>
-                  </div>
-                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                      Availability
-                    </dt>
-                    <dd className="mt-1 text-[var(--text-primary)]">
-                      {selectedDescriptor.required ? 'Required' : 'Optional'}
-                    </dd>
-                  </div>
-                  <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3">
-                    <dt className="font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                      Prompt
-                    </dt>
-                    <dd className="mt-2 text-[var(--text-primary)]">
-                      {canEditPrompt ? '可配置' : '由系统管理'}
-                    </dd>
-                  </div>
-                </dl>
-
-                <div className="grid gap-3 text-xs text-[var(--text-muted)] sm:grid-cols-2">
-                  <div className="min-w-0">
-                    <span className="font-semibold text-[var(--text-secondary)]">Input</span>
-                    <p className="mt-1 break-words">
-                      {selectedDescriptor.input_summary || 'Governed runtime input.'}
-                    </p>
-                  </div>
-                  <div className="min-w-0">
-                    <span className="font-semibold text-[var(--text-secondary)]">Output</span>
-                    <p className="mt-1 break-words">
-                      {selectedDescriptor.output_summary || 'Governed runtime output.'}
-                    </p>
-                  </div>
-                </div>
-
-                {canEditPrompt ? (
-                  <div className="flex min-w-0 flex-col gap-3">
-                    <div>
-                      <FieldHeader
-                        label="Prompt"
-                        help="自由编写本阶段的业务背景、任务要求和输出风格。模板只提供三个章节和填写提示，章节可随意修改；系统控制规则仍然生效。"
-                        htmlFor="stage-prompt"
-                      />
-                      <p id="stage-prompt-help" className="mb-3 text-xs text-[var(--text-muted)]">
-                        用一段 Prompt 描述这个节点的工作。结构模板包含 Business Context、Task Instructions 和 Output Preferences，内容由你填写。
-                      </p>
-                      <div className="mb-3 flex flex-wrap items-end gap-2">
-                        <Button type="button" variant="outline" onClick={() => updateSelectedStage((stage) => ({
-                          ...stage,
-                          prompt: {
-                            business_context: [stage.prompt.business_context, STRUCTURED_PROMPT_TEMPLATE].filter(Boolean).join('\n\n'),
-                            task_instructions: [], output_preferences: [],
-                          },
-                        }))}>插入结构模板</Button>
+                  {editable ? (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label
+                          htmlFor="stage-prompt"
+                          className="text-sm font-medium text-[var(--text-primary)]"
+                        >
+                          Prompt
+                        </label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={locked}
+                          onClick={() =>
+                            update((stage) => ({
+                              ...stage,
+                              prompt: {
+                                business_context: [
+                                  stage.prompt.business_context,
+                                  STRUCTURED_PROMPT_TEMPLATE,
+                                ]
+                                  .filter(Boolean)
+                                  .join('\n\n'),
+                                task_instructions: [],
+                                output_preferences: [],
+                              },
+                            }))
+                          }
+                        >
+                          插入结构模板
+                        </Button>
                       </div>
                       <textarea
                         id="stage-prompt"
-                        aria-describedby="stage-prompt-help"
-                        value={selectedConfig.prompt.business_context ?? ''}
-                        onChange={(event) => updateSelectedStage((stage) => ({
-                          ...stage,
-                          prompt: { business_context: event.target.value, task_instructions: [], output_preferences: [] },
-                        }))}
-                        rows={14}
-                        placeholder="描述这个节点要完成的任务、需要关注的信息和期望的输出。"
-                        className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm leading-relaxed text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                        aria-describedby="prompt-help"
+                        disabled={locked}
+                        value={config.prompt.business_context ?? ''}
+                        rows={12}
+                        onChange={(event) =>
+                          update((stage) => ({
+                            ...stage,
+                            prompt: {
+                              business_context: event.target.value,
+                              task_instructions: [],
+                              output_preferences: [],
+                            },
+                          }))
+                        }
+                        placeholder="描述这个节点的业务背景、任务要求和输出偏好。"
+                        className="w-full resize-y rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-3 text-sm leading-relaxed text-[var(--text-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
                       />
-                      <p className="mt-1 text-xs text-[var(--text-muted)]">模板追加到现有内容末尾，不会替换已写内容。保存时校验长度和内容。</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="rounded-md border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-secondary)]">
-                    此节点由系统执行，无需配置 Prompt。可在下方选择可用上下文。
-                  </p>
-                )}
-
-                {/* Context Options — shared Switch (was raw checkbox) */}
-                {selectedDescriptor.context_options.length > 0 && (
-                  <div>
-                    <FieldHeader
-                      label="Context Options"
-                      help="Toggles structured runtime context that the harness can safely provide to this stage, such as Agent purpose or prior outcome state."
-                    />
-                    <div className="mt-2">
-                      <FieldGrid cols={2} gap="sm">
-                        {selectedDescriptor.context_options.map((option) => (
-                          <SectionField
-                            key={option}
-                            label={<span translate="no">{option}</span>}
-                            inline
+                      <p
+                        id="prompt-help"
+                        className="text-xs text-[var(--text-muted)]"
+                      >
+                        模板只添加章节和填写提示，追加在现有内容之后。节点切换不会丢失修改。
+                      </p>
+                      <button
+                        type="button"
+                        aria-expanded={advanced}
+                        onClick={() => setAdvanced(!advanced)}
+                        className="rounded-md py-2 text-sm text-[var(--text-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                      >
+                        高级设置
+                      </button>
+                      {advanced && (
+                        <div className="space-y-4 rounded-md border border-[var(--border)] p-4">
+                          <p className="text-xs text-[var(--text-muted)]">
+                            仅在需要额外上下文时调整。这里不会启用知识、工具或改变权限。
+                          </p>
+                          {availableContext.map((option) => (
+                            <SectionField
+                              key={option}
+                              label={CONTEXT_LABELS[option]}
+                              inline
+                            >
+                              <Switch
+                                aria-label={CONTEXT_LABELS[option]}
+                                checked={!!config.context[option]}
+                                disabled={locked}
+                                onCheckedChange={(checked) =>
+                                  update((stage) => ({
+                                    ...stage,
+                                    context: {
+                                      ...stage.context,
+                                      [option]: checked,
+                                    },
+                                  }))
+                                }
+                              />
+                            </SectionField>
+                          ))}
+                          {extraContext.length > 0 && (
+                            <p className="text-xs text-[var(--text-muted)]">
+                              另有 {extraContext.length}{' '}
+                              项原有上下文设置保留不变，可在技术信息中查看。
+                            </p>
+                          )}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={previewContext}
+                            disabled={previewBusy || locked}
                           >
-                            <Switch
-                              aria-label={option}
-                              checked={Boolean(selectedConfig.context[option])}
-                              disabled={!canConfigureContext}
-                              onCheckedChange={(checked) => updateSelectedStage((stage) => ({
-                                ...stage,
-                                context: { ...stage.context, [option]: checked },
-                              }))}
-                            />
-                          </SectionField>
-                        ))}
-                      </FieldGrid>
+                            {previewBusy ? '预览中…' : '预览节点上下文'}
+                          </Button>
+                          <p className="text-xs text-[var(--text-muted)]">
+                            预览不调用模型；长文本可能被截断，请检查提示。
+                          </p>
+                          {preview && (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium">
+                                实际 Prompt 补充内容
+                              </p>
+                              <CodeBlock>
+                                {preview.business_context_addendum.text ||
+                                  '未添加 Prompt。'}
+                              </CodeBlock>
+                              {!!preview.summary.truncation_applied && (
+                                <p
+                                  role="status"
+                                  className="text-sm text-[var(--warning-fg)]"
+                                >
+                                  上下文超过运行长度限制，预览内容已截断。
+                                </p>
+                              )}
+                              <CodeBlock>
+                                {JSON.stringify(
+                                  preview.structured_control_context,
+                                  null,
+                                  2,
+                                )}
+                              </CodeBlock>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="rounded-md bg-[var(--bg-base)] p-4 text-sm text-[var(--text-secondary)]">
+                      此节点由系统管理，无需日常配置。原有设置会保留。
                     </div>
-                  </div>
-                )}
-
-                {/* Preview action */}
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={previewSelectedStage}
-                    disabled={previewBusy || !canPreviewSelected}
-                  >
-                    {previewBusy ? 'Previewing…' : 'Preview Context'}
-                  </Button>
-                  {previewError && (
-                    <span role="alert" className="text-sm text-[var(--danger-fg)]">
-                      {previewError}
-                    </span>
                   )}
-                </div>
-
-                {preview && (
-                  <div className="space-y-3">
-                    <div>
-                      <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                        Business Context Addendum
-                      </h5>
-                      <CodeBlock>{preview.business_context_addendum.text || 'No addendum configured.'}</CodeBlock>
-                    </div>
-                    <div>
-                      <h5 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                        Structured Control Context
-                      </h5>
-                      <CodeBlock>{JSON.stringify(preview.structured_control_context, null, 2)}</CodeBlock>
-                    </div>
+                  <div className="border-t border-[var(--border)] pt-3">
+                    <button
+                      type="button"
+                      aria-expanded={technical}
+                      onClick={() => setTechnical(!technical)}
+                      className="rounded-md text-xs text-[var(--text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                    >
+                      技术信息
+                    </button>
+                    {technical && (
+                      <div className="mt-3 space-y-3 text-xs text-[var(--text-secondary)]">
+                        <p>
+                          流程：{template} · 版本：
+                          {version || descriptor.descriptor_version}
+                        </p>
+                        <p>节点 ID：{selected.id}</p>
+                        <p>输入：{selected.input_summary}</p>
+                        <p>输出：{selected.output_summary}</p>
+                        <p>
+                          后续节点：{selected.successors.join(', ') || '结束'}
+                          。节点列表用于配置，不代表每次运行的固定顺序。
+                        </p>
+                        <CodeBlock>
+                          {JSON.stringify(
+                            {
+                              branches: selected.branch_conditions,
+                              context: config.context,
+                              ...(!editable ? { prompt: config.prompt } : {}),
+                            },
+                            null,
+                            2,
+                          )}
+                        </CodeBlock>
+                        <p>当前 Workflow YAML（只读）</p>
+                        <CodeBlock>{localYaml}</CodeBlock>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )}
-          </section>
-        </div>
-      </ConfigPanel>
-
-      {/*
-        Panel 3 — Advanced (disclosed). Raw YAML is a read-only artifact of the
-        same draft contract; no save here (Save Core / Save Stages own persistence).
-      */}
-      <ConfigPanel
-        headingLevel={3}
-        title={t('workflow.advancedYaml')}
-        description="Read-only projection of the current draft contract YAML."
-        actions={
-          <Button variant="ghost" size="sm" onClick={() => setShowYaml(!showYaml)}>
-            {showYaml ? t('moduleEditor.hideYaml') : t('workflow.advancedYaml')}
-          </Button>
-        }
-        variant="nested"
-      >
-        {showYaml ? (
-          <CodeBlock>{localYaml}</CodeBlock>
-        ) : (
-          <p className="text-sm text-[var(--text-muted)]">
-            Reveal the YAML projection with “{t('workflow.advancedYaml')}”.
-          </p>
+                </>
+              ) : (
+                <p>请选择一个节点。</p>
+              )}
+            </section>
+          </div>
         )}
       </ConfigPanel>
     </div>
   )
 }
-
-function WorkflowMapStage({
-  stage,
-  selected,
-  stageLabelById,
-  isLast,
-  onSelect,
-}: {
-  stage: WorkflowStageDescriptor
-  selected: boolean
-  stageLabelById: Map<string, string>
-  isLast: boolean
-  onSelect: () => void
-}) {
-  return (
-    <div className="relative pl-5">
-      <span className={`absolute left-1 top-4 h-full w-px bg-[var(--border)] ${isLast ? 'hidden' : ''}`} />
-      <span className={`absolute left-0 top-3 h-3 w-3 rounded-full border ${
-        selected
-          ? 'border-[var(--accent)] bg-[var(--accent)]'
-          : 'border-[var(--border)] bg-[var(--bg-surface)]'
-      }`} />
-      <Button
-        type="button"
-        variant="outline"
-        aria-pressed={selected}
-        onClick={onSelect}
-        className={`h-auto w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left font-normal ${
-          selected
-            ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text-primary)]'
-            : 'bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
-        }`}
-      >
-        <div className="w-full">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{stage.label}</div>
-              <div translate="no" className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]">{stage.id}</div>
-            </div>
-            <Badge variant={selected ? 'subtle' : 'outline'} className="shrink-0 text-[10px] uppercase">
-              {stage.model_bearing ? 'model' : 'stage'}
-            </Badge>
-          </div>
-          <div className="mt-2 truncate text-[11px] text-[var(--text-muted)]">
-            <span className="font-semibold text-[var(--text-secondary)]">Next: </span>
-            {formatSuccessors(stage, stageLabelById)}
-          </div>
-          {stage.governed_handoff_points.length > 0 && (
-            <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
-              <span className="font-semibold text-[var(--text-secondary)]">Handoff: </span>
-              {stage.governed_handoff_points.join(', ')}
-            </div>
-          )}
-        </div>
-      </Button>
-    </div>
+function configurationFingerprint(stages: WorkflowStageConfig[]): string {
+  return JSON.stringify(
+    stages.map((stage) => ({
+      ...stage,
+      context: Object.fromEntries(
+        Object.entries(stage.context)
+          .filter(([, enabled]) => enabled)
+          .sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    })),
   )
 }
-
-/**
- * FieldHeader — label + a "?" affordance that explains the field. The help is
- * rendered through the shared `Tooltip` primitive (Portal-based), replacing the
- * old hand-rolled `absolute role="note"` span that overlapped neighbouring
- * columns in the config grid.
- *
- * The "?" trigger is a sibling of the label text (NOT a child of the <label>),
- * so it does not pollute the field's accessible name. The <label> associates
- * to its control via `htmlFor`.
- */
-function FieldHeader({
-  label,
-  help,
-  htmlFor,
-}: {
-  label: string
-  help: string
-  htmlFor?: string
-}) {
-  return (
-    <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
-      <label htmlFor={htmlFor} className="truncate text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-        {label}
-      </label>
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Explain ${label}`}
-              className="inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-[var(--border)] text-[10px] font-semibold text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-            >
-              ?
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-xs normal-case leading-5 tracking-normal text-[var(--text-secondary)]">
-            {help}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    </div>
-  )
-}
-
-function groupWorkflowStages(stages: WorkflowStageDescriptor[]) {
-  const visited = new Set<string>()
-  const ordered = topologicalWorkflowStages(stages)
-  const groups = [
-    {
-      title: 'Entry',
-      stages: ordered.filter((stage) => stage.predecessors.length === 0),
-    },
-    {
-      title: 'Processing',
-      stages: ordered.filter((stage) => stage.predecessors.length > 0 && stage.successors.length > 0),
-    },
-    {
-      title: 'Terminal',
-      stages: ordered.filter((stage) => stage.successors.length === 0),
-    },
-  ].map((group) => ({
-    ...group,
-    stages: group.stages.filter((stage) => {
-      if (visited.has(stage.id)) return false
-      visited.add(stage.id)
-      return true
-    }),
-  }))
-
-  return groups.filter((group) => group.stages.length > 0)
-}
-
-function topologicalWorkflowStages(stages: WorkflowStageDescriptor[]) {
-  const byId = new Map(stages.map((stage) => [stage.id, stage]))
-  const visited = new Set<string>()
-  const ordered: WorkflowStageDescriptor[] = []
-
-  function visit(stage: WorkflowStageDescriptor) {
-    if (visited.has(stage.id)) return
-    visited.add(stage.id)
-    ordered.push(stage)
-    for (const successorId of stage.successors) {
-      const successor = byId.get(successorId)
-      if (successor) visit(successor)
-    }
-  }
-
-  for (const stage of stages.filter((item) => item.predecessors.length === 0)) visit(stage)
-  for (const stage of stages) visit(stage)
-
-  return ordered
-}
-
-function workflowFieldHelp(path: string): string {
-  switch (path) {
-    case 'workflow.template':
-      return 'Selects the backend-owned workflow template. react_enterprise_qa_v3 is the only production workflow template.'
-    case 'workflow.checkpointer.provider':
-      return 'Chooses where workflow state is checkpointed so multi-step runs can resume or inspect state consistently.'
-    case 'workflow.checkpointer.uri':
-      return 'Configures the checkpoint storage location used by the selected provider.'
-    default:
-      return 'Configures a workflow-level setting used by the Agent runtime.'
-  }
-}
-
-function emptyStageConfig(stageId: string): WorkflowStageConfig {
+function emptyStage(id: string): WorkflowStageConfig {
   return {
-    id: stageId,
+    id,
     prompt: {
       business_context: '',
       task_instructions: [],
@@ -772,79 +613,4 @@ function emptyStageConfig(stageId: string): WorkflowStageConfig {
     context: {},
   }
 }
-
-function normalizeStageConfig(stage: WorkflowStageConfig): WorkflowStageConfig {
-  return {
-    id: stage.id,
-    prompt: {
-      business_context: mergeStagePrompt(stage.prompt),
-      task_instructions: [],
-      output_preferences: [],
-    },
-    context: stage.context ?? {},
-  }
-}
-
-function sanitizeStageConfigForDescriptor(
-  stage: WorkflowStageConfig,
-  descriptor: WorkflowTemplateDescriptor,
-): WorkflowStageConfig {
-  const stageDescriptor = descriptor.stages.find((candidate) => candidate.id === stage.id)
-  if (!stageDescriptor?.editable_prompt_fields.length) {
-    return {
-      ...stage,
-      prompt: emptyStageConfig(stage.id).prompt,
-    }
-  }
-  return stage
-}
-
-/**
- * NativeSelect — the shared select styling used across the refactored editors
- * (data-URI chevron, semantic border, focus-visible ring). Wraps a native
- * `<select>` so form value semantics stay identical.
- */
-function NativeSelect({
-  id,
-  value,
-  onChange,
-  children,
-  ...rest
-}: {
-  id?: string
-  value: string
-  onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void
-  children: ReactNode
-} & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'value' | 'onChange' | 'id'>) {
-  return (
-    <select
-      id={id}
-      value={value}
-      onChange={onChange}
-      className="h-9 w-full appearance-none rounded-md border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 pr-9 text-sm text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-      style={{
-        backgroundImage:
-          "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
-        backgroundRepeat: 'no-repeat',
-        backgroundPosition: 'right 0.625rem center',
-      }}
-      {...rest}
-    >
-      {children}
-    </select>
-  )
-}
-
-function formatSuccessors(
-  stage: WorkflowStageDescriptor,
-  stageLabelById: Map<string, string>,
-): string {
-  if (stage.successors.length === 0) return 'Terminal'
-  return stage.successors.map((stageId) => {
-    const label = stageLabelById.get(stageId) ?? stageId
-    const condition = stage.branch_conditions[stageId]
-    return condition ? `${label} (${condition})` : label
-  }).join(', ')
-}
-
 export type { WorkflowModuleEditorProps }

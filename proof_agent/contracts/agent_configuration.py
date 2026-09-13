@@ -12,6 +12,7 @@ from proof_agent.contracts._base import (
     StrictFrozenModel,
     freeze_value,
 )
+from proof_agent.contracts.knowledge_connection import KnowledgeConnectionAuthorization
 from proof_agent.contracts.secrets import ProductionSecretHandle, SecretPurpose
 from proof_agent.contracts.knowledge_resolution import ResolvedKnowledgeBindingSet, ResolvedKnowledgeSourceServiceBinding
 from proof_agent.contracts.knowledge_release import (
@@ -621,6 +622,9 @@ class DraftAgent(FrozenModel):
     created_by: str
     updated_by: str
     version_id: str | None = None
+    knowledge_connection_authorizations: tuple[KnowledgeConnectionAuthorization, ...] = Field(
+        default=(), exclude_if=lambda value: not value,
+    )
     knowledge_release_binding_candidate: DraftKnowledgeReleaseBindingCandidate | None = None
     validation_records: tuple[AgentValidationRecord, ...] = Field(default_factory=tuple)
     operation_audit: tuple[ConfigurationOperationAudit, ...] = Field(default_factory=tuple)

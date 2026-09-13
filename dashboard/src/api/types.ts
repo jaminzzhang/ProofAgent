@@ -667,6 +667,79 @@ export interface WorkflowStageConfig {
   context: Record<string, boolean>
 }
 
+export type WorkflowComplexity = 'lite' | 'standard' | 'deep'
+export type WorkflowIntensity = 'minimal' | 'balanced' | 'thorough'
+export type WorkflowInteractionStage = 'goal' | 'plan' | 'evidence' | 'tool_input' | 'finalization'
+export type WorkflowInteractionReason = 'required_context' | 'material_ambiguity' | 'preference' | 'retrievable' | 'scope_change' | 'budget_change' | 'applicability_unresolved' | 'required_parameter' | 'user_preference_blocking'
+export type WorkflowReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export interface WorkflowBudget {
+  max_model_calls: number
+  max_retrieval_calls: number
+  max_tool_calls: number
+  max_total_tokens: number
+  reserved_output_tokens: number
+  max_active_seconds: number
+}
+
+// Optional fields preserve server defaults without materializing policy on old drafts.
+export interface WorkflowExecutionPolicy {
+  complexity?: WorkflowComplexity
+  ceiling?: WorkflowComplexity
+  auto_escalate?: boolean
+  reasoning?: { effort?: WorkflowReasoningEffort | null; unsupported?: 'reject' }
+  budget?: Partial<WorkflowBudget>
+}
+
+export interface WorkflowInteractionPolicy {
+  mode?: 'autonomous' | 'adaptive' | 'interactive'
+  intensity?: WorkflowIntensity
+  max_rounds?: number
+  max_questions_per_round?: number
+  unavailable?: 'return_missing_context' | 'pause'
+  wait_timeout_seconds?: number
+  checkpoints?: Partial<Record<WorkflowInteractionStage, { intensity?: WorkflowIntensity | null; ask_on?: WorkflowInteractionReason[] }>>
+}
+
+export interface WorkflowAssuranceRequirements {
+  min_sources?: number
+  max_age_days?: number | null
+  required_metadata?: ('source_id' | 'document_version' | 'effective_date')[]
+}
+
+export interface WorkflowAssurancePolicy {
+  level?: 'basic' | 'grounded' | 'strict'
+  unknown_required_claim?: 'block'
+  evidence_conflict?: 'resolve_or_block'
+  applicability?: 'required'
+  evidence?: WorkflowAssuranceRequirements
+  checkpoints?: Partial<Record<WorkflowInteractionStage, WorkflowAssuranceRequirements>>
+}
+
+export interface WorkflowPolicyPatch {
+  execution?: WorkflowExecutionPolicy | null
+  interaction?: WorkflowInteractionPolicy | null
+  assurance?: WorkflowAssurancePolicy | null
+}
+
+export interface ResolvedExecutionPlan {
+  schema_version: 'resolved-execution-plan.v1'
+  compiler_version: 'adaptive-workflow.v1'
+  requested_complexity: WorkflowComplexity | 'legacy'
+  effective_complexity: WorkflowComplexity | 'legacy'
+  configuration_digest: string
+  stages: {
+    stage_id: string
+    mode: 'execute' | 'conditional' | 'deterministic' | 'bypass'
+    reason: string
+    mandatory_checks: string[]
+  }[]
+  budget: WorkflowBudget | null
+  reasoning_effort: WorkflowReasoningEffort | null
+  blocked_reason: string | null
+  escalated: boolean
+}
+
 export interface WorkflowStageContextPreview {
   stage_id: string
   stage_label: string
@@ -1476,4 +1549,13 @@ export interface ExternalKnowledgeBinding {
 export interface ExternalKnowledgeConfiguration {
   revision: number
   bindings: ExternalKnowledgeBinding[]
+  can_authorize?: boolean
+  can_check?: boolean
+  authorization_mode?: 'development' | 'managed'
+  connections?: {binding_id: string; origin: string; authorized: boolean; address_mode?: 'public_dns' | 'local_proxy_dns' | null}[]
+}
+
+export interface KnowledgeConnectionCheck {
+  revision: number
+  connections: {binding_id: string; status: 'ready' | 'authorization_required' | 'credential_unavailable' | 'server_configuration_required' | 'provider_rejected' | 'connection_failed'}[]
 }

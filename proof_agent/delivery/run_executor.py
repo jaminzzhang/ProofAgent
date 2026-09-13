@@ -15,6 +15,7 @@ from proof_agent.control.artifacts.finalization import (
 )
 from proof_agent.contracts.artifacts import ArtifactOwner
 from proof_agent.contracts.conversation import ConversationTurn
+from proof_agent.contracts.workflow_task_update import WorkflowTaskUpdate
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.ports.run_queue import (
     RunClaimRejectedError,
@@ -47,6 +48,7 @@ class RunWorkResult:
     receipt_outcome: ReceiptOutcome | None = None
     conversation_turn: ConversationTurn | None = None
     expected_conversation_turn_count: int | None = None
+    workflow_task_update: WorkflowTaskUpdate | None = None
 
 
 class RunWorkHandler(Protocol):
@@ -206,11 +208,13 @@ class RunExecutor:
                 expected_conversation_turn_count = (
                     handled.expected_conversation_turn_count
                 )
+                workflow_task_update = handled.workflow_task_update
             else:
                 members = handled
                 receipt_outcome = None
                 conversation_turn = None
                 expected_conversation_turn_count = None
+                workflow_task_update = None
             cancellation_check()
             finalized_claim = self._repository.mark_finalizing(claim, now=self._now())
             finalizing = True
@@ -224,6 +228,7 @@ class RunExecutor:
                 cancellation_check=cancellation_check,
             )
             cancellation_check()
+            task_kwargs = {} if workflow_task_update is None else {"workflow_task_update": workflow_task_update}
             self._repository.commit_success(
                 finalized_claim,
                 manifest=prepared.manifest,
@@ -232,6 +237,7 @@ class RunExecutor:
                 receipt_outcome=receipt_outcome,
                 conversation_turn=conversation_turn,
                 expected_conversation_turn_count=expected_conversation_turn_count,
+                **task_kwargs,
             )
         except RunExecutionCancelled:
             self._terminal_best_effort(

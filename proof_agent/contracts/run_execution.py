@@ -104,6 +104,9 @@ class RunRequest(StrictFrozenModel):
     allow_untrusted_web_supplement: bool = False
     conversation_id: str | None = Field(default=None, pattern=_UUID_PATTERN)
     conversation_turn_count: int | None = Field(default=None, ge=0)
+    task_id: str | None = Field(default=None, min_length=1, max_length=128, exclude_if=lambda value: value is None)
+    expected_task_version: int | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
+    task_snapshot_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN, exclude_if=lambda value: value is None)
     permission_mapping_version_id: str = Field(pattern=_UUID_PATTERN)
     permission_epoch: int = Field(ge=1)
     institution_authorization: InstitutionAuthorizationContext = Field(
@@ -144,6 +147,9 @@ class RunRequest(StrictFrozenModel):
     def validate_conversation_snapshot(self) -> Self:
         if self.conversation_id is None and self.conversation_turn_count is not None:
             raise ValueError("Conversation turn count requires a conversation identity")
+        task_binding = (self.task_id, self.expected_task_version, self.task_snapshot_sha256)
+        if any(item is not None for item in task_binding) and not all(item is not None for item in task_binding):
+            raise ValueError("task execution requires its complete frozen snapshot binding")
         return self
 
 

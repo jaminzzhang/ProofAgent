@@ -40,6 +40,7 @@ EXPAND_ONLY_REVISIONS: Final = frozenset(
         "0022_formal_publish_cmd",
         "0023_formal_publish_claim",
         "0024_formal_candidate_checkpoint",
+        "0025_workflow_tasks",
     }
 )
 METADATA_V2_DIRECT_CUTOVER_REVISIONS: Final = frozenset(

@@ -471,3 +471,16 @@ def test_conversation_concurrent_append_returns_conflict(tmp_path, monkeypatch):
     monkeypatch.setattr(ConversationStore, 'append_turn_expected', conflict)
     response = client.post(f'/api/chat/conversations/{conversation_id}/runs', json={'question': 'Budget is 500 yuan.'})
     assert response.status_code == 409
+
+
+def test_local_session_advertises_the_available_chat_execution_route(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    session = client.get('/api/auth/session')
+    assert session.status_code == 200
+    assert session.json()['chat_execution_mode'] == 'development_sync'
+    created = client.post('/api/chat/conversations', json={'agent_id': 'react_enterprise_qa_v3'})
+    conversation_id = created.json()['conversation_id']
+    result = client.post(f'/api/chat/conversations/{conversation_id}/runs',
+        json={'question': 'What is the reimbursement rule for travel meals?'})
+    assert result.status_code == 200, result.text
+    assert result.json()['run_id']

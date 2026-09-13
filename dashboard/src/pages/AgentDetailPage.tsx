@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   chatUrl,
+  ApiError,
+  checkConfigDraftKnowledgeConnections,
   createModelConnection,
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
@@ -11,6 +13,7 @@ import {
   fetchWorkflowTemplate,
   fetchModelConnections,
   previewWorkflowStageContext,
+  previewWorkflowExecution,
   publishConfigDraft,
   rollbackConfigVersion,
   updateConfigDraft,
@@ -22,6 +25,7 @@ import {
 } from '../api/client'
 import type {
   ExternalKnowledgeConfiguration,
+  KnowledgeConnectionCheck,
   BusinessFlowSkillPackConfiguration,
   BusinessFlowSkillPackCreateRequest,
   BusinessFlowSkillPackUpdateRequest,
@@ -132,14 +136,20 @@ export function AgentDetailPage() {
   const [skillsLoaded, setSkillsLoaded] = useState(false)
   const [skillsError, setSkillsError] = useState<string | null>(null)
   const [knowledgeConfig, setKnowledgeConfig] = useState<ExternalKnowledgeConfiguration | null>(null)
+  const [knowledgeCheck, setKnowledgeCheck] = useState<KnowledgeConnectionCheck | null>(null)
+  const [knowledgeCheckError, setKnowledgeCheckError] = useState<string | null>(null)
   const knowledgeRouteKey = `${agentId}/${draftId}`
+  const knowledgeSnapshotKey = `${knowledgeRouteKey}/${draft?.revision ?? ""}`
   const knowledgeRouteRef = useRef(knowledgeRouteKey)
   knowledgeRouteRef.current = knowledgeRouteKey
+  useEffect(() => { setKnowledgeCheck(null); setKnowledgeCheckError(null) }, [knowledgeRouteKey])
   const [knowledgeLoadedFor, setKnowledgeLoadedFor] = useState<string | null>(null)
-  const knowledgeLoaded = knowledgeLoadedFor === knowledgeRouteKey
+  const knowledgeLoaded = knowledgeLoadedFor === knowledgeSnapshotKey
+  const [workflowStagesDirty, setWorkflowStagesDirty] = useState(false)
+  const [workflowReset, setWorkflowReset] = useState(0)
   const [knowledgeBindingsDirty, setKnowledgeBindingsDirty] = useState(false)
   const [knowledgeReset, setKnowledgeReset] = useState(0)
-  useEffect(() => { setKnowledgeBindingsDirty(false) }, [knowledgeRouteKey])
+  useEffect(() => { setKnowledgeBindingsDirty(false); setWorkflowStagesDirty(false) }, [knowledgeRouteKey])
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
   const [publicationConfiguration, setPublicationConfiguration] = useState<ProductionAgentPublicationConfiguration | null>(null)
   const [publicationConfigurationError, setPublicationConfigurationError] = useState<string | null>(null)
@@ -244,7 +254,7 @@ export function AgentDetailPage() {
 
   useEffect(() => {
     if (
-      activeTab !== 'knowledge'
+      !['knowledge', 'validate'].includes(activeTab)
       || !canEditKnowledge
       || knowledgeLoaded
       || !agentId
@@ -257,7 +267,7 @@ export function AgentDetailPage() {
       .then((response) => {
         if (!mounted) return
         setKnowledgeConfig(response)
-        setKnowledgeLoadedFor(knowledgeRouteKey)
+        setKnowledgeLoadedFor(knowledgeSnapshotKey)
         setKnowledgeError(null)
       })
       .catch((err) => {
@@ -267,7 +277,7 @@ export function AgentDetailPage() {
     return () => {
       mounted = false
     }
-  }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded, knowledgeRouteKey])
+  }, [activeTab, agentId, canEditKnowledge, draftId, knowledgeLoaded, knowledgeRouteKey, knowledgeSnapshotKey])
 
   useEffect(() => {
     if (
@@ -300,7 +310,7 @@ export function AgentDetailPage() {
   const contractDirty = Boolean(
     dirtyConfigurationModule && contract && (agentYaml !== contract.agent_yaml || policyYaml !== contract.policy_yaml || toolsYaml !== contract.tools_yaml),
   )
-  const hasUnsavedChanges = basicsDirty || contractDirty || knowledgeBindingsDirty
+  const hasUnsavedChanges = basicsDirty || contractDirty || knowledgeBindingsDirty || workflowStagesDirty
   const latestValidationFresh = Boolean(
     draft && latestValidation && validationCoversCurrentRevision(draft, latestValidation.run_id),
   )
@@ -317,6 +327,9 @@ export function AgentDetailPage() {
   const validationReadinessBlockers = [
     ...memoryReadinessBlockers,
     ...(unsavedValidationBlocker ? [unsavedValidationBlocker] : []),
+    ...(knowledgeLoaded && knowledgeConfig?.authorization_mode === 'development'
+      && knowledgeConfig.connections?.some(item => !item.authorized)
+      ? [t('externalKnowledge.check.authorization_required')] : []),
   ]
   const publicationReadinessBlockers = [
     ...validationReadinessBlockers,
@@ -385,13 +398,14 @@ export function AgentDetailPage() {
       await action()
       return 'saved'
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err))
+      setActionError(err instanceof ApiError && err.detail === 'external_knowledge_dns_not_allowed'
+        ? t('externalKnowledge.dnsNotAllowed') : err instanceof Error ? err.message : String(err))
       if (isConflictError(err) && agentId && draftId) {
         try {
           const latest = await fetchConfigDraftKnowledgeBinding(agentId, draftId)
           if (knowledgeRouteRef.current !== knowledgeRouteKey) return 'failed'
           setKnowledgeConfig(latest)
-          setKnowledgeLoadedFor(knowledgeRouteKey)
+          setKnowledgeLoadedFor(knowledgeSnapshotKey)
           setKnowledgeError(null)
         } catch (reloadError) {
           setActionError(
@@ -477,6 +491,11 @@ export function AgentDetailPage() {
     return previewWorkflowStageContext(agentId, draftId, stageId, payload)
   }
 
+  async function previewExecution(policy: Parameters<typeof previewWorkflowExecution>[2]['policy']) {
+    if (!agentId || !draftId || draft?.revision === undefined) throw new Error(t('agentDetail.draftRouteMissing'))
+    return previewWorkflowExecution(agentId, draftId, { expected_revision: draft.revision, policy })
+  }
+
   async function createSkillPack(payload: BusinessFlowSkillPackCreateRequest) {
     if (!agentId || !draftId) return 'failed' as const
     if (hasUnsavedChanges) {
@@ -545,6 +564,7 @@ export function AgentDetailPage() {
 
   async function saveKnowledgeReleaseBinding(
     bindings: ExternalKnowledgeBinding[],
+    authorize?: {allow_local_proxy: boolean},
   ): Promise<KnowledgeBindingMutationResult> {
     if (!agentId || !draftId || !knowledgeConfig || !knowledgeLoaded) return 'failed'
     if (basicsDirty || contractDirty) {
@@ -552,17 +572,33 @@ export function AgentDetailPage() {
       return 'failed'
     }
     return runKnowledgeMutation(async () => {
+      setKnowledgeCheck(null)
+      setKnowledgeCheckError(null)
       const updated = await updateConfigDraftKnowledgeBinding(agentId, draftId, {
         expected_revision: knowledgeConfig.revision,
         bindings,
+        ...(authorize ? {authorize} : {}),
       })
       if (knowledgeRouteRef.current !== knowledgeRouteKey) return
       setKnowledgeConfig(updated)
-      setKnowledgeLoadedFor(knowledgeRouteKey)
+      setKnowledgeLoadedFor(knowledgeSnapshotKey)
       setKnowledgeError(null)
       setStatus(t('agentDetail.knowledgeBindingSaved'))
       refresh()
+      if (authorize && updated.can_check) await checkKnowledgeConnections(updated)
     })
+  }
+
+  async function checkKnowledgeConnections(config: ExternalKnowledgeConfiguration) {
+    if (!agentId || !draftId) return
+    setKnowledgeCheck(null)
+    setKnowledgeCheckError(null)
+    try {
+      const result = await checkConfigDraftKnowledgeConnections(agentId, draftId, config.revision)
+      if (knowledgeRouteRef.current === knowledgeRouteKey) setKnowledgeCheck(result)
+    } catch {
+      if (knowledgeRouteRef.current === knowledgeRouteKey) setKnowledgeCheckError(t('externalKnowledge.checkFailed'))
+    }
   }
 
   async function publishDraft() {
@@ -638,7 +674,7 @@ export function AgentDetailPage() {
   function setActiveTab(moduleId: string) {
     const nextTab = agentDetailTab(moduleId)
     if (busy) return
-    if ((knowledgeBindingsDirty && nextTab !== activeTab) || (hasUnsavedChanges && nextTab !== activeTab && !lifecycleTabIds.includes(nextTab) && nextTab !== (dirtyConfigurationModule ?? 'general'))) {
+    if (((knowledgeBindingsDirty || workflowStagesDirty) && nextTab !== activeTab) || (hasUnsavedChanges && nextTab !== activeTab && !lifecycleTabIds.includes(nextTab) && nextTab !== (dirtyConfigurationModule ?? 'general'))) {
       setActionError(t('configuration.editPending'))
       return
     }
@@ -725,7 +761,7 @@ export function AgentDetailPage() {
 
       {hasUnsavedChanges && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-[var(--border)] p-3" role="status">
-          <Button variant="ghost" size="sm" onClick={() => setActiveTab(knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')}>{t('configuration.returnToEdit')}</Button>
+          <Button variant="ghost" size="sm" onClick={() => setActiveTab(workflowStagesDirty ? 'workflow' : knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')}>{t('configuration.returnToEdit')}</Button>
           <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => {
             setDisplayName(draft.display_name)
             setPurpose(draft.purpose)
@@ -734,6 +770,8 @@ export function AgentDetailPage() {
             setToolsYaml(contract.tools_yaml)
             setDirtyConfigurationModule(null)
             setKnowledgeBindingsDirty(false)
+            setWorkflowStagesDirty(false)
+            setWorkflowReset(value => value + 1)
             setKnowledgeReset(value => value + 1)
             setActionError(null)
           }}>{t('configuration.discard')}</Button>
@@ -743,7 +781,7 @@ export function AgentDetailPage() {
       {versionsError && <p role="alert" className="mb-4 text-sm text-[var(--danger-fg)]">{versionsError}</p>}
       <fieldset className="min-w-0" disabled={Boolean(busy) || (
         hasUnsavedChanges && editableModuleIds.includes(activeTab)
-        && activeTab !== (knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')
+        && activeTab !== (workflowStagesDirty ? 'workflow' : knowledgeBindingsDirty ? 'knowledge' : dirtyConfigurationModule ?? 'general')
       )}>
       {activeTab === 'general' && (
         <div className="space-y-5">
@@ -842,13 +880,12 @@ export function AgentDetailPage() {
             agentYaml={agentYaml}
             descriptor={workflowDescriptor}
             descriptorError={workflowDescriptorError}
-            onFieldChange={(path, value) => {
-              setDirtyConfigurationModule('workflow')
-              setAgentYaml((current: string) => updateAgentYamlField(current, path, value))
-            }}
-            onSaveCore={() => saveAgentYaml('workflow', t('agentDetail.workflowSaved'))}
+            key={workflowReset}
+            onDirtyChange={setWorkflowStagesDirty}
             onSaveStages={saveWorkflowStages}
             onPreviewStage={previewWorkflowStage}
+            revision={draft?.revision}
+            onPreviewExecution={previewExecution}
             busy={busy === 'workflow'}
             stageBusy={busy === 'workflow-stages'}
           />
@@ -886,6 +923,13 @@ export function AgentDetailPage() {
             disabled={contractDirty || basicsDirty}
             onDirtyChange={setKnowledgeBindingsDirty}
             onSave={saveKnowledgeReleaseBinding}
+            checkResult={knowledgeCheck}
+            checkError={knowledgeCheckError}
+            onCheck={async () => {
+              if (!knowledgeConfig) return
+              setBusy('knowledge-check')
+              try { await checkKnowledgeConnections(knowledgeConfig) } finally { setBusy(null) }
+            }}
           />
           <fieldset className="min-w-0" disabled={knowledgeBindingsDirty}>
           <RetrievalModuleEditor agentYaml={agentYaml} busy={Boolean(busy)}
@@ -1024,6 +1068,10 @@ export function AgentDetailPage() {
       )}
 
       {activeTab === 'validate' && agentId && draftId && (
+        <div className="space-y-4">
+        {knowledgeConfig?.bindings.length ? <Button variant="outline" onClick={() => setActiveTab('knowledge')}>
+          {t('externalKnowledge.connectionTitle')}
+        </Button> : null}
         <ValidateWorkspace
           agentId={agentId}
           draftId={draftId}
@@ -1046,6 +1094,7 @@ export function AgentDetailPage() {
           busy={busy === 'validation'}
           readinessBlockers={validationReadinessBlockers}
         />
+        </div>
       )}
 
       {activeTab === 'versions' && (

@@ -340,7 +340,8 @@ GET /api/config/agents/{agent_id}/drafts/{draft_id}/formal-publications/{command
 当前没有后台 recovery process、heartbeat 或 cancel。部署仍需由操作者使用相同身份、请求路径、
 请求体和 `Idempotency-Key` 重放 exact command。租约或 checkpoint 都不会授权发布，也不能替代
 Phase F、真实外部依赖证据或 Product Release Authority `GO`。当前 ProofAgent schema head 为
-`0024_formal_candidate_checkpoint`。
+`0025_workflow_tasks`。该增量新增任务快照和问询恢复 outbox；快照与恢复意图
+同事务保存，原始任务与回答按 90 天保留，不改变既有 Run 的租约与 fencing。
 
 正式候选至少需要：exact KSS product binding、Deployment Compatibility Manifest、
 Client Grant、versioned secret、批准的 Admission Scorer、真实依赖 readiness、shadow、

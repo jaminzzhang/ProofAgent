@@ -5,7 +5,12 @@ import json
 import os
 from typing import Any
 
+from proof_agent.capabilities.models.reasoning import (
+    parse_reasoning_effort,
+    resolve_reasoning_effort,
+)
 from proof_agent.contracts import ModelFunctionSchema, ModelRequest, ModelResponse, TokenUsage
+from proof_agent.contracts.model import ReasoningEffort
 from proof_agent.contracts import ProductionSecretHandle, SecretPurpose
 from proof_agent.contracts.manifest import ModelConfig
 from proof_agent.contracts.ports.guarded_http import GuardedHttpClient
@@ -132,6 +137,7 @@ class OpenAICompatibleModelProvider:
         timeout_seconds: float | None = None,
         default_temperature: float | None = None,
         default_max_output_tokens: int | None = None,
+        default_reasoning_effort: ReasoningEffort | None = None,
         guarded_http_client: GuardedHttpClient | None = None,
     ) -> None:
         self._provider_name = provider_name
@@ -143,6 +149,11 @@ class OpenAICompatibleModelProvider:
         self._timeout_seconds = timeout_seconds
         self._default_temperature = default_temperature
         self._default_max_output_tokens = default_max_output_tokens
+        self._default_reasoning_effort = parse_reasoning_effort(default_reasoning_effort)
+        resolve_reasoning_effort(
+            provider_name=provider_name, model_name=model_name,
+            effort=self._default_reasoning_effort, base_url=base_url,
+        )
         self._guarded_http_client = guarded_http_client
 
     @classmethod
@@ -173,6 +184,7 @@ class OpenAICompatibleModelProvider:
             "max_output_tokens",
             "timeout_seconds",
             "deepseek_endpoint_mode",
+            "reasoning_effort",
         }
         unsupported = sorted(set(params).difference(allowed))
         if unsupported:
@@ -261,6 +273,7 @@ class OpenAICompatibleModelProvider:
             if "max_output_tokens" in params
             else None,
             guarded_http_client=guarded_http_client,
+            default_reasoning_effort=parse_reasoning_effort(params.get("reasoning_effort")),
         )
 
     @property
@@ -270,6 +283,11 @@ class OpenAICompatibleModelProvider:
     @property
     def model_name(self) -> str:
         return self._model_name
+
+    @property
+    def base_url(self) -> str | None:
+        """Resolved endpoint for server-owned capability validation; never credentials."""
+        return self._base_url
 
     def estimate_tokens(self, request: ModelRequest) -> int | None:
         text = " ".join(message.content for message in request.messages)
@@ -281,7 +299,23 @@ class OpenAICompatibleModelProvider:
             return self._generate_guarded(request, payload=payload)
         return self._generate_with_sdk(request, payload=payload)
 
+    def _request_base_url(self, request: ModelRequest) -> str | None:
+        if self._base_url is not None:
+            return self._base_url
+        if request.reasoning_effort is None and self._default_reasoning_effort is None:
+            return None
+        # Explicit reasoning capabilities must describe the actual endpoint;
+        # the SDK's implicit OPENAI_BASE_URL cannot redirect that contract.
+        if self.provider_name == "deepseek":
+            return _DEEPSEEK_STANDARD_BASE_URL
+        return _OPENAI_STANDARD_BASE_URL
+
     def _request_payload(self, request: ModelRequest) -> dict[str, Any]:
+        reasoning = resolve_reasoning_effort(
+            provider_name=self.provider_name, model_name=self.model_name,
+            effort=(request.reasoning_effort if request.reasoning_effort is not None
+                    else self._default_reasoning_effort), base_url=self._base_url,
+        )
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [
@@ -299,16 +333,37 @@ class OpenAICompatibleModelProvider:
             )
         elif request.response_format == "json":
             payload["response_format"] = {"type": "json_object"}
+        if reasoning is not None:
+            if reasoning.protocol == "deepseek":
+                payload["extra_body"] = {"thinking": {
+                    "type": "enabled" if reasoning.thinking_enabled else "disabled",
+                }}
+                if reasoning.thinking_enabled:
+                    payload["reasoning_effort"] = reasoning.effective_effort
+                    if request.function_schema is not None:
+                        payload["tool_choice"] = "auto"
+            else:
+                payload["reasoning_effort"] = reasoning.effective_effort
         temperature = request.temperature
-        if temperature is None:
+        managed_thinking = (request.metadata.get("workflow_budgeted") is True
+                            and reasoning is not None and reasoning.thinking_enabled)
+        if temperature is None and not managed_thinking:
             temperature = self._default_temperature
         if temperature is not None:
+            if reasoning is not None and reasoning.thinking_enabled:
+                raise ProofAgentError(
+                    "PA_MODEL_001",
+                    "temperature is unsupported with the selected reasoning_effort.",
+                    "Omit temperature when explicitly enabling model reasoning.",
+                )
             payload["temperature"] = temperature
         max_tokens = request.max_output_tokens
         if max_tokens is None:
             max_tokens = self._default_max_output_tokens
         if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+            key = ("max_completion_tokens" if reasoning is not None
+                   and reasoning.protocol == "openai" else "max_tokens")
+            payload[key] = max_tokens
         return payload
 
     def _generate_guarded(
@@ -323,7 +378,7 @@ class OpenAICompatibleModelProvider:
         extra_body = payload.pop("extra_body", None)
         if isinstance(extra_body, Mapping):
             payload.update(extra_body)
-        base_url = (self._base_url or _OPENAI_STANDARD_BASE_URL).rstrip("/")
+        base_url = (self._request_base_url(request) or _OPENAI_STANDARD_BASE_URL).rstrip("/")
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self._api_key}",
@@ -387,6 +442,7 @@ class OpenAICompatibleModelProvider:
             raw_response,
             provider_name=self.provider_name,
             model_name=self.model_name,
+            required_function_name=_required_auto_function(request, payload),
         )
 
     def _generate_with_sdk(
@@ -409,14 +465,18 @@ class OpenAICompatibleModelProvider:
                 'Install with: pip install "proof-agent[openai]".',
             ) from exc
 
+        retry_options: dict[str, Any] = (
+            {"max_retries": 0} if request.metadata.get("workflow_budgeted") is True else {}
+        )
         client = OpenAI(
             api_key=self._api_key,
-            base_url=self._base_url,
+            base_url=self._request_base_url(request),
             timeout=request.timeout_seconds
             if request.timeout_seconds is not None
             else self._timeout_seconds,
             organization=self._organization,
             project=self._project,
+            **retry_options,
         )
         try:
             response = client.chat.completions.create(**payload)
@@ -450,7 +510,9 @@ class OpenAICompatibleModelProvider:
                 total_tokens=getattr(usage, "total_tokens", None),
             )
         return ModelResponse(
-            content=_extract_choice_content(choice),
+            content=_extract_choice_content(
+                choice, required_function_name=_required_auto_function(request, payload),
+            ),
             provider_name=self.provider_name,
             model_name=self.model_name,
             token_usage=token_usage,
@@ -464,6 +526,7 @@ def _model_response_from_mapping(
     *,
     provider_name: str,
     model_name: str,
+    required_function_name: str | None = None,
 ) -> ModelResponse:
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
@@ -484,7 +547,7 @@ def _model_response_from_mapping(
             ),
         )
     return ModelResponse(
-        content=_extract_choice_content(choice),
+        content=_extract_choice_content(choice, required_function_name=required_function_name),
         provider_name=provider_name,
         model_name=model_name,
         token_usage=token_usage,
@@ -662,8 +725,29 @@ def _deepseek_base_url_for_endpoint_mode(
     return _DEEPSEEK_BETA_BASE_URL
 
 
-def _extract_choice_content(choice: Any) -> str:
+def _required_auto_function(request: ModelRequest, payload: Mapping[str, Any]) -> str | None:
+    if payload.get("tool_choice") == "auto" and request.function_schema is not None:
+        return request.function_schema.name
+    return None
+
+
+def _extract_choice_content(choice: Any, *, required_function_name: str | None = None) -> str:
     message = _get_value(choice, "message")
+    if required_function_name is not None:
+        tool_calls = _get_value(message, "tool_calls")
+        if isinstance(tool_calls, list | tuple) and len(tool_calls) == 1:
+            function = _get_value(tool_calls[0], "function")
+            arguments = _get_value(function, "arguments")
+            if (
+                _get_value(tool_calls[0], "type") == "function"
+                and _get_value(function, "name") == required_function_name
+                and isinstance(arguments, str) and arguments.strip()
+            ):
+                return arguments
+        raise ProofAgentError(
+            "PA_MODEL_002", "model did not return exactly the required function output.",
+            "Retry with the required structured output or disable thinking for forced tool choice.",
+        )
     for tool_call in _get_value(message, "tool_calls") or ():
         function = _get_value(tool_call, "function")
         arguments = _get_value(function, "arguments")

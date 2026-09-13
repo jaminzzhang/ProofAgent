@@ -8,6 +8,7 @@ import type { ChatTurnView } from '../../chat-core/types'
 import { AgentSelectionPanel } from '../../components/AgentSelectionPanel'
 import { OutcomeBadge } from '../../components/OutcomeBadge'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
+import { GoalTaskPanel } from './GoalTaskPanel'
 import { useLocale } from '../../i18n/locale'
 import type {
   GovernanceDetails,
@@ -23,7 +24,7 @@ import {
 } from './operatorAdapter'
 
 /** Dashboard base URL for read-only run deep-links (env-configurable). */
-const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL ?? 'http://localhost:5173'
+import { dashboardUrl } from '../../api/navigation'
 
 function syntheticNewChat(agentId: string): OperatorConversationRecord {
   return {
@@ -62,7 +63,18 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
   const [input, setInput] = useState('')
   const [includeGovernanceDetails, setIncludeGovernanceDetails] = useState(false)
   const [allowUntrustedWebSupplement, setAllowUntrustedWebSupplement] = useState(false)
-  const { t } = useLocale()
+  const { t, locale } = useLocale()
+  const query = new URLSearchParams(location.search)
+  const taskId = query.get('task') || undefined
+  const taskVersion = query.get('version') || undefined
+  const goalMode = query.get('mode') !== 'chat' && (query.get('mode') === 'goal' || Boolean(taskId))
+  const updateTaskLocation = (mode: 'goal' | 'chat', reference?: { taskId: string; agentVersion: string } | null) => {
+    const next = new URLSearchParams(location.search)
+    next.set('mode', mode)
+    if (reference === null) { next.delete('task'); next.delete('version') }
+    else if (reference) { next.set('task', reference.taskId); next.set('version', reference.agentVersion) }
+    navigate({ pathname: location.pathname, search: next.toString() }, { replace: true })
+  }
 
   useEffect(() => {
     if (routeConversationId) {
@@ -279,6 +291,20 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
     return null
   }
 
+  if (goalMode) {
+    return <GoalTaskPanel key={`${activeConversation.agent_id}:${routeConversationId ?? 'new'}`}
+      agentId={activeConversation.agent_id} conversationId={routeConversationId}
+      initialTaskId={taskId} initialAgentVersion={taskVersion}
+      allowUntrustedWebSupplement={allowUntrustedWebSupplement}
+      onTaskReference={reference => updateTaskLocation('goal', reference)}
+      onBack={() => updateTaskLocation('chat')}
+      onUpdate={() => {
+        onUpdate?.()
+        if (routeConversationId) void fetchOperatorConversation(routeConversationId).then(setConversation).catch(() => undefined)
+      }}
+    />
+  }
+
   return (
     <ChatShell
       title={t('operator.title')}
@@ -298,6 +324,10 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
       emptyDescription={t('operator.chatEmptyDescription')}
       error={error}
       footer={
+        <div className="flex flex-wrap items-center gap-4">
+        <Button variant="outline" size="sm" disabled={sending || loading} onClick={() => updateTaskLocation('goal')}>
+          {locale === 'zh-CN' ? '目标任务' : 'Goal task'}
+        </Button>
         <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-muted)]">
           <input
             type="checkbox"
@@ -308,6 +338,7 @@ export function OperatorChatPage({ onUpdate }: { onUpdate?: () => void }) {
           />
           {t('operator.showGovernanceDetails')}
         </label>
+        </div>
       }
       renderAssistantMeta={(turn) => {
         const operatorTurn = findOperatorTurn(activeConversation, turn.id)
@@ -365,7 +396,7 @@ function OperatorMessageMeta({ turn }: { turn: OperatorConversationTurn }) {
       )}
       <div className="ml-auto flex items-center gap-1">
         <a
-          href={`${DASHBOARD_URL}/runs/${turn.run_id}`}
+          href={dashboardUrl(`/runs/${turn.run_id}`)}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-0.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--accent)]"

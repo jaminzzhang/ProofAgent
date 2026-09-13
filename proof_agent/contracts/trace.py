@@ -20,6 +20,11 @@ class TraceEventType(str, Enum):
     INTENT_RESOLUTION = "intent_resolution"
     RETRIEVAL_QUERY_SET = "retrieval_query_set"
     TASK_COMPLETION_EVALUATED = "task_completion_evaluated"
+    WORKFLOW_EXECUTION_RESOLVED = 'workflow_execution_resolved'
+    MODEL_REASONING_RESOLVED = 'model_reasoning_resolved'
+    WORKFLOW_BUDGET_EXHAUSTED = 'workflow_budget_exhausted'
+    INTERACTION_DECIDED = 'interaction_decided'
+    ASSURANCE_EVALUATED = 'assurance_evaluated'
     BUSINESS_FLOW_SKILL_PACK_RECOMMENDATION = "business_flow_skill_pack_recommendation"
     BUSINESS_FLOW_SKILL_PACK_ADMISSION = "business_flow_skill_pack_admission"
     REASONING_SUMMARY = "reasoning_summary"

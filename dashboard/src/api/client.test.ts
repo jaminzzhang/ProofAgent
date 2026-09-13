@@ -28,6 +28,7 @@ import {
   importConfigAgent,
   promoteEvaluationProductionSample,
   previewWorkflowStageContext,
+  previewWorkflowExecution,
   publishConfigDraft,
   restoreModelConnection,
   rollbackConfigVersion,
@@ -43,6 +44,15 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+test('workflow execution preview sends the policy patch and revision without saving', async () => {
+  const result = { effective_complexity: 'lite', stages: [] }
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(result), { status: 200 }))
+  expect(await previewWorkflowExecution('agent_1', 'draft_1', { expected_revision: 7, policy: { execution: { complexity: 'lite' }, interaction: null } })).toEqual(result)
+  expect(fetchMock).toHaveBeenCalledWith('/api/config/agents/agent_1/drafts/draft_1/workflow-execution/preview', sameOriginRequest({
+    method: 'POST', body: JSON.stringify({ expected_revision: 7, policy: { execution: { complexity: 'lite' }, interaction: null } }),
+  }))
 })
 
 const sameOriginRequest = (expected: RequestInit = {}) => expect.objectContaining({

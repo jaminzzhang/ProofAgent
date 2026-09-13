@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, Link } from 'react-router-dom'
 import { ThemeProvider } from '@proofagent/ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createModelConnection,
+  checkConfigDraftKnowledgeConnections,
   fetchConfigDraftKnowledgeBinding,
   fetchConfigDraftPublicationConfiguration,
   fetchConfigDraftSkills,
@@ -15,6 +16,7 @@ import {
   fetchWorkflowTemplate,
   fetchModelConnections,
   previewWorkflowStageContext,
+  previewWorkflowExecution,
   rollbackConfigVersion,
   createConfigDraftSkillPack,
   deleteConfigDraftSkillPack,
@@ -29,7 +31,9 @@ import type { ExternalKnowledgeBinding, DraftAgent, DraftValidationResponse, Run
 import { LocaleProvider } from '../../i18n/locale'
 import { AgentDetailPage } from '../AgentDetailPage'
 
-vi.mock('../../api/client', () => ({
+vi.mock('../../api/client', async (importOriginal) => ({
+  ApiError: (await importOriginal<typeof import('../../api/client')>()).ApiError,
+  checkConfigDraftKnowledgeConnections: vi.fn(),
   chatUrl: (path: string) => `http://localhost:5174${path}`,
   createModelConnection: vi.fn(),
   createConfigDraftSkillPack: vi.fn(),
@@ -55,6 +59,7 @@ vi.mock('../../api/client', () => ({
   }),
   fetchModelConnections: vi.fn(),
   previewWorkflowStageContext: vi.fn(),
+  previewWorkflowExecution: vi.fn(),
   publishConfigDraft: vi.fn(),
   rollbackConfigVersion: vi.fn(),
   updateConfigDraft: vi.fn(),
@@ -1350,17 +1355,14 @@ workflow:
 
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
 
-    expect(await screen.findByText('Stage Inspector')).toBeInTheDocument()
-    expect(screen.getByText('Relationship Map')).toBeInTheDocument()
-    expect(screen.getAllByText('Plan').length).toBeGreaterThan(0)
-    // Field help is rendered via the shared Tooltip primitive (opens on focus).
-    fireEvent.focus(await screen.findByRole('button', { name: 'Explain Prompt' }))
-    expect(screen.getByRole('tooltip')).toHaveTextContent(/自由编写/)
+    expect(await screen.findByRole('region', { name: '节点配置' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '规划下一步' })).toBeInTheDocument()
     fireEvent.change(await screen.findByLabelText('Prompt'), {
       target: { value: 'Claims context' },
     })
-    fireEvent.click(screen.getByLabelText('include_agent_purpose'))
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Context' }))
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }))
+    fireEvent.click(screen.getByRole('switch', { name: '助手职责' }))
+    fireEvent.click(screen.getByRole('button', { name: '预览节点上下文' }))
 
     await waitFor(() => {
       expect(previewWorkflowStageContext).toHaveBeenCalledWith('agent-1', 'draft-1', 'plan', {
@@ -1373,7 +1375,7 @@ workflow:
       })
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
 
     await waitFor(() => {
       expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', {
@@ -1404,93 +1406,74 @@ workflow:
     })
   })
 
-  it('saves the selected Workflow template and stages in one revisioned command', async () => {
+  it('saves the bound Workflow and all stage edits in one revisioned command', async () => {
     enableProductionWorkflowEditing(7)
-    mockContract = {
-      ...mockContract,
-      agent_yaml: `name: insurance
-workflow:
-  runtime: langgraph
-  template: react_enterprise_qa
-  checkpointer:
-    type: memory
-`,
-    }
-
+    mockContract = { ...mockContract, agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa\n' }
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
-
-    vi.mocked(updateConfigDraftContract).mockResolvedValue({
-      agent_yaml: `name: insurance
-workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v3
-  checkpointer:
-    type: memory
-`,
-      policy_yaml: '',
-      tools_yaml: '',
-      extra_files: {},
-      advanced_fields: {},
-    })
-    vi.mocked(updateWorkflowStages).mockResolvedValue({
-      agent_yaml: `name: insurance
-workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v3
-  checkpointer:
-    type: memory
-`,
-      policy_yaml: '',
-      tools_yaml: '',
-      extra_files: {},
-      advanced_fields: {},
-    })
-
-    const templateSelect = await screen.findByLabelText('Template')
-    fireEvent.change(templateSelect, { target: { value: 'react_enterprise_qa_v3' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
-
-    await waitFor(() => {
-      expect(updateConfigDraftContract).not.toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
-        expected_revision: 7,
-        template: 'react_enterprise_qa_v3',
-        template_descriptor_version: 'react_enterprise_qa.v3',
-      }))
-    })
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'Custom instructions' } })
+    expect(screen.queryByLabelText('Template')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+      expected_revision: 7, template: 'react_enterprise_qa', template_descriptor_version: 'react_enterprise_qa.v1',
+    })))
+    expect(updateConfigDraftContract).not.toHaveBeenCalled()
   })
 
-  it('keeps Workflow core template_descriptor_version aligned when changing templates', async () => {
+  it('blocks Workflow save while a stale template descriptor is displayed', async () => {
     enableProductionWorkflowEditing(8)
-    mockContract = {
-      ...mockContract,
-      agent_yaml: `name: insurance
-workflow:
-  runtime: langgraph
-  template: react_enterprise_qa_v2
-  template_descriptor_version: react_enterprise_qa.v2
-  checkpointer:
-    provider: sqlite
-    uri: sqlite:///runs/config/checkpoints.db
-`,
-    }
-
+    mockContract = { ...mockContract, agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa_v3\n  template_descriptor_version: react_enterprise_qa.v3\n' }
     renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+    expect(await screen.findByText('配置与当前流程描述不一致，请刷新并核对版本后再保存。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+    expect(updateWorkflowStages).not.toHaveBeenCalled()
+    expect(updateConfigDraftContract).not.toHaveBeenCalled()
+  })
 
-    const templateSelect = await screen.findByLabelText('Template')
-    fireEvent.change(templateSelect, { target: { value: 'react_enterprise_qa_v3' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Core' }))
+  it('guards unsaved Workflow edits during module navigation and supports explicit discard', async () => {
+    enableProductionWorkflowEditing(7)
+    mockContract = { ...mockContract, agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa\n' }
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'Unsaved workflow' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    expect(screen.getByLabelText('Prompt')).toHaveValue('Unsaved workflow')
+    expect(screen.getByRole('alert')).toHaveTextContent('Save or discard')
+    fireEvent.click(screen.getByRole('button', { name: 'Discard unsaved changes' }))
+    expect(screen.getByLabelText('Prompt')).toHaveValue('')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Model' })) })
+    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument()
+  })
 
-    await waitFor(() => {
-      expect(updateConfigDraftContract).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
-        agent_yaml: expect.stringContaining('template: react_enterprise_qa_v3'),
-        expected_revision: mockDraft.revision,
-      }))
+  it('binds workflow policy preview and combined save to the current draft revision and guards policy-only edits', async () => {
+    enableProductionWorkflowEditing(7)
+    mockContract = { ...mockContract, agent_yaml: 'name: insurance\nworkflow:\n  template: react_enterprise_qa\n' }
+    vi.mocked(previewWorkflowExecution).mockResolvedValue({
+      schema_version: 'resolved-execution-plan.v1', compiler_version: 'adaptive-workflow.v1',
+      requested_complexity: 'lite', effective_complexity: 'lite', configuration_digest: 'a'.repeat(64),
+      stages: [{ stage_id: 'plan', mode: 'deterministic', reason: 'server_plan_reason', mandatory_checks: ['goal_acceptance'] }],
+      budget: null, reasoning_effort: null, blocked_reason: null, escalated: false,
     })
-    expect(latestSavedAgentYaml()).toContain('template_descriptor_version: react_enterprise_qa.v3')
-    expect(latestSavedAgentYaml()).not.toContain('template_descriptor_version: react_enterprise_qa.v2')
+    vi.mocked(updateWorkflowStages).mockRejectedValueOnce(new Error('agent_draft_revision_conflict'))
+    renderPage('/agents/agent-1/drafts/draft-1?tab=workflow')
+    await screen.findByLabelText('Prompt')
+    fireEvent.click(screen.getByRole('button', { name: '推理与问询策略' }))
+    fireEvent.change(screen.getByLabelText('推理复杂度'), { target: { value: 'lite' } })
+    fireEvent.click(screen.getByRole('button', { name: '预览有效流程' }))
+    expect(await screen.findByText('server_plan_reason')).toBeInTheDocument()
+    expect(previewWorkflowExecution).toHaveBeenCalledWith('agent-1', 'draft-1', { expected_revision: 7, policy: { execution: { complexity: 'lite' } } })
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    expect(screen.getByLabelText('推理复杂度')).toHaveValue('lite')
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(updateWorkflowStages).toHaveBeenCalledWith('agent-1', 'draft-1', expect.objectContaining({
+      expected_revision: 7, policy: { execution: { complexity: 'lite' } }, stages: expect.any(Array),
+    })))
+    expect(await screen.findByText('agent_draft_revision_conflict')).toBeInTheDocument()
+    expect(screen.getByLabelText('推理复杂度')).toHaveValue('lite')
+    expect(refreshDraft).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard unsaved changes' }))
+    fireEvent.click(screen.getByRole('button', { name: '推理与问询策略' }))
+    expect(screen.getByLabelText('推理复杂度')).toHaveValue('legacy')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeDisabled()
   })
 
   it('preserves unsaved Workflow Stage edits after a revision conflict', async () => {
@@ -1513,7 +1496,7 @@ workflow:
 
     const businessContext = await screen.findByLabelText('Prompt')
     fireEvent.change(businessContext, { target: { value: 'Local unsaved claims edit' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Stages' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'agent_draft_revision_conflict',
@@ -2057,6 +2040,39 @@ workflow:
     expect(screen.getByLabelText('Secret Handle / environment variable name')).toHaveValue('knowledge/dify')
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.queryByText('Exact KSS Release')).not.toBeInTheDocument()
+  })
+
+  it('saves explicit connection authorization then checks the newly saved revision', async () => {
+    enableProductionKnowledgeEditing(4)
+    mockDraft.capabilities = {...mockDraft.capabilities!, mode: 'development'}
+    const config = {revision: 4, bindings: [difyBinding], can_authorize: true, can_check: true,
+      authorization_mode: 'development' as const}
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValue(config)
+    vi.mocked(updateConfigDraftKnowledgeBinding).mockResolvedValue({...config, revision: 5})
+    vi.mocked(checkConfigDraftKnowledgeConnections).mockResolvedValue({revision: 5,
+      connections: [{binding_id: difyBinding.binding_id, status: 'credential_unavailable'}]})
+    renderPage('/agents/agent-1/drafts/draft-1?tab=knowledge')
+    fireEvent.click(await screen.findByRole('button', {name: 'Save and authorize connection'}))
+    await waitFor(() => expect(updateConfigDraftKnowledgeBinding).toHaveBeenCalledWith('agent-1', 'draft-1', {
+      expected_revision: 4, bindings: [difyBinding], authorize: {allow_local_proxy: false},
+    }))
+    await waitFor(() => expect(checkConfigDraftKnowledgeConnections).toHaveBeenCalledWith('agent-1', 'draft-1', 5))
+    expect(await screen.findByText(/Server credential is unavailable/)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Save knowledge configuration'})).toBeDisabled()
+  })
+
+  it('shows a missing connection authorization before running validation', async () => {
+    enableProductionKnowledgeEditing(4)
+    mockDraft.capabilities = {...mockDraft.capabilities!, mode: 'development',
+      lifecycle_tabs: ['validate', 'versions', 'contract', 'monitor'],
+      actions: {...mockDraft.capabilities!.actions, can_validate: true}}
+    vi.mocked(fetchConfigDraftKnowledgeBinding).mockResolvedValue({revision: 4, bindings: [difyBinding],
+      authorization_mode: 'development', connections: [{binding_id: difyBinding.binding_id,
+        origin: 'https://api.dify.ai:443', authorized: false}]})
+    renderPage('/agents/agent-1/drafts/draft-1?tab=validate')
+    expect(await screen.findByText('Save and authorize this connection first.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Run Validation'})).toBeDisabled()
+    expect(screen.getByRole('button', {name: 'Connection authorization and check'})).toBeInTheDocument()
   })
 
   it('saves a Dify dataset change with the current Draft revision', async () => {

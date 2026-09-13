@@ -9,6 +9,9 @@ from pydantic import Field, field_serializer, field_validator
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 
 
+ReasoningEffort = Literal["off", "low", "medium", "high", "xhigh", "max"]
+
+
 class ModelRole(str, Enum):
     SYSTEM = "system"
     USER = "user"
@@ -69,6 +72,7 @@ class ModelRequest(FrozenModel):
     model: str
     temperature: float | None = None
     max_output_tokens: int | None = None
+    reasoning_effort: ReasoningEffort | None = None
     timeout_seconds: float | None = None
     stream: bool = False
     response_format: Literal["text", "json"] = "text"

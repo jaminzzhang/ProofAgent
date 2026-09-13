@@ -1,5 +1,7 @@
 const BASE = '/api'
 let csrfToken: string | null = null
+let chatExecutionMode: 'queued' | 'development_sync' = 'queued'
+let sessionInitialization: Promise<void> | null = null
 const sessionExpiredListeners = new Set<() => void>()
 
 export class SessionExpiredError extends Error {
@@ -15,13 +17,18 @@ export function onSessionExpired(listener: () => void): () => void {
 }
 
 function notifySessionExpired(): void {
+  chatExecutionMode = 'queued'
   csrfToken = null
   sessionExpiredListeners.forEach((listener) => listener())
 }
 
-export async function initializeOperatorSession(): Promise<void> {
-  const session = await fetchJson<{ csrf_token: string }>(`${BASE}/auth/session`)
-  csrfToken = session.csrf_token
+export function initializeOperatorSession(): Promise<void> {
+  chatExecutionMode = 'queued'
+  sessionInitialization = fetchJson<{ csrf_token: string; chat_execution_mode?: string }>(`${BASE}/auth/session`).then(session => {
+    csrfToken = session.csrf_token
+    chatExecutionMode = session.chat_execution_mode === 'development_sync' ? 'development_sync' : 'queued'
+  })
+  return sessionInitialization
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -95,7 +102,7 @@ export async function deleteConversation(conversationId: string): Promise<void> 
   }
 }
 
-export function createConversationRun(
+export async function createConversationRun(
   conversationId: string,
   question: string,
   runOptions: {
@@ -103,6 +110,15 @@ export function createConversationRun(
     allowUntrustedWebSupplement?: boolean
   } = {},
 ): Promise<import('./types').ChatRunResponse> {
+  if (sessionInitialization) await sessionInitialization
+  if (chatExecutionMode === 'development_sync') {
+    return fetchJson<import('./types').ChatRunResponse>(`${BASE}/chat/conversations/${conversationId}/runs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question,
+        include_governance_details: runOptions.includeGovernanceDetails ?? false,
+        allow_untrusted_web_supplement: runOptions.allowUntrustedWebSupplement ?? false }),
+    })
+  }
   return createQueuedConversationRun(conversationId, question, runOptions)
 }
 
@@ -223,4 +239,82 @@ function fetchQueuedRun(runId: string): Promise<import('./types').QueuedRunRespo
 function newIdempotencyKey(): string {
   const randomId = globalThis.crypto?.randomUUID?.()
   return randomId ? `chat-${randomId}` : `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+// Durable goal tasks share the authenticated transport and Run progress path.
+export type WorkflowTaskIdentity = { agent_id: string; agent_version: string }
+
+function taskIdentity(identity: WorkflowTaskIdentity): WorkflowTaskIdentity {
+  return { agent_id: identity.agent_id, agent_version: identity.agent_version }
+}
+
+export async function createWorkflowTask(
+  input: import('./workflowTasks').CreateWorkflowTaskInput,
+  idempotencyKey: string,
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  return fetchJson(`${BASE}/tasks`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify(input),
+  })
+}
+
+export function fetchWorkflowTask(
+  taskId: string, identity: WorkflowTaskIdentity,
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  const query = new URLSearchParams(taskIdentity(identity))
+  return fetchJson(`${BASE}/tasks/${encodeURIComponent(taskId)}?${query}`)
+}
+
+export async function answerWorkflowTask(
+  taskId: string, identity: WorkflowTaskIdentity,
+  answer: { question_id: string; expected_goal_revision: number; values: Record<string, import('./workflowTasks').TaskScalar>; idempotency_key: string },
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  return fetchJson(`${BASE}/tasks/${encodeURIComponent(taskId)}/answers`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...taskIdentity(identity), answer }),
+  })
+}
+
+export async function resumeWorkflowTask(
+  taskId: string, identity: WorkflowTaskIdentity,
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  return fetchJson(`${BASE}/tasks/${encodeURIComponent(taskId)}/resume`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(taskIdentity(identity)),
+  })
+}
+
+export async function changeWorkflowTaskPhase(
+  task: import('./workflowTasks').WorkflowTask, phase: 'paused' | 'active' | 'waiting_for_input' | 'cancelled',
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  return fetchJson(`${BASE}/tasks/${encodeURIComponent(task.goal.task_id)}/phase`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: task.owner.agent_id, agent_version: task.owner.agent_version, expected_version: task.version, phase }),
+  })
+}
+
+export async function reviseWorkflowTaskGoal(
+  task: import('./workflowTasks').WorkflowTask, goal: import('./workflowTasks').TaskGoal,
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  return fetchJson(`${BASE}/tasks/${encodeURIComponent(task.goal.task_id)}/goal`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: task.owner.agent_id, agent_version: task.owner.agent_version, expected_version: task.version, goal }),
+  })
+}
+
+export async function waitForWorkflowTask(
+  response: import('./workflowTasks').WorkflowTaskResponse,
+): Promise<import('./workflowTasks').WorkflowTaskResponse> {
+  if (sessionInitialization) await sessionInitialization
+  if (!response.run_id || response.final_output !== undefined || chatExecutionMode === 'development_sync') return response
+  const terminal = await waitForRunTerminal(await fetchQueuedRun(response.run_id))
+  const refreshed = await fetchWorkflowTask(response.task.goal.task_id, response.task.owner)
+  if (refreshed.run_id !== response.run_id || refreshed.task.goal.revision !== response.task.goal.revision) return refreshed
+  return {
+    ...refreshed, final_output: terminal.final_output?.message,
+    run_state: terminal.state, failure_code: terminal.failure_code,
+  }
 }

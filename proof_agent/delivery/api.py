@@ -353,6 +353,7 @@ def _execute_published_agent_run(
     run_purpose: RunPurpose = RunPurpose.PRODUCTION,
     allow_untrusted_web_supplement: bool = False,
     institution_authorization: InstitutionAuthorizationContext | None = None,
+    run_id: str | None = None,
 ) -> tuple[Any, Any, AgentManifest]:
     try:
         execution = execute_published_agent_run(
@@ -387,6 +388,7 @@ def _execute_published_agent_run(
             run_purpose=run_purpose,
             allow_untrusted_web_supplement=allow_untrusted_web_supplement,
             institution_authorization=institution_authorization,
+            run_id=run_id,
         )
     except ProofAgentError as exc:
         raise proof_agent_http_exception(exc) from exc

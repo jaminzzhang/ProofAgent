@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from proof_agent.delivery.api import router as execution_router
 from proof_agent.delivery.run_queue_api import router as run_queue_router
+from proof_agent.delivery.workflow_task_api import router as workflow_task_router
 from proof_agent.delivery.configuration_api import router as configuration_router
 from proof_agent.delivery.external_knowledge_configuration import router as external_knowledge_router
 from proof_agent.delivery.agent_configuration_validation import (
@@ -74,6 +75,7 @@ from proof_agent.control.workflow.controlled_react.local_stores import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy import Engine
     from proof_agent.control.security.sessions import OperatorSessionService
     from proof_agent.contracts.ports.secret_provider import SecretProvider
     from proof_agent.contracts.ports.security_configuration import (
@@ -106,6 +108,7 @@ def create_app(
     secret_provider: "SecretProvider" | None = None,
     recovery_oidc_group_mapping: "RecoveryOidcGroupMapping" | None = None,
     run_queue_repository: "RunQueueRepository" | None = None,
+    workflow_task_engine: "Engine" | None = None,
     run_artifact_result_reader: "RunArtifactResultReader" | None = None,
     conversation_repository: "ConversationRepository" | None = None,
     guarded_http_client: "GuardedHttpClient" | None = None,
@@ -195,6 +198,17 @@ def create_app(
 
     application.state.proof_agent_mode = selected_mode
     application.state.run_queue_repository = run_queue_repository
+    from threading import RLock
+    application.state.workflow_task_local_lock = RLock()
+    application.state.workflow_task_engine = workflow_task_engine
+    application.state.workflow_task_repository = None
+    if workflow_task_engine is not None:
+        from proof_agent.capabilities.persistence.postgres.workflow_task_repository import PostgresWorkflowTaskRepository
+        application.state.workflow_task_repository = PostgresWorkflowTaskRepository(workflow_task_engine)
+    elif selected_mode == "development":
+        from proof_agent.observability.storage.workflow_task_store import FileWorkflowTaskRepository
+        application.state.workflow_task_repository = FileWorkflowTaskRepository(
+            conversations_dir.parent / f"{conversations_dir.name}_tasks.sqlite3")
     application.state.run_artifact_result_reader = run_artifact_result_reader
     application.state.conversation_repository = conversation_repository
     application.state.guarded_http_client = guarded_http_client
@@ -320,6 +334,7 @@ def create_app(
     if run_queue_repository is not None:
         application.include_router(run_queue_router, prefix="/api")
     application.include_router(execution_router, prefix="/api")
+    application.include_router(workflow_task_router, prefix="/api")
     application.include_router(auth_router, prefix="/api")
     application.include_router(security_router, prefix="/api")
     application.include_router(release_bundle_router, prefix="/api")

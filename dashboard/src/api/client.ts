@@ -35,6 +35,8 @@ import type {
   StatsResponse,
   ValidationCaptureResponse,
   WorkflowStageConfig,
+  WorkflowPolicyPatch,
+  ResolvedExecutionPlan,
   WorkflowStageContextPreview,
   WorkflowStagePromptConfig,
   WorkflowTemplateDescriptor,
@@ -48,10 +50,11 @@ import type {
 import { currentCsrfToken, notifySessionExpired } from '../auth/sessionStore'
 
 const BASE = '/api'
-const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined ?? 'http://localhost:5174'
 
 export function chatUrl(path: string): string {
-  return `${CHAT_URL}${path}`
+  const base = import.meta.env.VITE_CHAT_URL ?? (import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:5174` : '')
+  return `${base.replace(/\/+$/, '')}${path}`
 }
 
 export class ApiError extends Error {
@@ -298,12 +301,28 @@ export function updateWorkflowStages(
     template?: string | null
     template_descriptor_version?: string | null
     stages: WorkflowStageConfig[]
+    policy?: WorkflowPolicyPatch
   },
 ): Promise<ContractBundle> {
   return fetchJson<ContractBundle>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-stages`,
     {
       method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function previewWorkflowExecution(
+  agentId: string,
+  draftId: string,
+  payload: { expected_revision: number; policy: WorkflowPolicyPatch },
+): Promise<ResolvedExecutionPlan> {
+  return fetchJson<ResolvedExecutionPlan>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/workflow-execution/preview`,
+    {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     },
@@ -582,7 +601,7 @@ export function fetchConfigDraftPublicationConfiguration(
 export function updateConfigDraftKnowledgeBinding(
   agentId: string,
   draftId: string,
-  payload: { bindings: ExternalKnowledgeBinding[]; expected_revision: number },
+  payload: { bindings: ExternalKnowledgeBinding[]; expected_revision: number; authorize?: {allow_local_proxy: boolean} },
 ): Promise<ExternalKnowledgeConfiguration> {
   return fetchJson<ExternalKnowledgeConfiguration>(
     `${BASE}/config/agents/${agentId}/drafts/${draftId}/external-knowledge`,
@@ -592,6 +611,14 @@ export function updateConfigDraftKnowledgeBinding(
       body: JSON.stringify(payload),
     },
   )
+}
+
+export function checkConfigDraftKnowledgeConnections(agentId: string, draftId: string, revision: number) {
+  return fetchJson<import('./types').KnowledgeConnectionCheck>(
+    `${BASE}/config/agents/${agentId}/drafts/${draftId}/external-knowledge/check`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({expected_revision: revision}),
+    })
 }
 
 export function updateConfigDraftContract(

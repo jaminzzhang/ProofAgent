@@ -17,6 +17,7 @@ from proof_agent.contracts.artifacts import ArtifactManifest, ArtifactObjectVers
 from proof_agent.contracts.receipt import ReceiptOutcome
 from proof_agent.contracts.dashboard import RunPurpose
 from proof_agent.contracts.conversation import ConversationTurn
+from proof_agent.contracts.workflow_task_update import WorkflowTaskUpdate
 
 
 class RunQueueOverloadedError(RuntimeError):
@@ -108,6 +109,7 @@ class RunQueueRepository(Protocol):
         receipt_outcome: ReceiptOutcome | None = None,
         conversation_turn: ConversationTurn | None = None,
         expected_conversation_turn_count: int | None = None,
+        workflow_task_update: WorkflowTaskUpdate | None = None,
     ) -> RunQueueRecord: ...
 
     def reap_expired_leases(self, *, now: datetime) -> int: ...

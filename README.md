@@ -17,6 +17,15 @@ The active product baseline is intentionally narrow:
 
 The deterministic provider remains available for offline development and regression. It is not evidence that the production deployment, identity, PostgreSQL, S3, queue, recovery or real-model gates are complete.
 
+## Adaptive workflow
+
+[KNOWN | HIGH] V3 supports explicit Goal tasks, typed human questions, cumulative budgets,
+provider-aware model effort and compiled `lite / standard / deep` execution. Dashboard
+previews the effective stages; Operator Chat creates and resumes version-bound tasks.
+Mandatory evidence and authorization gates remain in every profile. See the
+[configuration guide](docs/features/agent-kernel-quality/adaptive-workflow-configuration.md)
+and [local evidence and remaining scope](docs/features/agent-kernel-quality/tdd-adaptive-workflow.md).
+
 ## Quick start
 
 ```bash

@@ -112,6 +112,7 @@ from proof_agent.delivery.published_agent_materializer import (
     PublishedAgentMaterializer,
 )
 from proof_agent.delivery.published_run_handler import PublishedAgentRunWorkHandler
+from proof_agent.capabilities.persistence.postgres.workflow_task_repository import PostgresWorkflowTaskRepository
 from proof_agent.delivery.run_artifact_results import (
     RunArtifactResultReader,
     StatelessRunDetailProjector,
@@ -337,6 +338,7 @@ def create_production_api_application(
             secret_provider=secret_provider,
             recovery_oidc_group_mapping=security.recovery_mapping,
             run_queue_repository=persistence.run_queue,
+            workflow_task_engine=persistence.engine,
             run_artifact_result_reader=result_reader,
             conversation_repository=persistence.conversations,
             guarded_http_client=guarded,
@@ -431,6 +433,7 @@ def compose_production_run_executor(
             dependencies=dependencies,
             resolve_exact=authority.resolve_exact,
             conversations=persistence.conversations,
+            workflow_tasks=PostgresWorkflowTaskRepository(persistence.engine),
         )
         executor = RunExecutor(
             repository=persistence.run_queue,
