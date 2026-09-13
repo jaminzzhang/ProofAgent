@@ -1,5 +1,78 @@
 # Project Context
 
+[KNOWN | HIGH] ADR-0261 separates answer_context from globally blocking required_context.
+With independent required retrievals, Control preserves deferred_answer_fields through
+answer/repair/review and delivers a partial answer plus active follow-up, including
+autonomous mode. Tasks wait for input within round limits and cannot complete while
+these gaps remain. Identity, permission and tool-input gates are unchanged.
+See `docs/adr/0261-answer-independent-parts-before-personal-clarification.md`.
+
+
+## Quoted answer synthesis — 2026-09-13
+
+[KNOWN | HIGH] ADR-0260 enables LLM summaries, combined analysis and table explanation
+with claim-bound original quotes. Control validates quotes, separately calls the same
+answer model for grounding/conditions/coverage review, and preserves policy and cumulative
+budgets. Repair retains synthesis; automatic source-ID fallback is removed. Semantic
+Task criteria remain unassessed and strict assurance stays fail closed.
+Implementation and verification:
+`docs/features/agent-kernel-quality/quoted-answer-synthesis-2026-09-13.md`.
+Earlier source-selection descriptions below are historical where superseded by ADR-0260.
+
+
+## Orchestration and Prompt continuity — 2026-09-13
+
+[KNOWN | HIGH] ADR-0259 aligns Planner guidance with frozen required queries,
+preserves Task/conversation/stage scope through answer selection and recovery,
+separates complete runtime prompts from truncated previews, and supplies current
+answer/retrieval-review context. Model-facing selection instructions match the
+existing exclusive answer/gap branches. General semantic acceptance and real-model
+quality remain unverified. Analysis, cases and final local verification:
+`docs/features/agent-kernel-quality/orchestration-prompt-review-2026-09-13.md`.
+
+## Requirement-bound answers and recovery — 2026-09-13
+
+[KNOWN | HIGH] ADR-0258 carries user-clause requirements through intent, planner and
+answer context; the bounded insurance-performance profile renders business-level
+improvement/pressure/mixed assessments and rejects incomplete or altered renderings.
+Known evidence-gap IDs can return to governed retrieval within existing budgets.
+Task creation/revision adds a control-owned grounded-analysis criterion for supported
+objectives; unsupported semantic constraints stay unassessed. Stage descriptors and
+Dashboard show the actual recovery loops. See
+`docs/features/agent-kernel-quality/tdd-task-answer-workflow-2026-09-13.md` for scope
+and verification; general semantic reasoning and live-model quality are not proven.
+
+## Two-sided performance answers — 2026-09-12
+
+[KNOWN | HIGH] ADR-0257 aligns the `run_1fbcbc32` analysis path with source-bound
+selection: bounded table rows, two-sided coverage, finite supplemental retrieval,
+safe period defaults, evidence deduplication and both-attempt diagnostics. The
+original captured evidence passes the current answer path with an offline chooser;
+live model compliance and source latestness/authenticity remain unverified.
+Evidence: `docs/features/agent-kernel-quality/tdd-run-1fbcbc32.md`.
+
+## Development Knowledge connections — 2026-09-12
+
+[KNOWN | HIGH] ADR-0256 adds permission-gated save-and-authorize, atomic Draft grants
+and audit, bounded public/proxy DNS rotation, hot application and secret-free connection
+checks. The existing local Agentset binding passed a real synthetic connection check at
+Draft revision 36. Backend 2966 and Dashboard 269 tests passed; production automatic
+policy authoring and real model answer validation are outside this change. See
+`docs/features/external-knowledge/connection-authorization-verification.md`.
+
+## Adaptive workflow — 2026-09-12
+
+[KNOWN | HIGH] Goal tasks, stage-wide interaction policies, assurance requirements,
+compiled complexity paths, provider effort and cumulative Task budgets are implemented
+on the sole V3 workflow. Dashboard previews all ten stages; Operator Chat supports typed
+questions and persisted Task reconnect. Production Task/outbox authority is PostgreSQL
+migration `0025_workflow_tasks`. Scope is Task-level cross-Run continuation; same-Run
+partial recovery/nonblocking parallel branches remain open. Local implementation evidence
+is distinct from production release and real-model quality.
+- [Configuration](features/agent-kernel-quality/adaptive-workflow-configuration.md)
+- [Verification and remaining acceptance](features/agent-kernel-quality/tdd-adaptive-workflow.md)
+- [ADR-0255](adr/0255-compile-goal-driven-workflow-policies.md)
+
 ## Model contract failure capture — 2026-09-10
 
 [KNOWN | HIGH] Exhausted intent and answer validation failures now persist as

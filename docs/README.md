@@ -16,6 +16,11 @@ Read in this order:
 
 The sole example guide is `examples/agent-management-insurance-specialist.md`.
 
+## Business-task verification
+
+- [业务任务验证用例模板](testing/business-task-verification-template.zh-CN.md) — 从真实业务问题设计验收、正反例、多轮场景与结果证据；用于后续业务任务验证。
+- [项目核心目标与设计验收](../AGENTS-COMMON.md#product-goals-and-design-acceptance) — 设计、开发与评审的共享目标来源。
+
 ## Initial-production planning
 
 - `superpowers/specs/2026-07-11-proofagent-initial-production-release-closure-design.md` — approved closure design;

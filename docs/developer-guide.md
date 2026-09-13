@@ -1,10 +1,40 @@
 # Proof Agent Developer Guide
 
+[KNOWN | HIGH] ADR-0261 separates answer_context from globally blocking required_context.
+With independent required retrievals, Control preserves deferred_answer_fields through
+answer/repair/review and delivers a partial answer plus active follow-up, including
+autonomous mode. Tasks wait for input within round limits and cannot complete while
+these gaps remain. Identity, permission and tool-input gates are unchanged.
+See `docs/adr/0261-answer-independent-parts-before-personal-clarification.md`.
+
+
+## Workflow and Prompt changes
+
+For planning, stage-context, answer/repair or Prompt changes, use the
+[execution and Prompt map](features/agent-kernel-quality/orchestration-prompt-review-2026-09-13.md)
+and [business-task case template](testing/business-task-verification-template.zh-CN.md).
+Workflow business text does not replace system contracts. Preview prompt text may be
+truncated to 4,000 characters; runtime preserves configured text and rejects a combined
+Workflow/Skill prompt above 25,024 characters. Existing manifest aggregate limits still
+apply. Task constraints and Accepted Evidence travel separately from bounded optional
+stage summaries. Keep query, context and output-contract continuity tests when changing
+normal generation, quoted synthesis, repair or overflow recovery.
+
 > [KNOWN | HIGH] 2026-09-06：ADR-0242 覆盖本文历史 KSS-only 运行与默认部署描述。
 > 当前知识库采用外部 provider 绑定，首接 Dify，继续由 ProofAgent 执行证据准入与任务完成校验。
 > 配置、能力限制与验收见 [外部知识库配置](features/external-knowledge/configuration.md)。
 > KSS 专属正式发布证据不复用；外部知识库生产发布 profile 尚待独立验证。
 
+
+## Adaptive workflow development
+
+[KNOWN | HIGH] Use [the configuration guide](features/agent-kernel-quality/adaptive-workflow-configuration.md)
+for execution/interaction/assurance YAML, Task endpoints, legacy-field migration and
+provider effort support. Apply PostgreSQL migration `0025_workflow_tasks` before running
+Task endpoints in production mode. New Task APIs reuse existing Run execution, permission
+and visibility boundaries. Tests use synthetic model ports and isolated PostgreSQL;
+[implementation evidence](features/agent-kernel-quality/tdd-adaptive-workflow.md) does not
+establish external-model quality or production release readiness.
 
 ## 1. Setup
 
@@ -64,7 +94,8 @@ Premature final or duplicate/unrelated retrieval proposals advance to an unattem
 required query through the existing Review, Policy and KSS binding path. Failed
 queries stay incomplete while other requirements continue; no remaining progress
 or an exhausted observation budget produces a stable refusal. If the last allowed
-observation completes the required set, final answer generation is permitted.
+observation completes the required set, final answer generation is permitted when
+the applicable answer-coverage contract is also satisfied (ADR-0257).
 Explicit refusal/clarification and unresolved business/retrieval subgoals still
 block finalization. A denied tool is never executed; governed alternative retrieval
 may still answer. Resume validates original proof before any new observation,
@@ -86,14 +117,42 @@ into the execution configuration digest. Invalid values (including `off`) are re
 
 Intent contract failure after one repair persists as `FAILED_WITH_TRACE`, with
 field/code diagnostics and optional Stage Capture of both interactions (ADR-0254).
-Answer-output validation failure uses the same failed-run outcome rather than
-claiming evidence was absent. Invalid source selection reports a bounded specific
-reason; the server still requires 1–16 unique known IDs and revalidates the answer.
+Answer-output validation failures use the same failed-run outcome rather than
+claiming evidence was absent.
+
+[KNOWN | HIGH] [ADR-0260](adr/0260-synthesize-answers-with-bound-source-quotes.md)
+replaces automatic source-ID answer selection with LLM synthesis. Final output carries
+`message`, `citations`, `quotes: [{claim, text, citation}]` and requirement `coverage`.
+Generated prose may summarize, combine evidence and explain tables. Each quote's claim
+must occur in the prose and its original text must occur in the bound Accepted Evidence.
+Control renders numbered claim references and literal original-text blocks.
+
+After deterministic validation, a separate call to the same answer model assesses
+support, preserved conditions and question coverage. Its `HARNESS_REVIEW` role uses
+normal authorization and cumulative model budgets. A false/malformed review triggers
+bounded prose-and-quotes repair; unavailable or denied review cannot authorize delivery.
+No automatic source-selection fallback remains. The legacy literal/typed adapter form
+is retained under strict source checks and cannot bypass review for free analysis.
+
+User-clause requirement IDs travel through intent, planning, generation and review.
+A quoted answer's `needs_evidence` dispositions can trigger bounded supplemental
+retrieval through ordinary review, policy, observation and cumulative budgets.
+Unchanged attempted gaps terminate; remaining gaps must be explicit in the answer.
+`needs_user_input` preserves a personal-information gap, not a fabricated recommendation.
+
+Model-reviewed coverage remains `unassessed` for semantic Task acceptance and carries
+a separate `disposition` and `verification_kind=model_assessed`. Assurance binds the
+approved rendering and evidence hashes; strict assurance still rejects unassessed
+claims. A readable cited answer does not imply that a Goal/Task has been completed.
+Historical ADR-0257/0258 deterministic business renderings remain compatibility
+evidence, not the current generation or repair strategy.
 
 Applicable runs emit `task_completion_evaluated` with `stage_id=plan` and
 `retrieval-task-completion.v1` payloads. The final plan stage includes the same
 coverage projection for answers, refusals, clarification and policy/scope denial.
 Payloads contain stable reasons, requirement hashes, counts and bound truth refs;
+the bounded performance profile may include `missing_answer_requirements` with
+only the category names `period`, `strengths`, `pressures`;
 they contain no new raw query or answer content. Calls without required queries
 retain the original event sequence and report `not_applicable`. Approval-wait
 snapshots retain their existing format; pre-pause progress is in plan events.

@@ -5,6 +5,27 @@ not a second glossary.
 
 ## Primary maps
 
+- `docs/adr/0260-synthesize-answers-with-bound-source-quotes.md` — LLM synthesis,
+  original quote bindings, separate bounded model review and semantic acceptance limits;
+  supersedes automatic source-ID generation/recovery in earlier answer ADRs.
+
+- `docs/adr/0259-preserve-workflow-context-through-planning-and-answer-recovery.md`
+  — runtime Prompt preservation, query-aligned planning and bounded answer/review
+  context; verification and business cases under `docs/features/agent-kernel-quality/`.
+
+- `docs/adr/0258-bind-task-requirements-to-answer-verification.md` — user-bound
+  requirements, domain-profile analysis, grounded Task acceptance and bounded answer
+  recovery; plan and evidence under `docs/features/agent-kernel-quality/`.
+
+- `docs/adr/0257-align-performance-analysis-with-source-bound-answers.md` — bounded
+  two-sided performance coverage, table-row projection, source-ID generation and
+  finite gap retrieval; local evidence in `tdd-run-1fbcbc32.md` under agent-kernel-quality.
+
+- `docs/adr/0255-compile-goal-driven-workflow-policies.md` and
+  `docs/features/agent-kernel-quality/adaptive-workflow-configuration.md` — Goal/Task
+  acceptance, typed human information, compiled execution, cumulative budget and
+  PostgreSQL Task continuation; verification in `tdd-adaptive-workflow.md`.
+
 - `docs/adr/0254-preserve-model-contract-failure-diagnostics.md` and
   `docs/features/agent-kernel-quality/tdd-stage-capture-failures.md` — failed intent
   capture, safe contract diagnostics and answer-failure outcome semantics.
@@ -29,6 +50,10 @@ not a second glossary.
   `docs/adr/0240-separate-verified-quality-from-governed-resolution.md` records P0-1B.
 
 ## Active external Knowledge boundary
+
+- `docs/adr/0256-authorize-development-knowledge-connections.md` defines development
+  save-and-authorize, atomic server-owned grants, bounded DNS rotation and connection
+  diagnostics. Evidence: `docs/features/external-knowledge/connection-authorization-verification.md`.
 
 - `docs/adr/0244-validate-bounded-answer-facts-before-admission.md` defines
   cited-evidence numeric/explicit-assertion consistency and the existing one-repair boundary.

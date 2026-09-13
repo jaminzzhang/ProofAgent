@@ -1,14 +1,45 @@
 # Development Progress
 
+## Quoted answer synthesis — 2026-09-13
+
+[KNOWN | HIGH] ADR-0260 enables LLM summaries, combined analysis and table explanation
+with claim-bound original quotes. Control validates quotes, separately calls the same
+answer model for grounding/conditions/coverage review, and preserves policy and cumulative
+budgets. Repair retains synthesis; automatic source-ID fallback is removed. Semantic
+Task criteria remain unassessed and strict assurance stays fail closed.
+Implementation and verification:
+`docs/features/agent-kernel-quality/quoted-answer-synthesis-2026-09-13.md`.
+Earlier source-selection descriptions below are historical where superseded by ADR-0260.
+
+
 > [KNOWN | HIGH] 2026-09-06：ADR-0242 覆盖本文历史 KSS-only 运行与默认部署描述。
 > 当前知识库采用外部 provider 绑定，首接 Dify，继续由 ProofAgent 执行证据准入与任务完成校验。
 > 配置、能力限制与验收见 [外部知识库配置](features/external-knowledge/configuration.md)。
 > KSS 专属正式发布证据不复用；外部知识库生产发布 profile 尚待独立验证。
 
 
-Updated: 2026-09-07
+Updated: 2026-09-13
 
-## Current decision
+## Orchestration and system Prompt continuity
+
+[KNOWN | HIGH] ADR-0259 aligns the existing V3 Planner with frozen queries, removes
+duplicate stage context, preserves runtime Prompt text and Task/conversation scope
+through answer recovery, and aligns selection/gap instructions with the existing schema.
+Retrieval Review now consumes configured business guidance without extending policy
+authority. Analysis, business cases and current local checks are recorded in
+[the Orchestration/Prompt report](features/agent-kernel-quality/orchestration-prompt-review-2026-09-13.md).
+This does not prove general business semantics, real-model quality or production readiness.
+
+## Current adaptive workflow delivery
+
+[KNOWN | HIGH] The bounded cross-Run implementation now covers explicit Goal acceptance,
+unified interaction/assurance, compiled complexity, real provider payload mapping and
+shared budgets, PostgreSQL Task/outbox/queue fencing, and both browser surfaces.
+[The implementation record](features/agent-kernel-quality/tdd-adaptive-workflow.md)
+separates verified scope from remaining same-Run recovery, branch-local recomputation and
+external-model evaluation. Overall release status remains `PARTIAL_VERIFICATION`.
+
+## Prior P1/P2 decision
 
 [KNOWN | HIGH] P1/P2 local bounded implementation and current verification are recorded in [tdd-p1-p2.md](features/agent-kernel-quality/tdd-p1-p2.md). Task state, read-only tool plans and reports, Skill confinement and runtime narrowing are active locally; business-action coordination remains development-only. Five fixed probes pass. Final backend with temporary PostgreSQL: 2751 passed, 24 skipped, 2 deselected; Ruff/Mypy/lock/domain checks pass. Real business/provider and production release requirements remain open; overall `PARTIAL_VERIFICATION`.
 

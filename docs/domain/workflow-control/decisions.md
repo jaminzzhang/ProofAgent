@@ -4,6 +4,17 @@ Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `reac
 
 ## Ambiguity Resolutions
 
+- [FRAME | HIGH] [ADR-0260](../../adr/0260-synthesize-answers-with-bound-source-quotes.md):
+  allow synthesized prose with bound original quotes and separate model review; replace
+  automatic source-ID recovery. Keep hard evidence/policy/budget gates and unassessed
+  semantic Task criteria. The same answer model reviews in a separate call.
+
+- [FRAME | HIGH] [ADR-0259](../../adr/0259-preserve-workflow-context-through-planning-and-answer-recovery.md):
+  complete runtime business Prompt text is separate from bounded preview presentation;
+  Task and admitted conversation scope survive answer selection/repair/overflow, and
+  structured Planner pending queries remain proposals behind deterministic completion gates.
+  Retrieval Review business context is advisory input only, not policy authority.
+
 - [FRAME | HIGH] ADR-0254: exhausted intent-contract and answer-validation failures
   use `FAILED_WITH_TRACE`. Intent failure stops before planning; safe diagnostics
   and optional sensitive capture follow normal finalization. Invalid source selection
@@ -251,3 +262,21 @@ Compatibility decisions for `enterprise_qa`, `react_enterprise_qa` V1, and `reac
 - **Intent Resolution** runs once per governed run; multi-turn intent understanding accumulates through **Controlled Conversation Context** across **Clarification Continuation Run** boundaries.
 - In customer mode, a **LLM ReAct Planner** may propose **Policy Status Lookup Tool** or **Claim Status Lookup Tool** only as **ReAct Action Proposal** values when those tools are inside the run's **Tool Proposal Scope**.
 - The customer-mode **Tool Proposal Scope** does not grant execution rights; PolicyEngine and Tool Gateway still authorize or deny the proposed read tool before execution.
+
+### Workflow 配置按实际消费路径精简（2026-09-10）
+
+[FRAME | HIGH] [ADR-0252](../../adr/0252-simplify-workflow-configuration-surface.md)
+将 Dashboard 的日常 Prompt 入口限定为已有模型上下文消费路径的意图、规划和答案节点；
+固定模板与双保存入口移除，空上下文投影不提供编辑开关，桌面紧凑侧栏保留全部流程节点和分支，与配置并排；窄屏按需展开流程，选中节点后收起；点击系统节点查看说明及只读配置。检索、工具观察结果返回规划，流程总览不冒充单次运行轨迹。
+不修改后台契约、拓扑、工具权限或证据治理。逐项说明与本地证据见
+[Workflow 配置梳理](../../features/agent-configuration-workspace/workflow-simplification.md)。
+
+### Goal 驱动的可配置 Workflow（2026-09-12）
+
+[KNOWN | HIGH] [ADR-0255](../../adr/0255-compile-goal-driven-workflow-policies.md)
+固定 Goal revision、Task CAS、InteractionPolicy、AssurancePolicy 与 ExecutionPolicy 的独立职责。
+预览与实际执行共用编译器；lite 不跳过必需证据/权限/最终验证。HIL 是有类型的信息补充，
+恢复必须重新绑定权限、冻结 Agent Version、Task snapshot 与累计预算。
+当前为 PostgreSQL Task 跨 Run continuation；同 Run 局部恢复与非阻塞分支仍未交付。
+[配置说明](../../features/agent-kernel-quality/adaptive-workflow-configuration.md)和
+[实施证据](../../features/agent-kernel-quality/tdd-adaptive-workflow.md)记录当前边界。

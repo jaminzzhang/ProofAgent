@@ -12,6 +12,16 @@ Proof Agent is a Controlled Agent Harness Framework. It keeps model output, evid
 
 The initial private pilot is an internal operator product, not a customer-service product. Its sole Agent is `agent_management_insurance_specialist`, executed only by Controlled ReAct V3.
 
+## Goal-driven workflow
+
+[KNOWN | HIGH] Operators can create an explicit objective with evidence-backed acceptance
+criteria, provide typed answers to missing-context questions, and pause/resume/cancel the
+Task. Owners configure interaction mode/intensity, evidence requirements and execution
+complexity independently. Unknown required claims and missing required context cannot be
+accepted by user confirmation. The first delivery uses durable Task continuation across
+Runs; same-Run partial recovery and independent branches during nonblocking questions are
+not delivered. [Configuration and limits](features/agent-kernel-quality/adaptive-workflow-configuration.md).
+
 ## Users
 
 - internal insurance operations specialists using Operator Chat;

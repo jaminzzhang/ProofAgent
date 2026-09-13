@@ -1,5 +1,17 @@
 # Proof Agent Technical Design
 
+## Quoted answer synthesis — 2026-09-13
+
+[KNOWN | HIGH] ADR-0260 enables LLM summaries, combined analysis and table explanation
+with claim-bound original quotes. Control validates quotes, separately calls the same
+answer model for grounding/conditions/coverage review, and preserves policy and cumulative
+budgets. Repair retains synthesis; automatic source-ID fallback is removed. Semantic
+Task criteria remain unassessed and strict assurance stays fail closed.
+Implementation and verification:
+`docs/features/agent-kernel-quality/quoted-answer-synthesis-2026-09-13.md`.
+Earlier source-selection descriptions below are historical where superseded by ADR-0260.
+
+
 > [KNOWN | HIGH] 2026-09-06：ADR-0242 覆盖本文历史 KSS-only 运行与默认部署描述。
 > 当前知识库采用外部 provider 绑定，首接 Dify，继续由 ProofAgent 执行证据准入与任务完成校验。
 > 配置、能力限制与验收见 [外部知识库配置](features/external-knowledge/configuration.md)。
@@ -51,7 +63,27 @@ Dashboard / Operator Chat / CLI
 
 The only workflow identity is `react_enterprise_qa_v3`. The template identity selects the orchestrator directly. Public manifest fields `workflow.runtime`, `workflow.checkpointer` and `react.max_steps` are rejected. There is no active `proof_agent/runtime/` compatibility package and no LangGraph/LangChain production dependency.
 
+## 2.1 Goal and adaptive policy contracts
+
+[KNOWN | HIGH] ADR-0255 adds GoalContract/WorkflowTaskSnapshot, InteractionPolicy,
+AssurancePolicy and WorkflowExecutionPolicy without adding another workflow. The same
+Control compiler produces Draft previews and runtime ResolvedExecutionPlan; mandatory
+checks cannot be bypassed. Task updates are internal excluded fields, applied atomically
+with fenced Run visibility in PostgreSQL. Typed answers commit a unique durable resume
+intent; recovery creates a fresh Run bound to the frozen Agent version and remaining
+Task budget. Trace uses a restricted Task projection, not raw Goal/question content.
+Migration head is `0025_workflow_tasks`; same-Run HIL checkpoint execution is future work.
+[Detailed contracts and limits](features/agent-kernel-quality/adaptive-workflow-configuration.md).
+
 ## 3. Module ownership
+
+[KNOWN | HIGH] ADR-0259 aligns the existing model request paths: control-owned pending
+queries travel in structured Planner context; runtime prompt text is preserved separately
+from the bounded preview; Task, admitted conversation and stage scope survive selection
+and answer recovery. Retrieval Review receives configured business guidance only in its
+advisory model context, not PolicyEngine input. Optional evidence summaries refresh at the
+answer boundary. See the [execution and Prompt map](features/agent-kernel-quality/orchestration-prompt-review-2026-09-13.md)
+for verification and unsupported paths. This does not add a semantic verifier or tool authority.
 
 | Module | Owns |
 | --- | --- |
