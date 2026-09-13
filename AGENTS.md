@@ -10,6 +10,14 @@ The shared guide includes the required expert reasoning, claim-tagging, confiden
 
 Agent-specific note: keep this file as a thin entry point. When shared project status, architecture rules, commands, testing policy, or security guidance changes, update `AGENTS-COMMON.md` instead of duplicating the same content here.
 
+## Product goals and business-task verification
+
+Before designing, implementing or reviewing behavior, follow the canonical
+[Product goals and design acceptance](AGENTS-COMMON.md#product-goals-and-design-acceptance).
+For business-task case design, use the
+[verification template](docs/testing/business-task-verification-template.zh-CN.md).
+Keep the goals in the shared guide; do not duplicate them in agent-specific entries.
+
 ## hicode
 
 For scoped implementation work, use these repository-local indexes after reading
