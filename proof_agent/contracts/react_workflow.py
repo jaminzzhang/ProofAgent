@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, StringConstraints, field_serializer, fie
 
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
 from proof_agent.contracts.policy import EnforcementPoint, PolicyDecisionType
+from proof_agent.contracts.answer_requirements import AnswerRequirement
 
 
 class ReActActionType(str, Enum):
@@ -125,7 +126,7 @@ class ClarificationAssessment(FrozenModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     field: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
-    kind: Literal["required_context", "preference", "retrievable"]
+    kind: Literal["required_context", "answer_context", "preference", "retrievable"]
     default_assumption: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
 
 
@@ -142,6 +143,7 @@ class IntentResolution(FrozenModel):
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     recommended_next_action: ReActActionType
     retrieval_query_set: tuple[RetrievalQueryItem, ...] = Field(default_factory=tuple)
+    answer_requirements: tuple[AnswerRequirement, ...] = Field(default=(), max_length=16, exclude_if=lambda value: not value)
     insurance_condition_proposal: InsuranceConditionProposal = Field(
         default_factory=InsuranceConditionProposal
     )
@@ -149,6 +151,9 @@ class IntentResolution(FrozenModel):
         default=(), max_length=8, exclude_if=lambda value: not value,
     )
     scope_assumptions: tuple[ScopeAssumption, ...] = Field(
+        default=(), max_length=8, exclude_if=lambda value: not value,
+    )
+    deferred_answer_fields: tuple[ScopeAssumption, ...] = Field(
         default=(), max_length=8, exclude_if=lambda value: not value,
     )
     applied_clarification_level: Literal["minimal", "balanced", "thorough"] | None = Field(

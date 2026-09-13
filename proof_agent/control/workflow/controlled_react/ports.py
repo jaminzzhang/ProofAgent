@@ -25,6 +25,8 @@ from proof_agent.control.workflow.controlled_react.observation_commit import (
     ObservationIdentity,
 )
 from proof_agent.observability.audit.trace import TraceEmitter
+from proof_agent.contracts.workflow_policy import AssurancePolicy, InteractionPolicy, WorkflowExecutionPolicy
+from proof_agent.control.workflow.execution_budget import WorkflowBudgetLedger
 
 
 class PlannerPort(Protocol):
@@ -57,6 +59,9 @@ class AnswerSynthesisResult:
     final_output: str
     message: str
     reasoning_summary: Mapping[str, Any] | None = None
+    recovery_requirement_ids: tuple[str, ...] = ()
+    answer_requirement_report: tuple[Mapping[str, str], ...] = ()
+    fact_validation: ValidationResult | None = None
     model_usage_summary: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
     stage_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = field(default_factory=tuple)
@@ -171,3 +176,9 @@ class ControlledReActPorts:
     snapshot_store: SnapshotStorePort | None = None
     observation_truth_store: ObservationTruthStorePort | None = None
     execution_configuration_digest: str | None = None
+    execution_policy: WorkflowExecutionPolicy | None = None
+    interaction_policy: InteractionPolicy | None = None
+    assurance_policy: AssurancePolicy | None = None
+    configured_tools_enabled: bool | None = None
+    configured_memory_enabled: bool | None = None
+    budget_ledger: WorkflowBudgetLedger | None = None

@@ -222,7 +222,7 @@ def _harness(*, proposals=(None,), queries=((QUERY_A, True), (QUERY_B, True)), m
         ports=ControlledReActPorts(
             planner=planner,
             knowledge_observation=knowledge,
-            answer_synthesis=answer,
+            answer_synthesis=ports.pop("answer_synthesis", answer),
             trace=trace,
             intent_resolution=ports.pop("intent_resolution", _Intent(queries)),
             **ports,
@@ -250,6 +250,49 @@ def test_premature_final_is_redirected_to_required_queries():
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
     assert len(answer.contexts) == 1
     assert FACT_A in result.final_output and FACT_B in result.final_output
+
+
+def test_two_sided_performance_search_continues_after_required_queries():
+    question = "甲公司业绩有哪些亮点，哪些业务比较好，哪些业务比较差？"
+    followup = "甲公司各业务下降指标"
+    orchestrator, knowledge, answer, trace, _ = _harness(
+        queries=((QUERY_A, True), (QUERY_B, True), (followup, False)),
+    )
+    for query in (QUERY_A, QUERY_B):
+        knowledge.evidence_by_query[query] = EvidenceChunk(
+            source="synthetic://same", citation="synthetic://same#L1", status=EvidenceStatus.ACCEPTED,
+            content="2026 年第一季度，甲公司营业收入 120 亿元，同比增长 20%。",
+        )
+    knowledge.evidence_by_query[followup] = EvidenceChunk(
+        source="synthetic://pressures", citation="synthetic://pressures#L1", status=EvidenceStatus.ACCEPTED,
+        content="2026 年第一季度，甲公司寿险新业务价值率 23.5%，同比下降 4.8 个百分点。",
+    )
+    result = orchestrator.start(ControlledReActStartRequest(
+        run_id="two_sided", template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3", question=question, max_plan_rounds=4,
+    ))
+    assert knowledge.queries == [QUERY_A, QUERY_B, followup]
+    assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+    assert len(answer.contexts) == 1
+    projections = [e["payload"] for e in trace.events if e["event_type"] == "task_completion_evaluated"]
+    assert any(p["completed_count"] == 2 and p["status"] == "incomplete" for p in projections)
+    assert any("pressures" in p.get("missing_answer_requirements", []) for p in projections)
+
+
+def test_two_sided_coverage_gap_cannot_bypass_retrieval_budget():
+    orchestrator, knowledge, answer, _, _ = _harness(queries=((QUERY_A, True),))
+    knowledge.evidence_by_query[QUERY_A] = EvidenceChunk(
+        source="synthetic://same", citation="synthetic://same#L1", status=EvidenceStatus.ACCEPTED,
+        content="2026 年第一季度，甲公司营业收入 120 亿元，同比增长 20%。",
+    )
+    result = orchestrator.start(ControlledReActStartRequest(
+        run_id="bounded_two_sided", template_name="react_enterprise_qa_v3",
+        template_descriptor_version="react_enterprise_qa.v3",
+        question="甲公司业绩有哪些亮点，哪些业务比较差？", max_plan_rounds=1,
+    ))
+    assert result.outcome is ReceiptOutcome.REFUSED_NO_EVIDENCE
+    assert knowledge.queries == [QUERY_A]
+    assert not answer.contexts
 
 
 @pytest.mark.parametrize(

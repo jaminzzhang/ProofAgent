@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import copy
+from dataclasses import replace
 import json
 from typing import Any, Literal
 
@@ -43,6 +45,7 @@ from proof_agent.control.workflow.clarification import (
     clarification_context,
     scope_assumption_context,
 )
+from proof_agent.control.workflow.stage_context import refresh_workflow_stage_context
 from proof_agent.contracts.manifest import ResponseConfig
 from proof_agent.control.workflow.controlled_react.final_answer_attempt import (
     FinalAnswerAttemptRunner,
@@ -60,6 +63,7 @@ from proof_agent.control.workflow.controlled_react.model_tracing import (
     drain_stage_llm_interactions,
     stage_llm_interactions,
     wrap_control_plane_model_providers,
+    TracingModelProvider,
 )
 from proof_agent.control.workflow.controlled_react.ports import (
     AnswerSynthesisResult,
@@ -80,6 +84,10 @@ from proof_agent.control.knowledge.retrieval_service import (
     KnowledgeRetrievalService,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.capabilities.models.protocol import ModelProvider
+from proof_agent.capabilities.models.reasoning import ReasoningResolution, parse_reasoning_effort
+from proof_agent.contracts.manifest import ModelConfig
+from proof_agent.control.workflow.execution_budget import BudgetedModelProvider, WorkflowBudgetLedger
 
 
 def build_default_controlled_react_orchestrator() -> ControlledReActOrchestrator:
@@ -104,10 +112,21 @@ def build_controlled_react_orchestrator_for_invocation(
     trace: TracePort | None = None,
     stage_contexts: Mapping[str, Mapping[str, Any]] | None = None,
     business_flow_admission_callback: Callable[[str], None] | None = None,
+    task_execution: bool = False,
 ) -> ControlledReActOrchestrator:
     """Assemble a run-scoped V3 orchestrator from resolved Harness capabilities."""
 
     trace_port = trace or _NoopTrace()
+    if task_execution and invocation.manifest.workflow.execution is None:
+        from proof_agent.contracts.workflow_policy import WorkflowExecutionPolicy
+        invocation = replace(invocation, manifest=invocation.manifest.model_copy(update={
+            'workflow': invocation.manifest.workflow.model_copy(update={'execution': WorkflowExecutionPolicy()})}))
+    if (invocation.manifest.workflow.execution is not None
+            and invocation.manifest.workflow.execution.complexity == 'deep'
+            and invocation.manifest.review is not None):
+        invocation = replace(invocation, manifest=invocation.manifest.model_copy(update={
+            'review': invocation.manifest.review.model_copy(update={'low_risk_fast_path': False})}))
+    invocation, ledger = _invocation_with_budget(invocation, trace=trace_port)
     wrap_control_plane_model_providers(
         invocation,
         trace_port,
@@ -145,13 +164,20 @@ def build_controlled_react_orchestrator_for_invocation(
                     invocation,
                     selected_pack_id=business_flow_selection["selected_pack_id"],
                 ),
+                budget_ledger=ledger,
             ),
-            tool_observation=_InvocationToolObservationAdapter(invocation),
+            tool_observation=_InvocationToolObservationAdapter(invocation, budget_ledger=ledger),
             policy=_InvocationPolicyAdapter(invocation, trace=trace_port),
-            review=_InvocationReviewAdapter(invocation, trace=trace_port),
+            review=_InvocationReviewAdapter(invocation, trace=trace_port, stage_contexts=stage_contexts),
             trace=trace_port,
             tool_proposal_scope=_InvocationToolProposalScopeAdapter(invocation, restore_selection=restore_selection),
             execution_configuration_digest=_execution_configuration_digest(invocation, stage_contexts),
+            execution_policy=invocation.manifest.workflow.execution,
+            interaction_policy=invocation.manifest.interaction,
+            assurance_policy=invocation.manifest.assurance,
+            configured_tools_enabled=invocation.manifest.capabilities.tools.enabled,
+            configured_memory_enabled=invocation.manifest.capabilities.memory.enabled,
+            budget_ledger=ledger,
             snapshot_store=snapshot_store or _InMemorySnapshotStoreAdapter(),
             observation_truth_store=observation_truth_store,
             answer_synthesis=_ModelAnswerSynthesisAdapter(
@@ -161,6 +187,68 @@ def build_controlled_react_orchestrator_for_invocation(
             ),
         )
     )
+
+
+def _invocation_with_budget(
+    invocation: HarnessInvocation, *, trace: TracePort,
+) -> tuple[HarnessInvocation, WorkflowBudgetLedger | None]:
+    execution = invocation.manifest.workflow.execution
+    if execution is None:
+        return invocation, None
+    ledger = WorkflowBudgetLedger(execution.budget)
+    records = {record.role: record for record in invocation.model_resolution_records}
+
+    def wrap(provider: ModelProvider, params: Mapping[str, Any], role: str) -> ModelProvider:
+        while isinstance(provider, TracingModelProvider | BudgetedModelProvider):
+            provider = provider.inner_provider
+        configured_effort = execution.reasoning.effort
+        if configured_effort is None:
+            configured_effort = parse_reasoning_effort(params.get("reasoning_effort"))
+
+        def record_reasoning(resolution: ReasoningResolution) -> None:
+            trace.emit("model_reasoning_resolved", status="ok", payload={
+                "role": role, "provider": provider.provider_name, "model": provider.model_name,
+                "requested_effort": resolution.requested_effort,
+                "effective_effort": resolution.effective_effort,
+                "protocol": resolution.protocol,
+            })
+
+        return BudgetedModelProvider(
+            provider, ledger, reasoning_effort=configured_effort,
+            default_temperature=float(params["temperature"]) if "temperature" in params else None,
+            default_max_output_tokens=int(params["max_output_tokens"]) if "max_output_tokens" in params else None,
+            default_timeout_seconds=float(params["timeout_seconds"]) if "timeout_seconds" in params else None,
+            base_url=getattr(provider, "base_url", None) or params.get("base_url"),
+            on_reasoning_resolved=record_reasoning,
+        )
+
+    def role_params(role: ModelCallRole, owner: Any = None) -> Mapping[str, Any]:
+        if role in records:
+            return records[role].usage_params
+        return getattr(getattr(owner, "config", None), "params", {})
+
+    def clone_owner(owner: Any, role: ModelCallRole) -> Any:
+        if owner is None:
+            return None
+        cloned = copy(owner)
+        provider = getattr(owner, "model_provider", None)
+        if provider is not None:
+            cloned.model_provider = wrap(provider, role_params(role, owner), role.value)
+        return cloned
+
+    def model_resolver(config: ModelConfig) -> ModelProvider:
+        return wrap(invocation.model_resolver(config), config.params, "retrieval_auxiliary")
+
+    return replace(
+        invocation,
+        model_provider=wrap(invocation.model_provider,
+            role_params(ModelCallRole.FINAL_ANSWER) or invocation.manifest.model.params,
+            ModelCallRole.FINAL_ANSWER.value),
+        intent_resolver=clone_owner(invocation.intent_resolver, ModelCallRole.INTENT_RESOLUTION),
+        react_planner=clone_owner(invocation.react_planner, ModelCallRole.REACT_PLANNER),
+        review_subagent=clone_owner(invocation.review_subagent, ModelCallRole.HARNESS_REVIEW),
+        model_resolver=model_resolver,
+    ), ledger
 
 
 class _DeterministicPlannerAdapter:
@@ -204,6 +292,7 @@ class _InvocationIntentResolutionAdapter:
                 context_summary="pre_loop=true",
                 workflow_stage_context=clarification_context(
                     self._invocation.manifest.response, self._stage_contexts.get("intent_resolution"),
+                    interaction=self._invocation.manifest.interaction,
                 ),
                 conversation_context=state.conversation_context,
                 memory_recall_payloads=state.memory_recall_payloads,
@@ -217,6 +306,9 @@ class _InvocationIntentResolutionAdapter:
                 result.intent_resolution,
                 response=self._invocation.manifest.response,
                 question=state.question,
+                interaction=self._invocation.manifest.interaction,
+                rounds_asked=len(state.conversation_context.workflow_task.questions)
+                if state.conversation_context and state.conversation_context.workflow_task else 0,
             ),
         })
         return self._admit_business_flow(result)
@@ -334,17 +426,24 @@ class _InvocationPlannerAdapter:
         planner = self._invocation.react_planner or self._fallback
         planner_context = clarification_context(
             self._invocation.manifest.response, self._stage_contexts.get("plan"),
+            interaction=self._invocation.manifest.interaction, stage='plan',
         )
+        from proof_agent.control.workflow.controlled_react.task_completion import required_retrievals
+        required = [item.query for item in required_retrievals(state.intent_resolution)]
+        attempted = {str(item.parameters.get("query", "")).strip() for item in state.action_history
+                     if item.action_type is ReActActionType.PLAN_RETRIEVAL}
+        stage_context = scope_assumption_context(state.intent_resolution, planner_context)
+        stage_context["retrieval_control"] = {
+            "required_queries": required,
+            "attempted_queries": [query for query in required if query in attempted],
+            "pending_queries": [query for query in required if query not in attempted],
+            "attempted_is_not_coverage": True,
+        }
         action = planner.plan(
             question=state.question,
             system_prompt="Controlled ReAct Orchestrator V3",
-            context_summary=_context_summary(
-                state,
-                workflow_stage_context=scope_assumption_context(
-                    state.intent_resolution,
-                    planner_context,
-                ),
-            ),
+            context_summary=_context_summary(state),
+            workflow_stage_context=stage_context,
             conversation_context=state.conversation_context,
             memory_recall_payloads=state.memory_recall_payloads,
             eligible_actions=(
@@ -441,11 +540,13 @@ class _InvocationKnowledgeObservationAdapter:
         *,
         trace: TracePort,
         preferred_binding_ids_provider: Callable[[], tuple[str, ...]] | None = None,
+        budget_ledger: WorkflowBudgetLedger | None = None,
     ) -> None:
         self._invocation = invocation
         self._summary_builder = ObservationSummaryBuilder()
         self._trace = trace
         self._preferred_binding_ids_provider = preferred_binding_ids_provider
+        self._budget_ledger = budget_ledger
 
     def observe(
         self,
@@ -465,6 +566,7 @@ class _InvocationKnowledgeObservationAdapter:
             knowledge_candidate_admission_scorer=(
                 self._invocation.knowledge_candidate_admission_scorer
             ),
+            before_query=self._budget_ledger.consume_retrieval if self._budget_ledger else None,
         )
         retrieval_result = service.retrieve(
             KnowledgeRetrievalRequest(
@@ -519,6 +621,12 @@ class _InvocationKnowledgeObservationAdapter:
             ),
         )
         summary = self._summary_builder.build(truth)
+        from proof_agent.control.knowledge.performance_analysis import is_performance_comparison, performance_coverage
+        from proof_agent.control.validators.answer_facts import answer_fact_repair_options
+
+        if is_performance_comparison(state.question):
+            summary = {**summary, "answer_coverage": sorted(performance_coverage("\n".join(
+                o["statement"] for o in answer_fact_repair_options(accepted_evidence))))}
         record = ObservationRecord(
             observation_id=identity.observation_id,
             action_id=action.action_id,
@@ -527,7 +635,8 @@ class _InvocationKnowledgeObservationAdapter:
             truth_ref=identity.truth_ref,
             summary=summary,
             accepted_evidence_count=len(accepted_evidence),
-            new_evidence_count=len(accepted_evidence),
+            new_evidence_count=len({chunk.citation for chunk in accepted_evidence}
+                - {ref for previous in state.observation_records for ref in previous.citation_refs}),
             unresolved_subgoals=(),
             source_refs=tuple(chunk.source for chunk in accepted_evidence),
             citation_refs=tuple(
@@ -586,8 +695,9 @@ class _DeterministicToolObservationAdapter:
 
 
 class _InvocationToolObservationAdapter:
-    def __init__(self, invocation: HarnessInvocation) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, budget_ledger: WorkflowBudgetLedger | None = None) -> None:
         self._invocation = invocation
+        self._budget_ledger = budget_ledger
         self._summary_builder = ObservationSummaryBuilder()
 
     def observe(
@@ -604,6 +714,8 @@ class _InvocationToolObservationAdapter:
             if (config is None or step is None or not config.read_only or config.requires_approval
                 or set(step.report_fields) - set(config.summary_fields)):
                 raise ProofAgentError("PA_TOOL_SOURCE_002", "Task tool is outside its frozen read-only contract.", "Use authorized read-only task tools and summary fields.")
+        if self._budget_ledger is not None:
+            self._budget_ledger.consume_tool()
         result = self._invocation.tool_gateway.request_tool(
             tool_name=tool_name,
             parameters=dict(action.parameters),
@@ -775,9 +887,11 @@ class _InvocationPolicyAdapter:
 
 
 class _InvocationReviewAdapter:
-    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort) -> None:
+    def __init__(self, invocation: HarnessInvocation, *, trace: TracePort,
+                 stage_contexts: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self._invocation = invocation
         self._trace = trace
+        self._stage_contexts = stage_contexts if stage_contexts is not None else {}
 
     def review(
         self,
@@ -809,6 +923,10 @@ class _InvocationReviewAdapter:
             review_subagent=self._invocation.review_subagent,
             low_risk_fast_path_enabled=low_risk_fast_path_enabled,
             trace_event_id=f"{state.run_id}:{action.action_id}:retrieval_review",
+            workflow_stage_context=refresh_workflow_stage_context(
+                self._stage_contexts.get("retrieval_review"),
+                values={"retrieval_intent": str(action.parameters.get("query", ""))},
+            ),
         )
         _check_cancellation(self._invocation)
         return ReviewDecision(
@@ -866,7 +984,14 @@ class _ModelAnswerSynthesisAdapter:
             self._invocation,
             trace=self._trace,
             workflow_stage_context=scope_assumption_context(
-                state.intent_resolution, self._stage_contexts.get("model_answer"),
+                state.intent_resolution, refresh_workflow_stage_context(
+                    self._stage_contexts.get("model_answer"),
+                    values={"evidence_summary": [
+                        {"source": chunk.source, "citation": chunk.citation,
+                         "status": chunk.status.value}
+                        for chunk in evidence
+                    ]},
+                ),
             ),
         ).run(
             state,
@@ -961,7 +1086,13 @@ class _InMemorySnapshotStoreAdapter:
         return snapshot
 
 
-def _context_summary(
+def _context_summary(state: ControlledReActRunState, *, workflow_stage_context: Mapping[str, Any] | None = None) -> str:
+    from proof_agent.control.knowledge.answer_requirements import requirement_payload
+    summary = _progress_context_summary(state, workflow_stage_context=workflow_stage_context)
+    return summary + "; answer_requirements=" + json.dumps(requirement_payload(state.question), ensure_ascii=False)
+
+
+def _progress_context_summary(
     state: ControlledReActRunState,
     *,
     workflow_stage_context: Mapping[str, Any] | None = None,
@@ -975,6 +1106,26 @@ def _context_summary(
             + ",".join(sorted(action.value for action in state.effective_react_action_set))
             + f"; observation_count={len(state.observation_records)}"
         )
+        accepted_count = sum(
+            observation.accepted_evidence_count for observation in state.observation_records
+        )
+        summary += f"; accepted_evidence_count={accepted_count}"
+        summary += f"; unique_evidence_count={len({ref for row in state.observation_records for ref in row.citation_refs})}"
+        summary += "; query_completion_is_not_answer_coverage=true"
+        if ReActActionType.PLAN_RETRIEVAL in state.effective_react_action_set:
+            summary += (
+                "; required_retrieval_pending=true; next_action=plan_retrieval; "
+                "Answer generation is not yet eligible. Continue the pending governed "
+                "retrieval; incomplete retrieval alone is not a reason to refuse. "
+                "Refuse only when an independent evidence or authority constraint requires it."
+            )
+            from proof_agent.control.knowledge.performance_analysis import is_performance_comparison
+            if is_performance_comparison(state.question):
+                available = {str(part) for row in state.observation_records for part in row.summary.get("answer_coverage", ())}
+                missing = sorted({"period", "strengths", "pressures"} - available)
+                summary += "; coverage_available=" + ",".join(sorted(available))
+                summary += "; coverage_missing=" + ",".join(missing)
+                summary += "; follow the pending governed coverage query before synthesis"
         return _append_stage_context(summary, workflow_stage_context)
     accepted_count = sum(
         observation.accepted_evidence_count for observation in state.observation_records
@@ -1049,6 +1200,8 @@ def _citation_refs(state: ControlledReActRunState) -> tuple[str, ...]:
 def _evidence_from_answer_context(
     answer_context: AnswerEvidenceContext,
 ) -> tuple[EvidenceChunk, ...]:
+    from proof_agent.control.knowledge.answer_evidence import unique_answer_evidence
+
     evidence: list[EvidenceChunk] = []
     for truth in answer_context.observation_truth:
         if not isinstance(truth, RetrievalObservationTruth):
@@ -1056,7 +1209,7 @@ def _evidence_from_answer_context(
         for chunk in truth.accepted_evidence:
             if chunk.status is EvidenceStatus.ACCEPTED:
                 evidence.append(chunk)
-    return tuple(evidence)
+    return unique_answer_evidence(tuple(evidence))
 
 
 def _answer_policy_context(
@@ -1351,6 +1504,9 @@ def _execution_configuration_digest(invocation: HarnessInvocation, stage_context
         "skills": invocation.business_flow_skill_packs,
         "skill_admission": invocation.manifest.capabilities.skills.admission,
         "clarification_level": (invocation.manifest.response or ResponseConfig()).clarification_level,
+        "execution": invocation.manifest.workflow.execution,
+        "interaction": invocation.manifest.interaction,
+        "assurance": invocation.manifest.assurance,
         "policy": invocation.policy.rules,
         "stage_contexts": stage_contexts or {},
         "knowledge": invocation.resolved_knowledge_bindings,

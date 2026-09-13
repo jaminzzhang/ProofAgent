@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -70,11 +70,13 @@ class TraceEmitter(Protocol):
 class TraceWriter:
     """Writes ordered, redacted audit events to a JSONL trace file."""
 
-    def __init__(self, trace_path: Path, *, run_id: str, initial_sequence: int = 0) -> None:
+    def __init__(self, trace_path: Path, *, run_id: str, initial_sequence: int = 0,
+                 payload_projection: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None) -> None:
         self.trace_path = trace_path
         self.run_id = run_id
         self._sequence = initial_sequence
         self._lock = Lock()
+        self._payload_projection = payload_projection
 
     def emit(
         self,
@@ -93,6 +95,11 @@ class TraceWriter:
                 event_type.value if isinstance(event_type, TraceEventType) else event_type
             )
             projected_payload, omitted_fields = safe_trace_payload(event_type_value, payload)
+            if self._payload_projection is not None:
+                private_projection = dict(self._payload_projection(projected_payload))
+                if private_projection != projected_payload:
+                    omitted_fields = (*omitted_fields, 'restricted_task_content')
+                projected_payload = private_projection
             redacted_payload, redaction = redact_payload(projected_payload)
             if omitted_fields:
                 redaction = {

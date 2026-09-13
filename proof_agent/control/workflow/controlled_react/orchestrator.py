@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -31,6 +31,7 @@ from proof_agent.contracts import (
     ReasoningSummary,
     RetrievalObservationTruth,
     ToolObservationTruth,
+    ToolProposalParameterSource,
     ValidationResult,
     ValidationStatus,
     WorkflowStageResult,
@@ -67,12 +68,23 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
     verify_controlled_react_snapshot_binding,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.control.workflow.execution_compiler import compile_execution_plan
+from proof_agent.control.workflow.interaction import decide_interaction
+from proof_agent.control.workflow.goal_control import answered_fields, assess_goal, required_goal_queries
+from proof_agent.control.workflow.assurance import evaluate_assurance, requires_external_sources
+from proof_agent.contracts.workflow_policy import InteractionPolicy, InteractionStage
+from proof_agent.contracts.workflow_task import CriterionAssessment, QuestionField, QuestionStage
+from proof_agent.contracts.workflow_task_update import TaskQuestionDraft, WorkflowTaskUpdate
+from proof_agent.contracts.workflow_task import TaskBudgetUsage
+from proof_agent.control.workflow.execution_budget import BudgetExceeded
+from proof_agent.observability.audit.task_redaction import TaskTraceEmitter
 from proof_agent.contracts._base import freeze_value
 from proof_agent.control.workflow.controlled_react.task_completion import (
     RetrievalTaskCompletion,
     assess_retrieval_completion,
     required_retrievals,
     pending_retrieval_action,
+    RequiredRetrieval,
     completion_projection,
     incomplete_refusal,
 )
@@ -115,6 +127,16 @@ class ControlledReActResumeRequest:
     )
 
 
+def _required_context_action(fields: tuple[str, ...], *, stage: str) -> ReActActionProposal:
+    kind = ReActActionType.ASK_CLARIFICATION
+    return ReActActionProposal(action_id='act_required_context', action_type=kind, risk_level='low',
+        parameters={'missing_fields': fields, 'interaction_stage': stage},
+        reasoning_summary=ReasoningSummary(goal='Resolve required Task context.', observations=(),
+            candidate_actions=(kind,), selected_action=kind,
+            rationale_summary='The frozen goal requires information before execution.',
+            risk_flags=('missing_required_context',), required_evidence=()))
+
+
 class ControlledReActOrchestrator:
     """Run-scoped V3 Controlled ReAct execution interface."""
 
@@ -128,11 +150,71 @@ class ControlledReActOrchestrator:
             truth_store=self._observation_truth_store
         )
         self._tool_proposal_binder = ToolProposalParameterBinder()
+        self._task_question: TaskQuestionDraft | None = None
+        self._goal_assessments: tuple[CriterionAssessment, ...] = ()
+        self.last_execution_plan = compile_execution_plan(
+            execution=ports.execution_policy, interaction=ports.interaction_policy,
+            assurance=ports.assurance_policy,
+            tools_enabled=ports.configured_tools_enabled if ports.configured_tools_enabled is not None else ports.tool_observation is not None,
+            memory_enabled=ports.configured_memory_enabled if ports.configured_memory_enabled is not None else ports.memory is not None,
+        )
 
     def start(
         self,
         request: ControlledReActStartRequest,
     ) -> WorkflowTemplateExecutionResult:
+        task = request.conversation_context.workflow_task if request.conversation_context else None
+        if task is not None and self._ports.trace is not None and not isinstance(self._ports.trace, TaskTraceEmitter):
+            self._ports = replace(self._ports, trace=TaskTraceEmitter(self._ports.trace, task))
+        ledger = self._ports.budget_ledger
+        if ledger is not None:
+            ledger.restore_usage(task.budget_usage.model_dump() if task else {})
+        try:
+            if ledger is not None:
+                ledger.ensure_available()
+            result = self._start(request)
+            if ledger is not None:
+                ledger.ensure_available()
+        except BudgetExceeded as exc:
+            self._task_question = None
+            self._goal_assessments = ()
+            message = '任务已达到配置的执行预算：' + exc.reason
+            self._emit_trace('workflow_budget_exhausted', status='blocked', payload={'reason': exc.reason})
+            result = WorkflowTemplateExecutionResult(run_id=request.run_id, template_name=request.template_name,
+                template_descriptor_version=request.template_descriptor_version,
+                outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE, final_output=message, message=message)
+        if self._ports.execution_policy or self._ports.interaction_policy or self._ports.assurance_policy:
+            result = result.model_copy(update={'execution_plan': self.last_execution_plan})
+        if task is not None:
+            deferred = tuple(str(name) for name in (result.intent_resolution or {}).get('deferred_answer_fields', ()))
+            policy = self._ports.interaction_policy or InteractionPolicy()
+            if (deferred and result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
+                    and len(task.questions) < policy.max_rounds):
+                fields = tuple(QuestionField(
+                    name='field_' + hashlib.sha256(name.encode()).hexdigest()[:24], label=name[:1024])
+                    for name in deferred[:policy.max_questions_per_round])
+                self._task_question = TaskQuestionDraft(stage='answer', fields=fields,
+                    affected_criteria=tuple(c.criterion_id for c in task.goal.acceptance_criteria if c.required),
+                    wait_timeout_seconds=policy.wait_timeout_seconds)
+            assessments = self._goal_assessments or assess_goal(task, completion=None, evidence=(), message='', outcome=result.outcome)
+            satisfied = {item.criterion_id for item in assessments if item.status == 'satisfied'}
+            complete = not deferred and result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS and all(
+                item.criterion_id in satisfied for item in task.goal.acceptance_criteria if item.required)
+            update = WorkflowTaskUpdate(task_id=task.goal.task_id, expected_version=task.version,
+                goal_revision=task.goal.revision, assessments=assessments,
+                verified_proof_refs=tuple(dict.fromkeys(ref for item in assessments for ref in item.proof_refs)),
+                question=self._task_question,
+                phase='waiting_for_input' if self._task_question else 'complete' if complete else 'paused')
+            if ledger is not None:
+                total = ledger.snapshot()
+                before = task.budget_usage.model_dump()
+                delta = {key: None if total[key] is None or before[key] is None else max(0, total[key] - before[key])
+                         for key in before}
+                update = update.model_copy(update={'usage_delta': TaskBudgetUsage.model_validate(delta)})
+            result = result.model_copy(update={'workflow_task_update': update})
+        return result
+
+    def _start(self, request: ControlledReActStartRequest) -> WorkflowTemplateExecutionResult:
         state = ControlledReActRunState(
             run_id=request.run_id,
             template_name=request.template_name,
@@ -148,6 +230,14 @@ class ControlledReActOrchestrator:
             phase=ControlledReActRunPhase.PLANNING,
         )
         context = state.conversation_context
+        if context is not None and context.workflow_task is not None:
+            task = context.workflow_task
+            if task.phase not in ('active',):
+                raise ProofAgentError('PA_RUNTIME_001', 'Task is not active.', 'Resume the Task through its authority.')
+            values = answered_fields(task)
+            missing = tuple(name for name in task.goal.required_context if name not in values)
+            if missing:
+                return self._ask_clarification(request, _required_context_action(missing, stage='goal'), state=state)
         if context is not None and context.task_state is not None and context.task_state.unresolved:
             clarification = ReActActionProposal(action_id="act_task_state_clarification",
                 action_type=ReActActionType.ASK_CLARIFICATION, risk_level="low",
@@ -180,6 +270,7 @@ class ControlledReActOrchestrator:
             self._task_completion(state)
             assess_tool_tasks(state, self._answer_evidence_context(state).observation_truth)
             self.last_task_checkpoint_ref = request.task_checkpoint_ref
+            self._resolve_execution_plan(state)
         else:
             try:
                 state = self._prepare_pre_loop_state(state, retrieval_max_queries=request.retrieval_max_queries)
@@ -206,6 +297,7 @@ class ControlledReActOrchestrator:
         action: ReActActionProposal,
         max_plan_rounds: int,
     ) -> WorkflowTemplateExecutionResult:
+        recovery_diagnostics: tuple[WorkflowStageFailureDiagnostic, ...] = ()
         while True:
             if action.action_type is ReActActionType.REFUSE:
                 return self._refuse_plan_budget_exhausted(request, action, state=state)
@@ -235,7 +327,44 @@ class ControlledReActOrchestrator:
                         final_output=report_text, message=report_text,
                         reasoning_summary=action.reasoning_summary.model_dump(mode="json"))
                 else:
-                    answer = self._ports.answer_synthesis.synthesize(state, action, answer_context)
+                    source_check = None
+                    if self._ports.assurance_policy is not None:
+                        source_check = evaluate_assurance(self._ports.assurance_policy, evidence=tuple(
+                            chunk for truth in answer_context.observation_truth if isinstance(truth, RetrievalObservationTruth)
+                            for chunk in truth.accepted_evidence))
+                    if source_check is not None and not source_check.passed:
+                        self._emit_trace('assurance_evaluated', status='blocked',
+                            payload={'stage_id': 'evidence', **source_check.projection()})
+                        message = '已检索的证据未达到配置的可信度要求：' + ', '.join(source_check.violations)
+                        answer = AnswerSynthesisResult(outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE, final_output=message, message=message)
+                    else:
+                        answer = self._ports.answer_synthesis.synthesize(state, action, answer_context)
+                if answer.recovery_requirement_ids and answer.outcome in (
+                    ReceiptOutcome.FAILED_WITH_TRACE, ReceiptOutcome.ANSWERED_WITH_CITATIONS,
+                ):
+                    from proof_agent.control.knowledge.answer_requirements import answer_requirements
+                    requirements_by_id = {r.requirement_id: r for r in answer_requirements(state.question)}
+                    valid_ids = tuple(i for i in answer.recovery_requirement_ids if i in requirements_by_id)
+                    attempted = {str(a.parameters.get("query", "")) for a in state.action_history if a.action_type is ReActActionType.PLAN_RETRIEVAL}
+                    queries = [(i, state.question[:1024] + " 补充原文依据：" + requirements_by_id[i].source_text[:512]) for i in valid_ids]
+                    pending = [(i, q) for i, q in queries if q not in attempted]
+                    if (len(valid_ids) == len(answer.recovery_requirement_ids)
+                            and pending and state.plan_round < max_plan_rounds and state.tool_task_plan is None):
+                        requirement_id, query = pending[0]
+                        self._emit_trace('workflow_stage_result', payload={"stage_id": "model_answer", "status": "blocked",
+                            "summary": {"recovery_kind": "evidence_gap", "requirement_id": requirement_id}})
+                        recovery_diagnostics += answer.stage_failure_diagnostics
+                        state = state.model_copy(update={"stage_llm_interactions": state.stage_llm_interactions + answer.stage_llm_interactions})
+                        action = pending_retrieval_action(action, RequiredRetrieval(requirement_id, query), plan_round=state.plan_round)
+                        # Same review, immutable observation and budget path as every retrieval.
+                        # A reviewed explicit evidence gap may supplement a partial answer.
+                        # Never dispatch a model URL or change a policy-denied outcome.
+                        continue
+                    message = (answer.message if answer.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS else
+                               '部分问题仍缺少可验证依据，已停止重复补查；本次任务未完成。')
+                    answer = replace(answer, recovery_requirement_ids=(), message=message, final_output=message)
+                if recovery_diagnostics:
+                    answer = replace(answer, stage_failure_diagnostics=(*answer.stage_failure_diagnostics, *recovery_diagnostics))
                 answer = self._admit_final_answer(
                     state,
                     action,
@@ -272,6 +401,12 @@ class ControlledReActOrchestrator:
                         self._task_completion(state),
                         reason="tool_scope_denied",
                     )
+                if self._ports.interaction_policy or (state.conversation_context and state.conversation_context.workflow_task):
+                    action, missing_tool_fields = self._tool_user_context(state, action)
+                    if missing_tool_fields:
+                        return self._ask_clarification(request,
+                            _required_context_action(tuple(item.name for item in missing_tool_fields), stage='tool_input'),
+                            state=state, structured_fields=missing_tool_fields)
                 state, action = self._bind_tool_proposal(state, action)
                 policy_decision = self._policy_decision(state, action)
                 if policy_decision is PolicyDecisionType.DENY:
@@ -306,6 +441,8 @@ class ControlledReActOrchestrator:
             )
         elif reason == "policy_denied":
             message = "Unable to continue because policy denied the request."
+        elif reason == 'complexity_ceiling_exceeded':
+            message = '任务需要更高的流程复杂度；当前上限不允许升级。请调整目标或复杂度上限。'
         elif reason == "unresolved_subgoals":
             message = "Unable to finalize because retrieval observations still contain unresolved subgoals."
         elif completion is not None and reason not in {
@@ -354,8 +491,36 @@ class ControlledReActOrchestrator:
         action: ReActActionProposal,
         *,
         state: ControlledReActRunState,
+        structured_fields: tuple[QuestionField, ...] | None = None,
     ) -> WorkflowTemplateExecutionResult:
         missing_fields = _clarification_missing_fields(action)
+        policy = self._ports.interaction_policy
+        task = state.conversation_context.workflow_task if state.conversation_context else None
+        stage = action.parameters.get('interaction_stage', 'plan')
+        stage = stage if stage in ('goal', 'plan', 'evidence', 'tool_input', 'finalization') else 'plan'
+        if policy is not None or task is not None:
+            policy = policy or InteractionPolicy()
+            rounds = len(task.questions) if task else 0
+            decision = decide_interaction(policy, stage=cast(InteractionStage, stage), reason='required_context', rounds_asked=rounds)
+            missing_fields = missing_fields[:policy.max_questions_per_round]
+            self._emit_trace('interaction_decided', status='waiting' if decision == 'ask' else 'blocked',
+                             payload={'stage_id': stage, 'decision': decision, 'reason': 'required_context',
+                                      'question_count': len(missing_fields), 'rounds_used': rounds})
+            if decision != 'ask':
+                message = '缺少完成任务所需的信息，任务已暂停：' + '、'.join(missing_fields)
+                return WorkflowTemplateExecutionResult(run_id=request.run_id, template_name=request.template_name,
+                    template_descriptor_version=request.template_descriptor_version,
+                    outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE, final_output=message, message=message,
+                    intent_resolution=state.intent_resolution)
+            if task is not None:
+                fields = tuple(QuestionField(name=(name if re.fullmatch(r'[A-Za-z0-9_.:/-]{1,128}', name)
+                    else 'field_' + hashlib.sha256(name.encode()).hexdigest()[:24]), label=name[:1024]) for name in missing_fields)
+                if structured_fields is not None:
+                    fields = structured_fields[:policy.max_questions_per_round]
+                stage_map = {'goal': 'goal', 'plan': 'plan', 'evidence': 'evidence', 'tool_input': 'tool', 'finalization': 'answer'}
+                self._task_question = TaskQuestionDraft(stage=cast(QuestionStage, stage_map[stage]), fields=fields,
+                    affected_criteria=tuple(item.criterion_id for item in task.goal.acceptance_criteria if item.required),
+                    wait_timeout_seconds=policy.wait_timeout_seconds)
         first_field = missing_fields[0]
         chinese = any("\u4e00" <= char <= "\u9fff" for char in state.question)
         message = (
@@ -814,7 +979,30 @@ class ControlledReActOrchestrator:
                     ),
                 }
             )
-        if self._ports.memory is not None:
+        task = state.conversation_context.workflow_task if state.conversation_context else None
+        if task is not None:
+            intent = dict(state.intent_resolution or {})
+            supplied = answered_fields(task)
+            missing = tuple(str(name) for name in intent.get('missing_fields', ()) if name not in supplied)
+            intent['deferred_answer_fields'] = tuple(name for name in intent.get('deferred_answer_fields', ())
+                if name not in supplied and 'field_' + hashlib.sha256(str(name).encode()).hexdigest()[:24] not in supplied)
+            intent['missing_fields'] = missing
+            if not missing and intent.get('recommended_next_action') == ReActActionType.ASK_CLARIFICATION.value:
+                intent['recommended_next_action'] = ReActActionType.PLAN_RETRIEVAL.value
+            queries = [dict(item) for item in intent.get('retrieval_query_set', ())]
+            for query in required_goal_queries(task):
+                existing = next((item for item in queries if item['query'] == query), None)
+                if existing is not None:
+                    existing['required'] = True
+                else:
+                    queries.append({'query': query, 'required': True, 'intent_angle': 'explicit_goal',
+                                    'reason': 'Required by the frozen Task goal.'})
+            if len(queries) > 5:
+                raise ProofAgentError('PA_CONFIG_002', 'Goal exceeds the bounded retrieval query set.', 'Split the goal into smaller Tasks.')
+            intent['retrieval_query_set'] = queries
+            state = state.model_copy(update={'intent_resolution': freeze_value(intent)})
+        self._resolve_execution_plan(state)
+        if self._ports.memory is not None and self.last_execution_plan.effective_complexity != 'lite':
             state = state.model_copy(
                 update={
                     "memory_context": dict(self._ports.memory.read(state)),
@@ -828,7 +1016,7 @@ class ControlledReActOrchestrator:
         state: ControlledReActRunState,
         answer: AnswerSynthesisResult,
     ) -> ValidationResult | None:
-        if self._ports.memory is None:
+        if self._ports.memory is None or self.last_execution_plan.effective_complexity == 'lite':
             return None
         candidate = self._ports.memory.prepare_write(state, answer)
         if candidate is None:
@@ -853,6 +1041,8 @@ class ControlledReActOrchestrator:
                 ),
             )
             return result
+        if self._ports.budget_ledger is not None:
+            self._ports.budget_ledger.ensure_available()
         result = self._ports.memory.commit_write(candidate)
         self._emit_trace(
             "memory_write_decision",
@@ -914,8 +1104,14 @@ class ControlledReActOrchestrator:
             state,
             max_plan_rounds=max_plan_rounds,
         )
-        action = self._ports.planner.plan(planning_state)
-        planner_llm_interactions = _stage_llm_interactions_from_port(self._ports.planner)
+        if self._ports.budget_ledger is not None:
+            self._ports.budget_ledger.ensure_available()
+        action = self._compiled_action(planning_state)
+        planner_llm_interactions: tuple[WorkflowStageLlmInteraction, ...] = ()
+        if action is None:
+            action = self._ports.planner.plan(planning_state)
+            planner_llm_interactions = _stage_llm_interactions_from_port(self._ports.planner)
+        action = self._apply_plan_interaction(planning_state, action)
         if planner_llm_interactions:
             planning_state = planning_state.model_copy(
                 update={
@@ -932,6 +1128,81 @@ class ControlledReActOrchestrator:
         if self._ports.trace is not None:
             emit_reasoning_summary(self._ports.trace, action)
         return planning_state, action
+
+    def _apply_plan_interaction(self, state: ControlledReActRunState, action: ReActActionProposal) -> ReActActionProposal:
+        if action.action_type is not ReActActionType.ASK_CLARIFICATION or self._ports.interaction_policy is None:
+            return action
+        task = state.conversation_context.workflow_task if state.conversation_context else None
+        supplied = answered_fields(task) if task else {}
+        fields = tuple(name for name in _clarification_missing_fields(action) if name not in supplied)
+        raw = action.parameters.get('clarification_assessments', ())
+        assessments = {row.get('field'): row for row in raw if isinstance(row, Mapping)} if isinstance(raw, (tuple, list)) else {}
+        stage = action.parameters.get('interaction_stage', 'plan')
+        stage = stage if stage in ('goal', 'plan', 'evidence', 'tool_input', 'finalization') else 'plan'
+        blocking = []
+        for name in fields:
+            if (name in (state.intent_resolution or {}).get('deferred_answer_fields', ())
+                    and not (task and name in task.goal.required_context)
+                    and stage not in ('tool_input',)):
+                continue
+            row = assessments.get(name, {})
+            reason = row.get('kind', 'required_context')
+            if reason not in ('preference', 'retrievable', 'required_context', 'material_ambiguity'):
+                reason = 'required_context'
+            if task and name in task.goal.required_context:
+                reason = 'required_context'
+            decision = decide_interaction(self._ports.interaction_policy, stage=cast(InteractionStage, stage), reason=reason,
+                has_default=bool(row.get('default_assumption')), rounds_asked=len(task.questions) if task else 0)
+            if decision != 'continue':
+                blocking.append(name)
+        if blocking:
+            return action.model_copy(update={'parameters': {**action.parameters, 'missing_fields': tuple(blocking)}})
+        kind = ReActActionType.GENERATE_FINAL_ANSWER
+        return action.model_copy(update={'action_type': kind, 'parameters': {},
+            'reasoning_summary': action.reasoning_summary.model_copy(update={'selected_action': kind})})
+
+    def _resolve_execution_plan(self, state: ControlledReActRunState) -> None:
+        self.last_execution_plan = compile_execution_plan(
+            execution=self._ports.execution_policy, interaction=self._ports.interaction_policy,
+            assurance=self._ports.assurance_policy,
+            tools_enabled=self._ports.configured_tools_enabled if self._ports.configured_tools_enabled is not None else self._ports.tool_observation is not None,
+            memory_enabled=self._ports.configured_memory_enabled if self._ports.configured_memory_enabled is not None else self._ports.memory is not None,
+            required_query_count=len(required_retrievals(state.intent_resolution)),
+            has_tool_tasks=bool(state.tool_task_plan or (state.intent_resolution or {}).get(
+                'recommended_next_action') == ReActActionType.PROPOSE_TOOL_CALL.value),
+        )
+        if self._ports.execution_policy or self._ports.interaction_policy or self._ports.assurance_policy:
+            self._emit_trace('workflow_execution_resolved', payload=self.last_execution_plan.model_dump(mode='json'))
+
+    def _compiled_action(self, state: ControlledReActRunState) -> ReActActionProposal | None:
+        plan = self.last_execution_plan
+        intent = state.intent_resolution or {}
+        if self._ports.execution_policy or self._ports.interaction_policy or (state.conversation_context and state.conversation_context.workflow_task):
+            missing = tuple(str(name) for name in intent.get('missing_fields', ()))
+            if missing or intent.get('recommended_next_action') == ReActActionType.ASK_CLARIFICATION.value:
+                return _required_context_action(missing or ('required_context',), stage='goal')
+            if intent.get('recommended_next_action') == ReActActionType.REFUSE.value:
+                blocked = _required_context_action(('inadmissible_intent',), stage='goal')
+                return incomplete_refusal(blocked, reason='business_flow_admission_failed')
+        if not plan.blocked_reason and plan.effective_complexity != 'lite':
+            return None
+        completion = self._task_completion(state)
+        if not plan.blocked_reason and completion is None:
+            return None  # Terminal intent and tool proposals still pass the existing adapter.
+        kind = ReActActionType.REFUSE if plan.blocked_reason else ReActActionType.GENERATE_FINAL_ANSWER
+        action = ReActActionProposal(
+            action_id=f'act_compiled_{state.plan_round}', action_type=kind, risk_level='low',
+            parameters={'refusal_reason': plan.blocked_reason} if plan.blocked_reason else {},
+            reasoning_summary=ReasoningSummary(
+                goal='Complete the admitted task requirements.', observations=(),
+                candidate_actions=(kind,), selected_action=kind,
+                rationale_summary='The compiled workflow selects the next bounded action.',
+                risk_flags=(), required_evidence=(),
+            ),
+        )
+        if not plan.blocked_reason and completion and completion.pending:
+            return pending_retrieval_action(action, completion.pending[0], plan_round=state.plan_round)
+        return action
 
     def _prepare_plan_state(
         self,
@@ -991,6 +1262,30 @@ class ControlledReActOrchestrator:
             state.model_copy(update={"bound_tool_proposal": bound}),
             action.model_copy(update={"parameters": dict(bound.parameters)}),
         )
+
+    def _tool_user_context(self, state: ControlledReActRunState, action: ReActActionProposal
+                           ) -> tuple[ReActActionProposal, tuple[QuestionField, ...]]:
+        scope = state.effective_tool_proposal_scope
+        if scope is None:
+            return action, ()
+        interface = next((item for item in scope.tool_interfaces if item.tool_contract_id == action.target_tool_name), None)
+        if interface is None:
+            return action, ()
+        task = state.conversation_context.workflow_task if state.conversation_context else None
+        supplied = answered_fields(task) if task else {}
+        parameters = dict(action.parameters)
+        fields = []
+        for parameter in interface.parameters:
+            if parameter.value_source is not ToolProposalParameterSource.USER_SUPPLIED or parameter.name in parameters:
+                continue
+            key = f'tool:{interface.tool_contract_id}:{parameter.name}'
+            if key in supplied:
+                parameters[parameter.name] = supplied[key]
+            elif parameter.required and parameter.value_type in ('string', 'integer', 'number', 'boolean'):
+                fields.append(QuestionField(name=key, label=(parameter.description or parameter.name)[:1024],
+                    value_type=cast(Literal['string', 'integer', 'number', 'boolean'], parameter.value_type),
+                    choices=parameter.enum_values if parameter.value_type == 'string' and len(parameter.enum_values) <= 20 else ()))
+        return action.model_copy(update={'parameters': parameters}), tuple(fields)
 
     def _observe_knowledge(
         self,
@@ -1152,6 +1447,38 @@ class ControlledReActOrchestrator:
     ) -> AnswerSynthesisResult:
         if answer.outcome is not ReceiptOutcome.ANSWERED_WITH_CITATIONS:
             return answer
+        bound_evidence = tuple(chunk for truth in answer_context.observation_truth
+            if isinstance(truth, RetrievalObservationTruth) for chunk in truth.accepted_evidence)
+        from proof_agent.control.knowledge.answer_requirements import requirement_report
+        report = answer.answer_requirement_report or requirement_report(state.question, answer.message, bound_evidence)
+        answer = replace(answer, answer_requirement_report=report)
+        tool_progress = assess_tool_tasks(state, answer_context.observation_truth)
+        verified_tool_report = bool(state.tool_task_plan is not None and tool_progress.pending is None and tool_progress.results)
+        if self._ports.budget_ledger is not None:
+            self._ports.budget_ledger.ensure_available()
+        if self._ports.assurance_policy is not None and (not verified_tool_report or bound_evidence
+                or requires_external_sources(self._ports.assurance_policy)):
+            assessment = evaluate_assurance(self._ports.assurance_policy, evidence=bound_evidence, message=answer.message,
+                                            fact_validation=answer.fact_validation)
+            self._emit_trace('assurance_evaluated', status='ok' if assessment.passed else 'blocked',
+                             payload={'stage_id': 'response', **assessment.projection()})
+            if not assessment.passed:
+                message = '答案未达到配置的可信度要求：' + ', '.join(assessment.violations)
+                return AnswerSynthesisResult(outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE,
+                    final_output=message, message=message, evidence=bound_evidence,
+                    model_usage_summary=answer.model_usage_summary,
+                    stage_llm_interactions=answer.stage_llm_interactions)
+        task = state.conversation_context.workflow_task if state.conversation_context else None
+        if task is not None:
+            self._goal_assessments = assess_goal(task, completion=self._task_completion(state),
+                evidence=bound_evidence, message=answer.message, outcome=answer.outcome,
+                tool_proofs={key: (truth.truth_ref,) for key, truth in tool_progress.results.items()})
+            if self._ports.assurance_policy and self._ports.assurance_policy.level == 'strict':
+                satisfied = {item.criterion_id for item in self._goal_assessments if item.status == 'satisfied'}
+                if any(item.required and item.criterion_id not in satisfied for item in task.goal.acceptance_criteria):
+                    message = '必要验收条件尚未获得验证，无法完成任务。'
+                    return AnswerSynthesisResult(outcome=ReceiptOutcome.REFUSED_NO_EVIDENCE, final_output=message, message=message,
+                        evidence=bound_evidence, model_usage_summary=answer.model_usage_summary)
         if self._ports.policy is None:
             return answer
         evaluate_answer = getattr(self._ports.policy, "evaluate_answer", None)
@@ -1298,6 +1625,9 @@ class ControlledReActOrchestrator:
             requirements=requirements,
             records=state.observation_records,
             truths=context.observation_truth,
+            question=state.question,
+            optional_queries=tuple(str(q["query"]) for q in (state.intent_resolution or {}).get("retrieval_query_set", ())
+                                   if not q.get("required", True)),
         )
 
 
@@ -1883,6 +2213,8 @@ def _model_answer_stage_result(answer: AnswerSynthesisResult) -> WorkflowStageRe
         summary={
             "outcome": answer.outcome.value,
             "final_output_length": len(answer.final_output),
+            "answer_requirements": list(answer.answer_requirement_report),
+            "question_completion": "verified" if answer.answer_requirement_report and all(r["status"] == "satisfied" for r in answer.answer_requirement_report) else "unassessed",
             "model_call_count": len(answer.stage_llm_interactions),
         },
         produced_fact_refs=("final_output", "review_results"),

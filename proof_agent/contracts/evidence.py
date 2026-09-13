@@ -6,7 +6,7 @@ from hashlib import sha256
 from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import Field, StrictBool, field_validator, model_validator
+from pydantic import Field, StrictBool, field_serializer, field_validator, model_validator
 
 from proof_agent.contracts.external_source import external_evidence_source
 from proof_agent.contracts._base import FrozenDict, FrozenModel, freeze_value
@@ -78,6 +78,10 @@ class EvidenceChunk(FrozenModel):
     def freeze_metadata(cls, value: Any) -> Any:
         return freeze_value(value)
 
+    @field_serializer('metadata')
+    def serialize_metadata(self, value: Mapping[str, Any]) -> Any:
+        return _plain_metadata(value)
+
     @model_validator(mode="after")
     def validate_authority_admission(self) -> EvidenceChunk:
         if self.authority_admitted and self.authority_outcome != "PASS":
@@ -89,3 +93,11 @@ class EvidenceChunk(FrozenModel):
         if len(self.supported_evidence_slot_ids) != len(set(self.supported_evidence_slot_ids)):
             raise ValueError("supported evidence slot ids must be unique")
         return self
+
+
+def _plain_metadata(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_metadata(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_metadata(item) for item in value]
+    return value

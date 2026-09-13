@@ -1,0 +1,116 @@
+{
+  "record_version": "orchestration-verification.v1",
+  "date": "2026-09-13",
+  "status": "PARTIAL_VERIFICATION",
+  "scope": "Current local working tree; includes earlier uncommitted changes. No release approval.",
+  "git_head": "2ae4fae52d00d95471c706caf8eef15a23fe1e29",
+  "working_tree_dirty": true,
+  "delegation": {
+    "analysis_and_final_optimization": "Astra primary agent after user role correction",
+    "validation_model": "gpt-5.6-sol",
+    "validation_reasoning_effort": "low",
+    "application_real_model_evaluation": false
+  },
+  "backend": {
+    "command": "uv run --extra dev python -m pytest tests/ -q --junitxml=/private/tmp/proofagent-orchestration-final-20260913.xml",
+    "environment": "local host with permitted loopback binding",
+    "passed": 3043,
+    "skipped": 102,
+    "deselected": 2,
+    "warnings": 2,
+    "exit_code": 0,
+    "elapsed_seconds_reported_by_pytest": 48.52,
+    "junit_suite_seconds": 48.402,
+    "junit_timestamp": "2026-09-13T22:09:58.692282+08:00",
+    "skip_reasons": {
+      "set PROOF_AGENT_RUN_LLM_REGRESSION=1 to run real LLM regression tests": 1,
+      "embedded-evidence model-answer fixture was removed by ADR-0210": 2,
+      "real PostgreSQL DSN is not configured": 95,
+      "model-answer fixture depended on removed embedded Knowledge": 1,
+      "unsafe model-answer fixture depended on removed embedded Knowledge": 1,
+      "model-answer trace fixture depended on removed embedded Knowledge": 2
+    },
+    "deselection_policy": "pyproject.toml addopts: -m not s3_integration",
+    "junit_local_path": "/private/tmp/proofagent-orchestration-final-20260913.xml",
+    "junit_sha256": "9227937ae868e414e34f51ec04d2726b5ef5630b014f044edbd0926f78fa47da",
+    "focused_tests_in_final_suite": {
+      "files": [
+        "tests/test_planner_goal_alignment.py",
+        "tests/test_planner_pending_context.py",
+        "tests/test_answer_context_continuity.py",
+        "tests/test_runtime_stage_prompt_context.py",
+        "tests/test_prompt_contract_alignment.py",
+        "tests/test_orchestration_business_cases.py"
+      ],
+      "passed": 23
+    }
+  },
+  "checks": [
+    {
+      "command": "uv run --extra dev ruff check proof_agent tests",
+      "result": "passed"
+    },
+    {
+      "command": "uv run --extra dev --extra openai mypy proof_agent",
+      "result": "passed",
+      "source_files": 422
+    },
+    {
+      "command": "python3 scripts/check-domain-contexts.py",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "uv lock --check --offline",
+      "result": "passed",
+      "resolved_packages": 114
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "npm test",
+      "result": "passed",
+      "dashboard_tests": 269,
+      "operator_chat_tests": 57
+    },
+    {
+      "command": "npm run build",
+      "result": "passed",
+      "warnings": "Dashboard and Chat bundles exceed 500 kB warning threshold"
+    }
+  ],
+  "check_timing": "Backend and static checks ran after final runtime fix; frontend checks ran earlier in this task, with no subsequent frontend changes.",
+  "warnings": [
+    "AuthlibDeprecationWarning: authlib.jose",
+    "Pydantic FrozenDict serializer warning in test_tool_task_completion"
+  ],
+  "scope_file_sha256": {
+    "proof_agent/capabilities/react/planner.py": "110ddd27e738f41de74bf6612f4f4ce05b26908dc312385b1dfce219dbb29f56",
+    "proof_agent/capabilities/review/subagent.py": "79f533a03c558d143802bd9f9444a0ab28d5b3d1177f0c85b24c668f962a0f06",
+    "proof_agent/control/workflow/controlled_react/answer_source_selection.py": "4d62f103b9f454f598394ceea1bb83da5c2664fc74d2f61f505bf8c98b93f165",
+    "proof_agent/control/workflow/controlled_react/composition.py": "88cd88464362b995770beef6161e82530fc400ddcec0d356dcd3c10173a41b91",
+    "proof_agent/control/workflow/controlled_react/final_answer_attempt.py": "ab67f8540bfc6e08f873461b9d4a6f0f63513931263d5254dde924b0a8a78b0e",
+    "proof_agent/control/workflow/controlled_react/review.py": "55987a01f57467c34e740b09d2788ea103180bfac4799249acfe803cc88514c9",
+    "proof_agent/control/workflow/controlled_react/stage_contexts.py": "09c6896f9fead86807fac04cedfca87a3c9cd1e337b43db5f64128bcb67135f4",
+    "proof_agent/control/workflow/harness_helpers.py": "d15694b5f399d4182698ce2e51e52a4e4141e92e3a303d4514ef12984881cfc2",
+    "proof_agent/control/workflow/stage_context.py": "f12f40a530144e53862b77380f64165a0d05691a6ee402ebe3372d506b69cf16",
+    "tests/test_planner_goal_alignment.py": "70e7ebf85120b6fc3773170b36dfdfa8fafbc73c564e2b47103f7b6967da8e8c",
+    "tests/test_planner_pending_context.py": "8e0d949f5612e027d8fddc5291c9a206c5d204e107437b3541551563c31097b6",
+    "tests/test_answer_context_continuity.py": "6e7f6bb969de559a36498cac50135efca4d397aa745cd6bb4645e40a40dc82f3",
+    "tests/test_runtime_stage_prompt_context.py": "6ab3340758fdc98cc74653047258a9fa11573e33273316e2665eed7c0c481b80",
+    "tests/test_prompt_contract_alignment.py": "5561e1f08640e7f93716c863032f05081417a7cc4320e964488ee49b83fde0bb",
+    "tests/test_orchestration_business_cases.py": "8d75d45ef11a4abf2e068c496d22f9502eaa1c59056b48b7f578a052eb3822d5"
+  },
+  "fingerprint_limits": "Binds the listed runtime and focused test files only; does not fingerprint the entire repository, fixtures, dependencies or deployment.",
+  "evidence_limits": [
+    "Synthetic development cases; no independent business holdout",
+    "No actual application model-provider calls in this verification",
+    "PostgreSQL, S3 and real-model gates not verified by this run",
+    "No service restart, deployment, Git commit or push in this optimization task"
+  ]
+}

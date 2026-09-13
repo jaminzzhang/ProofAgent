@@ -7,7 +7,9 @@ from uuid import uuid4
 from proof_agent.control.artifacts.finalization import ArtifactMemberPayload
 from proof_agent.control.conversation import admit_conversation_context
 from proof_agent.contracts.artifacts import ArtifactKind
-from proof_agent.contracts.conversation import ConversationTurn
+from proof_agent.contracts.conversation import ContextAdmission, ConversationTurn
+from proof_agent.contracts.ports.workflow_tasks import WorkflowTaskRepository
+from proof_agent.contracts.workflow_task import TaskOwner
 from proof_agent.contracts.ports.conversations import ConversationRepository
 from proof_agent.contracts.run_execution import RunClaim
 from proof_agent.contracts.published_agent import PublishedAgent
@@ -34,10 +36,12 @@ class PublishedAgentRunWorkHandler:
         dependencies: RunExecutionDependencies,
         resolve_exact: ExactPublishedAgentResolver,
         conversations: ConversationRepository | None = None,
+        workflow_tasks: WorkflowTaskRepository | None = None,
     ) -> None:
         self._dependencies = dependencies
         self._resolve_exact = resolve_exact
         self._conversations = conversations
+        self._workflow_tasks = workflow_tasks
 
     def __call__(
         self,
@@ -66,6 +70,18 @@ class PublishedAgentRunWorkHandler:
             context_admission = admit_conversation_context(
                 conversation, current_question=request.question, current_turn_id=conversation_turn_id,
             )
+        if request.task_id is not None:
+            if self._workflow_tasks is None:
+                raise RuntimeError("task authority is unavailable")
+            task = self._workflow_tasks.get(request.task_id, owner=TaskOwner(
+                actor_subject=request.operator_subject, agent_id=request.agent_id,
+                agent_version=request.agent_version_id))
+            if (task is None or task.version != request.expected_task_version
+                    or task.digest() != request.task_snapshot_sha256 or task.phase != "active"
+                    or task.latest_run_id != request.run_id):
+                raise RuntimeError("task changed after Run admission")
+            context_admission = (context_admission or ContextAdmission(admitted=False)).model_copy(
+                update={"workflow_task": task})
         cancellation_check()
         execution = execute_published_agent_run(
             dependencies=self._dependencies,
@@ -121,6 +137,8 @@ class PublishedAgentRunWorkHandler:
             receipt_outcome=execution.detail.outcome,
             conversation_turn=conversation_turn,
             expected_conversation_turn_count=request.conversation_turn_count,
+            workflow_task_update=getattr(execution.result.workflow_template_execution_result,
+                "workflow_task_update", None),
         )
 
 

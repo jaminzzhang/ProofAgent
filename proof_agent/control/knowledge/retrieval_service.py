@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
@@ -88,6 +88,7 @@ class KnowledgeRetrievalService:
         knowledge_candidate_admission_scorer: (
             KnowledgeCandidateAdmissionScorer | None
         ) = None,
+        before_query: Callable[[], None] | None = None,
     ) -> None:
         self._trace = trace
         self._policy = policy
@@ -96,6 +97,7 @@ class KnowledgeRetrievalService:
         self._knowledge_candidate_admission_scorer = (
             knowledge_candidate_admission_scorer
         )
+        self._before_query = before_query
 
     def retrieve(self, request: KnowledgeRetrievalRequest) -> KnowledgeRetrievalResult:
         return self._retrieve(request, reviewed=False)
@@ -177,6 +179,8 @@ class KnowledgeRetrievalService:
                 "The Agent Version requires Knowledge Source Service but no client is composed.",
                 "Compose the exact KnowledgeCandidateService binding before run activation.",
             )
+        if self._before_query is not None:
+            self._before_query()
         candidate_result = service.query(candidate_query)
         admission_scores: Mapping[str, float] = {}
         scorer = self._knowledge_candidate_admission_scorer
@@ -255,6 +259,8 @@ class KnowledgeRetrievalService:
                                                 no_evidence_reason_code="retrieval_policy_denied")
         evidence: list[EvidenceChunk] = []
         for binding in selected:
+            if self._before_query is not None:
+                self._before_query()
             result = sources.query(binding.binding_id, request.question)
             if result.binding_id != binding.binding_id or result.query != request.question:
                 raise ProofAgentError("PA_KNOWLEDGE_002", "External Knowledge result scope mismatch.",

@@ -119,8 +119,9 @@ _CONTROLLED_REACT_V3_BASE_STAGES: tuple[WorkflowStageDescriptor, ...] = (
         label="Retrieval",
         description="Run governed retrieval through Knowledge Retrieval Service.",
         predecessors=("retrieval_review",),
-        successors=("memory", "model_answer", "response"),
+        successors=("plan", "memory", "model_answer", "response"),
         branch_conditions={
+            "plan": "admitted observation and coverage gaps",
             "memory": "accepted evidence",
             "model_answer": "accepted evidence",
             "response": "insufficient evidence or blocked retrieval",
@@ -137,9 +138,10 @@ _CONTROLLED_REACT_V3_BASE_STAGES: tuple[WorkflowStageDescriptor, ...] = (
     WorkflowStageDescriptor(
         id="model_answer",
         label="Model Answer",
-        description="Generate final answer from accepted evidence.",
-        predecessors=("retrieval",),
-        successors=("response",),
+        description="Generate and verify a requirement-bound answer from accepted evidence.",
+        predecessors=("plan", "retrieval", "model_answer"),
+        successors=("plan", "model_answer", "response"),
+        branch_conditions={"plan": "bounded evidence gap recovery", "model_answer": "bounded schema, binding or coverage repair", "response": "validated answer or exhausted recovery"},
         governed_handoff_points=("before_model_call",),
         editable_prompt_fields=EDITABLE_WORKFLOW_PROMPT_FIELDS,
         context_options=(

@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-13",
+  "status": "PARTIAL_VERIFICATION",
+  "scope": "Selected implementation and regression files; not a full repository or deployment digest",
+  "backend_suite": {
+    "passed": 3073,
+    "skipped": 102,
+    "deselected": 2,
+    "warnings": 2
+  },
+  "new_contract_tests": 30,
+  "mypy_source_files": 424,
+  "local_readiness": {
+    "/": 200,
+    "/operator": 200,
+    "/api/config/agents": 200
+  },
+  "external_model_replay": false,
+  "sha256": {
+    "proof_agent/control/validators/quoted_answer.py": "f86c9f5cf80b86505a570a19bb67d9305b818dc0a3ba525680aa3d560681bca3",
+    "proof_agent/control/workflow/controlled_react/answer_grounding_review.py": "e36834dc41469cace76679b64d638b0ec55232239eb6046618b78bece6544d30",
+    "proof_agent/control/workflow/controlled_react/final_answer_attempt.py": "e5d0c0516f9f7a76424d521871a2cc94e8cdd0dce14e599ea1c79a35fc8c45b9",
+    "proof_agent/control/workflow/controlled_react/orchestrator.py": "71bf3629d64f34eb87e5ea3a50aa15c9df3500bfecb3b627dd23f5020f40978f",
+    "proof_agent/control/workflow/controlled_react/ports.py": "de3c271b182636895b5ad3f7910109bad7139313a7532d040d2dbc64a8f8cd1e",
+    "proof_agent/control/workflow/harness_helpers.py": "7606fd6cb8c648465a81aaeffa733915a7f0748158592f50318a54b3847609c1",
+    "proof_agent/control/workflow/assurance.py": "93e08c1611210ed7c0a03ae1fb44e6cd77a6bfb1cb1d409f15f2f3e126184f8a",
+    "proof_agent/capabilities/react/intent.py": "91a9fb4ad95faf6ded90f665151aa9564992f51ba60c347ad5154b83b21357ec",
+    "tests/test_quoted_answer_contract.py": "f89971e635203018ce5ca8242908940545c82ba9a2b934a0a7d27fb6da0c6929",
+    "tests/test_answer_grounding_review.py": "fd3af4ab25a6cfcf41dd7fb94abe50116a31c21ad186fdb9f5a55289b7d7e5b8",
+    "tests/test_quoted_answer_workflow.py": "f8d595f7041e6d1a52b30d80293e40d2e6c7ac2c6b221abd2b5e0a329001efdb",
+    "tests/test_quoted_answer_boundaries.py": "aa77bb75a1577da64ac7ab5c844d5d22b816b67cf047519b043164fccbdcf95c"
+  }
+}

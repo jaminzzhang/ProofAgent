@@ -113,6 +113,7 @@ def compose_harness_invocation(
     secret_provider: SecretProvider | None = None,
     model_credential_resolver: ModelCredentialResolver | None = None,
     cancellation_check: Callable[[], None] | None = None,
+    knowledge_agent_id: str | None = None,
 ) -> HarnessInvocation:
     """Resolve one governed Agent with optional external Knowledge providers."""
 
@@ -233,14 +234,16 @@ def compose_harness_invocation(
         )
     external_knowledge = None
     if external_bindings:
-        guarded_http_client, secret_provider = development_knowledge_dependencies(guarded_http_client, secret_provider)
-        if guarded_http_client is None or secret_provider is None:
+        knowledge_http, knowledge_secrets = development_knowledge_dependencies(
+            guarded_http_client, secret_provider, configuration_store=configuration_store,
+            agent_id=knowledge_agent_id, bindings=external_bindings)
+        if knowledge_http is None or knowledge_secrets is None:
             raise ProofAgentError(
                 "PA_CONFIG_002", "External Knowledge requires guarded HTTP and a Secret Provider.",
                 "Compose the server-owned transport and credential resolver before execution.",
             )
         external_knowledge = ExternalKnowledgeRuntime(
-            external_bindings, http_client=guarded_http_client, secret_provider=secret_provider,
+            external_bindings, http_client=knowledge_http, secret_provider=knowledge_secrets,
             timeout_seconds=min(resolved_manifest.retrieval.query_timeout_seconds, 60.0),
         )
 

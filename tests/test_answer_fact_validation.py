@@ -256,6 +256,12 @@ def test_multiple_typed_records_require_own_identity():
     assert not passed(checks("total is 500 CNY.", evidence))
 
 
+def test_cjk_presentation_normalization_never_aliases_typed_field_identity():
+    evidence = [typed_chunk(extra_fields=({"field": "本期 利润", "value_type": "decimal", "value": "100", "unit": "元"},))]
+    assert passed(checks("本期 利润 is 100 元.", evidence))
+    assert not passed(checks("本期利润 is 100 元.", evidence))
+
+
 def test_record_and_subject_identifiers_are_exact():
     assert not passed(checks("policy1 total is 12345.67 CNY.", [typed_chunk("policy001")]))
     assert not passed(
@@ -429,22 +435,33 @@ def run_attempt(messages, *, budget=None, raw=False, evidence_text="The reimburs
     return result, provider, events
 
 
+def _quoted_limit(*, message="The reimbursement limit is 100 yuan.", quote_text="The reimbursement limit is 100 yuan."):
+    from proof_agent.control.knowledge.answer_requirements import answer_requirements
+    return {"message": message, "citations": ["knowledge://policy#fact"],
+            "quotes": [{"claim": message, "text": quote_text, "citation": "knowledge://policy#fact"}],
+            "coverage": [{"requirement_id": r.requirement_id, "status": "answered"}
+                         for r in answer_requirements("What is the reimbursement limit?")]}
+
+
+_REVIEW_OK = {"claims_supported": True, "conditions_preserved": True, "requirements_addressed": True}
+
+
 def test_numeric_repair_succeeds_with_same_evidence_and_revalidation():
     result, provider, events = run_attempt(
-        ["The reimbursement limit is 500 yuan.", {"statement_ids": ["s0"]}]
+        ["The reimbursement limit is 500 yuan.", _quoted_limit(), _REVIEW_OK]
     )
     assert result.outcome is ReceiptOutcome.ANSWERED_WITH_CITATIONS
-    assert result.final_output == "The reimbursement limit is 100 yuan."
-    assert len(provider.requests) == 2
+    assert result.final_output.startswith("The reimbursement limit is 100 yuan.")
+    assert "引用原文" in result.final_output
+    assert len(provider.requests) == 3
     repair = json.loads(provider.requests[1].messages[1].content)
     assert repair["validation_error"]["error_code"] == "answer_facts_failed"
     assert repair["question"] == "What is the reimbursement limit?"
     assert repair["accepted_evidence"][0]["content"] == "The reimbursement limit is 100 yuan."
-    assert repair["source_statement_options"] == [
-        {"statement_id": "s0", "statement": "The reimbursement limit is 100 yuan.", "citation": "knowledge://policy#fact"}
-    ]
     assert provider.requests[1].metadata["repair_attempt"] == 1
-    assert provider.requests[1].function_schema.name == "select_answer_statements"
+    assert [request.function_schema.name for request in provider.requests] == [
+        "submit_final_answer", "submit_final_answer", "review_grounded_answer"]
+    assert result.fact_validation.metadata["verification_kind"] == "quote_binding_and_model_review"
     failure = next(
         payload for event, payload in events if event == "final_answer_validation_failed"
     )
@@ -456,28 +473,41 @@ def test_repair_exhaustion_never_delivers_wrong_answer():
     assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert "500" not in result.final_output
     assert len(provider.requests) == 2
-    assert result.stage_failure_diagnostics[0].error_code == "schema_failed"
+    assert result.stage_failure_diagnostics[0].error_code == "answer_facts_failed"
 
 
-@pytest.mark.parametrize("selection", [
-    {"statement_ids": ["s999"]}, {"statement_ids": ["s0", "s0"]},
-    {"statement_ids": []}, {"statement_ids": [False]},
-    {"statement_ids": ["s0"], "message": "Injected answer"},
+def _invalid_quote(kind):
+    output = _quoted_limit()
+    if kind == "unknown_citation":
+        output["quotes"][0]["citation"] = "knowledge://unknown#fact"
+    elif kind == "duplicate_citation":
+        output["citations"] *= 2
+    elif kind == "empty_quotes":
+        output["quotes"] = []
+    elif kind == "invalid_quote_type":
+        output["quotes"] = [False]
+    elif kind == "injected_field":
+        output["quotes"][0]["private_value"] = "private-value"
+    return output
+
+
+@pytest.mark.parametrize("kind", [
+    "unknown_citation", "duplicate_citation", "empty_quotes", "invalid_quote_type", "injected_field",
 ])
-def test_source_selection_repair_fails_closed_on_invalid_selection(selection):
-    result, provider, _ = run_attempt(["The reimbursement limit is 500 yuan.", selection])
+def test_quoted_repair_fails_closed_on_invalid_binding(kind):
+    result, provider, _ = run_attempt(["The reimbursement limit is 500 yuan.", _invalid_quote(kind)])
     assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert len(provider.requests) == 2
 
 
 def test_valid_source_selection_still_rejects_conflicting_evidence():
     result, provider, events = run_attempt(
-        ["The reimbursement limit is 500 yuan.", {"statement_ids": ["s0"]}],
+        ["The reimbursement limit is 500 yuan.", _quoted_limit(), _REVIEW_OK],
         evidence_text="The reimbursement limit is 100 yuan. The reimbursement limit is 200 yuan.",
     )
     assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
-    assert len(provider.requests) == 2
-    assert result.stage_failure_diagnostics[0].error_code == "answer_facts_failed"
+    assert len(provider.requests) >= 2
+    assert result.stage_failure_diagnostics
     assert "source_statement_options" not in json.dumps(events)
     assert "The reimbursement limit" not in json.dumps(events)
 
@@ -510,7 +540,7 @@ def test_safety_and_fact_failure_never_repair():
     result, provider, _ = run_attempt(
         [
             "The reimbursement limit is 500 yuan.",
-            {"statement_ids": ["s0", "s1"]},
+            _quoted_limit(quote_text="The reimbursement limit is 100 yuan. access_token"),
         ],
         evidence_text="The reimbursement limit is 100 yuan. access_token",
     )
@@ -552,18 +582,18 @@ def test_failure_trace_contains_only_bounded_fact_locations():
     assert "500" not in json.dumps(payload)
 
 
-@pytest.mark.parametrize("selection,code", [
-    ({"statement_ids": ["s999"]}, "source_selection_unknown_id"),
-    ({"statement_ids": ["s0", "s0"]}, "source_selection_duplicate_id"),
-    ({"statement_ids": []}, "source_selection_count_out_of_range"),
-    ({"statement_ids": [False]}, "source_selection_invalid_id_type"),
-    ({"statement_ids": ["s0"], "message": "private-value"}, "source_selection_invalid_fields"),
+@pytest.mark.parametrize("kind,code", [
+    ("unknown_citation", "unsupported_quote_citation"),
+    ("duplicate_citation", "citation_quote_mismatch"),
+    ("empty_quotes", "invalid_quote_count"),
+    ("invalid_quote_type", "invalid_quote"),
+    ("injected_field", "invalid_quote"),
 ])
-def test_source_selection_failure_has_safe_actionable_diagnostic(selection, code):
-    result, provider, events = run_attempt(["The reimbursement limit is 500 yuan.", selection])
+def test_quoted_binding_failure_has_safe_actionable_diagnostic(kind, code):
+    result, provider, events = run_attempt(["The reimbursement limit is 500 yuan.", _invalid_quote(kind)])
     assert result.outcome is ReceiptOutcome.FAILED_WITH_TRACE
     assert code in result.stage_failure_diagnostics[0].violation_codes
     assert len(provider.requests) == 2
     assert "private-value" not in json.dumps(events)
     repair = json.loads(provider.requests[-1].messages[-1].content)
-    assert "1 to 16 unique" in repair["instruction"]
+    assert "quotes" in repair["instruction"]

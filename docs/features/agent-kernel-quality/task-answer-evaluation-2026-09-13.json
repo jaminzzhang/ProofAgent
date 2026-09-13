@@ -1,0 +1,56 @@
+{
+  "evaluation_kind": "fixed_synthetic_development_cases",
+  "model_calls": 0,
+  "cases": [
+    {
+      "case_id": "factual_lookup",
+      "facts_passed": true,
+      "completion_passed": true,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "flat_metrics",
+      "facts_passed": true,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "headers_only",
+      "facts_passed": true,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "grounded_mixed_analysis",
+      "facts_passed": true,
+      "completion_passed": true,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "altered_number",
+      "facts_passed": false,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "unsupported_ranking",
+      "facts_passed": false,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "wrong_period",
+      "facts_passed": false,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    },
+    {
+      "case_id": "negative_omitted",
+      "facts_passed": true,
+      "completion_passed": false,
+      "expected_behavior_matched": true
+    }
+  ],
+  "matched": 8,
+  "total": 8
+}

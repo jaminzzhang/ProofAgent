@@ -46,6 +46,7 @@ def build_controlled_react_stage_contexts(
             prompt=prompt,
             context_options=config.context,
             sample_context=sample_context,
+            runtime=True,
         )
         summary = workflow_stage_context_summary(preview)
         descriptor_stage = invocation.template.stage(config.id)

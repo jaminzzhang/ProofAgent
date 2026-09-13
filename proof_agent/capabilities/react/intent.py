@@ -317,7 +317,7 @@ def _intent_required_output_contract(
             "known_facts": "array of strings",
             "missing_fields": "array of strings",
             "clarification_assessments": (
-                "array of {field, kind: required_context|preference|retrievable, default_assumption}; "
+                "array of {field, kind: required_context|answer_context|preference|retrievable, default_assumption}; "
                 "classify every missing field exactly once; field must exactly match an entry in "
                 "missing_fields. Keep defaultable fields in missing_fields for Control Plane policy; "
                 "defaults describe scope only, never facts or permissions"
@@ -384,12 +384,15 @@ def _intent_required_output_contract(
 def _conversation_context_prompt_payload(
     conversation_context: ContextAdmission | None,
 ) -> dict[str, Any] | None:
-    if conversation_context is None or not conversation_context.admitted:
+    if conversation_context is None or (not conversation_context.admitted and conversation_context.workflow_task is None):
         return None
     payload = context_admission_payload(conversation_context)
     # Model working context carries content; the audit projection above carries only state metadata.
     payload["summary"] = conversation_context.summary
     payload["usage"] = "follow_up_resolution_only_not_evidence"
+    if conversation_context.workflow_task is not None:
+        from proof_agent.control.workflow.goal_control import goal_prompt
+        payload['task'] = goal_prompt(conversation_context.workflow_task)
     return payload
 
 
@@ -503,7 +506,7 @@ def _intent_resolution_parameters_schema() -> dict[str, Any]:
                     "required": ["field", "kind", "default_assumption"],
                     "properties": {
                         "field": {"type": "string", "minLength": 1, "maxLength": 200},
-                        "kind": {"type": "string", "enum": ["required_context", "preference", "retrievable"]},
+                        "kind": {"type": "string", "enum": ["required_context", "answer_context", "preference", "retrievable"]},
                         "default_assumption": {"type": "string", "maxLength": 400},
                     },
                 },
@@ -854,7 +857,12 @@ def _intent_control_prompt() -> str:
         "confidence, and a recommended_next_action. "
         "Apply workflow_stage_context.clarification_policy and current_date. Classify missing "
         "fields in clarification_assessments; required_context is never optional. Search for "
-        "retrievable facts before asking the user. For overview questions, allow broad coverage "
+        "retrievable facts before asking the user. Use answer_context for personal information "
+        "needed only to finish one subquestion (e.g. budget or existing coverage for suitability), "
+        "when independent public facts can already be retrieved and answered. Keep those "
+        "independent queries required. Never classify identity, permission, unresolved product "
+        "identity, tool parameters or conflicting constraints as answer_context. "
+        "For overview questions, allow broad coverage "
         "and explicit scope defaults instead of demanding a single metric. Keep assumptions in "
         "scope_assumptions, not known_facts, and never invent data or authority. "
         "Use only allowed recommended_next_action values from the user message. "
@@ -862,6 +870,11 @@ def _intent_control_prompt() -> str:
         "block retrieval, include a bounded non-executing retrieval_query_set. "
         "Use public Knowledge Query Expansion for knowledge retrieval: produce "
         "complementary query angles without inventing business-specific query types. "
+        "Every explicit user subquestion needs a required information path or an explicit "
+        "missing-context disposition; do not mark a core suitability or comparison question "
+        "optional merely because product clauses can already be retrieved. Retrieve public "
+        "product facts first where possible, while preserving personal-context gaps. Age alone "
+        "does not establish suitability; never invent the user's needs, budget or existing coverage. "
         "Do not return raw chain-of-thought, markdown, tool calls, executable retrieval "
         "plans, final answers, or policy decisions."
     )

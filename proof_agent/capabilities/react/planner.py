@@ -213,6 +213,13 @@ class LLMReActPlanner:
             "context_summary": context_summary,
             "allowed_actions": _planner_allowed_actions(eligible_actions),
         }
+        retrieval_control = (workflow_stage_context or {}).get("retrieval_control", {})
+        pending_queries = retrieval_control.get("pending_queries", ()) if isinstance(retrieval_control, Mapping) else ()
+        if (not isinstance(pending_queries, (list, tuple)) or len(pending_queries) > 5
+                or any(not isinstance(query, str) or not query.strip() for query in pending_queries)):
+            pending_queries = ()
+        if pending_queries and ReActActionType.PLAN_RETRIEVAL.value in user_payload["allowed_actions"]:
+            user_payload["required_query_pending"] = list(pending_queries)
         if workflow_stage_context:
             user_payload["workflow_stage_context"] = dict(workflow_stage_context)
         conversation_payload = _conversation_context_prompt_payload(conversation_context)
@@ -268,12 +275,15 @@ def _planner_allowed_actions(
 def _conversation_context_prompt_payload(
     conversation_context: ContextAdmission | None,
 ) -> dict[str, Any] | None:
-    if conversation_context is None or not conversation_context.admitted:
+    if conversation_context is None or (not conversation_context.admitted and conversation_context.workflow_task is None):
         return None
     payload = context_admission_payload(conversation_context)
     # Model working context carries content; the audit projection above carries only state metadata.
     payload["summary"] = conversation_context.summary
     payload["usage"] = "follow_up_resolution_only_not_evidence"
+    if conversation_context.workflow_task is not None:
+        from proof_agent.control.workflow.goal_control import goal_prompt
+        payload['task'] = goal_prompt(conversation_context.workflow_task)
     return payload
 
 
@@ -323,15 +333,22 @@ def _planner_function_schema(
 def _planner_control_prompt() -> str:
     return (
         "You are the Proof Agent LLM ReAct Planner. "
+        "deferred_answer_fields are missing information for a remaining subquestion, not "
+        "prerequisites for the independent required retrievals. Retrieve and answer supported "
+        "parts first; include an active focused follow-up in the final answer. Do not convert "
+        "those deferred fields back into a pre-retrieval clarification. Explicit Task required "
+        "context, identity, permission and tool parameters still block dependent work. "
         "Return exactly one JSON object matching ReActActionProposal. "
         "When function calling is available, submit the proposal through the supplied function schema. "
         "If you use a compact form, return action_type plus parameters; params is accepted as an alias for parameters. "
         "Use only allowed action_type values supplied in the user message. "
         "Do not return chain-of-thought, markdown commentary, tool results, or natural language. "
         "A proposed action is not approved and cannot execute until Harness policy admits it. "
-        "When action_type is plan_retrieval, set parameters.query to the original question verbatim. "
-        "Do not summarize, shorten, translate, or rephrase the question. "
-        "Preserve the original language, key terms, and full phrasing exactly as provided."
+        "When plan_retrieval is allowed and required_query_pending is nonempty, "
+        "prefer its first exact query as parameters.query; it is a Control Plane frozen requirement. "
+        "Do not repeat a query merely because the original question is unchanged. "
+        "If no pending required query is supplied, use the original question verbatim as the retrieval query. "
+        "Never infer new tool permissions or treat attempted retrieval as answer coverage."
     )
 
 

@@ -30,6 +30,7 @@ def review_action(
     review_subagent: HarnessReviewSubagent | None,
     low_risk_fast_path_enabled: bool = True,
     trace_event_id: str = "",
+    workflow_stage_context: Mapping[str, Any] | None = None,
 ) -> tuple[PolicyDecision, dict[str, Any]]:
     """Review a ReAct action, fail closed on reviewer errors, then emit policy."""
 
@@ -81,7 +82,8 @@ def review_action(
             review_decision = review_subagent.review(
                 enforcement_point=point,
                 action=proposal,
-                context=context,
+                context={**context, "workflow_stage_context": dict(workflow_stage_context)}
+                if workflow_stage_context else context,
             )
         except ModelOutputNormalizationError as exc:
             final_decision = fail_closed_policy_decision(

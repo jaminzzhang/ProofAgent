@@ -6,6 +6,7 @@ from hashlib import sha256
 from typing import Any
 
 from proof_agent.contracts import (
+    EvidenceChunk,
     EvidenceStatus,
     ObservationRecord,
     ObservationTruthArtifact,
@@ -18,6 +19,8 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
     require_bound_observation_truth,
 )
 from proof_agent.errors import ProofAgentError
+from proof_agent.control.validators.answer_facts import answer_fact_repair_options
+from proof_agent.control.knowledge.performance_analysis import is_performance_comparison, missing_performance_coverage
 
 
 @dataclass(frozen=True)
@@ -36,16 +39,21 @@ class RetrievalRequirementProgress:
 @dataclass(frozen=True)
 class RetrievalTaskCompletion:
     requirements: tuple[RetrievalRequirementProgress, ...]
+    missing_answer_requirements: tuple[str, ...] = ()
+    supplementary: tuple[RequiredRetrieval, ...] = ()
 
     @property
     def complete(self) -> bool:
         return bool(self.requirements) and all(
             row.supporting_truth_refs for row in self.requirements
-        )
+        ) and not self.missing_answer_requirements
 
     @property
     def pending(self) -> tuple[RequiredRetrieval, ...]:
-        return tuple(row.requirement for row in self.requirements if not row.attempted)
+        required = tuple(row.requirement for row in self.requirements if not row.attempted)
+        if required or any(not row.supporting_truth_refs for row in self.requirements):
+            return required
+        return self.supplementary if self.missing_answer_requirements else ()
 
     @property
     def unmet_count(self) -> int:
@@ -88,6 +96,8 @@ def completion_projection(
         else ("complete" if complete else "incomplete"),
         "reason": "not_applicable" if completion is None else reason,
         "required_count": len(rows),
+        **({"missing_answer_requirements": list(completion.missing_answer_requirements)}
+           if completion and completion.missing_answer_requirements else {}),
         "completed_count": sum(bool(row.supporting_truth_refs) for row in rows),
         "unmet_requirement_ids": [
             row.requirement.requirement_id for row in rows if not row.supporting_truth_refs
@@ -146,9 +156,12 @@ def assess_retrieval_completion(
     requirements: tuple[RequiredRetrieval, ...],
     records: tuple[ObservationRecord, ...],
     truths: tuple[ObservationTruthArtifact, ...],
+    question: str = "",
+    optional_queries: tuple[str, ...] = (),
 ) -> RetrievalTaskCompletion:
     attempted: set[str] = set()
     support: dict[str, list[str]] = {}
+    evidence: list[EvidenceChunk] = []
     for record, truth in zip(records, truths, strict=True):
         binding = require_bound_observation_truth(truth)
         if (
@@ -172,6 +185,9 @@ def assess_retrieval_completion(
             continue
         query = query.strip()
         attempted.add(query)
+        evidence.extend(chunk for chunk in truth.accepted_evidence
+            if chunk.status is EvidenceStatus.ACCEPTED and chunk.source in record.source_refs
+            and chunk.citation in record.citation_refs and chunk.citation in truth.citation_refs)
         if any(
             chunk.status is EvidenceStatus.ACCEPTED
             and chunk.source.strip()
@@ -183,6 +199,17 @@ def assess_retrieval_completion(
             for chunk in truth.accepted_evidence
         ):
             support.setdefault(query, []).append(binding.reference)
+    missing = missing_performance_coverage(question, "\n".join(
+        option["statement"] for option in answer_fact_repair_options(tuple(evidence)))) if is_performance_comparison(question) else ()
+    if is_performance_comparison(question):
+        from proof_agent.control.knowledge.business_assessment import assessment_gaps
+        missing = tuple(dict.fromkeys((*missing, *assessment_gaps(tuple(evidence)))))
+    # A finite query family, independent of model proposals and observed wording.
+    # Every query still goes through the ordinary policy, binding and run budgets.
+    supplement_queries = (*optional_queries[:3],
+        question[:150] + " 实际报告期 各业务营运利润 新业务价值率 净息差 下降 亏损 减值")
+    supplementary = tuple(RequiredRetrieval("rq_" + sha256(q.encode()).hexdigest(), q)
+        for q in dict.fromkeys(supplement_queries) if q and q not in attempted) if missing else ()
     return RetrievalTaskCompletion(
         tuple(
             RetrievalRequirementProgress(
@@ -191,7 +218,9 @@ def assess_retrieval_completion(
                 tuple(dict.fromkeys(support.get(requirement.query, []))),
             )
             for requirement in requirements
-        )
+        ),
+        missing_answer_requirements=missing,
+        supplementary=supplementary,
     )
 
 

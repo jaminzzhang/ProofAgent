@@ -155,7 +155,10 @@ def _execute_controlled_react_v3_agent_package_run(
     receipt_path = request.runs_dir / "governance_receipt.md"
     if trace_path.exists():
         trace_path.unlink()
-    trace = TraceWriter(trace_path, run_id=run_id)
+    from proof_agent.observability.audit.task_redaction import TaskTraceProjection
+    task = request.conversation_context.workflow_task if request.conversation_context else None
+    trace = TraceWriter(trace_path, run_id=run_id,
+                        payload_projection=TaskTraceProjection(task) if task else None)
     _emit_controlled_react_run_started(
         trace,
         manifest=manifest,
@@ -200,6 +203,7 @@ def _execute_controlled_react_v3_agent_package_run(
             secret_provider=request.secret_provider,
             model_credential_resolver=request.model_credential_resolver,
             cancellation_check=request.cancellation_check,
+            knowledge_agent_id=request.agent_id,
         )
     except ProofAgentError as exc:
         if exc.code.startswith("PA_MODEL_"):
@@ -244,6 +248,7 @@ def _execute_controlled_react_v3_agent_package_run(
             trace=trace,
             stage_contexts=stage_contexts,
             business_flow_admission_callback=apply_business_flow_stage_contexts,
+            task_execution=bool(request.conversation_context and request.conversation_context.workflow_task),
         )
     if request.cancellation_check is not None:
         request.cancellation_check()
@@ -299,7 +304,7 @@ def _execute_controlled_react_v3_agent_package_run(
         receipt_path=receipt_path,
         trace_path=trace_path,
         agent_name=manifest.name,
-        question=request.question,
+        question='[restricted_task_content]' if task else request.question,
         outcome=execution_result.outcome,
         message=execution_result.final_output,
         store=request.store,

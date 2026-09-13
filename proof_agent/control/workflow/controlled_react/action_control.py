@@ -59,6 +59,7 @@ def emit_intent_resolution(
             "clarification_policy": {
                 "level": resolution.applied_clarification_level,
                 "blocking_field_count": len(resolution.missing_fields),
+                "deferred_answer_field_count": len(resolution.deferred_answer_fields),
                 "scope_assumption_count": len(resolution.scope_assumptions),
             },
             "retrieval_query_set": query_set,

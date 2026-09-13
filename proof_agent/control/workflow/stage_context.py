@@ -22,6 +22,8 @@ MAX_WORKFLOW_STAGE_PREVIEW_VALUE_CHARS = 2_000
 MAX_WORKFLOW_STAGE_PREVIEW_KEY_CHARS = 128
 MAX_WORKFLOW_STAGE_PREVIEW_COLLECTION_ITEMS = 128
 MAX_WORKFLOW_STAGE_PREVIEW_DEPTH = 6
+# One validated Workflow prompt plus one selected Skill addendum and formatting.
+MAX_WORKFLOW_STAGE_RUNTIME_PROMPT_CHARS = 25_024
 _TRUNCATION_MARKER = "… [TRUNCATED]"
 
 
@@ -57,7 +59,9 @@ class _PreviewBudget:
             )
         except (TypeError, ValueError, OverflowError):
             self.truncation_applied = True
-            return _TRUNCATION_MARKER
+            return self.project_text(
+                _TRUNCATION_MARKER, maximum=MAX_WORKFLOW_STAGE_PREVIEW_VALUE_CHARS,
+            )[0]
         available = min(
             MAX_WORKFLOW_STAGE_PREVIEW_VALUE_CHARS,
             self.remaining_chars,
@@ -78,8 +82,13 @@ def build_workflow_stage_context_preview(
     prompt: Mapping[str, Any] | WorkflowStagePromptConfig,
     context_options: Mapping[str, bool],
     sample_context: Mapping[str, Any],
+    runtime: bool = False,
 ) -> dict[str, Any]:
-    """Render a redacted Workflow Stage Context Preview without executing the stage."""
+    """Project stage context without executing it; runtime preserves prompt text.
+
+    Preview truncates presentation. Runtime rejects oversized combined prompts;
+    optional structured summaries remain bounded and separate from Task/evidence.
+    """
 
     stage = descriptor.stage(stage_id)
     unsupported_context_options = sorted(
@@ -94,7 +103,7 @@ def build_workflow_stage_context_preview(
 
     normalized_prompt = _normalize_prompt(prompt)
     addendum, prompt_redacted, prompt_truncated = _business_context_addendum(
-        normalized_prompt
+        normalized_prompt, runtime=runtime
     )
     context_projection = _selected_structured_context(
         context_options,
@@ -177,6 +186,8 @@ def _normalize_prompt(
 
 def _business_context_addendum(
     prompt: WorkflowStagePromptConfig,
+    *,
+    runtime: bool = False,
 ) -> tuple[str, bool, bool]:
     lines: list[str] = []
     if prompt.business_context:
@@ -188,12 +199,42 @@ def _business_context_addendum(
     if prompt.output_preferences:
         lines.append("Output preferences:")
         lines.extend(f"- {item}" for item in prompt.output_preferences)
-    budget = _PreviewBudget(remaining_chars=MAX_WORKFLOW_STAGE_PREVIEW_PROMPT_CHARS)
+    limit = MAX_WORKFLOW_STAGE_RUNTIME_PROMPT_CHARS if runtime else MAX_WORKFLOW_STAGE_PREVIEW_PROMPT_CHARS
+    if runtime and len("\n".join(lines)) > limit:
+        raise ProofAgentError("PA_CONFIG_002", "Combined runtime stage prompt exceeds size limit.",
+                              "Shorten the Workflow prompt and selected Skill addendum; no text was dropped.")
+    budget = _PreviewBudget(remaining_chars=limit)
     text, redaction_applied = budget.project_text(
         "\n".join(lines),
-        maximum=MAX_WORKFLOW_STAGE_PREVIEW_PROMPT_CHARS,
+        maximum=limit,
     )
     return text, redaction_applied, budget.truncation_applied
+
+
+def refresh_workflow_stage_context(
+    context: Mapping[str, Any] | None, *, values: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Refresh selected optional working context without mutating frozen config.
+
+    These bounded summaries are not evidence or authorization. Required Task and
+    evidence contracts travel separately and must never use preview truncation.
+    """
+    result = dict(context or {})
+    previous = result.get("structured_control_context", {})
+    options = {key: True for key in previous}
+    refreshed_values = {
+        key.removeprefix("include_"): values.get(key.removeprefix("include_"), value)
+        for key, value in previous.items()
+    }
+    # Reproject every selected field under one budget; merging separately bounded
+    # old and fresh projections could otherwise exceed the total context limit.
+    projected, redacted, truncated = _selected_structured_context(options, refreshed_values)
+    result["structured_control_context"] = projected
+    summary = dict(result.get("summary", {}))
+    summary["redaction_applied"] = bool(summary.get("redaction_applied")) or redacted
+    summary["truncation_applied"] = bool(summary.get("truncation_applied")) or truncated
+    result["summary"] = summary
+    return result
 
 
 def _selected_structured_context(
@@ -202,7 +243,10 @@ def _selected_structured_context(
 ) -> tuple[dict[str, Any], bool, bool]:
     selected: dict[str, Any] = {}
     redaction_applied = False
-    budget = _PreviewBudget(remaining_chars=MAX_WORKFLOW_STAGE_PREVIEW_CONTEXT_CHARS)
+    option_name_chars = sum(len(option) for option, enabled in context_options.items() if enabled)
+    budget = _PreviewBudget(
+        remaining_chars=max(0, MAX_WORKFLOW_STAGE_PREVIEW_CONTEXT_CHARS - option_name_chars),
+    )
     for option, enabled in sorted(context_options.items()):
         if not enabled:
             continue
@@ -236,7 +280,9 @@ def _redact_value(
 ) -> tuple[Any, bool]:
     if depth >= MAX_WORKFLOW_STAGE_PREVIEW_DEPTH:
         budget.truncation_applied = True
-        return _TRUNCATION_MARKER, False
+        return budget.project_text(
+            _TRUNCATION_MARKER, maximum=MAX_WORKFLOW_STAGE_PREVIEW_VALUE_CHARS,
+        )
     if isinstance(value, str):
         return budget.project_text(
             value,
@@ -281,7 +327,9 @@ def _redact_value(
             budget.truncation_applied = True
         return list_result, redaction_applied
     if not budget.claim_item():
-        return _TRUNCATION_MARKER, False
+        return budget.project_text(
+            _TRUNCATION_MARKER, maximum=MAX_WORKFLOW_STAGE_PREVIEW_VALUE_CHARS,
+        )
     return budget.project_scalar(value), False
 
 

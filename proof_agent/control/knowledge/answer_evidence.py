@@ -1,6 +1,7 @@
 """One accepted-evidence projection for initial and repair model requests."""
 
 from typing import Any
+import json
 
 from pydantic import ValidationError
 
@@ -8,8 +9,9 @@ from proof_agent.contracts import EvidenceChunk, EvidenceStatus
 from proof_agent.errors import ProofAgentError
 
 
-def answer_evidence_records(evidence: tuple[EvidenceChunk, ...]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+def unique_answer_evidence(evidence: tuple[EvidenceChunk, ...]) -> tuple[EvidenceChunk, ...]:
+    """Deduplicate retrieval repeats, retaining applicability/conflict/authority changes."""
+    unique: dict[str, EvidenceChunk] = {}
     for chunk in evidence:
         if chunk.status is not EvidenceStatus.ACCEPTED:
             continue
@@ -22,6 +24,17 @@ def answer_evidence_records(evidence: tuple[EvidenceChunk, ...]) -> list[dict[st
                 "Accepted evidence integrity check failed.",
                 "Retrieve and admit valid source evidence again.",
             ) from None
+        identity = checked.model_dump(mode="json")
+        for key in ("provider_native_score", "fusion_rank", "admission_score"):
+            identity.pop(key, None)
+        identity["metadata"] = {key: value for key, value in identity["metadata"].items() if key != "observed_at"}
+        unique.setdefault(json.dumps(identity, sort_keys=True, ensure_ascii=False), checked)
+    return tuple(unique.values())
+
+
+def answer_evidence_records(evidence: tuple[EvidenceChunk, ...]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for checked in unique_answer_evidence(evidence):
         record: dict[str, Any] = {
             "source": checked.source,
             "citation": checked.citation,

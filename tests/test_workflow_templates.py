@@ -59,3 +59,10 @@ def test_removed_workflow_templates_fail_closed(removed_template: str) -> None:
 
     assert exc.value.code == "PA_CONFIG_002"
     assert "react_enterprise_qa_v3" in exc.value.fix
+
+
+def test_answer_descriptor_exposes_actual_recovery_loop():
+    template = resolve_workflow_template("react_enterprise_qa_v3")
+    assert "plan" in template.stage("model_answer").successors
+    assert "model_answer" in template.stage("model_answer").successors
+    assert "plan" in template.stage("retrieval").successors

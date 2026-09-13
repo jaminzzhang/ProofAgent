@@ -14,6 +14,8 @@ from proof_agent.contracts import (
     ValidationStatus,
 )
 from proof_agent.control.knowledge.answer_evidence import answer_evidence_records
+from proof_agent.control.knowledge.source_tables import table_source_statements
+from proof_agent.control.knowledge.performance_analysis import SCOPE_DISCLOSURE
 
 
 MAX_ANSWER_CHARS = 16_000
@@ -33,7 +35,7 @@ def answer_fact_repair_options(evidence: tuple[EvidenceChunk, ...]) -> list[dict
     for record in answer_evidence_records(evidence):
         if "structured_data" in record:
             continue  # Preserve typed record identity through the existing repair contract.
-        for statement in _statements(record["content"], source=True):
+        for statement in [*table_source_statements(record["content"]), *_statements(record["content"], source=True)]:
             if (
                 statement.startswith(("#", "|", "![", "<"))
                 or statement.endswith((":", "："))
@@ -49,7 +51,7 @@ def answer_fact_repair_options(evidence: tuple[EvidenceChunk, ...]) -> list[dict
             # Sentence splitting removes full stops. Restore prose punctuation so
             # exact repair selections do not resemble a bare table/heading dump.
             ending = "。" if re.search(r"[\u4e00-\u9fff]", statement) else "."
-            rendered = statement if statement.endswith(("?", "!", "？", "！")) else statement + ending
+            rendered = statement if statement.endswith(("?", "!", "？", "！", "。")) else statement + ending
             if len(options) >= 128 or total_chars + len(rendered) > MAX_ANSWER_CHARS:
                 return options
             seen.add(identity)
@@ -86,6 +88,7 @@ def validate_answer_facts(
         typed = record.get("structured_data")
         if typed is None:
             source_statements.extend(_statements(record["content"], source=True))
+            source_statements.extend(s.rstrip("。") for s in table_source_statements(record["content"]))
             continue
         for field in typed["fields"]:
             value = field["value"]
@@ -108,6 +111,10 @@ def validate_answer_facts(
             if field["value_type"] not in {"decimal", "integer"}:
                 for subject in subjects:
                     literal_values.setdefault(subject, set()).add(f"{rendered} {unit}".strip())
+    from proof_agent.control.knowledge.business_assessment import verified_business_body
+    bound_body = verified_business_body(message, accepted) if message.startswith(SCOPE_DISCLOSURE + "\n比较口径说明") else None
+    if bound_body is not None:
+        message = bound_body
     answer_statements = _statements(message)
     if len(source_statements) + len(answer_statements) > MAX_STATEMENTS:
         return _result(("fact_check_input_limit",), 0, 0, "not_evaluated")
@@ -122,6 +129,8 @@ def validate_answer_facts(
     diagnostics: list[tuple[int, str, str]] = []
     checked = unassessed = 0
     for index, statement in enumerate(answer_statements):
+        if statement == SCOPE_DISCLOSURE.rstrip("。"):
+            continue  # Exact conservative server disclosure; no dynamic facts are exempted.
         fact = _fact(statement, known_subjects)
         numeric = bool(re.search(r"\d", statement))
         if not numeric and not fact[0]:
@@ -187,7 +196,14 @@ def _statements(text: str, *, source: bool = False) -> list[str]:
 
 def _fact(statement: str, known_subjects: tuple[str, ...] = ()) -> tuple[str, str]:
     subject, value = _parts(statement, known_subjects)
+    if not known_subjects:
+        subject, value = _cjk_spacing(subject), _cjk_spacing(value)
     return subject, _canonical(value) if subject else value
+
+
+def _cjk_spacing(text: str) -> str:
+    # Only CJK presentation boundaries. Never join separated digits, signs or Latin units.
+    return re.sub(r"(?<=[\u4e00-\u9fff]) +(?=[\u4e00-\u9fff0-9])|(?<=[0-9%]) +(?=[\u4e00-\u9fff])", "", text)
 
 
 def _parts(statement: str, known_subjects: tuple[str, ...] = ()) -> tuple[str, str]:

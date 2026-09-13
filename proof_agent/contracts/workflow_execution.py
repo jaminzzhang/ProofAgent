@@ -14,6 +14,8 @@ from proof_agent.contracts.evidence import EvidenceChunk
 from proof_agent.contracts.insurance_authorization import InstitutionAuthorizationContext
 from proof_agent.contracts.policy import PolicyDecisionType
 from proof_agent.contracts.receipt import ReceiptOutcome
+from proof_agent.contracts.workflow_policy import ResolvedExecutionPlan
+from proof_agent.contracts.workflow_task_update import WorkflowTaskUpdate
 from proof_agent.contracts.workflow_stage_configuration import (
     EffectiveWorkflowStageConfiguration,
     WorkflowStageAvailabilitySet,
@@ -299,6 +301,8 @@ class WorkflowTemplateExecutionResult(WorkflowExecutionModel):
     model_usage_summary: Mapping[str, Any] = Field(default_factory=FrozenDict)
     trace_summary_refs: tuple[str, ...] = Field(default_factory=tuple)
     tool_task_report: ToolTaskReport | None = Field(default=None, exclude_if=lambda value: value is None)
+    execution_plan: ResolvedExecutionPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    workflow_task_update: WorkflowTaskUpdate | None = Field(default=None, exclude=True)
 
     @field_validator(
         "intent_resolution",
