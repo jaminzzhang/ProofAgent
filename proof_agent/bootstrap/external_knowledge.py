@@ -17,6 +17,10 @@ from proof_agent.capabilities.egress.guarded_http import GuardedHttpsClient
 from proof_agent.capabilities.secrets.local_environment import LocalEnvironmentSecretProvider
 from proof_agent.contracts.egress import EgressPolicyVersion
 from proof_agent.control.security.egress import CompiledEgressPolicy
+from proof_agent.capabilities.egress.knowledge_connections import binding_origin, knowledge_connection_client
+from proof_agent.configuration.local_store import LocalAgentConfigurationStore
+from proof_agent.contracts.egress import ExactHttpsOrigin
+from proof_agent.contracts.knowledge_connection import KnowledgeConnectionAuthorization, binding_digest
 
 
 _PROVIDER_TYPES: dict[str, type[DifyKnowledgeProvider] | type[AgentsetKnowledgeProvider]] = {
@@ -28,12 +32,24 @@ _PROVIDER_TYPES: dict[str, type[DifyKnowledgeProvider] | type[AgentsetKnowledgeP
 def development_knowledge_dependencies(
     http_client: GuardedHttpClient | None,
     secret_provider: SecretProvider | None,
+    *,
+    configuration_store: object | None = None,
+    agent_id: str | None = None,
+    bindings: tuple[ExternalKnowledgeBinding, ...] = (),
 ) -> tuple[GuardedHttpClient | None, SecretProvider | None]:
     """Use an explicit operator-owned egress policy for local CLI / Dashboard execution."""
     if os.environ.get("PROOF_AGENT_MODE", "development") != "development":
         return http_client, secret_provider
     if http_client is None:
         policy_path = os.environ.get("PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY")
+        if not policy_path and isinstance(configuration_store, LocalAgentConfigurationStore) and agent_id and bindings:
+            if any(_find_grant(configuration_store, agent_id, bindings, binding_origin(item)) is None for item in bindings):
+                raise ProofAgentError("PA_CONFIG_002", "External Knowledge connection authorization is required.",
+                    "Use Save and authorize connection in the Knowledge configuration, or configure "
+                    "PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY on the server.")
+            http_client = knowledge_connection_client(
+                lambda origin: _find_grant(configuration_store, agent_id, bindings, origin))
+            return http_client, secret_provider or LocalEnvironmentSecretProvider(os.environ, mode="development")
         if not policy_path:
             raise ProofAgentError(
                 "PA_CONFIG_002",
@@ -59,6 +75,24 @@ def development_knowledge_dependencies(
     if secret_provider is None:
         secret_provider = LocalEnvironmentSecretProvider(os.environ, mode="development")
     return http_client, secret_provider
+
+
+def _find_grant(
+    store: LocalAgentConfigurationStore, agent_id: str,
+    bindings: tuple[ExternalKnowledgeBinding, ...], origin: ExactHttpsOrigin,
+) -> KnowledgeConnectionAuthorization | None:
+    requested = [binding_digest(item) for item in bindings if binding_origin(item) == origin]
+    if not requested:
+        return None
+    available = [grant for draft in store.list_drafts(agent_id)
+                 for grant in draft.knowledge_connection_authorizations if grant.origin == origin]
+    selected = []
+    for digest in requested:
+        grant = next((item for item in available if item.binding_sha256 == digest), None)
+        if grant is None:
+            return None
+        selected.append(grant)
+    return next((item for item in selected if item.address_mode == "public_dns"), selected[0])
 
 
 class ExternalKnowledgeRuntime:

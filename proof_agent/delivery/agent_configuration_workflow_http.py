@@ -12,6 +12,43 @@ from proof_agent.contracts import (
     WorkflowStageContextConfig,
     WorkflowStagePromptConfig,
 )
+from proof_agent.contracts.workflow_policy import (
+    AssurancePolicy,
+    InteractionPolicy,
+    WorkflowExecutionPolicy,
+)
+
+
+class WorkflowPolicyPatchRequest(BaseModel):
+    """Absent sections stay untouched; explicit null removes one policy section."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    execution: WorkflowExecutionPolicy | None = None
+    interaction: InteractionPolicy | None = None
+    assurance: AssurancePolicy | None = None
+
+    def as_patch(self) -> dict[str, Any]:
+        """Preserve explicit fields even inside the frozen checkpoint mappings."""
+
+        payload = self.model_dump(mode="json", exclude_unset=True)
+        for section in ("interaction", "assurance"):
+            policy = getattr(self, section)
+            if policy is not None and "checkpoints" in policy.model_fields_set:
+                payload[section]["checkpoints"] = {
+                    stage: checkpoint.model_dump(mode="json", exclude_unset=True)
+                    for stage, checkpoint in policy.checkpoints.items()
+                }
+        return payload
+
+
+class WorkflowExecutionPreviewRequest(BaseModel):
+    """Compile an unsaved policy against one exact Draft revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1, strict=True)
+    policy: WorkflowPolicyPatchRequest = Field(default_factory=WorkflowPolicyPatchRequest)
 
 
 class WorkflowStagePromptRequest(BaseModel):
@@ -76,6 +113,8 @@ def workflow_stage_config_request(
 
 
 __all__ = [
+    "WorkflowExecutionPreviewRequest",
+    "WorkflowPolicyPatchRequest",
     "WorkflowStagePreviewRequest",
     "WorkflowStagePromptRequest",
     "WorkflowStageUpdateItemRequest",

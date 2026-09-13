@@ -28,6 +28,8 @@ from proof_agent.control.workflow.templates import (
     resolve_workflow_template,
 )
 from proof_agent.delivery.agent_configuration_workflow_http import (
+    WorkflowExecutionPreviewRequest,
+    WorkflowPolicyPatchRequest,
     WorkflowStagePreviewRequest,
     WorkflowStageUpdateItemRequest,
     workflow_stage_config_request,
@@ -129,6 +131,7 @@ class ProductionWorkflowStagesUpdateRequest(BaseModel):
         max_length=255,
     )
     stages: list[WorkflowStageUpdateItemRequest]
+    policy: WorkflowPolicyPatchRequest | None = None
 
 
 class ProductionBusinessFlowSkillPackCreateRequest(BusinessFlowSkillPackCreateFields):
@@ -706,6 +709,7 @@ def update_production_agent_workflow_stages(
                 template_descriptor_version=body.template_descriptor_version,
                 stages=tuple(workflow_stage_config_request(item) for item in body.stages),
                 actor=_audit_actor(request, identity),
+                **({"policy": body.policy.as_patch()} if body.policy is not None else {}),
             ),
         )
     except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
@@ -723,6 +727,35 @@ def update_production_agent_workflow_stages(
             detail="agent_workflow_stage_configuration_failed",
         ) from exc
     return record.draft.contract_bundle.model_dump(mode="json")
+
+
+@agent_router.post("/{agent_id}/drafts/{draft_id}/workflow-execution/preview")
+def preview_production_agent_workflow_execution(
+    agent_id: str,
+    draft_id: str,
+    body: WorkflowExecutionPreviewRequest,
+    request: Request,
+    identity: OperatorIdentityContext = Depends(get_operator_identity),
+) -> dict[str, Any]:
+    """Compile a revision-bound policy candidate without executing a Run."""
+
+    require_operator_permission(identity, Permission.AGENT_VALIDATE)
+    try:
+        result = _application(request).preview_workflow_execution(
+            agent_id=agent_id,
+            draft_id=draft_id,
+            expected_revision=body.expected_revision,
+            policy=body.policy.as_patch(),
+        )
+        return cast(dict[str, Any], result.model_dump(mode="json"))
+    except (AgentConfigurationConflict, AgentConfigurationNotFound) as exc:
+        raise _configuration_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="agent_workflow_execution_preview_invalid") from exc
+    except ProofAgentError as exc:
+        raise proof_agent_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="agent_workflow_execution_preview_failed") from exc
 
 
 @agent_router.post("/{agent_id}/drafts/{draft_id}/workflow-stages/{stage_id}/preview")

@@ -1,0 +1,25 @@
+{
+  "recorded_at": "2026-09-12T13:44:09.616919+00:00",
+  "head": "0d3009bd8d59bac2769e2b9d9212a480977c76ff",
+  "files": {
+    "proof_agent/contracts/knowledge_connection.py": "e96acc87a2b7aabe9125eb41f3d699f952340cde943f0995a94b4cf6969904bd",
+    "proof_agent/contracts/agent_configuration.py": "d66d749c1a3c5e4111d611b4b7e9099fc2e5953a16a9e3ad07c425e1e910fe65",
+    "proof_agent/capabilities/egress/knowledge_connections.py": "7022a424d58c9c04409ec772a4b9e295232c45455c7c17dc1a1c048e95505ed4",
+    "proof_agent/bootstrap/external_knowledge.py": "bd6c15d165f531fbc860647dfd15b9eec815482e090b8615856916d5830fec4d",
+    "proof_agent/bootstrap/composition.py": "73f19300e305efaab06be0d84ef4213e6244cbe612562c5acde32f4907784736",
+    "proof_agent/control/agent_configuration_workspace.py": "f8f36bad80e56c9699993434f79b1b5200608a66ba1bd3a38b8ff57e1cb55906",
+    "proof_agent/delivery/external_knowledge_configuration.py": "69b1cd2a8af4f8a6a32b5738ac0ff7560138780b45b7d44b3d41c9f8b33828aa",
+    "proof_agent/delivery/agent_package_execution.py": "b2b08dec5980a7253f1aea609c5b7cd44642962da2ad63994aa1dc109cd67e0d",
+    "dashboard/src/api/client.ts": "88fc1d61237076fe5bfb7e8291e6f3e5bd6f1974e031aab492ec941f46180d4d",
+    "dashboard/src/api/types.ts": "17bb567bafafbf781e1db725612bc239406766a0755d44edc33338cea7531b86",
+    "dashboard/src/components/agent/KnowledgeModuleEditor.tsx": "c1818f09e1bd03b1f9a41b449a425ac64d8cd6d19e4760a63f792063786c96d5",
+    "dashboard/src/pages/AgentDetailPage.tsx": "0579b223b2533ec80a4ce2c680ee2b8dcc0bb222d67e843071c2a230a4a69bd8",
+    "dashboard/src/i18n/messages.ts": "6906b276ee67bdb66d46866ea4b66219cde28f27f6592dae195a6daa2bc97fa6",
+    "dashboard/src/components/__tests__/agent/KnowledgeProviders.test.tsx": "8fc456b7ee5c3747044c17bd886ffcd6aa504b8601852112975d579afdc64e09",
+    "dashboard/src/pages/__tests__/AgentDetailPage.test.tsx": "71210073addc23c17bce24ef54328e149d1cd1f0be6e6e6f29cbc6c570dd9fad",
+    "tests/test_knowledge_connection_authorization.py": "cd914cc4b56307f2abf7b7299d1639f71c5c67dc27b171e91d843ef0448d2b2c",
+    "AGENTS-COMMON.md": "481c32d30a7fa89ed73657c6a3d8563b3cc8f17f22626bcced833f6d55679b4b",
+    "docs/rules/hicode-coding-rules.md": "c5d6bff759b067b8218b542ed3f4a4bcbc4653242a91756eca6653aeff9c3ba4",
+    "docs/adr/0256-authorize-development-knowledge-connections.md": "b287875490ad0dfcb0483203f6e7a9018ccb09a5d1c85217271b67708244a5e4"
+  }
+}

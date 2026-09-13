@@ -7,8 +7,9 @@
 1. 在 Dify 的知识库 Service API 页面获取 Service API 地址、Dataset ID 和 Knowledge API Key。API Key 的权限可能涵盖多个知识库；Agent 只能查询自身绑定的 Dataset。
 2. 将 Key 交给服务端凭证服务。开发环境通过环境变量解析，生产目标通过现有 Vault Secret Provider 解析。不要把 Key 填入 Agent YAML、Dashboard、聊天消息或 Git。
 3. 在 Dashboard → Agent → 草稿 → 知识库中添加 Dify 数据集。填写绑定 ID、Service API URL、Dataset ID、凭证服务、Secret Handle 与版本、检索方式、Top K 和最低相关性分数。Dify 与 Agentset 合计最多 5 个绑定；保存检查草稿 revision，冲突后需重新载入。
-4. 配置独立的出站许可：明确 Service API 的 HTTPS origin 和允许连接的 IP/CIDR。更改 Agent 地址不会自动获得网络许可。自部署 Dify 需通过 TLS 暴露 Service API。
-5. 开发模式下，执行草稿验证，确认实际引用与回答，再发布开发版本。版本固定连接、Dataset、凭证引用与检索设置；不固定 Dify 数据集的全部内容。
+4. 开发环境点击“保存并授权连接”：具有 Agent 编辑与出站策略编辑权限的操作者，可在同一草稿 revision 中保存绑定、授权精确 HTTPS origin 并记录审计。普通“保存知识库配置”不增加权限。公网 DNS 地址变化自动复核；每次连接仍检查全部解析地址并固定连接。使用本机代理时，显式勾选“允许内置供应商使用本机代理虚拟地址”；该选项仅对 `api.agentset.ai:443`、`api.dify.ai:443` 的 `198.18.0.0/15` 及映射／转换形式生效，不开放其他内网地址。
+5. 授权后自动检查服务端凭证并执行一次固定问题 `connection check` 的只读检索；也可点击“检查已保存连接”重试。界面仅显示该 revision 的连接状态，不返回密钥或检索内容。连接检查不调用模型，不证明回答质量。服务端凭证缺失需在服务启动环境中补齐；凭证不会在浏览器输入。
+6. 开发模式下，执行草稿验证，确认实际引用与回答，再发布开发版本。版本固定连接、Dataset、凭证引用与检索设置；不固定 Dify 数据集的全部内容。
 
 ## YAML 示例
 
@@ -79,7 +80,9 @@ knowledge_bindings:
 
 ## 开发出站策略
 
-在仓库外保存一份 `EgressPolicyVersion` JSON，并将路径设置到 `PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY`。已有服务端 Guarded HTTP 注入时继续使用该实例，不创建第二套网络权限。未配置许可时拒绝发起请求。
+[KNOWN | HIGH] Dashboard 自动授权按 ADR-0256 保存在现有开发配置存储的服务端字段中，随绑定与审计一起提交；后续请求立即读取，无需设置环境变量、编辑 JSON 或重启。修改／删除绑定会移除相应授权，旧发布版本也不能绕过撤销；仍保留同一 Agent 其他草稿授予的匹配授权。授权仅用于外部 Knowledge，不扩展模型或工具出站权限。草稿中的 YAML 不能自行声明授权。
+
+生产、自部署私网服务或已有独立网络策略继续由服务端管理。开发 CLI 或需要固定 CIDR 的环境可在仓库外保存一份 `EgressPolicyVersion` JSON，并将路径设置到 `PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY`。显式文件与已有服务端 Guarded HTTP 注入具有优先权，Dashboard 不覆盖它们；界面显示“服务端管理策略”。未配置许可时拒绝发起请求。
 
 ```json
 {
@@ -144,6 +147,6 @@ knowledge_bindings:
 
 ## Validate 报 PA_CONFIG_002：未装配外部检索组件
 
-如果开发服务器提示未配置 outbound access，需在**启动服务器的环境**中设置 `PROOF_AGENT_EXTERNAL_KNOWLEDGE_EGRESS_POLICY`，值为上文运维核准的 EgressPolicyVersion JSON 路径，然后重启。仅在 Dashboard 保存 URL、Namespace 和 Secret Handle 不会生成出站许可。凭证引用对应的环境变量也必须由服务器进程获得，不在浏览器输入 Key。
+如果开发服务器提示未配置 outbound access，进入当前 Agent 的 Knowledge 设置，点击“保存并授权连接”。本机代理解析为虚拟地址时同时启用代理选项。授权即时生效；当前 Agent 的已有绑定也可以直接授权，无需先修改表单。普通保存 URL、Namespace 和 Secret Handle 不会生成许可。若界面显示“服务端管理策略”，则按上文维护已有服务端策略。凭证引用对应的环境变量必须由服务器进程获得，不在浏览器输入 Key。
 
 历史报错 `External Knowledge requires guarded HTTP and a Secret Provider` 可能由缺失出站策略导致；现已将该分支改为明确的缺失配置诊断。测试验证提供策略后两项组件能够装配，但这不证明真实凭证、供应商网络与检索质量已通过验证。

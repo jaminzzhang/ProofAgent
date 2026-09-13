@@ -14,6 +14,8 @@ from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import yaml  # type: ignore[import-untyped]
+from proof_agent.contracts.knowledge_connection import KnowledgeConnectionAuthorization, binding_digest
+from proof_agent.contracts.external_knowledge import ExternalKnowledgeBinding
 
 from proof_agent.configuration.importer import build_agent_package_contract_bundle
 from proof_agent.contracts import (
@@ -45,6 +47,12 @@ from proof_agent.contracts import (
     WorkflowStagePromptConfig,
 )
 from proof_agent.contracts.ports import ConfigurationUnitOfWork
+from proof_agent.contracts.workflow_policy import (
+    AssurancePolicy,
+    InteractionPolicy,
+    ResolvedExecutionPlan,
+    WorkflowExecutionPolicy,
+)
 from proof_agent.contracts.knowledge_service_management import (
     KnowledgeServiceManagementWorkspace,
 )
@@ -185,6 +193,7 @@ class AgentConfigurationWorkflowStageDraftFacts:
     policy_reference: str
     response_disclosure_policy: Mapping[str, Any]
     memory_scope: Mapping[str, Any]
+    execution_plan: ResolvedExecutionPlan | None = None
 
 
 @dataclass(frozen=True)
@@ -613,11 +622,16 @@ class AgentConfigurationWorkspace:
         policy_yaml: str | None,
         tools_yaml: str | None,
         actor: AuditActorFacts,
+        knowledge_connection_authorizations: tuple["KnowledgeConnectionAuthorization", ...] | None = None,
     ) -> AgentDraftRecord:
         """Validate and atomically save one complete raw Contract candidate."""
 
         self._require_agent_scope(agent_id)
         self._require_draft_scope(draft_id)
+        if knowledge_connection_authorizations is not None:
+            from proof_agent.contracts import Permission
+            if Permission.EGRESS_POLICY_EDIT.value not in actor.permissions:
+                raise ValueError("Egress Policy edit permission is required")
         if expected_revision < 1:
             raise ValueError("expected_revision must be at least one")
         if self._contract_validator is None:
@@ -645,6 +659,20 @@ class AgentConfigurationWorkspace:
             extra_files=current_bundle.extra_files,
             advanced_fields=current_bundle.advanced_fields,
         )
+        try:
+            binding_digests = {
+                binding_digest(ExternalKnowledgeBinding.model_validate(item))
+                for item in yaml.safe_load(bundle.agent_yaml).get("knowledge_bindings", [])
+            }
+        except (ValueError, TypeError, AttributeError, yaml.YAMLError):
+            binding_digests = set()  # The complete Contract validator below reports the error.
+        authorizations = tuple(
+            item for item in (
+                current.draft.knowledge_connection_authorizations
+                if knowledge_connection_authorizations is None
+                else knowledge_connection_authorizations
+            ) if item.binding_sha256 in binding_digests
+        )
         now = _timestamp(self._clock())
         metadata = {
             "expected_revision": expected_revision,
@@ -658,6 +686,10 @@ class AgentConfigurationWorkspace:
                 if value is not None
             ],
         }
+        if knowledge_connection_authorizations is not None:
+            metadata["knowledge_connection_authorizations"] = [
+                item.model_dump(mode="json") for item in authorizations
+            ]
         operation = ConfigurationOperationAudit(
             operation_id=str(
                 uuid5(
@@ -674,6 +706,7 @@ class AgentConfigurationWorkspace:
         candidate = current.draft.model_copy(
             update={
                 "contract_bundle": bundle,
+                "knowledge_connection_authorizations": authorizations,
                 "updated_at": now,
                 "updated_by": actor.subject,
                 "operation_audit": (*current.draft.operation_audit, operation),
@@ -1064,6 +1097,7 @@ class AgentConfigurationWorkspace:
         template_descriptor_version: str | None,
         stages: tuple[WorkflowStageConfig, ...],
         actor: AuditActorFacts,
+        policy: Mapping[str, Any] | None = None,
     ) -> AgentDraftRecord:
         """Validate and atomically replace one Draft's Workflow Stage settings."""
 
@@ -1089,6 +1123,7 @@ class AgentConfigurationWorkspace:
             template_descriptor_version=template_descriptor_version,
             stages=stages,
         )
+        bundle = _workflow_policy_contract_bundle(bundle, policy=policy)
         _validate_workflow_stage_command(
             workflow_template=workflow_template,
             template_descriptor_version=template_descriptor_version,
@@ -1100,6 +1135,8 @@ class AgentConfigurationWorkspace:
             "template_descriptor_version": template_descriptor_version,
             "stage_ids": [stage.id for stage in stages],
         }
+        if policy:
+            metadata["policy_sections"] = sorted(policy)
         operation = ConfigurationOperationAudit(
             operation_id=str(
                 uuid5(
@@ -1152,6 +1189,45 @@ class AgentConfigurationWorkspace:
                 detail="The Agent Draft changed; reload it before saving.",
             ) from exc
         return saved
+
+    def preview_workflow_execution(
+        self,
+        *,
+        agent_id: str,
+        draft_id: str,
+        expected_revision: int,
+        policy: Mapping[str, Any],
+    ) -> ResolvedExecutionPlan:
+        """Compile an exact Draft candidate without writing state or executing models."""
+
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be at least one")
+        current = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if current.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed; reload it before previewing.",
+            )
+        if self._workflow_stage_inspector is None:
+            raise AgentConfigurationConflict(
+                code="agent_workflow_stage_configuration_unavailable",
+                detail="Workflow configuration is unavailable.",
+            )
+        bundle = _workflow_policy_contract_bundle(current.draft.contract_bundle, policy=policy)
+        candidate = current.draft.model_copy(update={"contract_bundle": bundle})
+        facts = self._workflow_stage_inspector.inspect(draft=candidate)
+        latest = self.get_draft(agent_id=agent_id, draft_id=draft_id)
+        if latest.revision != expected_revision:
+            raise AgentConfigurationConflict(
+                code="agent_draft_revision_conflict",
+                detail="The Agent Draft changed while compiling this preview.",
+            )
+        if facts.execution_plan is None:
+            raise AgentConfigurationConflict(
+                code="agent_workflow_execution_preview_unavailable",
+                detail="Execution plan inspection is unavailable.",
+            )
+        return facts.execution_plan
 
     def preview_workflow_stage(
         self,
@@ -1710,6 +1786,44 @@ def _workflow_stage_contract_bundle(
         ),
         workflow_template,
     )
+
+
+def _workflow_policy_contract_bundle(
+    bundle: ContractBundle,
+    *,
+    policy: Mapping[str, Any] | None,
+) -> ContractBundle:
+    """Apply only declared sections; full manifest validation remains in the inspector."""
+
+    if policy is None:
+        return bundle
+    if not isinstance(policy, Mapping) or set(policy) - {"execution", "interaction", "assurance"}:
+        raise ValueError("Unknown Workflow policy section")
+    if not policy:
+        return bundle
+    try:
+        raw = yaml.safe_load(bundle.agent_yaml)
+    except yaml.YAMLError as exc:
+        raise ValueError("agent_yaml is invalid YAML") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("workflow"), dict):
+        raise ValueError("agent_yaml workflow must be a mapping")
+    schemas: dict[str, type[WorkflowExecutionPolicy | InteractionPolicy | AssurancePolicy]] = {
+        "execution": WorkflowExecutionPolicy,
+        "interaction": InteractionPolicy,
+        "assurance": AssurancePolicy,
+    }
+    for section, value in policy.items():
+        target = raw["workflow"] if section == "execution" else raw
+        if value is None:
+            target.pop(section, None)
+            continue
+        if not isinstance(value, Mapping):
+            raise ValueError("Workflow policy sections must be mappings or null")
+        schemas[section].model_validate(value)
+        target[section] = dict(value)
+    return bundle.model_copy(update={
+        "agent_yaml": yaml.safe_dump(raw, sort_keys=False, allow_unicode=True, width=1000),
+    })
 
 
 def _workflow_stage_payload(stage: WorkflowStageConfig) -> dict[str, Any]:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ExternalKnowledgeBinding, ExternalKnowledgeConfiguration } from '../../api/types'
+import type { ExternalKnowledgeBinding, ExternalKnowledgeConfiguration, KnowledgeConnectionCheck } from '../../api/types'
 import { useLocale } from '../../i18n/locale'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
 
@@ -13,18 +13,25 @@ interface Props {
   busy: boolean
   disabled?: boolean
   onDirtyChange?: (dirty: boolean) => void
-  onSave: (bindings: ExternalKnowledgeBinding[]) => Promise<KnowledgeBindingMutationResult>
+  onSave: (bindings: ExternalKnowledgeBinding[], authorize?: {allow_local_proxy: boolean}) => Promise<KnowledgeBindingMutationResult>
+  onCheck?: () => Promise<void>
+  checkResult?: KnowledgeConnectionCheck | null
+  checkError?: string | null
 }
 
 const inputClass = 'w-full rounded-md border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)]'
 
-export function KnowledgeModuleEditor({ config, mode, loading, error, busy, disabled = false, onSave, onDirtyChange }: Props) {
+export function KnowledgeModuleEditor({ config, mode, loading, error, busy, disabled = false, onSave, onDirtyChange, onCheck, checkResult, checkError }: Props) {
   const { t } = useLocale()
   const [bindings, setBindings] = useState<ExternalKnowledgeBinding[]>([])
   const [dirty, setDirty] = useState(false)
   const [conflict, setConflict] = useState(false)
+  const [allowProxy, setAllowProxy] = useState(false)
   useEffect(() => {
-    if (config && !dirty && !conflict) setBindings(config.bindings)
+    if (config && !dirty && !conflict) {
+      setBindings(config.bindings)
+      setAllowProxy(config.connections?.some(item => item.address_mode === 'local_proxy_dns') ?? false)
+    }
   }, [config, dirty, conflict])
   useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
   if (loading) return <LoadingSpinner />
@@ -62,8 +69,9 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, disa
   return <form className="business-knowledge space-y-5"
     onSubmit={async event => {
       event.preventDefault()
-      if (!dirty || conflict || busy || disabled) return
-      const result = await onSave(bindings)
+      const authorize = (event.nativeEvent as SubmitEvent).submitter?.getAttribute('name') === 'authorize'
+      if ((!dirty && !authorize) || conflict || busy || disabled || (authorize && !config.can_authorize)) return
+      const result = authorize ? await onSave(bindings, {allow_local_proxy: allowProxy}) : await onSave(bindings)
       if (result === 'saved') setDirty(false)
       if (result === 'conflict') setConflict(true)
     }}>
@@ -138,8 +146,30 @@ export function KnowledgeModuleEditor({ config, mode, loading, error, busy, disa
       <button type="button" disabled={bindings.length >= 5} onClick={() => add('dify')}>{t('externalKnowledge.add')}</button>
       <button type="button" disabled={bindings.length >= 5} onClick={() => add('agentset')}>{t('externalKnowledge.addAgentset')}</button>
     </fieldset>
-    <button type="submit" disabled={!dirty || conflict || busy || disabled} className="rounded-md bg-[var(--accent)] px-4 py-2 font-semibold text-[var(--accent-fg)] disabled:opacity-50">
+    <section className="space-y-3 rounded-md border border-[var(--border)] p-4" aria-label={t('externalKnowledge.connectionTitle')}>
+      <h4 className="font-semibold">{t('externalKnowledge.connectionTitle')}</h4>
+      <p className="text-sm text-[var(--text-muted)]">{t(config.authorization_mode === 'managed' ? 'externalKnowledge.managedPolicy' : 'externalKnowledge.authorizeHelp')}</p>
+      {config.can_authorize && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowProxy}
+        disabled={busy || disabled || conflict} onChange={event => setAllowProxy(event.target.checked)} />
+        {t('externalKnowledge.allowProxy')}</label>}
+      {!dirty && config.connections?.map(item => <p className="text-sm break-all" key={item.binding_id}>
+        {item.binding_id} · {item.origin} · {t(config.authorization_mode === 'managed' ? 'externalKnowledge.managedLabel' : item.authorized ? 'externalKnowledge.authorized' : 'externalKnowledge.notAuthorized')}
+      </p>)}
+      {!dirty && checkResult?.revision === config.revision && <ul role="status" className="space-y-2 text-sm">
+        {checkResult.connections.map(item => <li key={item.binding_id}>{item.binding_id} · {t(`externalKnowledge.check.${item.status}`)}</li>)}
+      </ul>}
+      {!dirty && checkError && <p role="alert">{checkError}</p>}
+      {config.can_check && onCheck && <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-50"
+        disabled={dirty || conflict || busy || disabled || !bindings.length} onClick={() => void onCheck()}>{t('externalKnowledge.checkConnections')}</button>}
+    </section>
+    <div className="flex flex-wrap gap-3">
+    <button type="submit" disabled={!dirty || conflict || busy || disabled} className="rounded-md border border-[var(--border)] px-4 py-2 font-semibold disabled:opacity-50">
       {busy ? t('agentDetail.saving') : t('externalKnowledge.save')}
     </button>
+    {config.can_authorize && <button name="authorize" type="submit" disabled={conflict || busy || disabled || !bindings.length}
+      className="rounded-md bg-[var(--accent)] px-4 py-2 font-semibold text-[var(--accent-fg)] disabled:opacity-50">
+      {busy ? t('agentDetail.saving') : t('externalKnowledge.saveAuthorize')}
+    </button>}
+    </div>
   </form>
 }
