@@ -1,5 +1,11 @@
 # Proof Agent Developer Guide
 
+[KNOWN | HIGH] ADR-0263 checks missing-field dependencies against the current request.
+A bounded purchase-consultation profile removes unrelated existing-product-policy
+questions in both Intent and Planner; hypothetical later follow-ups do not create
+current prerequisites. Unknown dependencies and actual Task/tool requirements stay
+blocking. See `docs/adr/0263-check-purchase-clarification-dependencies.md`.
+
 [KNOWN | HIGH] ADR-0261 separates answer_context from globally blocking required_context.
 With independent required retrievals, Control preserves deferred_answer_fields through
 answer/repair/review and delivers a partial answer plus active follow-up, including

@@ -70,6 +70,7 @@ from proof_agent.control.workflow.controlled_react.artifact_binding import (
 from proof_agent.errors import ProofAgentError
 from proof_agent.control.workflow.execution_compiler import compile_execution_plan
 from proof_agent.control.workflow.interaction import decide_interaction
+from proof_agent.control.workflow.context_dependencies import irrelevant_purchase_policy_field
 from proof_agent.control.workflow.goal_control import answered_fields, assess_goal, required_goal_queries
 from proof_agent.control.workflow.assurance import evaluate_assurance, requires_external_sources
 from proof_agent.contracts.workflow_policy import InteractionPolicy, InteractionStage
@@ -1130,7 +1131,7 @@ class ControlledReActOrchestrator:
         return planning_state, action
 
     def _apply_plan_interaction(self, state: ControlledReActRunState, action: ReActActionProposal) -> ReActActionProposal:
-        if action.action_type is not ReActActionType.ASK_CLARIFICATION or self._ports.interaction_policy is None:
+        if action.action_type is not ReActActionType.ASK_CLARIFICATION:
             return action
         task = state.conversation_context.workflow_task if state.conversation_context else None
         supplied = answered_fields(task) if task else {}
@@ -1141,9 +1142,20 @@ class ControlledReActOrchestrator:
         stage = stage if stage in ('goal', 'plan', 'evidence', 'tool_input', 'finalization') else 'plan'
         blocking = []
         for name in fields:
+            if (stage != 'tool_input'
+                    and not (task and name in task.goal.required_context)
+                    and not state.tool_task_plan
+                    and action.target_tool_name is None
+                    and (state.intent_resolution or {}).get('recommended_next_action') != ReActActionType.PROPOSE_TOOL_CALL.value
+                    and required_retrievals(state.intent_resolution)
+                    and irrelevant_purchase_policy_field(state.question, name)):
+                continue
             if (name in (state.intent_resolution or {}).get('deferred_answer_fields', ())
                     and not (task and name in task.goal.required_context)
                     and stage not in ('tool_input',)):
+                continue
+            if self._ports.interaction_policy is None:
+                blocking.append(name)
                 continue
             row = assessments.get(name, {})
             reason = row.get('kind', 'required_context')

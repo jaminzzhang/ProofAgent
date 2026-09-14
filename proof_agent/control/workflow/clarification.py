@@ -8,6 +8,7 @@ import re
 from proof_agent.contracts.manifest import ResponseConfig
 from proof_agent.contracts.workflow_policy import InteractionPolicy, InteractionStage
 from proof_agent.control.workflow.interaction import decide_interaction
+from proof_agent.control.workflow.context_dependencies import PURCHASE_SCOPE, irrelevant_purchase_policy_field
 from proof_agent.contracts.react_workflow import (
     IntentResolution,
     ReActActionType,
@@ -38,6 +39,11 @@ def clarification_context(
                 "answer_context (personal information needed for a remaining subquestion while independent "
                 "public facts can be answered), or retrievable (facts governed retrieval can establish). "
                 "Never default required_context. Defer answer_context until after the supported answer; "
+                "Check each field against a CURRENT requested subtask: do not create missing fields "
+                "for hypothetical future follow-ups. Purchasing suitability does not require ownership "
+                "of this product or its policy documents. Existing overall coverage, needs and budget "
+                "can be answer_context; policy-specific claims, surrender and account queries require "
+                "their actual case inputs. A field is not required merely because it is insurance data. "
                 "include a focused active question, even in autonomous mode. "
                 "Do not ask users whether data exists; retrieve first. No matching business flow pack "
                 "is not a user ambiguity. Do not ask again for facts already supplied. "
@@ -70,6 +76,7 @@ def apply_clarification_policy(
     from proof_agent.control.knowledge.answer_requirements import answer_requirements
     resolution = resolution.model_copy(update={"answer_requirements": answer_requirements(question)})
     resolution = _normalize_performance_period(resolution, question)
+    resolution = _normalize_purchase_dependencies(resolution, question)
     resolution = resolution.model_copy(update={"applied_clarification_level": level})
     if not resolution.missing_fields or resolution.recommended_next_action is ReActActionType.REFUSE:
         return resolution
@@ -134,6 +141,28 @@ def apply_clarification_policy(
             "retrieval_query_set": queries,
         }
     )
+
+
+def _normalize_purchase_dependencies(resolution: IntentResolution, question: str) -> IntentResolution:
+    # Only independent Knowledge work qualifies. Tool actions and refusals retain
+    # the original gaps; explicit frozen Task requirements are enforced upstream.
+    if (resolution.recommended_next_action not in (
+            ReActActionType.PLAN_RETRIEVAL, ReActActionType.ASK_CLARIFICATION)
+            or not any(q.required for q in resolution.retrieval_query_set)):
+        return resolution
+    irrelevant = {field for field in (*resolution.missing_fields, *resolution.deferred_answer_fields)
+                  if irrelevant_purchase_policy_field(question, field)}
+    if not irrelevant:
+        return resolution
+    assumptions = tuple(dict.fromkeys((*resolution.scope_assumptions, PURCHASE_SCOPE)))
+    return resolution.model_copy(update={
+        "missing_fields": tuple(f for f in resolution.missing_fields if f not in irrelevant),
+        "deferred_answer_fields": tuple(f for f in resolution.deferred_answer_fields if f not in irrelevant),
+        "clarification_assessments": tuple(a for a in resolution.clarification_assessments if a.field not in irrelevant),
+        "scope_assumptions": assumptions if len(assumptions) <= 8 else resolution.scope_assumptions,
+        "recommended_next_action": (resolution.recommended_next_action
+            if any(f not in irrelevant for f in resolution.missing_fields) else ReActActionType.PLAN_RETRIEVAL),
+    })
 
 
 def _normalize_performance_period(resolution: IntentResolution, question: str) -> IntentResolution:

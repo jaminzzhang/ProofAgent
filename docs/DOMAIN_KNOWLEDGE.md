@@ -5,6 +5,12 @@ not a second glossary.
 
 ## Primary maps
 
+- `docs/adr/0263-check-purchase-clarification-dependencies.md` — current-request
+  clarification dependencies, bounded purchase-context correction and hard-gate boundaries.
+
+- `docs/adr/0262-bind-semantic-claim-labels-through-grounding-review.md` — semantic
+  claim labels, original quote binding and review; replaces exact body substring matching.
+
 - `docs/adr/0260-synthesize-answers-with-bound-source-quotes.md` — LLM synthesis,
   original quote bindings, separate bounded model review and semantic acceptance limits;
   supersedes automatic source-ID generation/recovery in earlier answer ADRs.

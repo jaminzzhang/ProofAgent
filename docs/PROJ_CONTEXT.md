@@ -1,5 +1,16 @@
 # Project Context
 
+[KNOWN | HIGH] ADR-0263 corrects run_d9e43d0e's purchase-consultation pause:
+Intent and Planner check current-request dependencies, with a bounded Control
+profile removing unrelated existing-product-policy fields before public retrieval.
+Suitability gaps, frozen Task inputs and tool gates remain. Synthetic regressions
+are separate from real-provider answer quality; see `docs/adr/0263-check-purchase-clarification-dependencies.md`.
+
+[KNOWN | HIGH] ADR-0262 resolves run_31c4ec49: claim labels may summarize a conclusion,
+with semantic correspondence assessed by grounding review. Original text and source
+binding remain deterministic; unused accepted references no longer reject an answer.
+Both captured attempts pass local deterministic replay; semantic approval remains unverified.
+
 [KNOWN | HIGH] ADR-0261 separates answer_context from globally blocking required_context.
 With independent required retrievals, Control preserves deferred_answer_fields through
 answer/repair/review and delivers a partial answer plus active follow-up, including
