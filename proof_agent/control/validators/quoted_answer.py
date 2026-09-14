@@ -68,8 +68,6 @@ def validate_quoted_answer(output: Mapping[str, Any], *, evidence: tuple[Evidenc
         total_chars += len(text) + len(claim)
         if len(text) > MAX_QUOTE_CHARS or len(claim) > 4_000:
             errors.append("quote_size_limit")
-        if claim not in message:
-            errors.append("unbound_quote_claim")
         if citation not in citations or citation not in sources:
             errors.append("unsupported_quote_citation")
         elif not any(_space(text) in source for source in sources[citation]):
@@ -83,7 +81,8 @@ def validate_quoted_answer(output: Mapping[str, Any], *, evidence: tuple[Evidenc
             if "conflicting_explicit_assertion" in source_check.metadata.get("violation_codes", ()):
                 errors.append("conflicting_explicit_assertion")
         bound_citations.add(citation)
-    if set(citations) != bound_citations or len(citations) != len(set(citations)):
+    if (not bound_citations.issubset(citations) or any(c not in sources for c in citations)
+            or len(citations) != len(set(citations))):
         errors.append("citation_quote_mismatch")
     if total_chars > MAX_OUTPUT_CHARS:
         errors.append("quoted_answer_size_limit")
@@ -157,7 +156,12 @@ def render_quoted_answer(output: Mapping[str, Any]) -> str:
     for index, item in enumerate(output["quotes"], 1):
         text = item["text"]
         fence = "`" * max(3, 1 + max((len(s) for s in re.findall(r"`+", text)), default=0))
-        parts.extend([f"\n原文 {index}：", f"{fence}text\n{text}\n{fence}"])
+        # A semantic label need not repeat the body verbatim. Display it literally;
+        # model review, not string matching, validates its relation to the body.
+        claim = item["claim"]
+        label_fence = "`" * max(3, 1 + max((len(s) for s in re.findall(r"`+", claim)), default=0))
+        label = f"对应结论：\n\n{label_fence}text\n{claim}\n{label_fence}"
+        parts.extend([f"\n原文 {index}：", label, f"{fence}text\n{text}\n{fence}"])
     return "\n\n".join(parts)
 
 

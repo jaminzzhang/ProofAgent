@@ -78,9 +78,8 @@ def test_synthesis_accepts_bound_table_and_parent_conditions_without_verbatim_bo
 @pytest.mark.parametrize("mutation", [
     lambda out: out["quotes"][0].update(text="| 住院医疗 | 500 万元 |"),
     lambda out: out["quotes"][0].update(citation="knowledge://other#bound"),
-    lambda out: out["quotes"][0].update(claim="正文没有这句话"),
 ])
-def test_forged_quote_wrong_citation_or_unanchored_claim_fails(mutation):
+def test_forged_quote_or_wrong_citation_fails(mutation):
     output = _output()
     mutation(output)
     assert _check(output).status is ValidationStatus.FAILED

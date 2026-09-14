@@ -124,7 +124,8 @@ claiming evidence was absent.
 replaces automatic source-ID answer selection with LLM synthesis. Final output carries
 `message`, `citations`, `quotes: [{claim, text, citation}]` and requirement `coverage`.
 Generated prose may summarize, combine evidence and explain tables. Each quote's claim
-must occur in the prose and its original text must occur in the bound Accepted Evidence.
+may identify a prose conclusion using a faithful summary (ADR-0262); grounding review
+checks that relationship. Original text must occur in the bound Accepted Evidence.
 Control renders numbered claim references and literal original-text blocks.
 
 After deterministic validation, a separate call to the same answer model assesses

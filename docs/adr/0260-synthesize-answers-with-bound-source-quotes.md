@@ -2,6 +2,9 @@
 
 Date: 2026-09-13
 
+Update 2026-09-14: ADR-0262 supersedes the exact claim-substring requirement below;
+semantic claim labels are bound to answer conclusions through grounding review.
+
 ## Decision
 
 [FRAME | HIGH] The user explicitly authorizes evidence-grounded LLM summaries and
