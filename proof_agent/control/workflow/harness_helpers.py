@@ -269,13 +269,18 @@ def validate_model_output(
     observation_records: tuple[Mapping[str, Any], ...] = (),
 ) -> tuple[ValidationResult, ...]:
     output, parse_error = structured_final_answer_output(response.content, outcome=outcome)
+    if response.finish_reason == "length":
+        return (ValidationResult(validator_name="schema", status=ValidationStatus.FAILED,
+            reason="Model output reached its token limit before completion.",
+            metadata={"violation_codes": ("model_output_truncated",),
+                      "parse_error_code": parse_error or "model_output_truncated"}),)
     if parse_error is not None:
         return (
             ValidationResult(
                 validator_name="schema",
                 status=ValidationStatus.FAILED,
                 reason="Final answer model output schema is invalid.",
-                metadata={"parse_error_code": parse_error},
+                metadata={"parse_error_code": parse_error, "violation_codes": (parse_error,)},
             ),
             validate_no_secret_strings(response.content),
             validate_citation_refs_supported_by_evidence(

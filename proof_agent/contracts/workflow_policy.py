@@ -20,9 +20,9 @@ class WorkflowBudget(StrictFrozenModel):
     max_model_calls: int = Field(default=16, ge=2, le=128, strict=True)
     max_retrieval_calls: int = Field(default=5, ge=1, le=32, strict=True)
     max_tool_calls: int = Field(default=4, ge=0, le=8, strict=True)
-    max_total_tokens: int = Field(default=64000, ge=512, le=1000000, strict=True)
-    reserved_output_tokens: int = Field(default=2048, ge=64, le=32768, strict=True)
-    max_active_seconds: int = Field(default=120, ge=1, le=120, strict=True)
+    max_total_tokens: int = Field(default=262144, ge=512, le=1000000, strict=True)
+    reserved_output_tokens: int = Field(default=65536, ge=64, le=131072, strict=True)
+    max_active_seconds: int = Field(default=600, ge=1, le=1800, strict=True)
 
     @model_validator(mode='after')
     def reserve_fits(self) -> Self:

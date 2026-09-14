@@ -31,6 +31,23 @@ function openPolicies() { fireEvent.click(screen.getByRole('button', { name: '�
 function change(label: string, value: string) { fireEvent.change(screen.getByLabelText(label), { target: { value } }) }
 
 describe('Workflow policy configuration', () => {
+  it('shows 64K defaults and saves configurable output and execution limits', async () => {
+    const p = props()
+    render(<WorkflowModuleEditor {...p} />)
+    openPolicies()
+    change('推理复杂度', 'standard')
+    fireEvent.click(screen.getByRole('button', { name: '策略高级设置' }))
+    expect(screen.getByLabelText('输出预留 Token')).toHaveValue(65536)
+    expect(screen.getByLabelText('总 Token 上限')).toHaveValue(262144)
+    expect(screen.getByLabelText('有效执行时间上限（秒）')).toHaveValue(600)
+    change('输出预留 Token', '98304')
+    change('有效执行时间上限（秒）', '900')
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(p.onSaveStages).toHaveBeenCalledTimes(1))
+    expect(p.onSaveStages.mock.calls[0][0].policy.execution.budget).toEqual({
+      reserved_output_tokens: 98304, max_active_seconds: 900,
+    })
+  })
   it('keeps legacy behavior absent until explicitly edited and preserves all workflow nodes', async () => {
     const p = props()
     render(<WorkflowModuleEditor {...p} />)

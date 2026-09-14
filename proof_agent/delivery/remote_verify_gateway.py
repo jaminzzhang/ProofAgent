@@ -13,6 +13,8 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 VERIFY_REMOTE_CHAT_BASE = "/__proofagent_chat__/"
+# Permit the longest configured local workflow plus response finalization.
+VERIFY_REMOTE_UPSTREAM_TIMEOUT_SECONDS = 1860
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -100,7 +102,7 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                 method=self.command,
             )
             try:
-                with urlopen(request, timeout=60) as response:
+                with urlopen(request, timeout=VERIFY_REMOTE_UPSTREAM_TIMEOUT_SECONDS) as response:
                     self.send_response(response.status)
                     self._send_response_headers(response.headers.items())
                     self.end_headers()

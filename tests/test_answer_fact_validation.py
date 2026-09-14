@@ -513,7 +513,7 @@ def test_valid_source_selection_still_rejects_conflicting_evidence():
 
 
 def test_repair_is_denied_by_real_policy_token_budget():
-    wrong_answer = "The reimbursement limit is 500 yuan. " * 20
+    wrong_answer = "The reimbursement limit is 500 yuan. " * 40
     _, provider, _ = run_attempt(
         [wrong_answer, {"statement_ids": ["s0"]}]
     )

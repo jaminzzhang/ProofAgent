@@ -35,9 +35,9 @@ export const WORKFLOW_BUDGET_FIELDS: { key: keyof WorkflowBudget; label: string;
   { key: 'max_model_calls', label: '模型调用上限', fallback: 16, min: 2, max: 128 },
   { key: 'max_retrieval_calls', label: '检索调用上限', fallback: 5, min: 1, max: 32 },
   { key: 'max_tool_calls', label: '工具调用上限', fallback: 4, min: 0, max: 8 },
-  { key: 'max_total_tokens', label: '总 Token 上限', fallback: 64000, min: 512, max: 1000000 },
-  { key: 'reserved_output_tokens', label: '输出预留 Token', fallback: 2048, min: 64, max: 32768 },
-  { key: 'max_active_seconds', label: '有效执行时间上限（秒）', fallback: 120, min: 1, max: 120 },
+  { key: 'max_total_tokens', label: '总 Token 上限', fallback: 262144, min: 512, max: 1000000 },
+  { key: 'reserved_output_tokens', label: '输出预留 Token', fallback: 65536, min: 64, max: 131072 },
+  { key: 'max_active_seconds', label: '有效执行时间上限（秒）', fallback: 600, min: 1, max: 1800 },
 ]
 
 export function workflowPolicyInputError(policy: WorkflowPolicyPatch): string | null {
@@ -48,7 +48,7 @@ export function workflowPolicyInputError(policy: WorkflowPolicyPatch): string | 
       const value = policy.execution.budget?.[field.key] ?? field.fallback
       if (!Number.isInteger(value) || value < field.min || value > field.max) return `${field.label}须为 ${field.min}–${field.max} 的整数。`
     }
-    if ((policy.execution.budget?.reserved_output_tokens ?? 2048) >= (policy.execution.budget?.max_total_tokens ?? 64000)) return '输出预留 Token 必须小于总 Token 上限。'
+    if ((policy.execution.budget?.reserved_output_tokens ?? 65536) >= (policy.execution.budget?.max_total_tokens ?? 262144)) return '输出预留 Token 必须小于总 Token 上限。'
   }
   const interactionBounds = [
     ['最多问询轮数', policy.interaction?.max_rounds, 0, 16],

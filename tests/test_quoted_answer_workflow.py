@@ -113,7 +113,7 @@ def test_missing_or_forged_quote_cannot_be_approved_by_review():
 
 def test_review_uses_shared_model_budget_before_dispatch():
     raw = ScriptedProvider([answer(), REVIEW_OK])
-    ledger = WorkflowBudgetLedger(WorkflowBudget(max_model_calls=2, max_total_tokens=10000),
+    ledger = WorkflowBudgetLedger(WorkflowBudget(max_model_calls=2, max_total_tokens=10000, reserved_output_tokens=2048),
                                   usage={"model_calls": 1, "tokens": 100})
     provider = BudgetedModelProvider(raw, ledger)
     with pytest.raises(BudgetExceeded, match="model_calls_exhausted"):

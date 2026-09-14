@@ -455,6 +455,12 @@ class FinalAnswerAttemptRunner:
                 if any("\u4e00" <= char <= "\u9fff" for char in state.question) else
                 "Answer generation failed: model output did not pass validation. See run diagnostics."
             )
+            if "model_output_truncated" in normalized.diagnostic.violation_codes:
+                message = (
+                    "回答生成失败：达到输出 Token 上限，压缩重试后仍未完整输出。请提高输出预留或缩小问题范围。"
+                    if any("\u4e00" <= char <= "\u9fff" for char in state.question) else
+                    "Answer truncated at the output token limit after compact retry. Increase the output allowance or narrow the question."
+                )
             for validation in normalized.validation_results:
                 count = validation.metadata.get("selection_count")
                 if type(count) is int:
@@ -645,6 +651,13 @@ def _final_answer_repair_request(
     }
     repair_payload: dict[str, Any] = {
         "question": state.question,
+        "previous_finish_reason": generated.response.finish_reason,
+        "length_recovery_instruction": (
+            "The previous JSON was truncated at the output token limit. Regenerate a compact complete JSON: "
+            "shorten prose and repeated quotes, use only the minimum original excerpts preserving conditions, "
+            "and keep every coverage item and the focused follow-up question. Do not repeat the same length."
+            if generated.response.finish_reason == "length" else None
+        ),
         "answer_requirements": requirement_payload(state.question),
         "instruction": (
             "Repair the previous final answer output. Return only one JSON object "
@@ -706,6 +719,8 @@ def _final_answer_repair_request(
         ),
         response_format="json",
         function_schema=request.function_schema,
+        max_output_tokens=request.max_output_tokens,
+        timeout_seconds=request.timeout_seconds,
         stream=request.stream,
         metadata={
             **dict(request.metadata),

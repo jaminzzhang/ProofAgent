@@ -37,9 +37,9 @@ workflow:
       max_model_calls: 16
       max_retrieval_calls: 5
       max_tool_calls: 4
-      max_total_tokens: 64000
-      reserved_output_tokens: 2048
-      max_active_seconds: 120
+      max_total_tokens: 262144
+      reserved_output_tokens: 65536
+      max_active_seconds: 600
 
 interaction:
   mode: adaptive
