@@ -55,6 +55,21 @@ function setup(agentYaml = yaml) {
   return save
 }
 describe('simple Workflow configuration', () => {
+  it('lets an existing draft clear empty overrides without changing its prompts', async () => {
+    const save = setup(yaml + '  stages:\n    - id: tool\n      context: {}\n')
+    expect(screen.getByRole('button', { name: '保存 Workflow' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ stages: [] })))
+  })
+
+  it('does not persist empty tool nodes when saving a tools-disabled workflow', async () => {
+    const save = setup(yaml + '  stages:\n    - id: tool\n      prompt:\n        business_context: ""\n      context: {}\n    - id: tool_review\n      context:\n        include_tool_proposal: false\ncapabilities:\n  tools:\n    enabled: false\n')
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Answer the question' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存 Workflow' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(save.mock.calls[0][0].stages.map((stage: { id: string }) => stage.id)).toEqual(['intent_resolution'])
+  })
+
   it('starts with useful Prompt nodes and one save, not template/runtime controls', () => {
     setup()
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()

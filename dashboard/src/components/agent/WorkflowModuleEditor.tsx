@@ -153,7 +153,8 @@ export function WorkflowModuleEditor({
     setTechnical(false)
   }, [selectedId, initialStages])
 
-  const dirty =
+  const emptyOverridesPending = readWorkflowStageConfigs(agentYaml).some((stage) => !hasStageOverrides(stage))
+  const dirty = emptyOverridesPending ||
     configurationFingerprint(stages) !== configurationFingerprint(initialStages) || policyDirty || policyInvalid
   useEffect(() => {
     onDirtyChange?.(dirty)
@@ -237,7 +238,7 @@ export function WorkflowModuleEditor({
       await onSaveStages({
         template,
         template_descriptor_version: version || descriptor.descriptor_version,
-        stages,
+        stages: stages.filter(hasStageOverrides),
         ...(policyDirty ? { policy: policyChanges } : {}),
       })
       // The caller supplies the persisted YAML. A failed API save never clears local edits.
@@ -588,6 +589,14 @@ export function WorkflowModuleEditor({
         )}
       </ConfigPanel>
     </div>
+  )
+}
+function hasStageOverrides(stage: WorkflowStageConfig): boolean {
+  return Boolean(
+    stage.prompt.business_context ||
+    stage.prompt.task_instructions.length ||
+    stage.prompt.output_preferences.length ||
+    Object.values(stage.context).some(Boolean),
   )
 }
 function configurationFingerprint(stages: WorkflowStageConfig[]): string {

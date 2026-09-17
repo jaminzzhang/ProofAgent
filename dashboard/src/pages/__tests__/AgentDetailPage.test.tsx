@@ -1392,15 +1392,6 @@ workflow:
             },
             context: { include_agent_purpose: true },
           },
-          {
-            id: 'response',
-            prompt: {
-              business_context: '',
-              task_instructions: [],
-              output_preferences: [],
-            },
-            context: {},
-          },
         ],
       })
     })
